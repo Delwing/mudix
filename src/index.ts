@@ -1,9 +1,13 @@
 // Core
 export { EventBus } from "./core/EventBus";
 
+// Scripting
+export { ScriptingAPI } from "./scripting/ScriptingAPI";
+
 // MUD session facade
 export { MudSession } from "./mud/MudSession";
-export type { MudSessionOptions, SessionStatus, SessionEvents } from "./mud/MudSession";
+export type { MudSessionOptions } from "./mud/MudSession";
+export type { SessionStatus, MudClientEvents, MudEvents } from "./mud/events";
 
 // Socket / Telnet protocol
 export {
@@ -43,19 +47,12 @@ export type {
 export { colorCodes } from "./mud/text/colors";
 
 // Output
-export {
-    setupOutputRenderer,
-    setOutputTimestampVisibility,
-    toggleOutputTimestampVisibility,
-    areOutputTimestampsVisible,
-    setOutputMessageTypeVisibility,
-    toggleOutputMessageTypeVisibility,
-    areOutputMessageTypesVisible,
-} from "./ui/output/OutputRenderer";
+export { setupOutputRenderer } from "./ui/output/OutputRenderer";
+export type { OutputRendererControls } from "./ui/output/OutputRenderer";
 
 // Client (lower-level API)
 export { MudClient } from "./mud/connection/MudClient";
-export type { MudClientOptions, MudClientEvents } from "./mud/connection/MudClient";
+export type { MudClientOptions } from "./mud/connection/MudClient";
 export { PingTracker } from "./mud/connection/PingTracker";
 export { createPassthroughEngine } from "./mud/triggers/TriggerEngine";
 export type { TriggerEngine } from "./mud/triggers/TriggerEngine";

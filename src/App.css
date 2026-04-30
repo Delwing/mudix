@@ -160,7 +160,7 @@ html, body, #root {
 }
 
 /* ── Output area ────────────────────────────────────────────── */
-.output-area {
+.output-section {
     flex: 1;
     overflow: hidden;
     position: relative;
@@ -198,17 +198,17 @@ html, body, #root {
 .output-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 /* ── Output messages ────────────────────────────────────────── */
-.output_msg {
+.output-msg {
     display: block;
 }
 
-.output_msg_text {
+.output-msg-text {
     display: flex;
     align-items: baseline;
     gap: 6px;
 }
 
-.output_msg_content {
+.output-msg-content {
     white-space: pre-wrap;
     word-break: break-word;
     flex: 1;

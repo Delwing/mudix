@@ -5,7 +5,7 @@ type MessageSource = { on(event: 'message', listener: MessageListener): () => vo
 
 type OutputHandlerOptions = {
     outputWrapper: HTMLElement;
-    splitBottom: HTMLElement;
+    sentinel: HTMLElement;
     stickyArea: HTMLElement;
     isSplitView: () => boolean;
     stickyLines: number;
@@ -14,13 +14,18 @@ type OutputHandlerOptions = {
     suppressSplitView?: (durationMs: number) => void;
 };
 
+export type OutputRendererControls = {
+    teardown: () => void;
+    areTimestampsVisible: () => boolean;
+    setTimestampVisibility: (visible: boolean) => void;
+    toggleTimestampVisibility: () => void;
+    areMessageTypesVisible: () => boolean;
+    setMessageTypeVisibility: (visible: boolean) => void;
+    toggleMessageTypeVisibility: () => void;
+};
+
 const TIMESTAMP_CLASS = 'output-show-timestamps';
 const MESSAGE_TYPE_CLASS = 'output-show-message-types';
-
-let timestampsVisible = false;
-let messageTypesVisible = false;
-let currentOutputWrapper: HTMLElement | null = null;
-let currentStickyArea: HTMLElement | null = null;
 
 function formatTimestamp(timestamp: number): string {
     const date = new Date(timestamp);
@@ -29,24 +34,6 @@ function formatTimestamp(timestamp: number): string {
     const seconds = date.getSeconds().toString().padStart(2, '0');
     const milliseconds = date.getMilliseconds().toString().padStart(3, '0');
     return `${hours}:${minutes}:${seconds}.${milliseconds}`;
-}
-
-function applyTimestampVisibility() {
-    if (currentOutputWrapper) {
-        currentOutputWrapper.classList.toggle(TIMESTAMP_CLASS, timestampsVisible);
-    }
-    if (currentStickyArea) {
-        currentStickyArea.classList.toggle(TIMESTAMP_CLASS, timestampsVisible);
-    }
-}
-
-function applyMessageTypeVisibility() {
-    if (currentOutputWrapper) {
-        currentOutputWrapper.classList.toggle(MESSAGE_TYPE_CLASS, messageTypesVisible);
-    }
-    if (currentStickyArea) {
-        currentStickyArea.classList.toggle(MESSAGE_TYPE_CLASS, messageTypesVisible);
-    }
 }
 
 function createTimestampElement(timestamp: number): HTMLSpanElement {
@@ -67,51 +54,25 @@ function createMessageTypeElement(type: string | undefined): HTMLSpanElement {
     return typeEl;
 }
 
-export function areOutputTimestampsVisible() {
-    return timestampsVisible;
-}
-
-export function setOutputTimestampVisibility(visible: boolean) {
-    timestampsVisible = visible;
-    applyTimestampVisibility();
-}
-
-export function toggleOutputTimestampVisibility() {
-    setOutputTimestampVisibility(!timestampsVisible);
-}
-
-export function areOutputMessageTypesVisible() {
-    return messageTypesVisible;
-}
-
-export function setOutputMessageTypeVisibility(visible: boolean) {
-    messageTypesVisible = visible;
-    applyMessageTypeVisibility();
-}
-
-export function toggleOutputMessageTypeVisibility() {
-    setOutputMessageTypeVisibility(!messageTypesVisible);
-}
-
 function createMessageWrapper(
     message: string | AnsiAwareBuffer,
     type: string | undefined,
     timestamp: number
 ): HTMLDivElement {
     const wrapper = document.createElement('div');
-    wrapper.classList.add('output_msg');
+    wrapper.classList.add('output-msg');
     if (type) {
         wrapper.classList.add(type);
     }
 
     const messageDiv = document.createElement('div');
-    messageDiv.classList.add('output_msg_text');
+    messageDiv.classList.add('output-msg-text');
     wrapper.dataset.timestamp = `${timestamp}`;
 
     const timestampEl = createTimestampElement(timestamp);
     const typeEl = createMessageTypeElement(type);
     const contentSpan = document.createElement('span');
-    contentSpan.classList.add('output_msg_content');
+    contentSpan.classList.add('output-msg-content');
 
     const buffer = typeof message === 'string' ? new AnsiAwareBuffer(message) : message;
     if (buffer.length === 0) {
@@ -135,7 +96,7 @@ export function setupOutputRenderer(
     source: MessageSource,
     {
         outputWrapper,
-        splitBottom,
+        sentinel,
         stickyArea,
         isSplitView,
         stickyLines,
@@ -143,11 +104,19 @@ export function setupOutputRenderer(
         trimSlack = 100,
         suppressSplitView,
     }: OutputHandlerOptions,
-) {
-    currentOutputWrapper = outputWrapper;
-    currentStickyArea = stickyArea;
-    applyTimestampVisibility();
-    applyMessageTypeVisibility();
+): OutputRendererControls {
+    let timestampsVisible = false;
+    let messageTypesVisible = false;
+
+    function applyTimestampVisibility() {
+        outputWrapper.classList.toggle(TIMESTAMP_CLASS, timestampsVisible);
+        stickyArea.classList.toggle(TIMESTAMP_CLASS, timestampsVisible);
+    }
+
+    function applyMessageTypeVisibility() {
+        outputWrapper.classList.toggle(MESSAGE_TYPE_CLASS, messageTypesVisible);
+        stickyArea.classList.toggle(MESSAGE_TYPE_CLASS, messageTypesVisible);
+    }
 
     const handleMessage = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number) => {
         if (message === undefined || message === null) {
@@ -157,7 +126,7 @@ export function setupOutputRenderer(
         const timestampValue = typeof timestamp === 'number' ? timestamp : Date.now();
         const wrapper = createMessageWrapper(message, type, timestampValue);
 
-        outputWrapper.insertBefore(wrapper, splitBottom);
+        outputWrapper.insertBefore(wrapper, sentinel);
 
         const maxElementsValue = typeof maxElements === 'function' ? maxElements() : maxElements;
 
@@ -166,7 +135,7 @@ export function setupOutputRenderer(
         if (!isSplitView() && outputWrapper.childElementCount - 1 > maxElementsValue + trimSlack) {
             while (outputWrapper.childElementCount - 1 > maxElementsValue) {
                 const first = outputWrapper.firstElementChild;
-                if (first === splitBottom) {
+                if (first === sentinel) {
                     const second = first.nextElementSibling;
                     if (second) {
                         outputWrapper.removeChild(second);
@@ -204,13 +173,25 @@ export function setupOutputRenderer(
 
     const unsubscribeMessage = source.on('message', handleMessage);
 
-    return () => {
-        unsubscribeMessage();
-        if (currentOutputWrapper === outputWrapper) {
-            currentOutputWrapper = null;
-        }
-        if (currentStickyArea === stickyArea) {
-            currentStickyArea = null;
-        }
+    return {
+        teardown: () => { unsubscribeMessage(); },
+        areTimestampsVisible: () => timestampsVisible,
+        setTimestampVisibility: (visible: boolean) => {
+            timestampsVisible = visible;
+            applyTimestampVisibility();
+        },
+        toggleTimestampVisibility: () => {
+            timestampsVisible = !timestampsVisible;
+            applyTimestampVisibility();
+        },
+        areMessageTypesVisible: () => messageTypesVisible,
+        setMessageTypeVisibility: (visible: boolean) => {
+            messageTypesVisible = visible;
+            applyMessageTypeVisibility();
+        },
+        toggleMessageTypeVisibility: () => {
+            messageTypesVisible = !messageTypesVisible;
+            applyMessageTypeVisibility();
+        },
     };
 }

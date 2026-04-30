@@ -10,13 +10,13 @@ export interface UseOutputOptions {
 
 export interface UseOutputResult {
     outputRef: React.RefObject<HTMLDivElement>;
-    splitBottomRef: React.RefObject<HTMLDivElement>;
+    sentinelRef: React.RefObject<HTMLDivElement>;
     stickyAreaRef: React.RefObject<HTMLDivElement>;
     isSplitView: boolean;
     scrollToBottom: () => void;
 }
 
-export function useOutput(
+export function useOutputArea(
     session: MudSession,
     {
         stickyLines = 5,
@@ -25,7 +25,7 @@ export function useOutput(
     }: UseOutputOptions = {},
 ): UseOutputResult {
     const outputRef = useRef<HTMLDivElement>(null);
-    const splitBottomRef = useRef<HTMLDivElement>(null);
+    const sentinelRef = useRef<HTMLDivElement>(null);
     const stickyAreaRef = useRef<HTMLDivElement>(null);
 
     const isSplitViewRef = useRef(false);
@@ -54,15 +54,15 @@ export function useOutput(
 
     useEffect(() => {
         const outputEl = outputRef.current;
-        const splitBottomEl = splitBottomRef.current;
+        const sentinelEl = sentinelRef.current;
         const stickyAreaEl = stickyAreaRef.current;
-        if (!outputEl || !splitBottomEl || !stickyAreaEl) return;
+        if (!outputEl || !sentinelEl || !stickyAreaEl) return;
 
         outputEl.addEventListener('scroll', handleScroll, { passive: true });
 
-        const teardown = setupOutputRenderer(session.events, {
+        const { teardown } = setupOutputRenderer(session.events, {
             outputWrapper: outputEl,
-            splitBottom: splitBottomEl,
+            sentinel: sentinelEl,
             stickyArea: stickyAreaEl,
             isSplitView: () => isSplitViewRef.current,
             stickyLines,
@@ -76,8 +76,7 @@ export function useOutput(
             outputEl.removeEventListener('scroll', handleScroll);
             teardown();
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [session, handleScroll]);
+    }, [session, handleScroll, stickyLines, maxElements]);
 
-    return { outputRef, splitBottomRef, stickyAreaRef, isSplitView, scrollToBottom };
+    return { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom };
 }

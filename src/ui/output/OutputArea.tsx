@@ -1,5 +1,5 @@
 import type { MudSession } from '../../mud/MudSession';
-import { useOutput } from '../../hooks/useOutput';
+import { useOutputArea } from '../../hooks/useOutput';
 
 interface OutputAreaProps {
     session: MudSession;
@@ -7,14 +7,14 @@ interface OutputAreaProps {
 }
 
 export function OutputArea({ session, stickyLines = 5 }: OutputAreaProps) {
-    const { outputRef, splitBottomRef, stickyAreaRef, isSplitView, scrollToBottom } =
-        useOutput(session, { stickyLines });
+    const { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom } =
+        useOutputArea(session, { stickyLines });
 
     return (
         <div className="output-container">
             <div className="output-wrapper" ref={outputRef}>
                 {/* Messages are inserted before this sentinel by the imperative renderer */}
-                <div ref={splitBottomRef} style={{ height: 0 }} />
+                <div ref={sentinelRef} style={{ height: 0 }} />
             </div>
 
             <div

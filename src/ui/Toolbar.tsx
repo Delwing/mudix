@@ -2,14 +2,14 @@ import type { SessionStatus } from '../mud/MudSession';
 
 interface ToolbarProps {
     url: string;
-    setUrl: (url: string) => void;
+    onUrlChange: (url: string) => void;
     status: SessionStatus;
     ping: number | null;
     onConnect: () => void;
     onDisconnect: () => void;
 }
 
-export function Toolbar({ url, setUrl, status, ping, onConnect, onDisconnect }: ToolbarProps) {
+export function Toolbar({ url, onUrlChange, status, ping, onConnect, onDisconnect }: ToolbarProps) {
     const connected = status === 'connected';
     const connecting = status === 'connecting';
 
@@ -26,7 +26,7 @@ export function Toolbar({ url, setUrl, status, ping, onConnect, onDisconnect }: 
             <input
                 className="url-input"
                 value={url}
-                onChange={e => setUrl(e.target.value)}
+                onChange={e => onUrlChange(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="wss://host:port/path"
                 disabled={connected || connecting}

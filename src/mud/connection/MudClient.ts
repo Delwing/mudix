@@ -1,6 +1,5 @@
 import { EventBus } from "../../core/EventBus";
 import { AnsiAwareBuffer } from "../text/FormatState";
-import { PingTracker } from "./PingTracker";
 import { createPassthroughEngine, type TriggerEngine } from "../triggers/TriggerEngine";
 import {
     createGmcpStream,
@@ -12,28 +11,9 @@ import {
     MccpHandler,
     stripTelnetSequences,
 } from "../protocol";
+import type { MudClientEvents } from "../events";
 
-export type MudClientEvents = {
-    'open': [event: Event];
-    'close': [event: CloseEvent];
-    'error': [error: unknown];
-    'client.connect': void;
-    'client.disconnect': void;
-    'socket.incoming': [data: string];
-    'socket.outgoing': [data: string];
-    'message': [text?: string | AnsiAwareBuffer, type?: string, timestamp?: number];
-    'flushLines': [groups: { text: string; type: string }[]];
-    'gmcp': [payload: { path: string; value: unknown }];
-    'telnet.echo': [serverEchoing: boolean];
-    'ping': [duration: number | null];
-} & Record<string, any>;
-
-type Params<T> = [T] extends [void]
-    ? []
-    : [T] extends [any[]]
-        ? T
-        : [T];
-type EventListener<K extends keyof MudClientEvents> = (...args: Params<MudClientEvents[K]>) => void;
+export type { MudClientEvents } from "../events";
 
 export interface MudClientOptions {
     url: string;
@@ -45,7 +25,6 @@ export interface MudClientOptions {
 export class MudClient {
     private socket!: WebSocket;
     private readonly eventBus: EventBus<MudClientEvents>;
-    private readonly pingTracker: PingTracker;
     private readonly triggerEngine: TriggerEngine;
     private messageBuffer: { text: string; type: string }[] = [];
     private readonly gmcpStream: (data: string) => void;
@@ -56,21 +35,24 @@ export class MudClient {
 
     commandEcho: boolean;
 
-    constructor({
-        url,
-        mccpEnabled = true,
-        commandEcho = true,
-        triggerEngine,
-    }: MudClientOptions) {
+    constructor(
+        {
+            url,
+            mccpEnabled = true,
+            commandEcho = true,
+            triggerEngine,
+        }: MudClientOptions,
+        eventBus: EventBus<MudClientEvents>,
+    ) {
         this.url = url;
         this.commandEcho = commandEcho;
-        this.eventBus = new EventBus<MudClientEvents>();
+        this.eventBus = eventBus;
         this.triggerEngine = triggerEngine ?? createPassthroughEngine();
 
         this.gmcpStream = createGmcpStream({
             onEnvelope: ({ path, value }) => {
                 (this.eventBus.emit as (event: string, ...args: unknown[]) => void)(`gmcp.${path}`, value);
-                this.emit('gmcp', { path, value });
+                this.eventBus.emit('gmcp', { path, value });
             },
             onMessage: (text, type) => {
                 this.messageBuffer.push({ text, type });
@@ -83,13 +65,7 @@ export class MudClient {
 
         this.echoHandler = new EchoHandler(
             (data) => this.sendRaw(data),
-            (serverEchoing) => this.emit('telnet.echo', serverEchoing),
-        );
-
-        this.pingTracker = new PingTracker(
-            () => this.sendGmcp('core.ping'),
-            (duration) => this.emit('ping', duration),
-            (handler) => this.eventBus.on('gmcp.core.ping', handler),
+            (serverEchoing) => this.eventBus.emit('telnet.echo', serverEchoing),
         );
 
         addEventListener('beforeunload', (event) => {
@@ -97,18 +73,6 @@ export class MudClient {
                 event.preventDefault();
             }
         });
-    }
-
-    on<K extends keyof MudClientEvents>(event: K, listener: EventListener<K>): () => void {
-        return this.eventBus.on(event, listener);
-    }
-
-    off<K extends keyof MudClientEvents>(event: K, listener: EventListener<K>): void {
-        this.eventBus.off(event, listener);
-    }
-
-    emit<K extends keyof MudClientEvents>(event: K, ...args: Params<MudClientEvents[K]>): void {
-        this.eventBus.emit(event, ...args);
     }
 
     setMccpEnabled(enabled: boolean): void {
@@ -139,9 +103,10 @@ export class MudClient {
                     const data = this.mccpHandler.processData(decodedData);
                     if (data.includes(GMCP_WILL)) {
                         this.sendRaw(GMCP_DO);
+                        this.eventBus.emit('gmcp.negotiated');
                     }
                     this.echoHandler.processData(data);
-                    this.emit('socket.incoming', data);
+                    this.eventBus.emit('socket.incoming', data);
                     try {
                         this.processIncomingData(data);
                     } catch (processingError) {
@@ -153,24 +118,22 @@ export class MudClient {
             };
 
             this.socket.onerror = (error: Event) => {
-                this.emit('error', error);
+                this.eventBus.emit('error', error);
             };
 
             this.socket.onclose = (event: CloseEvent) => {
-                this.emit('close', event);
-                this.emit('client.disconnect');
-                this.pingTracker.stop();
+                this.eventBus.emit('close', event);
+                this.eventBus.emit('client.disconnect');
                 this.mccpHandler.reset();
                 this.echoHandler.reset();
             };
 
             this.socket.onopen = (event: Event) => {
-                this.emit('open', event);
-                this.emit('client.connect');
-                this.pingTracker.start();
+                this.eventBus.emit('open', event);
+                this.eventBus.emit('client.connect');
             };
         } catch (error) {
-            this.emit('error', error);
+            this.eventBus.emit('error', error);
         }
     }
 
@@ -178,7 +141,6 @@ export class MudClient {
         if (this.socket && this.socket.readyState === WebSocket.OPEN) {
             this.socket.close();
         }
-        this.pingTracker.stop();
     }
 
     isSocketOpen(): boolean {
@@ -199,13 +161,13 @@ export class MudClient {
             return;
         }
         if (!this.echoHandler.serverEchoing) {
-            this.emit('socket.outgoing', message);
+            this.eventBus.emit('socket.outgoing', message);
         }
         try {
             this.socket.send(btoa(message + "\r\n"));
         } catch (error) {
             console.error('Error sending message:', error);
-            this.emit('error', error);
+            this.eventBus.emit('error', error);
         }
     }
 
@@ -228,13 +190,13 @@ export class MudClient {
             this.socket.send(btoa(encodeGmcp(path, payload)));
         } catch (error) {
             console.error('Error sending GMCP message:', error);
-            this.emit('error', error);
+            this.eventBus.emit('error', error);
         }
     }
 
     output(text?: string | AnsiAwareBuffer, type?: string, timestamp?: number): void {
         const ts = typeof timestamp === 'number' ? timestamp : Date.now();
-        this.emit('message', text, type, ts);
+        this.eventBus.emit('message', text, type, ts);
     }
 
     private processIncomingData(data: string, timestamp?: number): void {
@@ -269,6 +231,6 @@ export class MudClient {
         }
 
         this.messageBuffer = [];
-        this.emit('flushLines', groups);
+        this.eventBus.emit('flushLines', groups);
     }
 }

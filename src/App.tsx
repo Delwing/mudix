@@ -33,14 +33,14 @@ export default function App() {
         <div className="app">
             <Toolbar
                 url={url}
-                setUrl={setUrl}
+                onUrlChange={setUrl}
                 status={status}
                 ping={ping}
                 onConnect={handleConnect}
                 onDisconnect={disconnect}
             />
 
-            <div className="output-area">
+            <div className="output-section">
                 {hasConnected ? (
                     <OutputArea session={session} stickyLines={5} />
                 ) : (
@@ -52,7 +52,7 @@ export default function App() {
 
             <CommandBar
                 command={command}
-                setCommand={setCommand}
+                onCommandChange={setCommand}
                 connected={status === 'connected'}
                 commandInputRef={commandInputRef}
                 onSubmit={handleSend}

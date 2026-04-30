@@ -2,13 +2,13 @@ import { useEffect } from 'react';
 
 interface CommandBarProps {
     command: string;
-    setCommand: (command: string) => void;
+    onCommandChange: (command: string) => void;
     connected: boolean;
     commandInputRef: React.RefObject<HTMLInputElement>;
     onSubmit: () => void;
 }
 
-export function CommandBar({ command, setCommand, connected, commandInputRef, onSubmit }: CommandBarProps) {
+export function CommandBar({ command, onCommandChange, connected, commandInputRef, onSubmit }: CommandBarProps) {
     useEffect(() => {
         if (connected) {
             commandInputRef.current?.focus();
@@ -17,7 +17,7 @@ export function CommandBar({ command, setCommand, connected, commandInputRef, on
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!command.trim() || !connected) return;
+        if (!connected) return;
         onSubmit();
     };
 
@@ -28,7 +28,7 @@ export function CommandBar({ command, setCommand, connected, commandInputRef, on
                 ref={commandInputRef}
                 className="command-input"
                 value={command}
-                onChange={e => setCommand(e.target.value)}
+                onChange={e => onCommandChange(e.target.value)}
                 placeholder={connected ? 'Enter command…' : ''}
                 disabled={!connected}
                 autoComplete="off"

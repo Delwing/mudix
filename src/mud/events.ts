@@ -1,0 +1,24 @@
+import type { AnsiAwareBuffer } from './text/FormatState';
+
+export type SessionStatus = 'disconnected' | 'connecting' | 'connected';
+
+export type MudClientEvents = {
+    'open': [event: Event];
+    'close': [event: CloseEvent];
+    'error': [error: unknown];
+    'client.connect': void;
+    'client.disconnect': void;
+    'gmcp.negotiated': void;
+    'socket.incoming': [data: string];
+    'socket.outgoing': [data: string];
+    'message': [text?: string | AnsiAwareBuffer, type?: string, timestamp?: number];
+    'flushLines': [groups: { text: string; type: string }[]];
+    'gmcp': [payload: { path: string; value: unknown }];
+    'gmcp.core.ping': [value: unknown];
+    'telnet.echo': [serverEchoing: boolean];
+} & Record<string, any>;
+
+export type MudEvents = MudClientEvents & {
+    'status': [status: SessionStatus];
+    'ping': [duration: number | null];
+};

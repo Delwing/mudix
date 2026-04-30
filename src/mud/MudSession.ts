@@ -1,21 +1,17 @@
 import { EventBus } from '../core/EventBus';
 import { MudClient, type MudClientOptions } from './connection/MudClient';
-import type { AnsiAwareBuffer } from './text/FormatState';
+import { PingTracker } from './connection/PingTracker';
+import { type MudClientEvents, type MudEvents, type SessionStatus } from './events';
 
-export type SessionStatus = 'disconnected' | 'connecting' | 'connected';
-
-export type SessionEvents = {
-    'status': [status: SessionStatus];
-    'ping': [duration: number | null];
-    'message': [text?: string | AnsiAwareBuffer, type?: string, timestamp?: number];
-};
+export type { SessionStatus, MudEvents } from './events';
 
 export type MudSessionOptions = Omit<MudClientOptions, 'url'>;
 
 export class MudSession {
-    readonly events = new EventBus<SessionEvents>();
+    readonly events = new EventBus<MudEvents>();
     private client: MudClient | null = null;
-    private clientUnsubs: (() => void)[] = [];
+    private pingTracker: PingTracker | null = null;
+    private stateUnsubs: (() => void)[] = [];
     private _status: SessionStatus = 'disconnected';
     private _ping: number | null = null;
 
@@ -26,15 +22,19 @@ export class MudSession {
 
     connect(url: string): void {
         this.teardownClient();
-        const client = new MudClient({ url, ...this.options });
+        const client = new MudClient({ url, ...this.options }, this.events as EventBus<MudClientEvents>);
         this.client = client;
 
-        this.clientUnsubs = [
-            client.on('client.connect', () => this.setStatus('connected')),
-            client.on('client.disconnect', () => { this.setStatus('disconnected'); this.setPing(null); }),
-            client.on('error', () => this.setStatus('disconnected')),
-            client.on('ping', d => this.setPing(d)),
-            client.on('message', (text, type, timestamp) => this.events.emit('message', text, type, timestamp)),
+        this.pingTracker = new PingTracker(
+            () => client.sendGmcp('core.ping'),
+            (d) => this.setPing(d),
+            this.events,
+        );
+
+        this.stateUnsubs = [
+            this.events.on('client.connect', () => this.setStatus('connected')),
+            this.events.on('client.disconnect', () => { this.setStatus('disconnected'); this.setPing(null); }),
+            this.events.on('error', () => this.setStatus('disconnected')),
         ];
 
         this.setStatus('connecting');
@@ -54,8 +54,10 @@ export class MudSession {
     }
 
     private teardownClient(): void {
-        for (const unsub of this.clientUnsubs) unsub();
-        this.clientUnsubs = [];
+        for (const unsub of this.stateUnsubs) unsub();
+        this.stateUnsubs = [];
+        this.pingTracker?.destroy();
+        this.pingTracker = null;
         this.client?.disconnect();
         this.client = null;
     }
