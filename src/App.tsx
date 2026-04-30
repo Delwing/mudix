@@ -1,25 +1,39 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMudSession } from './hooks/useMudSession';
 import { Toolbar } from './ui/Toolbar';
 import { CommandBar } from './ui/CommandBar';
 import { OutputArea } from './ui/output/OutputArea';
+import { ConnectionScreen } from './ui/ConnectionScreen';
+import { useAppStore, connectionUrl, type MudConnection } from './storage';
 
 export default function App() {
-    const { session, status, ping, connect, disconnect, send } = useMudSession();
-    const [url, setUrl] = useState('');
+    const { session, status, ping, passwordMode, connect, disconnect, send } = useMudSession();
     const [command, setCommand] = useState('');
-    const [hasConnected, setHasConnected] = useState(false);
+    const [activeConnection, setActiveConnection] = useState<MudConnection | null>(null);
+    const [sessionStarted, setSessionStarted] = useState(false);
     const commandInputRef = useRef<HTMLInputElement>(null);
+    const connections = useAppStore(s => s.connections);
+    const addConnection = useAppStore(s => s.addConnection);
+    const removeConnection = useAppStore(s => s.removeConnection);
 
-    useEffect(() => {
-        if (status === 'connecting' || status === 'connected') {
-            setHasConnected(true);
-        }
-    }, [status]);
+    const handleConnect = (connection: MudConnection) => {
+        setActiveConnection(connection);
+        setSessionStarted(true);
+        connect(connectionUrl(connection));
+    };
 
-    const handleConnect = () => {
-        const trimmedUrl = url.trim();
-        if (trimmedUrl) connect(trimmedUrl);
+    const handleDisconnect = () => {
+        disconnect();
+    };
+
+    const handleReconnect = () => {
+        if (activeConnection) connect(connectionUrl(activeConnection));
+    };
+
+    const handleNewConnection = () => {
+        disconnect();
+        setActiveConnection(null);
+        setSessionStarted(false);
     };
 
     const handleSend = () => {
@@ -29,31 +43,39 @@ export default function App() {
         }
     };
 
+    if (!sessionStarted) {
+        return (
+            <div className="app">
+                <ConnectionScreen
+                    connections={connections}
+                    connecting={status === 'connecting'}
+                    connectingId={activeConnection?.id ?? null}
+                    onConnect={handleConnect}
+                    onAdd={addConnection}
+                    onDelete={removeConnection}
+                />
+            </div>
+        );
+    }
+
     return (
         <div className="app">
             <Toolbar
-                url={url}
-                onUrlChange={setUrl}
+                connectionName={activeConnection?.name ?? ''}
                 status={status}
                 ping={ping}
-                onConnect={handleConnect}
-                onDisconnect={disconnect}
+                onDisconnect={handleDisconnect}
+                onReconnect={handleReconnect}
+                onNewConnection={handleNewConnection}
             />
-
             <div className="output-section">
-                {hasConnected ? (
-                    <OutputArea session={session} stickyLines={5} />
-                ) : (
-                    <div className="empty-state">
-                        Enter a server address and click Connect.
-                    </div>
-                )}
+                <OutputArea session={session} stickyLines={5} />
             </div>
-
             <CommandBar
                 command={command}
                 onCommandChange={setCommand}
                 connected={status === 'connected'}
+                passwordMode={passwordMode}
                 commandInputRef={commandInputRef}
                 onSubmit={handleSend}
             />

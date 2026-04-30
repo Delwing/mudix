@@ -1,0 +1,142 @@
+/* ── Button ─────────────────────────────────────────────────── */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-weight: 500;
+    white-space: nowrap;
+    transition: opacity 0.1s, color 0.1s, border-color 0.1s, background 0.1s;
+    flex-shrink: 0;
+}
+
+.btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* Sizes */
+.btn--sm {
+    height: 26px;
+    padding: 0 8px;
+    font-size: 11px;
+}
+
+.btn--md {
+    height: 28px;
+    padding: 0 12px;
+    font-size: 12px;
+}
+
+/* Variants */
+.btn--primary {
+    background: var(--accent);
+    color: #000;
+}
+.btn--primary:not(:disabled):hover {
+    opacity: 0.85;
+}
+
+.btn--secondary {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+.btn--secondary:not(:disabled):hover {
+    border-color: var(--accent-dim);
+    color: var(--accent);
+}
+
+.btn--ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+}
+.btn--ghost:not(:disabled):hover {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+.btn--icon {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    width: 26px;
+    padding: 0;
+    font-size: 16px;
+    line-height: 1;
+}
+.btn--icon:not(:disabled):hover {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+/* ── Input ──────────────────────────────────────────────────── */
+.input {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    height: 28px;
+    padding: 0 8px;
+    outline: none;
+    width: 100%;
+    min-width: 0;
+    transition: border-color 0.1s;
+}
+
+.input:focus {
+    border-color: var(--accent-dim);
+}
+
+.input:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.input::placeholder {
+    color: var(--text-dim);
+}
+
+/* ── FormField ──────────────────────────────────────────────── */
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.field__label {
+    font-family: var(--font-ui);
+    font-size: 11px;
+    color: var(--text-dim);
+    user-select: none;
+}
+
+/* ── Checkbox field ─────────────────────────────────────────── */
+.field--check {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.field--check .field__label {
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.field--check input[type='checkbox'] {
+    accent-color: var(--accent);
+    width: 13px;
+    height: 13px;
+    cursor: pointer;
+    flex-shrink: 0;
+}

@@ -1,53 +1,20 @@
+import { Button } from './components';
 import type { SessionStatus } from '../mud/MudSession';
 
 interface ToolbarProps {
-    url: string;
-    onUrlChange: (url: string) => void;
+    connectionName: string;
     status: SessionStatus;
     ping: number | null;
-    onConnect: () => void;
     onDisconnect: () => void;
+    onReconnect: () => void;
+    onNewConnection: () => void;
 }
 
-export function Toolbar({ url, onUrlChange, status, ping, onConnect, onDisconnect }: ToolbarProps) {
-    const connected = status === 'connected';
-    const connecting = status === 'connecting';
-
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && status === 'disconnected') {
-            onConnect();
-        }
-    };
-
+export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection }: ToolbarProps) {
     return (
         <div className="toolbar">
             <span className="brand">mudix</span>
-
-            <input
-                className="url-input"
-                value={url}
-                onChange={e => onUrlChange(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="wss://host:port/path"
-                disabled={connected || connecting}
-                spellCheck={false}
-                aria-label="Server URL"
-            />
-
-            {!connected ? (
-                <button
-                    className="btn btn-connect"
-                    onClick={onConnect}
-                    disabled={connecting || !url.trim()}
-                >
-                    {connecting ? 'Connecting…' : 'Connect'}
-                </button>
-            ) : (
-                <button className="btn btn-disconnect" onClick={onDisconnect}>
-                    Disconnect
-                </button>
-            )}
-
+            <span className="toolbar-connection-name">{connectionName}</span>
             <span
                 className={`status-dot status-${status}`}
                 title={status}
@@ -56,6 +23,13 @@ export function Toolbar({ url, onUrlChange, status, ping, onConnect, onDisconnec
             {ping !== null && (
                 <span className="ping">{Math.round(ping)} ms</span>
             )}
+            {status === 'disconnected'
+                ? <>
+                    <Button variant="ghost" onClick={onReconnect}>Reconnect</Button>
+                    <Button variant="ghost" onClick={onNewConnection}>New Connection</Button>
+                  </>
+                : <Button variant="ghost" onClick={onDisconnect}>Disconnect</Button>
+            }
         </div>
     );
 }
