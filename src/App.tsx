@@ -37,10 +37,8 @@ export default function App() {
     };
 
     const handleSend = () => {
-        if (command.trim()) {
-            send(command);
-            setCommand('');
-        }
+        send(command);
+        setCommand('');
     };
 
     if (!sessionStarted) {

@@ -41,7 +41,7 @@ export function CommandBar({ command, onCommandChange, connected, passwordMode, 
             <Button
                 variant="secondary"
                 type="submit"
-                disabled={!connected || !command.trim()}
+                disabled={!connected}
             >
                 Send
             </Button>
