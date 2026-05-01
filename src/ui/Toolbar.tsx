@@ -1,5 +1,5 @@
 import { Button } from './components';
-import type { SessionStatus } from '../mud/MudSession';
+import type { SessionStatus } from '../mud/events';
 
 interface ToolbarProps {
     connectionName: string;
@@ -8,9 +8,11 @@ interface ToolbarProps {
     onDisconnect: () => void;
     onReconnect: () => void;
     onNewConnection: () => void;
+    onOpenMap: () => void;
+    onOpenScripts: () => void;
 }
 
-export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection }: ToolbarProps) {
+export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts }: ToolbarProps) {
     return (
         <div className="toolbar">
             <span className="brand">mudix</span>
@@ -23,6 +25,8 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
             {ping !== null && (
                 <span className="ping">{Math.round(ping)} ms</span>
             )}
+            <Button variant="ghost" onClick={onOpenScripts}>Scripts</Button>
+            <Button variant="ghost" onClick={onOpenMap}>Map</Button>
             {status === 'disconnected'
                 ? <>
                     <Button variant="ghost" onClick={onReconnect}>Reconnect</Button>

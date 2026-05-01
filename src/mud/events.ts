@@ -21,4 +21,5 @@ export type MudClientEvents = {
 export type MudEvents = MudClientEvents & {
     'status': [status: SessionStatus];
     'ping': [duration: number | null];
+    'script.log': [text: string, level: 'error' | 'info'];
 };

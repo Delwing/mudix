@@ -1,4 +1,5 @@
 import { EventBus } from '../core/EventBus';
+import { WindowManager } from '../ui/windows/WindowManager';
 import { MudClient, type MudClientOptions } from './connection/MudClient';
 import { PingTracker } from './connection/PingTracker';
 import { type MudClientEvents, type MudEvents, type SessionStatus } from './events';
@@ -9,6 +10,7 @@ export type MudSessionOptions = Omit<MudClientOptions, 'url'>;
 
 export class MudSession {
     readonly events = new EventBus<MudEvents>();
+    readonly windows = new WindowManager();
     private client: MudClient | null = null;
     private pingTracker: PingTracker | null = null;
     private stateUnsubs: (() => void)[] = [];

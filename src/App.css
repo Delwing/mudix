@@ -6,20 +6,24 @@
 }
 
 :root {
-    --bg:          #0e0e0e;
-    --bg-surface:  #161616;
-    --bg-input:    #1c1c1c;
-    --border:      #2a2a2a;
-    --text:        #d4d4d4;
-    --text-dim:    #6b6b6b;
-    --accent:      #4ec9b0;
-    --accent-dim:  #2d7a6e;
-    --danger:      #f14c4c;
-    --font-mono:   'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace;
-    --font-ui:     system-ui, -apple-system, sans-serif;
-    --toolbar-h:   44px;
-    --cmdbar-h:    44px;
-    --radius:      4px;
+    --bg:           #090909;
+    --bg-surface:   #121218;
+    --bg-input:     #1a1a22;
+    --bg-glass:     rgba(16, 16, 22, 0.72);
+    --border:       #252530;
+    --border-hi:    rgba(255, 255, 255, 0.06);
+    --text:         #d4d4d4;
+    --text-dim:     #606070;
+    --accent:       #4ec9b0;
+    --accent-dim:   #2d7a6e;
+    --accent-glow:  rgba(78, 201, 176, 0.18);
+    --danger:       #f14c4c;
+    --font-mono:    'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace;
+    --font-ui:      system-ui, -apple-system, sans-serif;
+    --toolbar-h:    44px;
+    --cmdbar-h:     44px;
+    --radius:       6px;
+    --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 html, body, #root {
@@ -46,9 +50,14 @@ html, body, #root {
     gap: 8px;
     height: var(--toolbar-h);
     padding: 0 12px;
-    background: var(--bg-surface);
+    background: var(--bg-glass);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border-bottom: 1px solid var(--border);
+    box-shadow: inset 0 1px 0 var(--border-hi);
     flex-shrink: 0;
+    position: relative;
+    z-index: 10;
 }
 
 .brand {
@@ -96,11 +105,25 @@ html, body, #root {
     font-variant-numeric: tabular-nums;
 }
 
-/* ── Output area ────────────────────────────────────────────── */
-.output-section {
+/* ── Dock area ──────────────────────────────────────────────── */
+.dock-section {
     flex: 1;
+    display: flex;
+    flex-direction: row;
     overflow: hidden;
     position: relative;
+    min-height: 0;
+}
+
+/* ── Scripts sidebar ────────────────────────────────────────── */
+.scripts-sidebar {
+    width: 560px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 /* ── Connection screen ──────────────────────────────────────── */
@@ -142,10 +165,19 @@ html, body, #root {
     display: flex;
     align-items: center;
     gap: 10px;
-    background: var(--bg-surface);
+    background: var(--bg-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border: 1px solid var(--border);
+    box-shadow: inset 0 1px 0 var(--border-hi);
     border-radius: var(--radius);
     padding: 10px 12px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.connection-card:hover {
+    border-color: color-mix(in srgb, var(--accent-dim) 50%, var(--border));
+    box-shadow: inset 0 1px 0 var(--border-hi), 0 2px 12px rgba(0,0,0,0.3);
 }
 
 .connection-info {
@@ -182,8 +214,11 @@ html, body, #root {
 }
 
 .connection-form {
-    background: var(--bg-surface);
+    background: var(--bg-glass);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border: 1px solid var(--border);
+    box-shadow: inset 0 1px 0 var(--border-hi), 0 4px 24px rgba(0,0,0,0.4);
     border-radius: var(--radius);
     padding: 16px;
     display: flex;
@@ -270,8 +305,9 @@ html, body, #root {
 .output-sticky {
     display: none;
     border-top: 1px solid var(--border);
-    background: color-mix(in srgb, var(--bg-surface) 90%, transparent);
-    backdrop-filter: blur(4px);
+    background: color-mix(in srgb, var(--bg-surface) 80%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     padding: 4px 10px;
     max-height: 160px;
     overflow: hidden;
@@ -286,8 +322,11 @@ html, body, #root {
     position: absolute;
     bottom: 8px;
     right: 16px;
-    background: var(--bg-surface);
+    background: color-mix(in srgb, var(--bg-surface) 80%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border: 1px solid var(--border);
+    box-shadow: inset 0 1px 0 var(--border-hi), 0 4px 12px rgba(0,0,0,0.4);
     border-radius: 12px;
     color: var(--accent);
     cursor: pointer;
@@ -295,11 +334,12 @@ html, body, #root {
     font-size: 11px;
     padding: 3px 10px;
     z-index: 10;
-    transition: background 0.1s;
+    transition: background 0.15s, box-shadow 0.15s;
 }
 
 .scroll-to-bottom:hover {
-    background: var(--bg-input);
+    background: color-mix(in srgb, var(--bg-input) 85%, transparent);
+    box-shadow: inset 0 1px 0 var(--border-hi), 0 4px 16px rgba(0,0,0,0.5), 0 0 8px var(--accent-glow);
 }
 
 /* ── Command bar ────────────────────────────────────────────── */
@@ -309,24 +349,121 @@ html, body, #root {
     gap: 6px;
     height: var(--cmdbar-h);
     padding: 0 10px;
-    background: var(--bg-surface);
+    background: var(--bg-glass);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border-top: 1px solid var(--border);
+    box-shadow: inset 0 -1px 0 var(--border-hi);
     flex-shrink: 0;
+    position: relative;
+    z-index: 10;
+}
+
+.command-input-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
 }
 
 .prompt {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
     color: var(--accent);
-    font-size: 14px;
+    font-size: 13px;
     user-select: none;
-    flex-shrink: 0;
+    pointer-events: none;
+    z-index: 1;
 }
 
 /* Command input overrides the base .input styles for the transparent bar style */
 .command-input.input {
-    background: transparent;
-    border: none;
+    background: color-mix(in srgb, var(--bg-input) 60%, transparent);
+    border-color: var(--border);
     font-size: 13px;
     height: auto;
+    padding: 6px 8px 6px 24px;
+    width: 100%;
+}
+
+/* ── Map panel ──────────────────────────────────────────────── */
+.map-panel {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    overflow: hidden;
+}
+
+.map-panel-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--bg-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    box-shadow: inset 0 1px 0 var(--border-hi);
+    flex-shrink: 0;
+}
+
+.map-area-select {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    padding: 2px 6px;
+    max-width: 220px;
+}
+
+.map-canvas-container {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+}
+
+.map-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: var(--bg);
+    color: var(--text-dim);
+    font-family: var(--font-ui);
+    font-size: 13px;
+}
+
+.map-overlay-error {
+    color: var(--danger);
+}
+
+.map-load-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--accent);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    padding: 6px 16px;
+    transition: background 0.1s, border-color 0.1s;
+}
+
+.map-load-btn:hover {
+    background: var(--bg-input);
+    border-color: var(--accent-dim);
 }
 
 /* ── ANSI animations ────────────────────────────────────────── */

@@ -1,0 +1,110 @@
+.dockview-theme-mudix {
+    --dv-paneview-active-outline-color: var(--accent);
+    --dv-tabs-and-actions-container-font-size: 12px;
+    --dv-tabs-and-actions-container-height: 30px;
+    --dv-drag-over-background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+    --dv-drag-over-border-color: var(--accent);
+    --dv-tabs-container-scrollbar-color: var(--border);
+    --dv-icon-hover-background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+    --dv-floating-box-shadow: var(--shadow-float);
+    --dv-overlay-z-index: 999;
+    --dv-tab-font-size: 12px;
+    --dv-border-radius: 4px;
+    --dv-tab-margin: 0;
+    --dv-sash-color: var(--border);
+    --dv-active-sash-color: var(--accent-dim);
+    --dv-active-sash-transition-duration: 0.1s;
+    --dv-active-sash-transition-delay: 0.2s;
+
+    --dv-group-view-background-color: var(--bg);
+    --dv-tabs-and-actions-container-background-color: rgba(14, 14, 20, 0.78);
+
+    --dv-activegroup-visiblepanel-tab-background-color: rgba(20, 20, 30, 0.60);
+    --dv-activegroup-hiddenpanel-tab-background-color: rgba(12, 12, 18, 0.45);
+    --dv-inactivegroup-visiblepanel-tab-background-color: rgba(12, 12, 18, 0.45);
+    --dv-inactivegroup-hiddenpanel-tab-background-color: rgba(10, 10, 16, 0.35);
+
+    --dv-tab-divider-color: var(--border);
+    --dv-activegroup-visiblepanel-tab-color: var(--text);
+    --dv-activegroup-hiddenpanel-tab-color: var(--text-dim);
+    --dv-inactivegroup-visiblepanel-tab-color: var(--text-dim);
+    --dv-inactivegroup-hiddenpanel-tab-color: var(--text-dim);
+
+    --dv-separator-border: var(--border);
+    --dv-paneview-header-border-color: var(--border);
+
+    color: var(--text);
+}
+
+/* Tab/header chrome only — keep panel content inheriting the body's mono font. */
+.dockview-theme-mudix .dv-tabs-and-actions-container,
+.dockview-theme-mudix .dv-default-tab,
+.dockview-theme-mudix .dv-tab {
+    font-family: var(--font-ui);
+}
+
+/* Glass tab bar */
+.dockview-theme-mudix .dv-tabs-and-actions-container {
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: inset 0 1px 0 var(--border-hi), inset 0 -1px 0 var(--border);
+}
+
+/* Accent underline on the active tab */
+.dockview-theme-mudix .dv-default-tab.active-tab {
+    box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* Flex wrapper — controls how the dock area shares space with sidebars */
+.dock-root-wrap {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Dockview root — always fills its wrapper */
+.dock-root {
+    width: 100%;
+    height: 100%;
+}
+
+/* Make panel content reliably fill its dockview group regardless of how
+   children declare height (some use flex, some use height: 100%). */
+.dock-root .dv-content-container {
+    display: flex;
+    min-height: 0;
+}
+.dock-root .dv-content-container > * {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+}
+
+.window-text-panel,
+.window-html-panel {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    padding: 6px 10px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--bg);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+
+.window-text-panel::-webkit-scrollbar,
+.window-html-panel::-webkit-scrollbar { width: 6px; }
+.window-text-panel::-webkit-scrollbar-track,
+.window-html-panel::-webkit-scrollbar-track { background: transparent; }
+.window-text-panel::-webkit-scrollbar-thumb,
+.window-html-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.window-text-line {
+    white-space: pre-wrap;
+    word-break: break-word;
+}

@@ -1,6 +1,6 @@
 import { EventBus } from "../../core/EventBus";
 import { AnsiAwareBuffer } from "../text/FormatState";
-import { createPassthroughEngine, type TriggerEngine } from "../triggers/TriggerEngine";
+import { createPassthroughProcessor, type ChunkProcessor } from "../triggers/ChunkProcessor";
 import {
     createGmcpStream,
     createTelnetOptionParser,
@@ -19,13 +19,13 @@ export interface MudClientOptions {
     url: string;
     mccpEnabled?: boolean;
     commandEcho?: boolean;
-    triggerEngine?: TriggerEngine;
+    chunkProcessor?: ChunkProcessor;
 }
 
 export class MudClient {
     private socket!: WebSocket;
     private readonly eventBus: EventBus<MudClientEvents>;
-    private readonly triggerEngine: TriggerEngine;
+    private readonly chunkProcessor: ChunkProcessor;
     private messageBuffer: { text: string; type: string }[] = [];
     private readonly gmcpStream: (data: string) => void;
     private readonly telnetOptionHandler: (optionData: string) => string;
@@ -40,14 +40,14 @@ export class MudClient {
             url,
             mccpEnabled = true,
             commandEcho = true,
-            triggerEngine,
+            chunkProcessor,
         }: MudClientOptions,
         eventBus: EventBus<MudClientEvents>,
     ) {
         this.url = url;
         this.commandEcho = commandEcho;
         this.eventBus = eventBus;
-        this.triggerEngine = triggerEngine ?? createPassthroughEngine();
+        this.chunkProcessor = chunkProcessor ?? createPassthroughProcessor();
 
         this.gmcpStream = createGmcpStream({
             onEnvelope: ({ path, value }) => {
@@ -203,7 +203,7 @@ export class MudClient {
         const sanitized = stripTelnetSequences(data, this.telnetOptionHandler).replace(/\r/g, '');
         const ts = typeof timestamp === 'number' ? timestamp : Date.now();
         if (sanitized.length > 0) {
-            this.triggerEngine.processChunk(sanitized, ts, this);
+            this.chunkProcessor.processChunk(sanitized, ts, this);
         }
         this.flushMessageBuffer();
     }
