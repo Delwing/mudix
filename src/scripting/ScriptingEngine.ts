@@ -36,6 +36,16 @@ export class ScriptingEngine {
         this.api.flushOutput();
     }
 
+    /** Run a single script on the existing runtime without restarting it. */
+    reloadScript(script: Script): void {
+        if (script.language !== 'lua') return;
+        if (!this.runtimes.lua) {
+            this.runtimes.lua = new LuaRuntime(this.api);
+        }
+        this.runtimes.lua.load(script.code, script.name);
+        this.api.flushOutput();
+    }
+
     /** Run input through aliases. Returns true if an alias matched (caller should not send). */
     processInput(text: string): boolean {
         // JS temp aliases

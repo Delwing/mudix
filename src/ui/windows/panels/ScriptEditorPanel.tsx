@@ -35,9 +35,10 @@ interface LogEntry {
 interface ScriptEditorPanelProps {
     connectionId: string;
     session: MudSession;
+    onScriptSave?: (script: Script) => void;
 }
 
-export function ScriptEditorPanel({ connectionId, session }: ScriptEditorPanelProps) {
+export function ScriptEditorPanel({ connectionId, session, onScriptSave }: ScriptEditorPanelProps) {
 
     const scripts      = useAppStore(s => s.connectionScripts[connectionId] ?? EMPTY_SCRIPTS);
     const addScript    = useAppStore(s => s.addScript);
@@ -87,13 +88,14 @@ export function ScriptEditorPanel({ connectionId, session }: ScriptEditorPanelPr
     };
 
     const handleSave = () => {
-        if (!selectedId) return;
+        if (!selectedId || !selected) return;
         setLogs([]);
         updateScript(connectionId, selectedId, {
             name: editName,
             language: editLang,
             code: editCode,
         });
+        onScriptSave?.({ ...selected, name: editName, language: editLang, code: editCode });
         setDirty(false);
     };
 

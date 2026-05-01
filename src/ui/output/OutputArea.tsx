@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { MudSession } from '../../mud/MudSession';
 import { useOutputArea } from '../../hooks/useOutput';
+import { useAppStore } from '../../storage';
 
 interface OutputAreaProps {
     session: MudSession;
@@ -9,6 +10,7 @@ interface OutputAreaProps {
 }
 
 export function OutputArea({ session, stickyLines = 5, commandInputRef }: OutputAreaProps) {
+    const outputBackground = useAppStore(s => s.ui.outputBackground);
     const { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom } =
         useOutputArea(session, { stickyLines });
 
@@ -22,7 +24,11 @@ export function OutputArea({ session, stickyLines = 5, commandInputRef }: Output
 
     return (
         <div className="output-container" onClick={handleClick}>
-            <div className="output-wrapper" ref={outputRef}>
+            <div
+                className="output-wrapper"
+                ref={outputRef}
+                style={outputBackground ? { background: outputBackground } : undefined}
+            >
                 {/* Messages are inserted before this sentinel by the imperative renderer */}
                 <div ref={sentinelRef} style={{ height: 0 }} />
             </div>

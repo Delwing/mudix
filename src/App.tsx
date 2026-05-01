@@ -9,6 +9,7 @@ import { ScriptingEngine } from './scripting/ScriptingEngine';
 import { AliasEngine } from './mud/aliases/AliasEngine';
 import { TriggerEngine } from './mud/triggers/TriggerEngine';
 import { ScriptEditorPanel } from './ui/windows/panels/ScriptEditorPanel';
+import { SettingsModal } from './ui/SettingsModal';
 import type { SerializedLayout } from './ui/windows/types';
 import type { Script } from './storage/schema';
 
@@ -22,6 +23,7 @@ export default function App() {
     const [activeConnection, setActiveConnection] = useState<MudConnection | null>(null);
     const [sessionStarted, setSessionStarted] = useState(false);
     const [scriptsOpen, setScriptsOpen] = useState(false);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const commandInputRef = useRef<HTMLInputElement>(null);
     const connections = useAppStore(s => s.connections);
     const addConnection = useAppStore(s => s.addConnection);
@@ -55,9 +57,36 @@ export default function App() {
     const activeScripts = useAppStore(s =>
         activeConnection ? (s.connectionScripts[activeConnection.id] ?? NO_SCRIPTS) : NO_SCRIPTS,
     );
+    const suppressNextScriptReload = useRef(false);
+    const pendingOutputReadyUnsub = useRef<(() => void) | null>(null);
     useEffect(() => {
-        engineRef.current?.loadScripts(activeScripts);
-    }, [activeScripts]);
+        if (suppressNextScriptReload.current) {
+            suppressNextScriptReload.current = false;
+            return;
+        }
+
+        pendingOutputReadyUnsub.current?.();
+        pendingOutputReadyUnsub.current = null;
+
+        if (session.outputReady) {
+            engineRef.current?.loadScripts(activeScripts);
+        } else {
+            pendingOutputReadyUnsub.current = session.events.on('output.ready', () => {
+                pendingOutputReadyUnsub.current = null;
+                engineRef.current?.loadScripts(activeScripts);
+            }, { once: true });
+        }
+
+        return () => {
+            pendingOutputReadyUnsub.current?.();
+            pendingOutputReadyUnsub.current = null;
+        };
+    }, [activeScripts, session]);
+
+    const handleScriptSave = useCallback((script: Script) => {
+        suppressNextScriptReload.current = true;
+        engineRef.current?.reloadScript(script);
+    }, []);
 
     // Reload permanent aliases from store into AliasEngine whenever they change.
     const NO_ALIASES = useRef<never[]>([]).current;
@@ -83,6 +112,11 @@ export default function App() {
         connect(connectionUrl(connection));
     };
 
+    const handleOpenOffline = (connection: MudConnection) => {
+        setActiveConnection(connection);
+        setSessionStarted(true);
+    };
+
     const handleDisconnect = () => {
         disconnect();
     };
@@ -102,6 +136,7 @@ export default function App() {
     };
 
     const handleOpenScripts = () => setScriptsOpen(v => !v);
+    const handleOpenSettings = () => setSettingsOpen(v => !v);
 
     const handleSend = () => {
         const consumed = engineRef.current?.processInput(command) ?? false;
@@ -125,9 +160,12 @@ export default function App() {
                     connecting={status === 'connecting'}
                     connectingId={activeConnection?.id ?? null}
                     onConnect={handleConnect}
+                    onOpen={handleOpenOffline}
                     onAdd={addConnection}
                     onDelete={removeConnection}
+                    onOpenSettings={handleOpenSettings}
                 />
+                {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
             </div>
         );
     }
@@ -145,7 +183,9 @@ export default function App() {
                 onNewConnection={handleNewConnection}
                 onOpenMap={handleOpenMap}
                 onOpenScripts={handleOpenScripts}
+                onOpenSettings={handleOpenSettings}
             />
+            {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
             <div className="dock-section">
                 <DockRoot
                     key={activeConnectionId ?? 'no-connection'}
@@ -158,7 +198,7 @@ export default function App() {
                 />
                 {scriptsOpen && (
                     <aside className="scripts-sidebar">
-                        <ScriptEditorPanel connectionId={activeConnectionId ?? ''} session={session} />
+                        <ScriptEditorPanel connectionId={activeConnectionId ?? ''} session={session} onScriptSave={handleScriptSave} />
                     </aside>
                 )}
             </div>

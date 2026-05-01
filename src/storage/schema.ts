@@ -11,6 +11,7 @@ export interface UISettings {
     showMessageTypes: boolean;
     fontSize: number;
     stickyLines: number;
+    outputBackground: string;
 }
 
 export interface Script {
@@ -55,6 +56,7 @@ export const APP_DEFAULTS: AppSchema = {
         showMessageTypes: false,
         fontSize: 13,
         stickyLines: 5,
+        outputBackground: '',
     },
     connectionLayouts: {},
     connectionScripts: {},

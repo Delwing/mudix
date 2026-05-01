@@ -16,11 +16,23 @@ export class MudSession {
     private stateUnsubs: (() => void)[] = [];
     private _status: SessionStatus = 'disconnected';
     private _ping: number | null = null;
+    private _outputReady = false;
 
     constructor(private readonly options: MudSessionOptions = {}) {}
 
     get status(): SessionStatus { return this._status; }
     get ping(): number | null { return this._ping; }
+    get outputReady(): boolean { return this._outputReady; }
+
+    markOutputReady(): void {
+        if (this._outputReady) return;
+        this._outputReady = true;
+        this.events.emit('output.ready');
+    }
+
+    markOutputGone(): void {
+        this._outputReady = false;
+    }
 
     connect(url: string): void {
         this.teardownClient();

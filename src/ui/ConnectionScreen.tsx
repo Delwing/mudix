@@ -7,11 +7,13 @@ interface Props {
     connecting: boolean;
     connectingId: string | null;
     onConnect: (connection: MudConnection) => void;
+    onOpen: (connection: MudConnection) => void;
     onAdd: (data: Omit<MudConnection, 'id'>) => void;
     onDelete: (id: string) => void;
+    onOpenSettings: () => void;
 }
 
-export function ConnectionScreen({ connections, connecting, connectingId, onConnect, onAdd, onDelete }: Props) {
+export function ConnectionScreen({ connections, connecting, connectingId, onConnect, onOpen, onAdd, onDelete, onOpenSettings }: Props) {
     const [name, setName] = useState('');
     const [url, setUrl] = useState('');
 
@@ -27,6 +29,9 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
 
     return (
         <div className="connection-screen">
+            <button className="connection-settings-btn" onClick={onOpenSettings} type="button" aria-label="Settings">
+                ⚙
+            </button>
             <div className="connection-panel">
                 <div className="connection-brand">mudix</div>
 
@@ -45,6 +50,15 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                         disabled={connecting}
                                     >
                                         {connectingId === c.id ? 'Connecting…' : 'Connect'}
+                                    </Button>
+                                    <Button
+                                        variant="secondary"
+                                        size="md"
+                                        onClick={() => onOpen(c)}
+                                        disabled={connecting}
+                                        title="Open profile offline"
+                                    >
+                                        Open
                                     </Button>
                                     <Button
                                         variant="icon"

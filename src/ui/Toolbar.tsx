@@ -10,9 +10,10 @@ interface ToolbarProps {
     onNewConnection: () => void;
     onOpenMap: () => void;
     onOpenScripts: () => void;
+    onOpenSettings: () => void;
 }
 
-export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts }: ToolbarProps) {
+export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenSettings }: ToolbarProps) {
     return (
         <div className="toolbar">
             <span className="brand">mudix</span>
@@ -27,6 +28,7 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
             )}
             <Button variant="ghost" onClick={onOpenScripts}>Scripts</Button>
             <Button variant="ghost" onClick={onOpenMap}>Map</Button>
+            <Button variant="ghost" onClick={onOpenSettings}>Settings</Button>
             {status === 'disconnected'
                 ? <>
                     <Button variant="ghost" onClick={onReconnect}>Reconnect</Button>

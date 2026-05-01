@@ -67,6 +67,17 @@ export function MapPanel(_props: IDockviewPanelProps) {
     }, [loadFromBuffer]);
 
 
+    // Divs don't fire "resize" natively; the renderer needs it to update canvas size.
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const ro = new ResizeObserver(() => {
+            el.dispatchEvent(new Event('resize'));
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+
     // Cleanup renderer on unmount
     useEffect(() => {
         return () => { rendererRef.current?.destroy(); };

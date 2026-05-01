@@ -64,8 +64,10 @@ export class LuaRuntime implements IScriptingRuntime {
         return false;
     }
 
-    /** Fire all Lua-registered temp triggers that match `line`. Sets `matches` per-trigger before calling. */
+    /** Fire all Lua-registered temp triggers that match `line`. Sets `matches` and `line` per-trigger before calling. */
     processTrigger(line: string): void {
+        lua.lua_pushstring(this.L, ls(line));
+        lua.lua_setglobal(this.L, ls('line'));
         for (const { pattern, ref } of this.triggers.values()) {
             const m = line.match(pattern);
             if (!m) continue;
@@ -84,10 +86,14 @@ export class LuaRuntime implements IScriptingRuntime {
         }
     }
 
-    /** Execute `code` with the `matches` global pre-set. Used for permanent alias/trigger execution. */
+    /** Execute `code` with the `matches` and `line` globals pre-set. Used for permanent alias/trigger execution. */
     runWithMatches(code: string, name: string, matches: string[]): void {
         this.push(matches);
         lua.lua_setglobal(this.L, ls('matches'));
+        if (matches.length > 0) {
+            lua.lua_pushstring(this.L, ls(matches[0]));
+            lua.lua_setglobal(this.L, ls('line'));
+        }
         const err = this.exec(code, `@alias:${name}`);
         if (err) this.api.printError(`[lua alias "${name}"] ${err}`);
     }

@@ -72,7 +72,10 @@ export function useOutputArea(
             },
         });
 
+        session.markOutputReady();
+
         return () => {
+            session.markOutputGone();
             outputEl.removeEventListener('scroll', handleScroll);
             teardown();
         };
