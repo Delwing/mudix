@@ -29,8 +29,11 @@ mudix = {
     fg           = __mudix_fg__,
     bg           = __mudix_bg__,
     resetFormat  = __mudix_reset_format__,
-    feedTriggers = __mudix_feed_triggers__,
-    printerror   = __mudix_printerror__,
+    feedTriggers  = __mudix_feed_triggers__,
+    printerror    = __mudix_printerror__,
+    deleteLine    = __mudix_delete_line__,
+    appendCmdLine = __mudix_append_cmd_line__,
+    setCmdLine    = __mudix_set_cmd_line__,
 
     windows = {
         open = function(id, options)
@@ -124,6 +127,90 @@ tempTrigger  = __mudix_temp_trigger__
 killTrigger  = __mudix_kill_trigger__
 tempKey      = __mudix_temp_key__
 killKey      = __mudix_kill_key__
+deleteLine   = __mudix_delete_line__
+appendCmdLine = __mudix_append_cmd_line__
+setCmdLine   = __mudix_set_cmd_line__
+
+-- String utilities (Mudlet-compatible)
+function string.starts(s, prefix)
+    return s:sub(1, #prefix) == prefix
+end
+
+function string.ends(s, suffix)
+    if suffix == '' then return true end
+    return s:sub(-#suffix) == suffix
+end
+
+function string.trim(s)
+    return s:match('^%s*(.-)%s*$')
+end
+
+function string.split(str, sep)
+    if sep == nil or sep == '' then return { str } end
+    local result = {}
+    local i = 1
+    local len = #str
+    local sepLen = #sep
+    while i <= len + 1 do
+        local j = str:find(sep, i, true)
+        if j then
+            table.insert(result, str:sub(i, j - 1))
+            i = j + sepLen
+        else
+            table.insert(result, str:sub(i))
+            break
+        end
+    end
+    return result
+end
+
+function string.contains(s, sub)
+    return s:find(sub, 1, true) ~= nil
+end
+
+-- Table utilities (Mudlet-compatible)
+function table.contains(t, val)
+    for _, v in pairs(t) do
+        if v == val then return true end
+    end
+    return false
+end
+
+function table.size(t)
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    return count
+end
+
+-- sendAll: send multiple commands at once
+function sendAll(...)
+    for _, cmd in ipairs({...}) do
+        send(cmd)
+    end
+end
+
+-- raiseEvent: fire a named event to all registered Lua handlers
+function raiseEvent(name, ...)
+    __dispatch__(name, ...)
+end
+
+-- registerAnonymousEventHandler: Mudlet-compatible alias for mudix.on
+function registerAnonymousEventHandler(name, fn)
+    mudix.on(name, fn)
+end
+
+-- Window shortcuts
+function clearWindow(name)
+    mudix.windows.clear(name)
+end
+
+function openWindow(id, options)
+    mudix.windows.open(id, options)
+end
+
+function closeWindow(id)
+    mudix.windows.close(id)
+end
 
 -- display: pretty-print a value to the output window
 function display(what, indent, seen)

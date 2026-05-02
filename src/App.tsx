@@ -137,6 +137,17 @@ export default function App() {
         engineRef.current?.loadPermKeybindings(activeKeybindings);
     }, [activeKeybindings]);
 
+    // Script-driven command bar manipulation.
+    useEffect(() => {
+        const unsub1 = session.events.on('script.appendcmd', (text: string) => {
+            setCommand(prev => prev + text);
+        });
+        const unsub2 = session.events.on('script.setcmd', (text: string) => {
+            setCommand(text);
+        });
+        return () => { unsub1(); unsub2(); };
+    }, [session]);
+
     // Global keydown listener — fires keybindings, but not when focused in a textarea (e.g. script editor).
     useEffect(() => {
         if (!sessionStarted) return;

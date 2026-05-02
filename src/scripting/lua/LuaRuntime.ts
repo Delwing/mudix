@@ -433,6 +433,21 @@ export class LuaRuntime implements IScriptingRuntime {
             lua.lua_pushboolean(L, api.windows.has(lua.lua_tojsstring(L, 1)) ? 1 : 0);
             return 1;
         });
+
+        this.cfunction('__mudix_delete_line__', (_L) => {
+            api.deleteLine();
+            return 0;
+        });
+
+        this.cfunction('__mudix_append_cmd_line__', (L) => {
+            api.appendCmdLine(lua.lua_tojsstring(L, 1));
+            return 0;
+        });
+
+        this.cfunction('__mudix_set_cmd_line__', (L) => {
+            api.setCmdLine(lua.lua_tojsstring(L, 1));
+            return 0;
+        });
     }
 
     /** Register a C function as a Lua global. */

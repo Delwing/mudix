@@ -1,7 +1,10 @@
 import {AnsiAwareBuffer} from "../../mud/text/FormatState";
 
 type MessageListener = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number) => void;
-type MessageSource = { on(event: 'message', listener: MessageListener): () => void };
+type MessageSource = {
+    on(event: 'message', listener: MessageListener): () => void;
+    on(event: 'script.deleteline', listener: () => void): () => void;
+};
 
 type OutputHandlerOptions = {
     outputWrapper: HTMLElement;
@@ -172,8 +175,13 @@ export function setupOutputRenderer(
 
     const unsubscribeMessage = source.on('message', handleMessage);
 
+    const unsubscribeDeleteLine = source.on('script.deleteline', () => {
+        const prev = sentinel.previousElementSibling;
+        if (prev) outputWrapper.removeChild(prev);
+    });
+
     return {
-        teardown: () => { unsubscribeMessage(); },
+        teardown: () => { unsubscribeMessage(); unsubscribeDeleteLine(); },
         areTimestampsVisible: () => timestampsVisible,
         setTimestampVisibility: (visible: boolean) => {
             timestampsVisible = visible;

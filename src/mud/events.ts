@@ -23,4 +23,7 @@ export type MudEvents = MudClientEvents & {
     'ping': [duration: number | null];
     'script.log': [text: string, level: 'error' | 'info'];
     'output.ready': void;
+    'script.deleteline': void;
+    'script.appendcmd': [text: string];
+    'script.setcmd': [text: string];
 };

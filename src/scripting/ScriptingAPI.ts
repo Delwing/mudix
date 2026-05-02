@@ -174,6 +174,18 @@ export class ScriptingAPI {
         node[parts[parts.length - 1]] = value;
     }
 
+    deleteLine(): void {
+        this.session.events.emit('script.deleteline');
+    }
+
+    appendCmdLine(text: string): void {
+        this.session.events.emit('script.appendcmd', text);
+    }
+
+    setCmdLine(text: string): void {
+        this.session.events.emit('script.setcmd', text);
+    }
+
     destroy(): void {
         this.flushOutput();
     }
