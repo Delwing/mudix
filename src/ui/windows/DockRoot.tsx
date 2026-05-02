@@ -9,6 +9,8 @@ import {OutputPanel} from './panels/OutputPanel';
 import {TextPanel} from './panels/TextPanel';
 import {HtmlPanel} from './panels/HtmlPanel';
 import {MapPanel} from './panels/MapPanel';
+import {PopoutButton} from './PopoutButton';
+import {DEFAULT_STICKY_LINES} from '../../hooks/useOutput';
 
 interface DockRootProps {
     session: MudSession;
@@ -25,7 +27,7 @@ const OUTPUT_PANEL_ID = 'output';
 export function DockRoot({
     session,
     manager,
-    stickyLines = 5,
+    stickyLines = DEFAULT_STICKY_LINES,
     initialLayout,
     onLayoutChange,
     commandInputRef,
@@ -93,8 +95,90 @@ export function DockRoot({
                 }, SAVE_DEBOUNCE_MS);
             });
 
-            // Dispose subscription when this DockRoot unmounts.
-            return () => sub.dispose();
+            // Allow dragging floating panels by their tab, not just the void area.
+            // dockview's built-in drag handle is .dv-void-container only; we add
+            // pointer handlers on the full tab header so the entire title bar works.
+            const floatingDragCleanups = new Map<string, () => void>();
+
+            const attachFloatingDrag = (group: (typeof api.groups)[number]) => {
+                const header = group.element.querySelector<HTMLElement>('.dv-tabs-and-actions-container');
+                if (!header) return;
+
+                let active: {
+                    pointerId: number;
+                    panelEl: HTMLElement;
+                    containerEl: HTMLElement;
+                    offsetX: number;
+                    offsetY: number;
+                } | null = null;
+
+                const onDown = (e: PointerEvent) => {
+                    if (e.button !== 0 || e.shiftKey) return;
+                    if (!(e.target as HTMLElement).closest('.dv-tab')) return;
+                    if ((e.target as HTMLElement).closest('button')) return;
+
+                    const panelEl = group.element.closest<HTMLElement>('.dv-resize-container');
+                    const containerEl = panelEl?.parentElement;
+                    if (!panelEl || !containerEl) return;
+
+                    const r = panelEl.getBoundingClientRect();
+                    active = { pointerId: e.pointerId, panelEl, containerEl, offsetX: e.clientX - r.left, offsetY: e.clientY - r.top };
+                    header.setPointerCapture(e.pointerId);
+                };
+
+                const onMove = (e: PointerEvent) => {
+                    if (!active || e.pointerId !== active.pointerId) return;
+                    const cr = active.containerEl.getBoundingClientRect();
+                    active.panelEl.style.left = `${e.clientX - cr.left - active.offsetX}px`;
+                    active.panelEl.style.top = `${e.clientY - cr.top - active.offsetY}px`;
+                    active.panelEl.style.right = 'auto';
+                    active.panelEl.style.bottom = 'auto';
+                };
+
+                const onUp = (e: PointerEvent) => {
+                    if (active?.pointerId === e.pointerId) {
+                        header.releasePointerCapture(e.pointerId);
+                        active = null;
+                    }
+                };
+
+                header.addEventListener('pointerdown', onDown);
+                header.addEventListener('pointermove', onMove);
+                header.addEventListener('pointerup', onUp);
+                header.addEventListener('pointercancel', onUp);
+
+                floatingDragCleanups.set(group.id, () => {
+                    header.removeEventListener('pointerdown', onDown);
+                    header.removeEventListener('pointermove', onMove);
+                    header.removeEventListener('pointerup', onUp);
+                    header.removeEventListener('pointercancel', onUp);
+                });
+            };
+
+            for (const group of api.groups) {
+                if (group.api.location.type === 'floating') {
+                    requestAnimationFrame(() => attachFloatingDrag(group));
+                }
+            }
+
+            const addGroupSub = api.onDidAddGroup((group) => {
+                if (group.api.location.type === 'floating') {
+                    requestAnimationFrame(() => attachFloatingDrag(group));
+                }
+            });
+
+            const removeGroupSub = api.onDidRemoveGroup((group) => {
+                floatingDragCleanups.get(group.id)?.();
+                floatingDragCleanups.delete(group.id);
+            });
+
+            // Dispose subscriptions when this DockRoot unmounts.
+            return () => {
+                sub.dispose();
+                addGroupSub.dispose();
+                removeGroupSub.dispose();
+                floatingDragCleanups.forEach(fn => fn());
+            };
         },
         [manager, session, stickyLines, initialLayout],
     );
@@ -112,8 +196,9 @@ export function DockRoot({
     return (
         <div className="dock-root-wrap">
             <DockviewReact
-                className="dock-root dockview-theme-mudix"
+                className="dock-root dockview-theme-dark dockview-theme-mudix"
                 components={components}
+                rightHeaderActionsComponent={PopoutButton}
                 onReady={handleReady}
             />
         </div>

@@ -311,24 +311,49 @@ html, body, #root {
 
 /* ── Sticky area (split view) ──────────────────────────────── */
 .output-sticky {
-    display: none;
-    border-top: 1px solid var(--border);
-    background: color-mix(in srgb, var(--bg-surface) 80%, transparent);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    padding: 4px 10px;
-    max-height: 160px;
+    visibility: hidden;
+    pointer-events: none;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 6px; /* leave scrollbar track visible */
+    background: var(--bg);
     overflow: hidden;
+    z-index: 2;
 }
 
 .output-sticky--active {
-    display: block;
+    visibility: visible;
+    pointer-events: auto;
+}
+
+.output-sticky-content {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 4px 10px;
+}
+
+.output-sticky-handle {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 4px;
+    cursor: ns-resize;
+    z-index: 3;
+    background: var(--border);
+    transition: background 0.15s;
+}
+
+.output-sticky-handle:hover,
+.output-sticky-handle:active {
+    background: var(--accent);
 }
 
 /* ── Scroll-to-bottom button ───────────────────────────────── */
 .scroll-to-bottom {
     position: absolute;
-    bottom: 8px;
     right: 16px;
     background: color-mix(in srgb, var(--bg-surface) 80%, transparent);
     backdrop-filter: blur(10px);

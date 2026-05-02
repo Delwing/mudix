@@ -19,6 +19,8 @@ export type OutputRendererControls = {
     areTimestampsVisible: () => boolean;
     setTimestampVisibility: (visible: boolean) => void;
     toggleTimestampVisibility: () => void;
+    populateStickyArea: () => void;
+    clearStickyArea: () => void;
 };
 
 const TIMESTAMP_CLASS = 'output-show-timestamps';
@@ -150,6 +152,24 @@ export function setupOutputRenderer(
         }
     };
 
+    function clearStickyArea() {
+        while (stickyArea.firstChild) {
+            stickyArea.removeChild(stickyArea.firstChild);
+        }
+    }
+
+    function populateStickyArea() {
+        clearStickyArea();
+        const children = Array.from(outputWrapper.children);
+        const sentinelIdx = children.indexOf(sentinel as Element);
+        const messages = sentinelIdx >= 0 ? children.slice(0, sentinelIdx) : children;
+        const lastN = messages.slice(-stickyLines);
+        for (const el of lastN) {
+            stickyArea.appendChild(el.cloneNode(true));
+        }
+        applyTimestampVisibility();
+    }
+
     const unsubscribeMessage = source.on('message', handleMessage);
 
     return {
@@ -163,5 +183,7 @@ export function setupOutputRenderer(
             timestampsVisible = !timestampsVisible;
             applyTimestampVisibility();
         },
+        populateStickyArea,
+        clearStickyArea,
     };
 }

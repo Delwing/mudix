@@ -12,6 +12,7 @@ import { ScriptEditorPanel } from './ui/windows/panels/ScriptEditorPanel';
 import { SettingsModal } from './ui/SettingsModal';
 import type { SerializedLayout } from './ui/windows/types';
 import type { Script } from './storage/schema';
+import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 
 // Stable fallback so the Zustand selector always returns the same reference
 // when there are no scripts — avoids an infinite re-render loop.
@@ -191,7 +192,7 @@ export default function App() {
                     key={activeConnectionId ?? 'no-connection'}
                     session={session}
                     manager={session.windows}
-                    stickyLines={5}
+                    stickyLines={DEFAULT_STICKY_LINES}
                     initialLayout={initialLayout}
                     onLayoutChange={handleLayoutChange}
                     commandInputRef={commandInputRef}

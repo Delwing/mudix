@@ -2,6 +2,8 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import type { MudSession } from '../mud/MudSession';
 import { setupOutputRenderer, type OutputRendererControls } from '../ui/output/OutputRenderer';
 
+export const DEFAULT_STICKY_LINES = 50;
+
 export interface UseOutputOptions {
     stickyLines?: number;
     maxElements?: number;
@@ -20,9 +22,9 @@ export interface UseOutputResult {
 export function useOutputArea(
     session: MudSession,
     {
-        stickyLines = 5,
+        stickyLines = DEFAULT_STICKY_LINES,
         maxElements = 1000,
-        splitViewThreshold = 60,
+        splitViewThreshold = 1,
         showTimestamps = false,
     }: UseOutputOptions = {},
 ): UseOutputResult {
@@ -42,16 +44,36 @@ export function useOutputArea(
         el.scrollTop = el.scrollHeight;
         isSplitViewRef.current = false;
         setIsSplitView(false);
+        rendererRef.current?.clearStickyArea();
     }, []);
 
     const handleScroll = useCallback(() => {
         const el = outputRef.current;
         if (!el || Date.now() < suppressUntilRef.current) return;
-        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        const distFromBottom = Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
         const next = distFromBottom > splitViewThreshold;
         if (next !== isSplitViewRef.current) {
             isSplitViewRef.current = next;
             setIsSplitView(next);
+            if (next) {
+                rendererRef.current?.populateStickyArea();
+            } else {
+                rendererRef.current?.clearStickyArea();
+            }
+        }
+    }, [splitViewThreshold]);
+
+    // Fires before the browser scrolls — lets us show the sticky with zero visual delay.
+    const handleWheel = useCallback((e: WheelEvent) => {
+        const el = outputRef.current;
+        if (!el || isSplitViewRef.current || Date.now() < suppressUntilRef.current) return;
+        if (e.deltaY < 0) {
+            const distFromBottom = Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
+            if (distFromBottom <= splitViewThreshold) {
+                isSplitViewRef.current = true;
+                setIsSplitView(true);
+                rendererRef.current?.populateStickyArea();
+            }
         }
     }, [splitViewThreshold]);
 
@@ -62,6 +84,7 @@ export function useOutputArea(
         if (!outputEl || !sentinelEl || !stickyAreaEl) return;
 
         outputEl.addEventListener('scroll', handleScroll, { passive: true });
+        outputEl.addEventListener('wheel', handleWheel, { passive: true });
 
         const controls = setupOutputRenderer(session.events, {
             outputWrapper: outputEl,
@@ -83,9 +106,10 @@ export function useOutputArea(
             rendererRef.current = null;
             session.markOutputGone();
             outputEl.removeEventListener('scroll', handleScroll);
+            outputEl.removeEventListener('wheel', handleWheel);
             controls.teardown();
         };
-    }, [session, handleScroll, stickyLines, maxElements]);
+    }, [session, handleScroll, handleWheel, stickyLines, maxElements]);
 
     useEffect(() => {
         rendererRef.current?.setTimestampVisibility(showTimestamps);
