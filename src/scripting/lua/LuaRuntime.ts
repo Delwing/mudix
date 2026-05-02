@@ -9,12 +9,14 @@ type LuaState = ReturnType<typeof lauxlib.luaL_newstate>;
 
 export class LuaRuntime implements IScriptingRuntime {
     private L: LuaState;
-    private timers: Map<number, { handle: ReturnType<typeof setTimeout>; ref: number }> = new Map();
+    private timers: Map<number, { handle: number; ref: number; repeat: boolean }> = new Map();
     private aliases: Map<number, { pattern: RegExp; ref: number }> = new Map();
     private triggers: Map<number, { pattern: RegExp; ref: number }> = new Map();
+    private keys: Map<number, { key: string; modifiers: string[]; ref: number }> = new Map();
     private nextTimerId = 1;
     private nextAliasId = 1;
     private nextTriggerId = 1;
+    private nextKeyId = 1;
 
     constructor(private readonly api: ScriptingAPI) {
         this.L = lauxlib.luaL_newstate();
@@ -98,6 +100,34 @@ export class LuaRuntime implements IScriptingRuntime {
         if (err) this.api.printError(`[lua alias "${name}"] ${err}`);
     }
 
+    /** Execute a code chunk once, without match context. Used for timers and keybindings. */
+    run(code: string, name: string): void {
+        const err = this.exec(code, `@${name}`);
+        if (err) this.api.printError(`[lua "${name}"] ${err}`);
+    }
+
+    /** Fire the first matching Lua-registered temp keybinding. Returns true if consumed. */
+    processKey(event: KeyboardEvent): boolean {
+        for (const { key, modifiers, ref } of this.keys.values()) {
+            if (event.key !== key) continue;
+            if (event.ctrlKey  !== modifiers.includes('ctrl'))  continue;
+            if (event.shiftKey !== modifiers.includes('shift')) continue;
+            if (event.altKey   !== modifiers.includes('alt'))   continue;
+            if (event.metaKey  !== modifiers.includes('meta'))  continue;
+
+            const top = lua.lua_gettop(this.L);
+            lua.lua_rawgeti(this.L, lua.LUA_REGISTRYINDEX, ref);
+            const status = lua.lua_pcall(this.L, 0, 0, 0);
+            if (status !== 0) {
+                const err = lua.lua_tojsstring(this.L, -1);
+                lua.lua_settop(this.L, top);
+                this.api.printError('[lua key error] ' + err);
+            }
+            return true;
+        }
+        return false;
+    }
+
     emitEvent(event: string, args: unknown[]): void {
         const L = this.L;
         const top = lua.lua_gettop(L);
@@ -119,8 +149,9 @@ export class LuaRuntime implements IScriptingRuntime {
     }
 
     destroy(): void {
-        for (const { handle, ref } of this.timers.values()) {
-            clearTimeout(handle);
+        for (const { handle, ref, repeat } of this.timers.values()) {
+            if (repeat) clearInterval(handle);
+            else clearTimeout(handle);
             if (this.L) lauxlib.luaL_unref(this.L, lua.LUA_REGISTRYINDEX, ref);
         }
         this.timers.clear();
@@ -134,6 +165,11 @@ export class LuaRuntime implements IScriptingRuntime {
             if (this.L) lauxlib.luaL_unref(this.L, lua.LUA_REGISTRYINDEX, ref);
         }
         this.triggers.clear();
+
+        for (const { ref } of this.keys.values()) {
+            if (this.L) lauxlib.luaL_unref(this.L, lua.LUA_REGISTRYINDEX, ref);
+        }
+        this.keys.clear();
 
         if (this.L) {
             lua.lua_close(this.L);
@@ -227,22 +263,33 @@ export class LuaRuntime implements IScriptingRuntime {
             lua.lua_pushvalue(L, 2);
             const ref = lauxlib.luaL_ref(L, lua.LUA_REGISTRYINDEX);
             const id = this.nextTimerId++;
+            const repeat = lua.lua_type(L, 3) !== lua.LUA_TNIL && lua.lua_toboolean(L, 3) !== 0;
 
-            const handle = setTimeout(() => {
-                this.timers.delete(id);
+            const callRef = () => {
                 if (!this.L) return;
                 const top = lua.lua_gettop(this.L);
                 lua.lua_rawgeti(this.L, lua.LUA_REGISTRYINDEX, ref);
-                lauxlib.luaL_unref(this.L, lua.LUA_REGISTRYINDEX, ref);
                 const status = lua.lua_pcall(this.L, 0, 0, 0);
                 if (status !== 0) {
                     const err = lua.lua_tojsstring(this.L, -1);
                     lua.lua_settop(this.L, top);
                     this.api.printError('[lua timer error] ' + err);
                 }
-            }, seconds * 1000);
+                this.api.flushOutput();
+            };
 
-            this.timers.set(id, { handle, ref });
+            let handle: number;
+            if (repeat) {
+                handle = setInterval(callRef, seconds * 1000) as unknown as number;
+            } else {
+                handle = setTimeout(() => {
+                    this.timers.delete(id);
+                    lauxlib.luaL_unref(this.L, lua.LUA_REGISTRYINDEX, ref);
+                    callRef();
+                }, seconds * 1000) as unknown as number;
+            }
+
+            this.timers.set(id, { handle, ref, repeat });
             lua.lua_pushnumber(L, id);
             return 1;
         });
@@ -251,7 +298,8 @@ export class LuaRuntime implements IScriptingRuntime {
             const id = lua.lua_tonumber(L, 1);
             const timer = this.timers.get(id);
             if (timer) {
-                clearTimeout(timer.handle);
+                if (timer.repeat) clearInterval(timer.handle);
+                else clearTimeout(timer.handle);
                 lauxlib.luaL_unref(L, lua.LUA_REGISTRYINDEX, timer.ref);
                 this.timers.delete(id);
             }
@@ -314,6 +362,37 @@ export class LuaRuntime implements IScriptingRuntime {
                 this.triggers.delete(id);
             }
             lua.lua_pushboolean(L, trigger ? 1 : 0);
+            return 1;
+        });
+
+        this.cfunction('__mudix_temp_key__', (L) => {
+            const key = lua.lua_tojsstring(L, 1);
+            const modifiers: string[] = [];
+            if (lua.lua_type(L, 2) === lua.LUA_TTABLE) {
+                lua.lua_pushnil(L);
+                while (lua.lua_next(L, 2) !== 0) {
+                    if (lua.lua_type(L, -1) === lua.LUA_TSTRING) {
+                        modifiers.push(lua.lua_tojsstring(L, -1));
+                    }
+                    lua.lua_pop(L, 1);
+                }
+            }
+            lua.lua_pushvalue(L, 3);
+            const ref = lauxlib.luaL_ref(L, lua.LUA_REGISTRYINDEX);
+            const id = this.nextKeyId++;
+            this.keys.set(id, { key, modifiers, ref });
+            lua.lua_pushnumber(L, id);
+            return 1;
+        });
+
+        this.cfunction('__mudix_kill_key__', (L) => {
+            const id = lua.lua_tonumber(L, 1);
+            const entry = this.keys.get(id);
+            if (entry) {
+                lauxlib.luaL_unref(L, lua.LUA_REGISTRYINDEX, entry.ref);
+                this.keys.delete(id);
+            }
+            lua.lua_pushboolean(L, entry ? 1 : 0);
             return 1;
         });
 

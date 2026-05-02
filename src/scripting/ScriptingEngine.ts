@@ -1,6 +1,8 @@
 import type { MudSession } from '../mud/MudSession';
 import type { AliasEngine, PermanentAlias } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine, PermanentTrigger } from '../mud/triggers/TriggerEngine';
+import type { TimerEngine, PermanentTimer } from '../mud/timers/TimerEngine';
+import type { KeyEngine, PermanentKeybinding } from '../mud/keybindings/KeyEngine';
 import type { Script } from '../storage/schema';
 import { ScriptingAPI } from './ScriptingAPI';
 import { LuaRuntime } from './lua/LuaRuntime';
@@ -17,6 +19,8 @@ export class ScriptingEngine {
         session: MudSession,
         private readonly aliasEngine: AliasEngine,
         private readonly triggerEngine: TriggerEngine,
+        private readonly timerEngine: TimerEngine,
+        private readonly keyEngine: KeyEngine,
     ) {
         this.api = new ScriptingAPI(session, aliasEngine, triggerEngine);
         this.bridgeEvents(session);
@@ -46,6 +50,19 @@ export class ScriptingEngine {
         this.api.flushOutput();
     }
 
+    /** Start all enabled permanent timers. Called when the timer list changes. */
+    loadPermTimers(timers: PermanentTimer[]): void {
+        this.timerEngine.loadPerm(timers, (code, language, name) => {
+            if (language === 'lua') this.runtimes.lua?.run(code, name);
+            this.api.flushOutput();
+        });
+    }
+
+    /** Reload permanent keybindings into the engine. Called when the keybinding list changes. */
+    loadPermKeybindings(keybindings: PermanentKeybinding[]): void {
+        this.keyEngine.loadPerm(keybindings);
+    }
+
     /** Run input through aliases. Returns true if an alias matched (caller should not send). */
     processInput(text: string): boolean {
         // JS temp aliases
@@ -60,9 +77,29 @@ export class ScriptingEngine {
             this.api.flushOutput();
             return true;
         }
-        // Lua temp aliases (PCRE matching + luaL_ref callbacks inside LuaRuntime)
+        // Lua temp aliases
         const luaMatched = this.runtimes.lua?.processInput(text) ?? false;
         this.api.flushOutput();
+        return luaMatched;
+    }
+
+    /** Process a keyboard event. Returns true if a keybinding consumed it. */
+    processKey(event: KeyboardEvent): boolean {
+        // JS temp keybindings
+        if (this.keyEngine.processTemp(event)) {
+            this.api.flushOutput();
+            return true;
+        }
+        // Permanent keybindings
+        const permMatch = this.keyEngine.matchPerm(event);
+        if (permMatch) {
+            this.executePermKeybinding(permMatch);
+            this.api.flushOutput();
+            return true;
+        }
+        // Lua temp keybindings
+        const luaMatched = this.runtimes.lua?.processKey(event) ?? false;
+        if (luaMatched) this.api.flushOutput();
         return luaMatched;
     }
 
@@ -83,6 +120,12 @@ export class ScriptingEngine {
     private executePermTrigger(trigger: PermanentTrigger, matches: string[]): void {
         if (trigger.language === 'lua') {
             this.runtimes.lua?.runWithMatches(trigger.code, trigger.name, matches);
+        }
+    }
+
+    private executePermKeybinding(binding: PermanentKeybinding): void {
+        if (binding.language === 'lua') {
+            this.runtimes.lua?.run(binding.code, binding.name);
         }
     }
 

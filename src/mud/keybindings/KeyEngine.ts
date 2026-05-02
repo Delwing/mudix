@@ -1,0 +1,69 @@
+export interface PermanentKeybinding {
+    id: string;
+    name: string;
+    key: string;        // KeyboardEvent.key value, e.g. "F1", "Enter", "a"
+    modifiers: string[]; // subset of ["ctrl", "shift", "alt", "meta"]
+    code: string;
+    language: 'lua' | 'js';
+    enabled: boolean;
+}
+
+type TempFn = () => void;
+
+function matchesEvent(key: string, modifiers: string[], event: KeyboardEvent): boolean {
+    if (event.key !== key) return false;
+    return (
+        event.ctrlKey  === modifiers.includes('ctrl')  &&
+        event.shiftKey === modifiers.includes('shift') &&
+        event.altKey   === modifiers.includes('alt')   &&
+        event.metaKey  === modifiers.includes('meta')
+    );
+}
+
+export class KeyEngine {
+    private readonly temp = new Map<number, { key: string; modifiers: string[]; fn: TempFn }>();
+    private perm: PermanentKeybinding[] = [];
+    private nextId = 1;
+
+    // ── Temp keybindings (session-scoped, created by scripts) ─────────────────
+
+    addTemp(key: string, modifiers: string[], fn: TempFn): number {
+        const id = this.nextId++;
+        this.temp.set(id, { key, modifiers, fn });
+        return id;
+    }
+
+    killKey(id: number): boolean {
+        const had = this.temp.has(id);
+        this.temp.delete(id);
+        return had;
+    }
+
+    processTemp(event: KeyboardEvent): boolean {
+        for (const { key, modifiers, fn } of this.temp.values()) {
+            if (matchesEvent(key, modifiers, event)) {
+                fn();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // ── Perm keybindings (persisted, visible in UI) ────────────────────────────
+
+    loadPerm(keybindings: PermanentKeybinding[]): void {
+        this.perm = keybindings.filter(k => k.enabled);
+    }
+
+    matchPerm(event: KeyboardEvent): PermanentKeybinding | null {
+        for (const binding of this.perm) {
+            if (matchesEvent(binding.key, binding.modifiers, event)) return binding;
+        }
+        return null;
+    }
+
+    destroy(): void {
+        this.temp.clear();
+        this.perm = [];
+    }
+}

@@ -50,7 +50,16 @@ mudix = {
     },
 
     timers = {
+        -- after(seconds, fn)        -- one-shot
+        -- after(seconds, fn, true)  -- repeating until killTimer()
         after = __mudix_temp_timer__,
+        kill  = __mudix_kill_timer__,
+    },
+
+    keys = {
+        -- add(key, modifiers, fn)  e.g. add("F1", nil, fn) or add("F2", {"ctrl"}, fn)
+        add    = __mudix_temp_key__,
+        remove = __mudix_kill_key__,
     },
 
     aliases = {
@@ -113,6 +122,8 @@ tempAlias    = __mudix_temp_alias__
 killAlias    = __mudix_kill_alias__
 tempTrigger  = __mudix_temp_trigger__
 killTrigger  = __mudix_kill_trigger__
+tempKey      = __mudix_temp_key__
+killKey      = __mudix_kill_key__
 
 -- display: pretty-print a value to the output window
 function display(what, indent, seen)

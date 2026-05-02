@@ -34,6 +34,7 @@ declare module 'fengari-web' {
         lua_setglobal(L: LuaState, name: Uint8Array): void;
         lua_getglobal(L: LuaState, name: Uint8Array): number;
         lua_pcall(L: LuaState, nargs: number, nresults: number, msgh: number): number;
+        lua_next(L: LuaState, idx: number): number;
     };
 
     const lauxlib: {

@@ -40,30 +40,6 @@ function parseHecho(text: string): string {
         .replace(/#r/g, '\x1b[0m') + '\x1b[0m';
 }
 
-// ── Timers ────────────────────────────────────────────────────────────────────
-
-class ScriptingTimersAPI {
-    private readonly handles: Set<ReturnType<typeof setTimeout>> = new Set();
-
-    /** Schedule `fn` to run after `seconds`. Returns a function that cancels the timer. */
-    after(seconds: number, fn: () => void): () => void {
-        const handle = setTimeout(() => {
-            this.handles.delete(handle);
-            fn();
-        }, seconds * 1000);
-        this.handles.add(handle);
-        return () => {
-            clearTimeout(handle);
-            this.handles.delete(handle);
-        };
-    }
-
-    destroy(): void {
-        for (const h of this.handles) clearTimeout(h);
-        this.handles.clear();
-    }
-}
-
 // ── Windows ───────────────────────────────────────────────────────────────────
 
 class ScriptingWindowsAPI {
@@ -106,7 +82,6 @@ class ScriptingWindowsAPI {
 
 export class ScriptingAPI {
     readonly windows: ScriptingWindowsAPI;
-    readonly timers: ScriptingTimersAPI;
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
     readonly gmcp: Record<string, unknown> = {};
@@ -114,7 +89,6 @@ export class ScriptingAPI {
 
     constructor(private readonly session: MudSession, aliasEngine: AliasEngine, triggerEngine: TriggerEngine) {
         this.windows = new ScriptingWindowsAPI(session);
-        this.timers = new ScriptingTimersAPI();
         this.aliases = aliasEngine;
         this.triggers = triggerEngine;
     }
@@ -202,7 +176,6 @@ export class ScriptingAPI {
 
     destroy(): void {
         this.flushOutput();
-        this.timers.destroy();
     }
 
     // Split on newlines: emit each complete line immediately, buffer the remainder.

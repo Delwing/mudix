@@ -39,6 +39,26 @@ export interface PermanentTrigger {
     enabled: boolean;
 }
 
+export interface PermanentTimer {
+    id: string;
+    name: string;
+    seconds: number;
+    code: string;
+    language: 'lua' | 'js';
+    repeat: boolean;
+    enabled: boolean;
+}
+
+export interface PermanentKeybinding {
+    id: string;
+    name: string;
+    key: string;        // KeyboardEvent.key value, e.g. "F1", "Enter"
+    modifiers: string[]; // subset of ["ctrl", "shift", "alt", "meta"]
+    code: string;
+    language: 'lua' | 'js';
+    enabled: boolean;
+}
+
 export interface AppSchema {
     connections: MudConnection[];
     ui: UISettings;
@@ -46,6 +66,8 @@ export interface AppSchema {
     connectionScripts: Record<string, Script[]>;
     connectionAliases: Record<string, PermanentAlias[]>;
     connectionTriggers: Record<string, PermanentTrigger[]>;
+    connectionTimers: Record<string, PermanentTimer[]>;
+    connectionKeybindings: Record<string, PermanentKeybinding[]>;
 }
 
 export const APP_DEFAULTS: AppSchema = {
@@ -60,6 +82,8 @@ export const APP_DEFAULTS: AppSchema = {
     connectionScripts: {},
     connectionAliases: {},
     connectionTriggers: {},
+    connectionTimers: {},
+    connectionKeybindings: {},
 };
 
 export function connectionUrl(c: MudConnection): string {

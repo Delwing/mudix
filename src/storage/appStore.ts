@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { APP_DEFAULTS, type AppSchema, type MudConnection, type PermanentAlias, type PermanentTrigger, type Script, type UISettings } from './schema';
+import { APP_DEFAULTS, type AppSchema, type MudConnection, type PermanentAlias, type PermanentKeybinding, type PermanentTimer, type PermanentTrigger, type Script, type UISettings } from './schema';
 import type { SerializedLayout } from '../ui/windows/types';
 
 interface AppStore extends AppSchema {
@@ -18,6 +18,12 @@ interface AppStore extends AppSchema {
     addTrigger: (connectionId: string, data: Omit<PermanentTrigger, 'id'>) => string;
     updateTrigger: (connectionId: string, id: string, patch: Partial<Omit<PermanentTrigger, 'id'>>) => void;
     removeTrigger: (connectionId: string, id: string) => void;
+    addTimer: (connectionId: string, data: Omit<PermanentTimer, 'id'>) => string;
+    updateTimer: (connectionId: string, id: string, patch: Partial<Omit<PermanentTimer, 'id'>>) => void;
+    removeTimer: (connectionId: string, id: string) => void;
+    addKeybinding: (connectionId: string, data: Omit<PermanentKeybinding, 'id'>) => string;
+    updateKeybinding: (connectionId: string, id: string, patch: Partial<Omit<PermanentKeybinding, 'id'>>) => void;
+    removeKeybinding: (connectionId: string, id: string) => void;
 }
 
 export const useAppStore = create<AppStore>()(
@@ -114,12 +120,60 @@ export const useAppStore = create<AppStore>()(
                     [connectionId]: (s.connectionTriggers[connectionId] ?? []).filter(t => t.id !== id),
                 },
             })),
+            addTimer: (connectionId, data) => {
+                const id = crypto.randomUUID();
+                set(s => ({
+                    connectionTimers: {
+                        ...s.connectionTimers,
+                        [connectionId]: [...(s.connectionTimers[connectionId] ?? []), { ...data, id }],
+                    },
+                }));
+                return id;
+            },
+            updateTimer: (connectionId, id, patch) => set(s => ({
+                connectionTimers: {
+                    ...s.connectionTimers,
+                    [connectionId]: (s.connectionTimers[connectionId] ?? []).map(
+                        t => t.id === id ? { ...t, ...patch } : t,
+                    ),
+                },
+            })),
+            removeTimer: (connectionId, id) => set(s => ({
+                connectionTimers: {
+                    ...s.connectionTimers,
+                    [connectionId]: (s.connectionTimers[connectionId] ?? []).filter(t => t.id !== id),
+                },
+            })),
+            addKeybinding: (connectionId, data) => {
+                const id = crypto.randomUUID();
+                set(s => ({
+                    connectionKeybindings: {
+                        ...s.connectionKeybindings,
+                        [connectionId]: [...(s.connectionKeybindings[connectionId] ?? []), { ...data, id }],
+                    },
+                }));
+                return id;
+            },
+            updateKeybinding: (connectionId, id, patch) => set(s => ({
+                connectionKeybindings: {
+                    ...s.connectionKeybindings,
+                    [connectionId]: (s.connectionKeybindings[connectionId] ?? []).map(
+                        k => k.id === id ? { ...k, ...patch } : k,
+                    ),
+                },
+            })),
+            removeKeybinding: (connectionId, id) => set(s => ({
+                connectionKeybindings: {
+                    ...s.connectionKeybindings,
+                    [connectionId]: (s.connectionKeybindings[connectionId] ?? []).filter(k => k.id !== id),
+                },
+            })),
         }),
         {
             name: 'mudix_v1',
-            version: 6,
-            partialize: ({ connections, ui, connectionLayouts, connectionScripts, connectionAliases, connectionTriggers }) => ({
-                connections, ui, connectionLayouts, connectionScripts, connectionAliases, connectionTriggers,
+            version: 7,
+            partialize: ({ connections, ui, connectionLayouts, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings }) => ({
+                connections, ui, connectionLayouts, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings,
             }),
             migrate: (saved, version) => {
                 const s = saved as Partial<AppSchema> & { connections?: any[] };
@@ -140,6 +194,8 @@ export const useAppStore = create<AppStore>()(
                     connectionScripts: s.connectionScripts ?? {},
                     connectionAliases: s.connectionAliases ?? {},
                     connectionTriggers: s.connectionTriggers ?? {},
+                    connectionTimers: s.connectionTimers ?? {},
+                    connectionKeybindings: s.connectionKeybindings ?? {},
                 };
             },
         },

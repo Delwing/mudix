@@ -8,6 +8,8 @@ import { useAppStore, connectionUrl, type MudConnection } from './storage';
 import { ScriptingEngine } from './scripting/ScriptingEngine';
 import { AliasEngine } from './mud/aliases/AliasEngine';
 import { TriggerEngine } from './mud/triggers/TriggerEngine';
+import { TimerEngine } from './mud/timers/TimerEngine';
+import { KeyEngine } from './mud/keybindings/KeyEngine';
 import { ScriptEditorPanel } from './ui/windows/panels/ScriptEditorPanel';
 import { SettingsModal } from './ui/SettingsModal';
 import type { SerializedLayout } from './ui/windows/types';
@@ -32,25 +34,35 @@ export default function App() {
     const connectionLayouts = useAppStore(s => s.connectionLayouts);
     const saveLayout = useAppStore(s => s.saveLayout);
 
-    // AliasEngine + TriggerEngine + ScriptingEngine — created per session, destroyed on disconnect/new-connection
+    // All scripting engines — created per session, destroyed on disconnect/new-connection
     const aliasEngineRef = useRef<AliasEngine | null>(null);
     const triggerEngineRef = useRef<TriggerEngine | null>(null);
+    const timerEngineRef = useRef<TimerEngine | null>(null);
+    const keyEngineRef = useRef<KeyEngine | null>(null);
     const engineRef = useRef<ScriptingEngine | null>(null);
     useEffect(() => {
         if (!sessionStarted) return;
         const aliasEngine = new AliasEngine();
         const triggerEngine = new TriggerEngine();
-        const engine = new ScriptingEngine(session, aliasEngine, triggerEngine);
+        const timerEngine = new TimerEngine();
+        const keyEngine = new KeyEngine();
+        const engine = new ScriptingEngine(session, aliasEngine, triggerEngine, timerEngine, keyEngine);
         aliasEngineRef.current = aliasEngine;
         triggerEngineRef.current = triggerEngine;
+        timerEngineRef.current = timerEngine;
+        keyEngineRef.current = keyEngine;
         engineRef.current = engine;
         return () => {
             engine.destroy();
             aliasEngine.destroy();
             triggerEngine.destroy();
+            timerEngine.destroy();
+            keyEngine.destroy();
             engineRef.current = null;
             aliasEngineRef.current = null;
             triggerEngineRef.current = null;
+            timerEngineRef.current = null;
+            keyEngineRef.current = null;
         };
     }, [session, sessionStarted]);
 
@@ -106,6 +118,36 @@ export default function App() {
     useEffect(() => {
         triggerEngineRef.current?.loadPerm(activeTriggers);
     }, [activeTriggers]);
+
+    // Reload permanent timers from store into ScriptingEngine whenever they change.
+    const NO_TIMERS = useRef<never[]>([]).current;
+    const activeTimers = useAppStore(s =>
+        activeConnection ? (s.connectionTimers[activeConnection.id] ?? NO_TIMERS) : NO_TIMERS,
+    );
+    useEffect(() => {
+        engineRef.current?.loadPermTimers(activeTimers);
+    }, [activeTimers]);
+
+    // Reload permanent keybindings from store into ScriptingEngine whenever they change.
+    const NO_KEYBINDINGS = useRef<never[]>([]).current;
+    const activeKeybindings = useAppStore(s =>
+        activeConnection ? (s.connectionKeybindings[activeConnection.id] ?? NO_KEYBINDINGS) : NO_KEYBINDINGS,
+    );
+    useEffect(() => {
+        engineRef.current?.loadPermKeybindings(activeKeybindings);
+    }, [activeKeybindings]);
+
+    // Global keydown listener — fires keybindings, but not when focused in a textarea (e.g. script editor).
+    useEffect(() => {
+        if (!sessionStarted) return;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            const target = e.target as HTMLElement;
+            if (target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+            if (engineRef.current?.processKey(e)) e.preventDefault();
+        };
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [sessionStarted]);
 
     const handleConnect = (connection: MudConnection) => {
         setActiveConnection(connection);
