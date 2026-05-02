@@ -19,13 +19,9 @@ export type OutputRendererControls = {
     areTimestampsVisible: () => boolean;
     setTimestampVisibility: (visible: boolean) => void;
     toggleTimestampVisibility: () => void;
-    areMessageTypesVisible: () => boolean;
-    setMessageTypeVisibility: (visible: boolean) => void;
-    toggleMessageTypeVisibility: () => void;
 };
 
 const TIMESTAMP_CLASS = 'output-show-timestamps';
-const MESSAGE_TYPE_CLASS = 'output-show-message-types';
 
 function formatTimestamp(timestamp: number): string {
     const date = new Date(timestamp);
@@ -45,15 +41,6 @@ function createTimestampElement(timestamp: number): HTMLSpanElement {
     return timestampEl;
 }
 
-function createMessageTypeElement(type: string | undefined): HTMLSpanElement {
-    const typeEl = document.createElement('span');
-    typeEl.classList.add('output-message-type');
-    typeEl.textContent = type && type.length > 0 ? type : '—';
-    typeEl.dataset.messageType = type ?? '';
-    typeEl.title = type ? `Message type: ${type}` : 'No message type';
-    return typeEl;
-}
-
 function createMessageWrapper(
     message: string | AnsiAwareBuffer,
     type: string | undefined,
@@ -70,7 +57,6 @@ function createMessageWrapper(
     wrapper.dataset.timestamp = `${timestamp}`;
 
     const timestampEl = createTimestampElement(timestamp);
-    const typeEl = createMessageTypeElement(type);
     const contentSpan = document.createElement('span');
     contentSpan.classList.add('output-msg-content');
 
@@ -85,7 +71,6 @@ function createMessageWrapper(
     contentSpan.style.whiteSpace = 'pre-wrap';
 
     messageDiv.appendChild(timestampEl);
-    messageDiv.appendChild(typeEl);
     messageDiv.appendChild(contentSpan);
     wrapper.appendChild(messageDiv);
 
@@ -106,16 +91,10 @@ export function setupOutputRenderer(
     }: OutputHandlerOptions,
 ): OutputRendererControls {
     let timestampsVisible = false;
-    let messageTypesVisible = false;
 
     function applyTimestampVisibility() {
         outputWrapper.classList.toggle(TIMESTAMP_CLASS, timestampsVisible);
         stickyArea.classList.toggle(TIMESTAMP_CLASS, timestampsVisible);
-    }
-
-    function applyMessageTypeVisibility() {
-        outputWrapper.classList.toggle(MESSAGE_TYPE_CLASS, messageTypesVisible);
-        stickyArea.classList.toggle(MESSAGE_TYPE_CLASS, messageTypesVisible);
     }
 
     const handleMessage = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number) => {
@@ -183,15 +162,6 @@ export function setupOutputRenderer(
         toggleTimestampVisibility: () => {
             timestampsVisible = !timestampsVisible;
             applyTimestampVisibility();
-        },
-        areMessageTypesVisible: () => messageTypesVisible,
-        setMessageTypeVisibility: (visible: boolean) => {
-            messageTypesVisible = visible;
-            applyMessageTypeVisibility();
-        },
-        toggleMessageTypeVisibility: () => {
-            messageTypesVisible = !messageTypesVisible;
-            applyMessageTypeVisibility();
         },
     };
 }

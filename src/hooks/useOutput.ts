@@ -1,11 +1,12 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import type { MudSession } from '../mud/MudSession';
-import { setupOutputRenderer } from '../ui/output/OutputRenderer';
+import { setupOutputRenderer, type OutputRendererControls } from '../ui/output/OutputRenderer';
 
 export interface UseOutputOptions {
     stickyLines?: number;
     maxElements?: number;
     splitViewThreshold?: number;
+    showTimestamps?: boolean;
 }
 
 export interface UseOutputResult {
@@ -22,11 +23,13 @@ export function useOutputArea(
         stickyLines = 5,
         maxElements = 1000,
         splitViewThreshold = 60,
+        showTimestamps = false,
     }: UseOutputOptions = {},
 ): UseOutputResult {
     const outputRef = useRef<HTMLDivElement>(null);
     const sentinelRef = useRef<HTMLDivElement>(null);
     const stickyAreaRef = useRef<HTMLDivElement>(null);
+    const rendererRef = useRef<OutputRendererControls | null>(null);
 
     const isSplitViewRef = useRef(false);
     const suppressUntilRef = useRef(0);
@@ -60,7 +63,7 @@ export function useOutputArea(
 
         outputEl.addEventListener('scroll', handleScroll, { passive: true });
 
-        const { teardown } = setupOutputRenderer(session.events, {
+        const controls = setupOutputRenderer(session.events, {
             outputWrapper: outputEl,
             sentinel: sentinelEl,
             stickyArea: stickyAreaEl,
@@ -71,15 +74,22 @@ export function useOutputArea(
                 suppressUntilRef.current = Date.now() + ms;
             },
         });
+        rendererRef.current = controls;
+        controls.setTimestampVisibility(showTimestamps);
 
         session.markOutputReady();
 
         return () => {
+            rendererRef.current = null;
             session.markOutputGone();
             outputEl.removeEventListener('scroll', handleScroll);
-            teardown();
+            controls.teardown();
         };
     }, [session, handleScroll, stickyLines, maxElements]);
+
+    useEffect(() => {
+        rendererRef.current?.setTimestampVisibility(showTimestamps);
+    }, [showTimestamps]);
 
     return { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom };
 }

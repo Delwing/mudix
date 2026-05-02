@@ -8,7 +8,6 @@ export interface MudConnection {
 
 export interface UISettings {
     showTimestamps: boolean;
-    showMessageTypes: boolean;
     fontSize: number;
     stickyLines: number;
     outputBackground: string;
@@ -53,7 +52,6 @@ export const APP_DEFAULTS: AppSchema = {
     connections: [],
     ui: {
         showTimestamps: false,
-        showMessageTypes: false,
         fontSize: 13,
         stickyLines: 5,
         outputBackground: '',

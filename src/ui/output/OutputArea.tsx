@@ -1,7 +1,9 @@
+import { useState, useCallback } from 'react';
 import type React from 'react';
 import type { MudSession } from '../../mud/MudSession';
 import { useOutputArea } from '../../hooks/useOutput';
 import { useAppStore } from '../../storage';
+import { OutputContextMenu } from './OutputContextMenu';
 
 interface OutputAreaProps {
     session: MudSession;
@@ -9,10 +11,20 @@ interface OutputAreaProps {
     commandInputRef?: React.RefObject<HTMLInputElement>;
 }
 
+interface ContextMenuState {
+    x: number;
+    y: number;
+}
+
 export function OutputArea({ session, stickyLines = 5, commandInputRef }: OutputAreaProps) {
     const outputBackground = useAppStore(s => s.ui.outputBackground);
+    const showTimestamps = useAppStore(s => s.ui.showTimestamps);
+    const patchUI = useAppStore(s => s.patchUI);
+
+    const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
     const { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom } =
-        useOutputArea(session, { stickyLines });
+        useOutputArea(session, { stickyLines, showTimestamps });
 
     const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
         if (!commandInputRef) return;
@@ -22,12 +34,20 @@ export function OutputArea({ session, stickyLines = 5, commandInputRef }: Output
         }
     };
 
+    const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        setContextMenu({ x: e.clientX, y: e.clientY });
+    }, []);
+
+    const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
     return (
         <div className="output-container" onClick={handleClick}>
             <div
                 className="output-wrapper"
                 ref={outputRef}
                 style={outputBackground ? { background: outputBackground } : undefined}
+                onContextMenu={handleContextMenu}
             >
                 {/* Messages are inserted before this sentinel by the imperative renderer */}
                 <div ref={sentinelRef} style={{ height: 0 }} />
@@ -47,6 +67,16 @@ export function OutputArea({ session, stickyLines = 5, commandInputRef }: Output
                 >
                     ↓ new output
                 </button>
+            )}
+
+            {contextMenu && (
+                <OutputContextMenu
+                    x={contextMenu.x}
+                    y={contextMenu.y}
+                    showTimestamps={showTimestamps}
+                    onToggleTimestamps={() => patchUI({ showTimestamps: !showTimestamps })}
+                    onClose={closeContextMenu}
+                />
             )}
         </div>
     );
