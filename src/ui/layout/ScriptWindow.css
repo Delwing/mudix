@@ -1,0 +1,243 @@
+/* Portal root for floating windows — position:fixed so dock layout shifts never affect them */
+.floating-window-root {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 500;
+    overflow: hidden;
+}
+
+.script-window {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-float);
+    min-width: 150px;
+    min-height: 80px;
+    pointer-events: auto;
+}
+
+.script-window-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 28px;
+    padding: 0 4px 0 10px;
+    background: var(--bg-glass);
+    border-bottom: 1px solid var(--border);
+    cursor: grab;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.script-window-titlebar:active { cursor: grabbing; }
+
+.script-window-title {
+    flex: 1;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.script-window-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: none;
+    border: none;
+    border-radius: 3px;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.script-window-btn:hover { background: var(--border); color: var(--text); }
+.script-window-btn.close:hover { background: var(--danger); color: #fff; }
+
+.script-window-content {
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+    position: relative;
+}
+
+.script-window-resize {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 14px;
+    height: 14px;
+    cursor: se-resize;
+    z-index: 1;
+}
+
+.script-window-resize::after {
+    content: '';
+    position: absolute;
+    bottom: 3px;
+    right: 3px;
+    width: 7px;
+    height: 7px;
+    border-bottom: 2px solid var(--border);
+    border-right: 2px solid var(--border);
+    border-radius: 0 0 2px 0;
+}
+
+
+/* ── Inline drop preview (ghost slot inside an existing DockArea) ── */
+.dock-drop-preview {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    background: var(--accent);
+    opacity: 0.18;
+    border: 2px dashed var(--accent);
+    animation: dock-preview-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes dock-preview-pulse {
+    0%, 100% { opacity: 0.14; }
+    50%       { opacity: 0.26; }
+}
+
+/* ── Overlay preview — shown when targeting an empty dock side ─── */
+.dock-preview {
+    position: absolute;
+    background: var(--accent);
+    opacity: 0.18;
+    border: 2px solid var(--accent);
+    pointer-events: none;
+    z-index: 50;
+    transition: width 0.08s, height 0.08s, opacity 0.08s;
+}
+.dock-preview-left   { top: 0; left: 0; bottom: 0; }
+.dock-preview-right  { top: 0; right: 0; bottom: 0; }
+.dock-preview-top    { top: 0; left: 0; right: 0; }
+.dock-preview-bottom { bottom: 0; left: 0; right: 0; }
+
+/* ── Content layout (replaces dock-section) ─────────────────── */
+.content-layout {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.content-middle-row {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.main-viewport {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* ── Dock areas ─────────────────────────────────────────────── */
+.dock-area {
+    display: flex;
+    flex-shrink: 0;
+    position: relative;
+    background: var(--bg-surface);
+    overflow: hidden;
+}
+.dock-area-left, .dock-area-right { flex-direction: column; }
+.dock-area-top, .dock-area-bottom { flex-direction: row; }
+
+/* Slot wrapping each DockedPanel — carries the flex value */
+.dock-panel-slot {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+}
+.dock-area-top .dock-panel-slot,
+.dock-area-bottom .dock-panel-slot { flex-direction: row; }
+
+/* Splitter between adjacent panels within a dock area — always visible as a separator */
+.dock-panel-splitter {
+    background: var(--border);
+    flex-shrink: 0;
+    transition: background 0.12s;
+    z-index: 5;
+}
+.dock-panel-splitter:hover,
+.dock-panel-splitter:active { background: var(--accent-dim); }
+.dock-panel-splitter-h { height: 1px; cursor: ns-resize; width: 100%; }
+.dock-panel-splitter-v { width:  1px; cursor: ew-resize; height: 100%; }
+
+/* Edge splitter — between the dock area and the main viewport */
+.dock-edge-splitter {
+    position: absolute;
+    background: transparent;
+    z-index: 10;
+    transition: background 0.12s;
+}
+.dock-edge-splitter:hover,
+.dock-edge-splitter:active { background: var(--accent-dim); }
+.dock-edge-splitter-left   { top: 0; right: 0; bottom: 0; width: 5px; cursor: ew-resize; }
+.dock-edge-splitter-right  { top: 0; left:  0; bottom: 0; width: 5px; cursor: ew-resize; }
+.dock-edge-splitter-top    { left: 0; right: 0; bottom: 0; height: 5px; cursor: ns-resize; }
+.dock-edge-splitter-bottom { left: 0; right: 0; top:    0; height: 5px; cursor: ns-resize; }
+
+/* ── Docked panels ──────────────────────────────────────────── */
+.docked-panel {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    overflow: hidden;
+}
+
+/* One border only — on the edge that faces the main content */
+.dock-area-left   .docked-panel { border-right:  1px solid var(--border); }
+.dock-area-right  .docked-panel { border-left:   1px solid var(--border); }
+.dock-area-top    .docked-panel { border-bottom: 1px solid var(--border); }
+.dock-area-bottom .docked-panel { border-top:    1px solid var(--border); }
+
+.docked-panel-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 28px;
+    padding: 0 4px 0 10px;
+    background: var(--bg-glass);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+    flex-shrink: 0;
+    cursor: grab;
+}
+.docked-panel-titlebar:active { cursor: grabbing; }
+
+.docked-panel-title {
+    flex: 1;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.docked-panel-content {
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+    min-width: 0;
+    position: relative;
+}

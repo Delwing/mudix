@@ -1,14 +1,7 @@
 import { useEffect, useRef } from 'react';
-import type { IDockviewPanelProps } from 'dockview';
 import type { WindowManager } from '../WindowManager';
 
-interface HtmlPanelParams {
-    manager: WindowManager;
-}
-
-export function HtmlPanel(props: IDockviewPanelProps<HtmlPanelParams>) {
-    const { manager } = props.params;
-    const id = props.api.id;
+export function HtmlPanel({ id, manager }: { id: string; manager: WindowManager }) {
     const ref = useRef<HTMLDivElement>(null);
 
     useEffect(() => {

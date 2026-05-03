@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMudSession } from './hooks/useMudSession';
 import { Toolbar } from './ui/Toolbar';
 import { CommandBar } from './ui/CommandBar';
-import { DockRoot } from './ui/windows/DockRoot';
+import { ContentLayout } from './ui/layout/ContentLayout';
 import { ConnectionScreen } from './ui/ConnectionScreen';
 import { useAppStore, connectionUrl, type MudConnection } from './storage';
 import { useEngines } from './hooks/useEngines';
@@ -27,9 +27,11 @@ export default function App() {
     const addConnection = useAppStore(s => s.addConnection);
     const removeConnection = useAppStore(s => s.removeConnection);
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
+    const connectionDockExtents = useAppStore(s => s.connectionDockExtents);
     const saveWindowHint = useAppStore(s => s.saveWindowHint);
+    const saveDockExtents = useAppStore(s => s.saveDockExtents);
 
-    const { aliasEngineRef, triggerEngineRef, timerEngineRef, keyEngineRef, engineRef } = useEngines(session, sessionStarted);
+    const { aliasEngineRef, triggerEngineRef, engineRef } = useEngines(session, sessionStarted);
 
     // Reload scripts whenever the store changes for the active connection.
     const activeScripts = useAppStore(s =>
@@ -143,12 +145,23 @@ export default function App() {
     }, [sessionStarted]);
 
     const handleConnect = (connection: MudConnection) => {
+        // Load hints synchronously BEFORE any renders so they're ready when scripts run.
+        // (Child useEffects fire before App's, meaning output.ready could fire before
+        //  a deferred setWindowHints effect, causing open() to miss dock positions.)
+        const hints   = connectionWindowHints[connection.id] ?? {};
+        const extents = connectionDockExtents[connection.id];
+        if (extents) session.windows.setDockExtentsFromStorage(extents);
+        session.windows.setWindowHints(hints);
         setActiveConnection(connection);
         setSessionStarted(true);
         connect(connectionUrl(connection));
     };
 
     const handleOpenOffline = (connection: MudConnection) => {
+        const hints   = connectionWindowHints[connection.id] ?? {};
+        const extents = connectionDockExtents[connection.id];
+        if (extents) session.windows.setDockExtentsFromStorage(extents);
+        session.windows.setWindowHints(hints);
         setActiveConnection(connection);
         setSessionStarted(true);
     };
@@ -163,12 +176,17 @@ export default function App() {
 
     const handleNewConnection = () => {
         disconnect();
+        session.windows.clearAll();
         setActiveConnection(null);
         setSessionStarted(false);
     };
 
     const handleOpenMap = () => {
         session.windows.open('map', { kind: 'map', title: 'Map', position: 'right' });
+        // Mark map as auto-restorable so it re-opens next time this connection is activated.
+        if (activeConnectionId) {
+            saveWindowHint(activeConnectionId, 'map', { kind: 'map', autoOpen: true });
+        }
     };
 
     const handleOpenScripts = () => setScriptsOpen(v => !v);
@@ -182,17 +200,23 @@ export default function App() {
 
     const activeConnectionId = activeConnection?.id ?? null;
 
-    // Wire up window position hints for the active connection.
+    // Wire up save callbacks (re-established whenever connection or savers change).
     useEffect(() => {
-        const hints = activeConnectionId ? (connectionWindowHints[activeConnectionId] ?? {}) : {};
-        session.windows.setWindowHints(hints);
         session.windows.onWindowHint = activeConnectionId
             ? (id, hint) => saveWindowHint(activeConnectionId, id, hint)
             : undefined;
+        session.windows.onWindowClosed = activeConnectionId
+            ? (id) => saveWindowHint(activeConnectionId, id, { autoOpen: false })
+            : undefined;
+        session.windows.onDockExtentsChange = activeConnectionId
+            ? (extents) => saveDockExtents(activeConnectionId, extents)
+            : undefined;
         return () => {
-            session.windows.onWindowHint = undefined;
+            session.windows.onWindowHint        = undefined;
+            session.windows.onWindowClosed      = undefined;
+            session.windows.onDockExtentsChange = undefined;
         };
-    }, [session, activeConnectionId, connectionWindowHints, saveWindowHint]);
+    }, [session, activeConnectionId, saveWindowHint, saveDockExtents]);
 
     if (!sessionStarted) {
         return (
@@ -226,9 +250,8 @@ export default function App() {
                 onOpenSettings={handleOpenSettings}
             />
             {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
-            <div className="dock-section">
-                <DockRoot
-                    key={activeConnectionId ?? 'no-connection'}
+            <div className="app-content">
+                <ContentLayout
                     session={session}
                     manager={session.windows}
                     stickyLines={DEFAULT_STICKY_LINES}

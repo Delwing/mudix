@@ -105,15 +105,15 @@ html, body, #root {
     font-variant-numeric: tabular-nums;
 }
 
-/* ── Dock area ──────────────────────────────────────────────── */
-.dock-section {
+/* ── Main content area ──────────────────────────────────────── */
+.app-content {
     flex: 1;
     display: flex;
     flex-direction: row;
     overflow: hidden;
-    position: relative;
     min-height: 0;
 }
+
 
 /* ── Scripts sidebar ────────────────────────────────────────── */
 .scripts-sidebar {

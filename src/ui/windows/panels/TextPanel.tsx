@@ -1,19 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import type React from 'react';
-import type { IDockviewPanelProps } from 'dockview';
 import type { WindowManager } from '../WindowManager';
 import { useTextPanelOutput } from '../../../hooks/useOutput';
-
-interface TextPanelParams {
-    manager: WindowManager;
-}
 
 const DEFAULT_STICKY_HEIGHT = 120;
 const MIN_STICKY_HEIGHT = 40;
 
-export function TextPanel(props: IDockviewPanelProps<TextPanelParams>) {
-    const { manager } = props.params;
-    const id = props.api.id;
+export function TextPanel({ id, manager }: { id: string; manager: WindowManager }) {
 
     const [stickyHeight, setStickyHeight] = useState(DEFAULT_STICKY_HEIGHT);
     const stickyOuterRef = useRef<HTMLDivElement>(null);

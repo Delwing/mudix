@@ -63,6 +63,8 @@ export interface AppSchema {
     connections: MudConnection[];
     ui: UISettings;
     connectionWindowHints: Record<string, Record<string, WindowOpenOptions>>;
+    /** Per-connection dock area extents: { left, right, top, bottom } in pixels. */
+    connectionDockExtents: Record<string, Record<string, number>>;
     connectionScripts: Record<string, Script[]>;
     connectionAliases: Record<string, PermanentAlias[]>;
     connectionTriggers: Record<string, PermanentTrigger[]>;
@@ -79,6 +81,7 @@ export const APP_DEFAULTS: AppSchema = {
         outputBackground: '',
     },
     connectionWindowHints: {},
+    connectionDockExtents: {},
     connectionScripts: {},
     connectionAliases: {},
     connectionTriggers: {},

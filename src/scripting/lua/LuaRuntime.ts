@@ -1,4 +1,4 @@
-import { lauxlib, lua, lualib, to_luastring, to_jsstring } from 'fengari-web';
+import { lauxlib, lua, lualib, to_luastring } from 'fengari-web';
 import type { ScriptingAPI } from '../ScriptingAPI';
 import type { IScriptingRuntime } from '../IScriptingRuntime';
 import mudletColorsRaw from '../../mud/text/mudletColors.json';
@@ -296,7 +296,7 @@ export class LuaRuntime implements IScriptingRuntime {
             return 0;
         });
 
-        this.cfunction('__mudix_reset_format__', (L) => {
+        this.cfunction('__mudix_reset_format__', () => {
             api.resetFormat();
             return 0;
         });
@@ -447,14 +447,21 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         this.cfunction('__mudix_windows_open__', (L) => {
-            const id       = lua.lua_tojsstring(L, 1);
-            const kind     = this.optstring(L, 2, 'text');
-            const title    = this.optstring(L, 3, id);
-            const position = this.optstring(L, 4, undefined);
+            const id          = lua.lua_tojsstring(L, 1);
+            const kind        = this.optstring(L, 2, 'text');
+            const title       = this.optstring(L, 3, id);
+            const position    = this.optstring(L, 4, undefined);
+            // Args 5-7 are passed as strings ("true"/"false"/nil) to avoid boolean marshalling.
+            const autoDockStr   = this.optstring(L, 5, undefined);
+            const dockingArea   = this.optstring(L, 6, undefined);
+            const ignoreHintStr = this.optstring(L, 7, undefined);
             api.windows.open(id, {
-                kind: kind as 'text' | 'html' | 'map',
+                kind:        kind        as 'text' | 'html' | 'map',
                 title,
-                position: position as 'right' | 'left' | 'above' | 'below' | undefined,
+                position:    position   as 'right' | 'left' | 'above' | 'below' | undefined,
+                autoDock:    autoDockStr   === undefined ? undefined : autoDockStr   === 'true',
+                dockingArea: dockingArea ?? undefined,
+                ignoreHint:  ignoreHintStr === 'true',
             });
             return 0;
         });

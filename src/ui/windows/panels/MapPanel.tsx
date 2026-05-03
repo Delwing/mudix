@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview';
 import { MapReader, MapRenderer, createSettings } from 'mudlet-map-renderer';
 import { readMapFromBuffer, readerExport } from 'mudlet-map-binary-reader';
 import { Buffer } from 'buffer';
@@ -10,7 +9,7 @@ type MapStatus = 'loading' | 'empty' | 'ready' | 'error';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyArea = any;
 
-export function MapPanel(_props: IDockviewPanelProps) {
+export function MapPanel() {
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<MapRenderer | null>(null);
     const readerRef = useRef<MapReader | null>(null);

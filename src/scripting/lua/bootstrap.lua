@@ -38,11 +38,17 @@ mudix = {
     windows = {
         open = function(id, options)
             options = options or {}
+            -- Pass autoDock and ignoreHint as strings to avoid boolean marshalling issues.
+            local autoDockStr   = options.autoDock   == nil and nil or (options.autoDock   and 'true' or 'false')
+            local ignoreHintStr = options.ignoreHint == nil and nil or (options.ignoreHint and 'true' or nil)
             __mudix_windows_open__(
                 tostring(id),
                 options.kind,
                 options.title,
-                options.position
+                options.position,
+                autoDockStr,
+                options.dockingArea,
+                ignoreHintStr
             )
         end,
         write    = __mudix_windows_write__,
@@ -110,8 +116,34 @@ end
 unpack = table.unpack
 
 -- Mudlet-compatible globals
-function openUserWindow(name)
-    mudix.windows.open(name, { kind = 'text', title = name, position = 'right' })
+-- openUserWindow(name, [restoreLayout=true], [autoDock=true], [dockingArea="r"])
+-- dockingArea short codes (Mudlet-compatible):
+--   "f" or false = floating   "t" = top   "b" = bottom   "r" = right   "l" = left
+-- Default docking area is "r" (right) when autoDock is true and no area is given.
+function openUserWindow(name, restoreLayout, autoDock, dockingArea)
+    if restoreLayout == nil then restoreLayout = true end
+    if autoDock      == nil then autoDock      = true  end
+
+    -- Normalise dockingArea to a full side name (or nil = floating)
+    local areaMap = { f='main', t='top', b='bottom', r='right', l='left',
+                      ['false']='main', top='top', bottom='bottom',
+                      right='right', left='left', main='main' }
+    local areaNorm
+    if dockingArea == false or dockingArea == 'f' then
+        autoDock  = false        -- "f" / false explicitly means float
+    elseif type(dockingArea) == 'string' then
+        areaNorm  = areaMap[dockingArea]
+    elseif autoDock then
+        areaNorm  = 'right'      -- Mudlet default: dock to right when no area given
+    end
+
+    mudix.windows.open(name, {
+        kind        = 'text',
+        title       = name,
+        autoDock    = autoDock,
+        dockingArea = areaNorm,
+        ignoreHint  = not restoreLayout,
+    })
 end
 
 function clearWindow(name)

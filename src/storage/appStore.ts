@@ -9,6 +9,7 @@ interface AppStore extends AppSchema {
     patchUI: (patch: Partial<UISettings>) => void;
     saveWindowHint: (connectionId: string, panelId: string, hint: WindowOpenOptions) => void;
     clearWindowHints: (connectionId: string) => void;
+    saveDockExtents: (connectionId: string, extents: Record<string, number>) => void;
     addScript: (connectionId: string, data: Omit<Script, 'id'>) => string;
     updateScript: (connectionId: string, id: string, patch: Partial<Omit<Script, 'id'>>) => void;
     removeScript: (connectionId: string, id: string) => void;
@@ -34,10 +35,12 @@ export const useAppStore = create<AppStore>()(
                 connections: [...s.connections, { ...data, id: crypto.randomUUID() }],
             })),
             removeConnection: id => set(s => {
-                const { [id]: _layout, ...restHints } = s.connectionWindowHints;
+                const { [id]: _h, ...restHints } = s.connectionWindowHints;
+                const { [id]: _e, ...restExtents } = s.connectionDockExtents;
                 return {
                     connections: s.connections.filter(c => c.id !== id),
                     connectionWindowHints: restHints,
+                    connectionDockExtents: restExtents,
                 };
             }),
             patchUI: patch => set(s => ({ ui: { ...s.ui, ...patch } })),
@@ -51,6 +54,12 @@ export const useAppStore = create<AppStore>()(
                 const { [connectionId]: _, ...rest } = s.connectionWindowHints;
                 return { connectionWindowHints: rest };
             }),
+            saveDockExtents: (connectionId, extents) => set(s => ({
+                connectionDockExtents: {
+                    ...s.connectionDockExtents,
+                    [connectionId]: extents,
+                },
+            })),
             addScript: (connectionId, data) => {
                 const id = crypto.randomUUID();
                 set(s => ({
@@ -175,8 +184,8 @@ export const useAppStore = create<AppStore>()(
         {
             name: 'mudix_v1',
             version: 8,
-            partialize: ({ connections, ui, connectionWindowHints, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings }) => ({
-                connections, ui, connectionWindowHints, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings,
+            partialize: ({ connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings }) => ({
+                connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings,
             }),
             migrate: (saved, version) => {
                 const s = saved as Partial<AppSchema> & { connections?: any[] };
@@ -194,6 +203,7 @@ export const useAppStore = create<AppStore>()(
                     ui: { ...APP_DEFAULTS.ui, ...(s.ui ?? {}) },
                     connections,
                     connectionWindowHints: s.connectionWindowHints ?? {},
+                    connectionDockExtents: s.connectionDockExtents ?? {},
                     connectionScripts: s.connectionScripts ?? {},
                     connectionAliases: s.connectionAliases ?? {},
                     connectionTriggers: s.connectionTriggers ?? {},

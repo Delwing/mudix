@@ -1,87 +1,112 @@
-import type { DockviewApi } from 'dockview';
 import { type CursorOps, type OutputRendererControls } from '../output/OutputRenderer';
-import type {
-    PanelKind,
-    PanelPosition,
-    WindowHandle,
-    WindowOpenOptions,
-} from './types';
+import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
 
-interface PanelEntry {
-    id: string;
-    kind: PanelKind;
-    /** The container element exposed to scripts. Resolved once the panel mounts. */
-    element: HTMLElement | null;
-    /** Buffered text written before the element was ready (text-kind only). */
+interface ScriptWindowData extends ScriptWindowRenderData {
     pendingText: string[];
-    /** Renderer controls for text panels — provides push/clear and split-view. */
-    controls?: OutputRendererControls | null;
 }
 
 const TEXT_BUFFER_LIMIT = 5000;
 
+const DEFAULT_SIZE: Record<'text' | 'html' | 'map', { w: number; h: number }> = {
+    text: { w: 400, h: 300 },
+    html: { w: 400, h: 300 },
+    map:  { w: 500, h: 400 },
+};
+
+const DEFAULT_DOCK_EXTENTS: Record<DockSide, number> = {
+    left: 250, right: 250, top: 150, bottom: 150,
+};
+
+export type WindowsChangedFn = (
+    windows: ScriptWindowRenderData[],
+    dockExtents: Record<DockSide, number>,
+) => void;
+
 export class WindowManager {
-    private api: DockviewApi | null = null;
-    private readonly entries = new Map<string, PanelEntry>();
-    private readonly pendingOpens: Array<{ id: string; options: WindowOpenOptions }> = [];
-    // Per-window partial-line buffers — accumulate text until \n, matching main output behaviour.
-    private readonly lineBuffers = new Map<string, string>();
+    private readonly windows       = new Map<string, ScriptWindowData>();
+    private readonly controls      = new Map<string, OutputRendererControls>();
+    private readonly elements      = new Map<string, HTMLElement>();
+    private readonly lineBuffers   = new Map<string, string>();
+    private readonly portalTargets = new Map<string, HTMLDivElement>();
     private cursorRegistry: Map<string, CursorOps> | null = null;
     private windowHints: Record<string, WindowOpenOptions> = {};
+    private nextZ       = 10;
+    private nextDockOrder = 0;
+    private readonly dockExtents: Record<DockSide, number> = { ...DEFAULT_DOCK_EXTENTS };
 
-    /** Called by App to supply saved position hints for the active connection. */
-    setWindowHints(hints: Record<string, WindowOpenOptions>): void {
-        this.windowHints = hints;
-    }
+    onWindowsChange?:     WindowsChangedFn;
+    onWindowHint?:        (id: string, hint: WindowOpenOptions) => void;
+    /** Called when a window is explicitly closed — use to clear its auto-open flag. */
+    onWindowClosed?:      (id: string) => void;
+    /** Called when a dock side's extent changes — use to persist it. */
+    onDockExtentsChange?: (extents: Record<DockSide, number>) => void;
 
-    /** Called after a NEW panel is opened with the effective positional options used. */
-    onWindowHint?: (id: string, hint: WindowOpenOptions) => void;
-
-    /** Wired up by MudSession so cursor ops are registered per text window. */
     setCursorRegistry(registry: Map<string, CursorOps>): void {
         this.cursorRegistry = registry;
     }
 
-    /** Called by DockRoot once Dockview is ready. */
-    attach(api: DockviewApi): void {
-        this.api = api;
-        const drained = this.pendingOpens.splice(0);
-        for (const { id, options } of drained) this.open(id, options);
-    }
-
-    /** Called when the host React tree unmounts. */
-    detach(): void {
-        this.api = null;
-    }
-
-    /**
-     * Called by non-text panel components from a mount effect (html, output).
-     * Creates or updates the entry for this id.
-     */
-    register(id: string, element: HTMLElement, kind: PanelKind): void {
-        const existing = this.entries.get(id);
-        if (existing) {
-            existing.element = element;
-            existing.kind = kind;
-            return;
+    setWindowHints(hints: Record<string, WindowOpenOptions>): void {
+        this.windowHints = hints;
+        // Auto-restore windows that were open when the connection was last closed.
+        for (const [id, hint] of Object.entries(hints)) {
+            if (hint.autoOpen && !this.windows.has(id)) {
+                this.open(id, hint);
+            }
         }
-        this.entries.set(id, { id, kind, element, pendingText: [] });
     }
 
-    /**
-     * Called by TextPanel once its OutputRenderer is ready.
-     * Drains any text buffered before the panel mounted.
-     */
+    /** Restore saved dock extents from storage (called on connect, before setWindowHints). */
+    setDockExtentsFromStorage(extents: Record<string, number>): void {
+        for (const [side, size] of Object.entries(extents)) {
+            if (size !== undefined) this.dockExtents[side as DockSide] = size;
+        }
+        this.notify();
+    }
+
+    /** Call after setting onWindowsChange to deliver current state immediately.
+     *  Needed because windows may have been opened (e.g. autoOpen) before the
+     *  React subscriber mounted. */
+    initialize(): void {
+        this.notify();
+    }
+
+    // ── Portal target ─────────────────────────────────────────────────────────
+
+    /** Returns the stable portal-target div for a window, creating it on first call.
+     *  This div is physically moved between dock slots and floating frames — the
+     *  panel component rendered into it never unmounts during transitions. */
+    getOrCreatePortalTarget(id: string): HTMLDivElement {
+        if (!this.portalTargets.has(id)) {
+            const div = document.createElement('div');
+            div.style.display = 'contents';
+            this.portalTargets.set(id, div);
+        }
+        return this.portalTargets.get(id)!;
+    }
+
+    getPortalTarget(id: string): HTMLDivElement | undefined {
+        return this.portalTargets.get(id);
+    }
+
+    // ── Panel mount / unmount ─────────────────────────────────────────────────
+
     registerTextPanel(id: string, controls: OutputRendererControls, element: HTMLElement): void {
-        const existing = this.entries.get(id);
-        if (existing) {
-            existing.controls = controls;
-            existing.element = element;
-            for (const text of existing.pendingText) controls.push(text);
-            existing.pendingText = [];
-            return;
+        this.controls.set(id, controls);
+        const win = this.windows.get(id);
+        if (win?.pendingText.length) {
+            for (const line of win.pendingText) controls.push(line);
+            win.pendingText = [];
         }
-        this.entries.set(id, { id, kind: 'text', element, pendingText: [], controls });
+        this.elements.set(id, element);
+    }
+
+    register(id: string, element: HTMLElement, _kind: 'html'): void {
+        this.elements.set(id, element);
+        const win = this.windows.get(id);
+        if (win?.pendingText.length) {
+            for (const line of win.pendingText) element.insertAdjacentHTML('beforeend', line);
+            win.pendingText = [];
+        }
     }
 
     registerCursor(id: string, ops: CursorOps): void {
@@ -89,265 +114,306 @@ export class WindowManager {
     }
 
     unregister(id: string): void {
-        const entry = this.entries.get(id);
-        if (!entry) return;
-        entry.element = null;
-        entry.controls = null;
+        this.controls.delete(id);
+        this.elements.delete(id);
         this.cursorRegistry?.delete(id);
     }
 
+    // ── Floating window drag / resize ─────────────────────────────────────────
+
+    setPosition(id: string, x: number, y: number): void {
+        const win = this.windows.get(id);
+        if (!win) return;
+        win.x = x;
+        win.y = y;
+        this.notify();
+        this.saveHint(id, win);
+    }
+
+    setSize(id: string, width: number, height: number): void {
+        const win = this.windows.get(id);
+        if (!win) return;
+        win.width  = Math.max(150, width);
+        win.height = Math.max(80, height);
+        this.notify();
+        this.saveHint(id, win);
+    }
+
+    bringToFront(id: string): void {
+        const win = this.windows.get(id);
+        if (!win) return;
+        win.zIndex = ++this.nextZ;
+        this.notify();
+    }
+
+    // ── Dock management ───────────────────────────────────────────────────────
+
+    dock(id: string, side: DockSide, slotIndex?: number): void {
+        const win = this.windows.get(id);
+        if (!win) return;
+        // Assign dockOrder: insert at slotIndex, push others down
+        const existing = [...this.windows.values()]
+            .filter(w => w.docked === side)
+            .sort((a, b) => (a.dockOrder ?? 0) - (b.dockOrder ?? 0));
+        const insertAt = slotIndex ?? existing.length;
+        // Re-number: panels before insertAt keep their order, others get +1
+        existing.forEach(w => {
+            if ((w.dockOrder ?? 0) >= insertAt) w.dockOrder = (w.dockOrder ?? 0) + 1;
+        });
+        win.docked    = side;
+        win.dockOrder = insertAt;
+        win.dockFlex  = 1;
+        win.visible   = true;
+        this.notify();
+        this.saveHint(id, win);
+    }
+
+    /** Undock. Pass the panel's screen rect so the floating window appears in-place. */
+    undock(id: string, visualWidth?: number, visualHeight?: number, screenX?: number, screenY?: number): void {
+        const win = this.windows.get(id);
+        if (!win) return;
+        const side = win.docked;
+        if (visualWidth  !== undefined) win.width  = visualWidth;
+        else if (side === 'left' || side === 'right') win.width = this.dockExtents[side];
+        if (visualHeight !== undefined) win.height = visualHeight;
+        else if (side === 'top' || side === 'bottom') win.height = this.dockExtents[side];
+        if (screenX !== undefined) win.x = screenX;
+        if (screenY !== undefined) win.y = screenY;
+        delete win.docked;
+        delete win.dockOrder;
+        delete win.dockFlex;
+        win.visible = true;
+        win.zIndex  = ++this.nextZ;
+        this.notify();
+        this.saveHint(id, win);
+    }
+
+    getDockExtent(side: DockSide): number {
+        return this.dockExtents[side];
+    }
+
+    setDockExtent(side: DockSide, size: number): void {
+        const min = side === 'left' || side === 'right' ? 80 : 50;
+        this.dockExtents[side] = Math.max(min, size);
+        this.notify();
+        this.onDockExtentsChange?.({ ...this.dockExtents });
+    }
+
+    setDockFlex(id: string, flex: number): void {
+        const win = this.windows.get(id);
+        if (!win?.docked) return;
+        win.dockFlex = Math.max(0.05, flex);
+        this.notify();
+        this.saveHint(id, win);
+    }
+
+    // ── Scripting API ─────────────────────────────────────────────────────────
+
     open(id: string, options: WindowOpenOptions = {}): WindowHandle {
-        if (!this.api) {
-            this.pendingOpens.push({ id, options });
-            return this.makeHandle(id, options.kind ?? 'text');
-        }
-
-        const existing = this.api.getPanel(id);
+        const existing = this.windows.get(id);
         if (existing) {
-            if (options.title) existing.api.setTitle(options.title);
-            if (options.activate !== false) existing.api.setActive();
-            const kind = this.entries.get(id)?.kind ?? (options.kind ?? 'text');
-            // Panel was restored from a saved layout — ensure a manager entry exists
-            // so that write() calls buffer correctly until registerTextPanel fires.
-            if (!this.entries.has(id)) {
-                this.entries.set(id, { id, kind, element: null, pendingText: [] });
-            }
-            return this.makeHandle(id, kind);
+            if (options.title) existing.title = options.title;
+            existing.visible = true;
+            existing.zIndex  = ++this.nextZ;
+            this.notify();
+            return this.makeHandle(id);
         }
 
-        // Merge saved position hint: hint provides positional fields only where
-        // the caller has not explicitly specified them.
-        const hint = this.windowHints[id];
-        const mergedOptions: WindowOpenOptions = hint
-            ? {
-                kind: options.kind ?? hint.kind,
-                position: options.position ?? hint.position,
-                referencePanelId: options.referencePanelId ?? hint.referencePanelId,
-                floatSize: options.floatSize ?? hint.floatSize,
-                title: options.title,
-                activate: options.activate,
-            }
-            : options;
+        const kind = options.kind ?? 'text';
+        const hint = options.ignoreHint ? undefined : this.windowHints[id];
+        const def  = DEFAULT_SIZE[kind];
 
-        const kind = mergedOptions.kind ?? 'text';
-        if (!this.entries.has(id)) {
-            this.entries.set(id, { id, kind, element: null, pendingText: [] });
+        // Determine dock state, following Mudlet semantics:
+        //   autoDock=false           → always float
+        //   hint present             → restore saved dock position
+        //   dockingArea (no hint)    → dock to that side
+        //   otherwise                → float
+        let docked: DockSide | undefined;
+        let dockOrder: number | undefined;
+        let dockFlex: number | undefined;
+
+        if (options.autoDock === false) {
+            // Force floating
+        } else if (hint?.docked) {
+            docked    = hint.docked;
+            dockOrder = hint.dockOrder;
+            dockFlex  = hint.dockFlex;
+        } else if (options.dockingArea && options.dockingArea !== 'main') {
+            const areaMap: Partial<Record<string, DockSide>> = {
+                left: 'left', right: 'right', top: 'top', bottom: 'bottom',
+            };
+            docked = areaMap[options.dockingArea];
+            if (docked) { dockFlex = 1; dockOrder = ++this.nextDockOrder; }
         }
 
-        const addOptions = this.buildAddPanelOptions(id, kind, mergedOptions);
-        this.api.addPanel(addOptions);
-
-        // Persist the effective positional options as a new hint.
-        const effectiveHint: WindowOpenOptions = {
+        const win: ScriptWindowData = {
+            id,
+            title:       options.title ?? id,
             kind,
-            position: mergedOptions.position,
-            referencePanelId: mergedOptions.referencePanelId,
-            floatSize: mergedOptions.floatSize,
+            visible:     true,
+            x:           hint?.x      ?? this.defaultX(options.position),
+            y:           hint?.y      ?? this.defaultY(options.position),
+            width:       hint?.width  ?? options.width  ?? def.w,
+            height:      hint?.height ?? options.height ?? def.h,
+            zIndex:      ++this.nextZ,
+            docked,
+            dockOrder,
+            dockFlex,
+            pendingText: [],
         };
-        this.onWindowHint?.(id, effectiveHint);
 
-        return this.makeHandle(id, kind);
+        this.windows.set(id, win);
+        this.notify();
+        return this.makeHandle(id);
     }
 
     close(id: string): void {
+        this.windows.delete(id);
+        this.controls.delete(id);
+        this.elements.delete(id);
         this.lineBuffers.delete(id);
-        const panel = this.api?.getPanel(id);
-        if (!panel) {
-            this.entries.delete(id);
-            return;
+        this.portalTargets.delete(id);
+        this.cursorRegistry?.delete(id);
+        this.onWindowClosed?.(id);
+        this.notify();
+    }
+
+    clearAll(): void {
+        for (const id of this.windows.keys()) {
+            this.controls.delete(id);
+            this.elements.delete(id);
+            this.lineBuffers.delete(id);
+            this.portalTargets.delete(id);
+            this.cursorRegistry?.delete(id);
         }
-        panel.api.close();
-        this.entries.delete(id);
+        this.windows.clear();
+        this.notify();
+    }
+
+    hide(id: string): void {
+        const win = this.windows.get(id);
+        if (!win || !win.visible) return;
+        win.visible = false;
+        this.notify();
+    }
+
+    show(id: string): void {
+        const win = this.windows.get(id);
+        if (!win) { this.open(id); return; }
+        if (win.visible) return;
+        win.visible = true;
+        win.zIndex  = ++this.nextZ;
+        this.notify();
     }
 
     write(id: string, text: string): void {
-        const entry = this.entries.get(id);
-        if (!entry) {
-            const handle = this.open(id, { kind: 'text', title: id });
-            handle.write(text);
-            return;
-        }
-        if (entry.kind === 'output') return;
-        if (entry.kind === 'text') {
-            // Buffer partial lines — only push complete lines (terminated by \n).
-            const buffered = (this.lineBuffers.get(id) ?? '') + text;
-            const lines = buffered.split('\n');
-            for (let i = 0; i < lines.length - 1; i++) {
-                this.pushLine(entry, id, lines[i]);
-            }
-            const remainder = lines[lines.length - 1];
-            if (remainder) {
-                this.lineBuffers.set(id, remainder);
-            } else {
-                this.lineBuffers.delete(id);
-            }
-            return;
-        }
-        if (entry.element) entry.element.insertAdjacentHTML('beforeend', text);
+        if (!this.windows.has(id)) this.open(id, { kind: 'text', title: id });
+        const win = this.windows.get(id)!;
+        if (win.kind === 'map') return;
+
+        const buffered = (this.lineBuffers.get(id) ?? '') + text;
+        const lines    = buffered.split('\n');
+        for (let i = 0; i < lines.length - 1; i++) this.pushLine(win, id, lines[i]);
+
+        const remainder = lines[lines.length - 1];
+        if (remainder) this.lineBuffers.set(id, remainder);
+        else           this.lineBuffers.delete(id);
     }
 
-    /** Flush the partial-line buffer for a single window to its renderer. */
     flushLine(id: string): void {
         const partial = this.lineBuffers.get(id);
         if (!partial) return;
         this.lineBuffers.delete(id);
-        const entry = this.entries.get(id);
-        if (entry?.kind === 'text') this.pushLine(entry, id, partial);
+        const win = this.windows.get(id);
+        if (win) this.pushLine(win, id, partial);
     }
 
-    /** Flush all pending partial lines across every open window. */
     flushAllLines(): void {
         for (const id of this.lineBuffers.keys()) this.flushLine(id);
     }
 
-    hide(id: string): void {
-        const el = this.groupElement(id);
-        if (el) el.style.display = 'none';
-    }
-
-    show(id: string): void {
-        const el = this.groupElement(id);
-        if (el) el.style.display = '';
-    }
-
-    private groupElement(id: string): HTMLElement | null {
-        const panel = this.api?.getPanel(id);
-        // DockviewGroupPanel extends BasePanelView which has element, but
-        // BasePanelViewExported (the interface) doesn't expose it.
-        return panel ? ((panel.api.group as any).element as HTMLElement) ?? null : null;
-    }
-
     clear(id: string): void {
+        const win = this.windows.get(id);
+        if (!win) return;
+        win.pendingText = [];
         this.lineBuffers.delete(id);
-        const entry = this.entries.get(id);
-        if (!entry) return;
-        if (entry.kind === 'output') return;
-        entry.pendingText = [];
-        if (entry.kind === 'text') {
-            entry.controls?.clear();
-        } else if (entry.element) {
-            entry.element.replaceChildren();
-        }
-    }
-
-    private pushLine(entry: PanelEntry, id: string, line: string): void {
-        if (!entry.controls) {
-            entry.pendingText.push(line);
-            if (entry.pendingText.length > TEXT_BUFFER_LIMIT) {
-                entry.pendingText.splice(0, entry.pendingText.length - TEXT_BUFFER_LIMIT);
-                console.warn(`[WindowManager] pre-mount buffer for panel "${id}" exceeded ${TEXT_BUFFER_LIMIT} lines — oldest entries dropped`);
-            }
-        } else {
-            entry.controls.push(line);
-        }
+        this.controls.get(id)?.clear();
+        const el = this.elements.get(id);
+        if (el && win.kind === 'html') el.replaceChildren();
     }
 
     setTitle(id: string, title: string): void {
-        const panel = this.api?.getPanel(id);
-        if (panel) panel.api.setTitle(title);
+        const win = this.windows.get(id);
+        if (!win) return;
+        win.title = title;
+        this.notify();
     }
 
-    focus(id: string): void {
-        const panel = this.api?.getPanel(id);
-        if (panel) panel.api.setActive();
+    focus(id: string): void { this.bringToFront(id); }
+    has(id: string): boolean { return this.windows.has(id); }
+    getElement(id: string): HTMLElement | null { return this.elements.get(id) ?? null; }
+
+    // ── Private ───────────────────────────────────────────────────────────────
+
+    private pushLine(win: ScriptWindowData, id: string, line: string): void {
+        if (win.kind === 'text') {
+            const ctrl = this.controls.get(id);
+            if (ctrl) {
+                ctrl.push(line);
+            } else {
+                win.pendingText.push(line);
+                if (win.pendingText.length > TEXT_BUFFER_LIMIT) {
+                    win.pendingText.splice(0, win.pendingText.length - TEXT_BUFFER_LIMIT);
+                    console.warn(`[WindowManager] pre-mount buffer for "${id}" exceeded ${TEXT_BUFFER_LIMIT} lines`);
+                }
+            }
+        } else if (win.kind === 'html') {
+            const el = this.elements.get(id);
+            if (el) el.insertAdjacentHTML('beforeend', line);
+            else    win.pendingText.push(line);
+        }
     }
 
-    has(id: string): boolean {
-        return this.entries.has(id);
+    private defaultX(position?: string): number {
+        if (position === 'right') return Math.round(window.innerWidth * 0.6);
+        if (position === 'left')  return 20;
+        return 20 + (this.windows.size % 8) * 30;
     }
 
-    getElement(id: string): HTMLElement | null {
-        return this.entries.get(id)?.element ?? null;
+    private defaultY(position?: string): number {
+        if (position === 'above') return 20;
+        if (position === 'below') return Math.round(window.innerHeight * 0.55);
+        return 20 + (this.windows.size % 8) * 30;
     }
 
-    /** Used by DockRoot to claim the locked Output panel id up front. */
-    registerOutputEntry(id: string): void {
-        if (this.entries.has(id)) return;
-        this.entries.set(id, {
-            id,
-            kind: 'output',
-            element: null,
-            pendingText: [],
+    private notify(): void {
+        const arr = [...this.windows.values()]
+            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex }) =>
+                ({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex }))
+            .sort((a, b) => a.zIndex - b.zIndex);
+        this.onWindowsChange?.(arr, { ...this.dockExtents });
+    }
+
+    private saveHint(id: string, win: ScriptWindowData): void {
+        this.onWindowHint?.(id, {
+            x: win.x, y: win.y, width: win.width, height: win.height,
+            kind: this.windowHints[id]?.kind,       // preserve kind for auto-restore
+            autoOpen: this.windowHints[id]?.autoOpen, // preserve auto-open flag
+            docked: win.docked, dockOrder: win.dockOrder, dockFlex: win.dockFlex,
         });
     }
 
-    private buildAddPanelOptions(
-        id: string,
-        kind: PanelKind,
-        options: WindowOpenOptions,
-    ): Parameters<DockviewApi['addPanel']>[0] {
-        const component = kind === 'output' ? 'output'
-            : kind === 'text' ? 'text'
-            : kind === 'map' ? 'map'
-            : 'html';
-        const title = options.title ?? id;
-        const activate = options.activate !== false;
-
-        const params = { manager: this };
-
-        if (options.position === 'float') {
-            return {
-                id,
-                component,
-                title,
-                params,
-                inactive: !activate,
-                floating: {
-                    width: options.floatSize?.width ?? 320,
-                    height: options.floatSize?.height ?? 240,
-                },
-            };
-        }
-
-        const direction = directionFromPosition(options.position ?? 'right');
-        const reference = options.referencePanelId ?? 'output';
-        const referenceExists = !!this.api?.getPanel(reference);
-
-        if (referenceExists && direction !== null) {
-            return {
-                id,
-                component,
-                title,
-                params,
-                inactive: !activate,
-                position: { referencePanel: reference, direction },
-            };
-        }
+    private makeHandle(id: string): WindowHandle {
+        const m = this;
         return {
-            id,
-            component,
-            title,
-            params,
-            inactive: !activate,
+            get id()      { return id; },
+            get kind()    { return m.windows.get(id)?.kind ?? 'text'; },
+            get element() { return m.elements.get(id) ?? document.createElement('div'); },
+            write(text)   { m.write(id, text); },
+            clear()       { m.clear(id); },
+            setTitle(t)   { m.setTitle(id, t); },
+            focus()       { m.focus(id); },
+            close()       { m.close(id); },
         };
-    }
-
-    private makeHandle(id: string, kind: PanelKind): WindowHandle {
-        const manager = this;
-        return {
-            id,
-            kind,
-            get element(): HTMLElement {
-                const el = manager.entries.get(id)?.element;
-                if (el) return el;
-                return document.createElement('div');
-            },
-            write(text: string) { manager.write(id, text); },
-            clear() { manager.clear(id); },
-            setTitle(title: string) { manager.setTitle(id, title); },
-            focus() { manager.focus(id); },
-            close() { manager.close(id); },
-        };
-    }
-}
-
-function directionFromPosition(position: PanelPosition): 'left' | 'right' | 'above' | 'below' | 'within' | null {
-    switch (position) {
-        case 'left': return 'left';
-        case 'right': return 'right';
-        case 'above': return 'above';
-        case 'below': return 'below';
-        case 'within': return 'within';
-        case 'float': return null;
     }
 }

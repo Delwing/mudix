@@ -1,35 +1,34 @@
-import type { SerializedDockview } from 'dockview';
-
 export type PanelKind = 'output' | 'text' | 'html' | 'map';
 
-export type PanelPosition =
-    | 'left'
-    | 'right'
-    | 'above'
-    | 'below'
-    | 'within'
-    | 'float';
+export type DockSide = 'left' | 'right' | 'top' | 'bottom';
 
-export interface WindowOpenOptions {
-    /** Display title shown in the tab. Defaults to the panel id. */
-    title?: string;
-    /** Panel kind. Defaults to 'text' for script-opened panels. */
-    kind?: PanelKind;
-    /** Where to place the panel on first open. Ignored once a panel exists. */
-    position?: PanelPosition;
-    /** Reference panel id for relative positioning. Defaults to 'output'. */
-    referencePanelId?: string;
-    /** If position === 'float', initial pixel size of the floating window. */
-    floatSize?: { width?: number; height?: number };
-    /** Bring the panel to the foreground after opening. Defaults to true. */
-    activate?: boolean;
+export interface DragState {
+    panelId: string;
+    potentialDock: DockSide | null;
+    insertSlotIndex: number | null;
 }
 
-/**
- * Handle returned to scripts after opening a window. The element is the
- * raw container the script can fill with arbitrary DOM (for `kind: 'html'`)
- * or that text writes are appended to (for `kind: 'text'`).
- */
+export interface WindowOpenOptions {
+    title?: string;
+    kind?: 'text' | 'html' | 'map';
+    position?: 'right' | 'left' | 'above' | 'below';
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    activate?: boolean;
+    autoOpen?: boolean;
+    docked?: DockSide;
+    dockOrder?: number;
+    dockFlex?: number;
+    /** If false, skip restoring the saved hint (Mudlet restoreLayout=false). */
+    ignoreHint?: boolean;
+    /** If false, force floating regardless of dockingArea (Mudlet autoDock=false). */
+    autoDock?: boolean;
+    /** Dock side to use when no saved hint exists (Mudlet dockingArea). "main" = floating. */
+    dockingArea?: string;
+}
+
 export interface WindowHandle {
     readonly id: string;
     readonly kind: PanelKind;
@@ -41,4 +40,17 @@ export interface WindowHandle {
     close(): void;
 }
 
-export type SerializedLayout = SerializedDockview;
+export interface ScriptWindowRenderData {
+    id: string;
+    title: string;
+    kind: 'text' | 'html' | 'map';
+    visible: boolean;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    zIndex: number;
+    docked?: DockSide;
+    dockOrder?: number;
+    dockFlex?: number;
+}
