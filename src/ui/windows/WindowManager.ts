@@ -28,6 +28,7 @@ export class WindowManager {
     private readonly elements      = new Map<string, HTMLElement>();
     private readonly lineBuffers   = new Map<string, string>();
     private readonly portalTargets = new Map<string, HTMLDivElement>();
+    private readonly activeTabGroups = new Map<string, string>(); // groupId → active panelId
     private cursorRegistry: Map<string, CursorOps> | null = null;
     private windowHints: Record<string, WindowOpenOptions> = {};
     private nextZ       = 10;
@@ -151,12 +152,13 @@ export class WindowManager {
     dock(id: string, side: DockSide, slotIndex?: number): void {
         const win = this.windows.get(id);
         if (!win) return;
+        if (win.dockGroup)  this.removeFromGroup(id);
+        if (win.splitGroup) this.removeFromSplitGroup(id);
         // Assign dockOrder: insert at slotIndex, push others down
         const existing = [...this.windows.values()]
             .filter(w => w.docked === side)
             .sort((a, b) => (a.dockOrder ?? 0) - (b.dockOrder ?? 0));
         const insertAt = slotIndex ?? existing.length;
-        // Re-number: panels before insertAt keep their order, others get +1
         existing.forEach(w => {
             if ((w.dockOrder ?? 0) >= insertAt) w.dockOrder = (w.dockOrder ?? 0) + 1;
         });
@@ -168,15 +170,108 @@ export class WindowManager {
         this.saveHint(id, win);
     }
 
+    /** Stack panel `id` as a tab with panel `targetId` (or into its existing group). */
+    tabIntoGroup(id: string, targetId: string): void {
+        const source = this.windows.get(id);
+        const target = this.windows.get(targetId);
+        if (!source || !target || !target.docked) return;
+        // Leave any existing group membership
+        if (source.dockGroup) this.removeFromGroup(id);
+
+        // Get or create the target's group
+        let groupId: string;
+        if (target.dockGroup) {
+            groupId = target.dockGroup;
+        } else {
+            groupId = `grp_${targetId}`;
+            target.dockGroup = groupId;
+            target.tabOrder  = 0;
+            this.activeTabGroups.set(groupId, targetId);
+            this.saveHint(targetId, target);
+        }
+
+        const members   = [...this.windows.values()].filter(w => w.dockGroup === groupId);
+        const maxOrder  = members.reduce((m, w) => Math.max(m, w.tabOrder ?? 0), -1);
+
+        source.docked    = target.docked;
+        source.dockOrder = target.dockOrder;
+        source.dockFlex  = target.dockFlex;
+        source.dockGroup = groupId;
+        source.tabOrder  = maxOrder + 1;
+        source.visible   = true;
+
+        this.activeTabGroups.set(groupId, id);
+        this.notify();
+        this.saveHint(id, source);
+    }
+
+    setActiveTab(panelId: string): void {
+        const win = this.windows.get(panelId);
+        if (!win?.dockGroup) return;
+        this.activeTabGroups.set(win.dockGroup, panelId);
+        this.notify();
+    }
+
+    /** Split panel `id` above or below `targetId` (cross-axis within the same dock slot). */
+    splitIntoGroup(id: string, targetId: string, splitBefore: boolean): void {
+        const source = this.windows.get(id);
+        const target = this.windows.get(targetId);
+        if (!source || !target || !target.docked) return;
+        if (source.dockGroup)  this.removeFromGroup(id);
+        if (source.splitGroup) this.removeFromSplitGroup(id);
+
+        let splitGroupId: string;
+        if (target.splitGroup) {
+            splitGroupId = target.splitGroup;
+        } else {
+            splitGroupId = `splt_${targetId}`;
+            target.splitGroup = splitGroupId;
+            target.splitOrder = 0;
+            target.splitFlex  = 1;
+            this.saveHint(targetId, target);
+        }
+
+        const members  = [...this.windows.values()]
+            .filter(w => w.splitGroup === splitGroupId)
+            .sort((a, b) => (a.splitOrder ?? 0) - (b.splitOrder ?? 0));
+        const targetIdx = members.findIndex(m => m.id === targetId);
+        const insertAt  = splitBefore ? (targetIdx < 0 ? 0 : targetIdx) : (targetIdx < 0 ? members.length : targetIdx + 1);
+
+        members.forEach(w => {
+            if ((w.splitOrder ?? 0) >= insertAt) w.splitOrder = (w.splitOrder ?? 0) + 1;
+        });
+
+        source.docked     = target.docked;
+        source.dockOrder  = target.dockOrder;
+        source.dockFlex   = target.dockFlex;
+        source.splitGroup = splitGroupId;
+        source.splitOrder = insertAt;
+        source.splitFlex  = 1;
+        source.visible    = true;
+
+        this.notify();
+        this.saveHint(id, source);
+    }
+
+    setSplitFlex(panelId: string, flex: number): void {
+        const win = this.windows.get(panelId);
+        if (!win?.splitGroup) return;
+        win.splitFlex = Math.max(0.05, flex);
+        this.notify();
+        this.saveHint(panelId, win);
+    }
+
     /** Undock. Pass the panel's screen rect so the floating window appears in-place. */
     undock(id: string, visualWidth?: number, visualHeight?: number, screenX?: number, screenY?: number): void {
         const win = this.windows.get(id);
         if (!win) return;
+        if (win.dockGroup)  this.removeFromGroup(id);
+        if (win.splitGroup) this.removeFromSplitGroup(id);
         const side = win.docked;
         if (visualWidth  !== undefined) win.width  = visualWidth;
-        else if (side === 'left' || side === 'right') win.width = this.dockExtents[side];
+        else if (side === 'left' || side === 'right') win.width = this.dockExtents[side!];
         if (visualHeight !== undefined) win.height = visualHeight;
-        else if (side === 'top' || side === 'bottom') win.height = this.dockExtents[side];
+        else if (side === 'top' || side === 'bottom') win.height = this.dockExtents[side!];
         if (screenX !== undefined) win.x = screenX;
         if (screenY !== undefined) win.y = screenY;
         delete win.docked;
@@ -207,6 +302,22 @@ export class WindowManager {
         this.saveHint(id, win);
     }
 
+    /** Set flex for all panels in the same slot (by panel ID, tab-group ID, or split-group ID). */
+    setSlotFlex(slotId: string, flex: number): void {
+        const normalized = Math.max(0.05, flex);
+        for (const win of this.windows.values()) {
+            if (win.id === slotId || win.dockGroup === slotId || win.splitGroup === slotId) {
+                win.dockFlex = normalized;
+            }
+        }
+        this.notify();
+        for (const win of this.windows.values()) {
+            if (win.id === slotId || win.dockGroup === slotId || win.splitGroup === slotId) {
+                this.saveHint(win.id, win);
+            }
+        }
+    }
+
     // ── Scripting API ─────────────────────────────────────────────────────────
 
     open(id: string, options: WindowOpenOptions = {}): WindowHandle {
@@ -231,6 +342,11 @@ export class WindowManager {
         let docked: DockSide | undefined;
         let dockOrder: number | undefined;
         let dockFlex: number | undefined;
+        let dockGroup: string | undefined;
+        let tabOrder: number | undefined;
+        let splitGroup: string | undefined;
+        let splitOrder: number | undefined;
+        let splitFlex: number | undefined;
 
         if (options.autoDock === false) {
             // Force floating
@@ -238,6 +354,18 @@ export class WindowManager {
             docked    = hint.docked;
             dockOrder = hint.dockOrder;
             dockFlex  = hint.dockFlex;
+            if (hint.dockGroup) {
+                dockGroup = hint.dockGroup;
+                tabOrder  = hint.tabOrder;
+                if (hint.isActiveTab || !this.activeTabGroups.has(hint.dockGroup)) {
+                    this.activeTabGroups.set(hint.dockGroup, id);
+                }
+            }
+            if (hint.splitGroup) {
+                splitGroup = hint.splitGroup;
+                splitOrder = hint.splitOrder;
+                splitFlex  = hint.splitFlex;
+            }
         } else if (options.dockingArea && options.dockingArea !== 'main') {
             const areaMap: Partial<Record<string, DockSide>> = {
                 left: 'left', right: 'right', top: 'top', bottom: 'bottom',
@@ -259,10 +387,21 @@ export class WindowManager {
             docked,
             dockOrder,
             dockFlex,
+            dockGroup,
+            tabOrder,
+            splitGroup,
+            splitOrder,
+            splitFlex,
             pendingText: [],
         };
 
         this.windows.set(id, win);
+        this.windowHints[id] = {
+            ...this.windowHints[id],
+            kind:     win.kind,
+            autoOpen: options.autoOpen ?? this.windowHints[id]?.autoOpen,
+        };
+        this.saveHint(id, win);
         this.notify();
         return this.makeHandle(id);
     }
@@ -388,19 +527,78 @@ export class WindowManager {
 
     private notify(): void {
         const arr = [...this.windows.values()]
-            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex }) =>
-                ({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex }))
+            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex }) => ({
+                id, title, kind, visible, x, y, width, height, zIndex,
+                docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex,
+                isActiveTab: dockGroup ? this.activeTabGroups.get(dockGroup) === id : undefined,
+            }))
             .sort((a, b) => a.zIndex - b.zIndex);
         this.onWindowsChange?.(arr, { ...this.dockExtents });
     }
 
     private saveHint(id: string, win: ScriptWindowData): void {
-        this.onWindowHint?.(id, {
+        const hint: WindowOpenOptions = {
             x: win.x, y: win.y, width: win.width, height: win.height,
-            kind: this.windowHints[id]?.kind,       // preserve kind for auto-restore
-            autoOpen: this.windowHints[id]?.autoOpen, // preserve auto-open flag
-            docked: win.docked, dockOrder: win.dockOrder, dockFlex: win.dockFlex,
-        });
+            kind:      win.kind,
+            autoOpen:  this.windowHints[id]?.autoOpen,
+            docked:    win.docked,    dockOrder:  win.dockOrder,  dockFlex:  win.dockFlex,
+            dockGroup: win.dockGroup, tabOrder:   win.tabOrder,
+            isActiveTab: win.dockGroup ? this.activeTabGroups.get(win.dockGroup) === id : undefined,
+            splitGroup: win.splitGroup, splitOrder: win.splitOrder, splitFlex: win.splitFlex,
+        };
+        this.windowHints[id] = hint;
+        this.onWindowHint?.(id, hint);
+    }
+
+    private removeFromSplitGroup(id: string): void {
+        const win = this.windows.get(id);
+        if (!win?.splitGroup) return;
+        const groupId = win.splitGroup;
+        delete win.splitGroup;
+        delete win.splitOrder;
+        delete win.splitFlex;
+
+        // Dissolve group when only one panel remains
+        const remaining = [...this.windows.values()]
+            .filter(w => w.splitGroup === groupId)
+            .sort((a, b) => (a.splitOrder ?? 0) - (b.splitOrder ?? 0));
+        if (remaining.length === 1) {
+            const last = remaining[0];
+            delete last.splitGroup;
+            delete last.splitOrder;
+            delete last.splitFlex;
+            this.saveHint(last.id, last);
+        }
+    }
+
+    private removeFromGroup(id: string): void {
+        const win = this.windows.get(id);
+        if (!win?.dockGroup) return;
+        const groupId = win.dockGroup;
+        delete win.dockGroup;
+        delete win.tabOrder;
+
+        // Switch active tab if this was the active one
+        if (this.activeTabGroups.get(groupId) === id) {
+            const remaining = [...this.windows.values()].filter(w => w.dockGroup === groupId);
+            if (remaining.length > 0) {
+                this.activeTabGroups.set(groupId, remaining[0].id);
+            } else {
+                this.activeTabGroups.delete(groupId);
+            }
+        }
+
+        // Dissolve group when only one panel remains
+        const remaining = [...this.windows.values()].filter(w => w.dockGroup === groupId);
+        if (remaining.length === 1) {
+            const last = remaining[0];
+            delete last.dockGroup;
+            delete last.tabOrder;
+            this.activeTabGroups.delete(groupId);
+            this.saveHint(last.id, last);
+        } else if (remaining.length === 0) {
+            this.activeTabGroups.delete(groupId);
+        }
     }
 
     private makeHandle(id: string): WindowHandle {

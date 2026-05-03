@@ -11,11 +11,12 @@ interface DockedPanelProps {
     title: string;
     kind: 'text' | 'html' | 'map';
     manager: WindowManager;
-    onClose: () => void;
+    onHide: () => void;
     onDragStateChange: (ds: DragState | null) => void;
+    onTitlebarContextMenu: (e: React.MouseEvent) => void;
 }
 
-export function DockedPanel({ id, title, manager, onClose, onDragStateChange }: DockedPanelProps) {
+export function DockedPanel({ id, title, manager, onHide, onDragStateChange, onTitlebarContextMenu }: DockedPanelProps) {
     const panelRef  = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
 
@@ -51,6 +52,9 @@ export function DockedPanel({ id, title, manager, onClose, onDragStateChange }: 
         let lastY = panelRect?.top  ?? 0;
         let potentialDock: DockSide | null = null;
         let potentialSlot = 0;
+        let potentialStackTarget: string | undefined;
+        let potentialSplitTarget: string | undefined;
+        let potentialSplitBefore: boolean | undefined;
 
         const onMove = (ev: PointerEvent) => {
             if (!hasDragged) {
@@ -85,17 +89,19 @@ export function DockedPanel({ id, title, manager, onClose, onDragStateChange }: 
             floatingEl.style.left = `${lastX}px`;
             floatingEl.style.top  = `${lastY}px`;
 
-            const { side, slotIndex } = ev.shiftKey
-                ? { side: null, slotIndex: 0 }
+            const { side, slotIndex, stackTargetId, splitTargetId, splitBefore } = ev.shiftKey
+                ? { side: null, slotIndex: 0, stackTargetId: undefined, splitTargetId: undefined, splitBefore: undefined }
                 : detectDock(ev.clientX, ev.clientY);
 
-            if (side !== potentialDock || slotIndex !== potentialSlot) {
-                potentialDock = side;
-                potentialSlot = slotIndex;
-                // Sync position before dock-zone re-render so the window doesn't snap.
+            if (side !== potentialDock || slotIndex !== potentialSlot || stackTargetId !== potentialStackTarget || splitTargetId !== potentialSplitTarget) {
+                potentialDock        = side;
+                potentialSlot        = slotIndex;
+                potentialStackTarget = stackTargetId;
+                potentialSplitTarget = splitTargetId;
+                potentialSplitBefore = splitBefore;
                 manager.setPosition(id, lastX, lastY);
                 onDragStateChange(side
-                    ? { panelId: id, potentialDock: side, insertSlotIndex: slotIndex }
+                    ? { panelId: id, potentialDock: side, insertSlotIndex: slotIndex, stackTargetId, splitTargetId, splitBefore }
                     : null);
             }
         };
@@ -104,7 +110,13 @@ export function DockedPanel({ id, title, manager, onClose, onDragStateChange }: 
             onDragStateChange(null);
             if (hasDragged) {
                 if (potentialDock !== null) {
-                    manager.dock(id, potentialDock, potentialSlot);
+                    if (potentialStackTarget) {
+                        manager.tabIntoGroup(id, potentialStackTarget);
+                    } else if (potentialSplitTarget) {
+                        manager.splitIntoGroup(id, potentialSplitTarget, potentialSplitBefore ?? false);
+                    } else {
+                        manager.dock(id, potentialDock, potentialSlot);
+                    }
                 } else if (floatingEl) {
                     manager.setPosition(id, lastX, lastY);
                 }
@@ -119,9 +131,9 @@ export function DockedPanel({ id, title, manager, onClose, onDragStateChange }: 
 
     return (
         <div ref={panelRef} className="docked-panel" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-            <div className="docked-panel-titlebar" onPointerDown={handleTitlebarPointerDown}>
+            <div className="docked-panel-titlebar" onPointerDown={handleTitlebarPointerDown} onContextMenu={onTitlebarContextMenu}>
                 <span className="docked-panel-title">{title}</span>
-                <button className="script-window-btn close" title="Close" onClick={onClose}>×</button>
+                <button className="script-window-btn close" title="Close" onClick={onHide}>×</button>
             </div>
             <div className="docked-panel-content" ref={contentRef} />
         </div>

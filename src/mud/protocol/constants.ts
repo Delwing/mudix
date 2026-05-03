@@ -1,4 +1,4 @@
-export const TELNET_OPTION_REGEX = /ÿú.*?ÿð|ÿ.[^ÿ]/g;
+export const TELNET_OPTION_REGEX = /ÿú[\s\S]*?ÿð|ÿ.[^ÿ]/g;
 
 // Telnet Go Ahead / End-of-Record — used by MUDs to signal a prompt line
 export const TELNET_GA  = "\xFF\xF9"; // IAC GA  (249)

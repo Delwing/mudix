@@ -25,6 +25,7 @@ export default function App() {
     const commandInputRef = useRef<HTMLInputElement>(null);
     const connections = useAppStore(s => s.connections);
     const addConnection = useAppStore(s => s.addConnection);
+    const updateConnection = useAppStore(s => s.updateConnection);
     const removeConnection = useAppStore(s => s.removeConnection);
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
     const connectionDockExtents = useAppStore(s => s.connectionDockExtents);
@@ -182,11 +183,7 @@ export default function App() {
     };
 
     const handleOpenMap = () => {
-        session.windows.open('map', { kind: 'map', title: 'Map', position: 'right' });
-        // Mark map as auto-restorable so it re-opens next time this connection is activated.
-        if (activeConnectionId) {
-            saveWindowHint(activeConnectionId, 'map', { kind: 'map', autoOpen: true });
-        }
+        session.windows.open('map', { kind: 'map', title: 'Map', position: 'right', autoOpen: true });
     };
 
     const handleOpenScripts = () => setScriptsOpen(v => !v);
@@ -228,6 +225,7 @@ export default function App() {
                     onConnect={handleConnect}
                     onOpen={handleOpenOffline}
                     onAdd={addConnection}
+                    onUpdate={updateConnection}
                     onDelete={removeConnection}
                     onOpenSettings={handleOpenSettings}
                 />

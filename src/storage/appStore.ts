@@ -5,6 +5,7 @@ import type { WindowOpenOptions } from '../ui/windows/types';
 
 interface AppStore extends AppSchema {
     addConnection: (data: Omit<MudConnection, 'id'>) => void;
+    updateConnection: (id: string, data: Omit<MudConnection, 'id'>) => void;
     removeConnection: (id: string) => void;
     patchUI: (patch: Partial<UISettings>) => void;
     saveWindowHint: (connectionId: string, panelId: string, hint: WindowOpenOptions) => void;
@@ -33,6 +34,9 @@ export const useAppStore = create<AppStore>()(
             ...APP_DEFAULTS,
             addConnection: data => set(s => ({
                 connections: [...s.connections, { ...data, id: crypto.randomUUID() }],
+            })),
+            updateConnection: (id, data) => set(s => ({
+                connections: s.connections.map(c => c.id === id ? { ...data, id } : c),
             })),
             removeConnection: id => set(s => {
                 const { [id]: _h, ...restHints } = s.connectionWindowHints;

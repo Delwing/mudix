@@ -7,9 +7,10 @@ interface FloatingWindowLayerProps {
     windows: ScriptWindowRenderData[];
     manager: WindowManager;
     onDragStateChange: (ds: DragState | null) => void;
+    onTitlebarContextMenu: (e: React.MouseEvent) => void;
 }
 
-export function FloatingWindowLayer({ windows, manager, onDragStateChange }: FloatingWindowLayerProps) {
+export function FloatingWindowLayer({ windows, manager, onDragStateChange, onTitlebarContextMenu }: FloatingWindowLayerProps) {
     const floating = windows.filter(w => !w.docked);
 
     return createPortal(
@@ -22,9 +23,13 @@ export function FloatingWindowLayer({ windows, manager, onDragStateChange }: Flo
                     onFocus={()           => manager.bringToFront(w.id)}
                     onMoved={(x, y)       => manager.setPosition(w.id, x, y)}
                     onResized={(ww, h)    => manager.setSize(w.id, ww, h)}
-                    onDock={(side, idx)   => manager.dock(w.id, side, idx)}
+                    onDock={(side, idx, stackTargetId, splitTargetId, splitBefore) =>
+                        stackTargetId  ? manager.tabIntoGroup(w.id, stackTargetId)
+                        : splitTargetId ? manager.splitIntoGroup(w.id, splitTargetId, splitBefore ?? false)
+                        : manager.dock(w.id, side, idx)
+                    }
                     onDragStateChange={onDragStateChange}
-                    onClose={()           => manager.close(w.id)}
+                    onTitlebarContextMenu={onTitlebarContextMenu}
                     onHide={()            => manager.hide(w.id)}
                 />
             ))}

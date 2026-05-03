@@ -6,6 +6,12 @@ export interface DragState {
     panelId: string;
     potentialDock: DockSide | null;
     insertSlotIndex: number | null;
+    /** Center zone drop — creates/joins a tab group. */
+    stackTargetId?: string;
+    /** Cross-axis edge drop — creates/joins a split group (vertical stack in horizontal dock). */
+    splitTargetId?: string;
+    /** true = insert before target in cross-axis; false = after. */
+    splitBefore?: boolean;
 }
 
 export interface WindowOpenOptions {
@@ -21,6 +27,12 @@ export interface WindowOpenOptions {
     docked?: DockSide;
     dockOrder?: number;
     dockFlex?: number;
+    dockGroup?: string;
+    tabOrder?: number;
+    isActiveTab?: boolean;
+    splitGroup?: string;
+    splitOrder?: number;
+    splitFlex?: number;
     /** If false, skip restoring the saved hint (Mudlet restoreLayout=false). */
     ignoreHint?: boolean;
     /** If false, force floating regardless of dockingArea (Mudlet autoDock=false). */
@@ -53,4 +65,10 @@ export interface ScriptWindowRenderData {
     docked?: DockSide;
     dockOrder?: number;
     dockFlex?: number;
+    dockGroup?: string;
+    tabOrder?: number;
+    isActiveTab?: boolean;
+    splitGroup?: string;
+    splitOrder?: number;
+    splitFlex?: number;
 }

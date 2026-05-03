@@ -34,6 +34,8 @@ export class MudClient {
     private readonly mccpHandler: MccpHandler;
     private readonly echoHandler: EchoHandler;
     private readonly url: string;
+    /** Buffers the start of a subnegotiation that arrived without its closing IAC SE. */
+    private pendingSubneg = "";
 
     commandEcho: boolean;
 
@@ -128,6 +130,7 @@ export class MudClient {
                 this.eventBus.emit('client.disconnect');
                 this.mccpHandler.reset();
                 this.echoHandler.reset();
+                this.pendingSubneg = "";
             };
 
             this.socket.onopen = (event: Event) => {
@@ -206,9 +209,19 @@ export class MudClient {
         this.messageBuffer.push({ text, type });
     }
 
-    private processIncomingData(data: string, timestamp?: number): void {
-        const hasPrompt = data.includes(TELNET_GA) || data.includes(TELNET_EOR);
-        const sanitized = stripTelnetSequences(data, this.telnetOptionHandler).replace(/\r/g, '');
+    private processIncomingData(rawData: string, timestamp?: number): void {
+        const data = this.pendingSubneg + rawData;
+        this.pendingSubneg = "";
+
+        const incompleteAt = findIncompleteSubnegStart(data);
+        let processable = data;
+        if (incompleteAt !== -1) {
+            this.pendingSubneg = data.substring(incompleteAt);
+            processable = data.substring(0, incompleteAt);
+        }
+
+        const hasPrompt = processable.includes(TELNET_GA) || processable.includes(TELNET_EOR);
+        const sanitized = stripTelnetSequences(processable, this.telnetOptionHandler).replace(/\r/g, '');
         const ts = typeof timestamp === 'number' ? timestamp : Date.now();
         if (sanitized.length > 0) {
             this.chunkProcessor.processChunk(sanitized, ts, this);
@@ -244,4 +257,35 @@ export class MudClient {
         this.messageBuffer = [];
         this.eventBus.emit('flushLines', groups);
     }
+}
+
+/**
+ * Returns the index of the first IAC SB that has no matching IAC SE later in
+ * the string, or -1 if every subnegotiation is complete.
+ * Used to detect subnegotiations split across WebSocket frames.
+ */
+function findIncompleteSubnegStart(data: string): number {
+    const IAC = 0xFF;
+    const SB  = 0xFA;
+    const SE  = 0xF0;
+    let i = 0;
+    while (i < data.length - 1) {
+        if (data.charCodeAt(i) === IAC && data.charCodeAt(i + 1) === SB) {
+            // Found start of subneg — scan forward for IAC SE
+            let j = i + 2;
+            let found = false;
+            while (j < data.length - 1) {
+                if (data.charCodeAt(j) === IAC && data.charCodeAt(j + 1) === SE) {
+                    found = true;
+                    i = j + 2;
+                    break;
+                }
+                j++;
+            }
+            if (!found) return i;
+        } else {
+            i++;
+        }
+    }
+    return -1;
 }

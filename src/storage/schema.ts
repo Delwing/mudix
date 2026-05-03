@@ -1,9 +1,19 @@
 import type { WindowOpenOptions } from '../ui/windows/types';
 
+export const DEFAULT_PROXY_URL = 'wss://mudix.delwing.workers.dev';
+
+export type ConnectionMode = 'mud' | 'websocket';
+
 export interface MudConnection {
     id: string;
     name: string;
-    url: string;
+    mode?: ConnectionMode;  // undefined treated as 'websocket' for backward compat
+    // websocket mode
+    url?: string;
+    // mud mode
+    host?: string;
+    port?: number;
+    proxyUrl?: string;      // overrides DEFAULT_PROXY_URL when set
 }
 
 export interface UISettings {
@@ -90,5 +100,14 @@ export const APP_DEFAULTS: AppSchema = {
 };
 
 export function connectionUrl(c: MudConnection): string {
-    return c.url;
+    if (c.mode === 'mud') {
+        const base = (c.proxyUrl?.trim() || DEFAULT_PROXY_URL).replace(/\/$/, '');
+        return `${base}?host=${encodeURIComponent(c.host ?? '')}&port=${c.port ?? 23}`;
+    }
+    return c.url ?? '';
+}
+
+export function connectionDisplayAddr(c: MudConnection): string {
+    if (c.mode === 'mud') return `${c.host ?? ''}:${c.port ?? 23}`;
+    return c.url ?? '';
 }

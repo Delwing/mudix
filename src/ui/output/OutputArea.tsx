@@ -65,9 +65,9 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
     const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
         if (!commandInputRef) return;
         const target = e.target as Element;
-        if (!target.closest('a, button, input, select, textarea')) {
-            commandInputRef.current?.focus();
-        }
+        if (target.closest('a, button, input, select, textarea')) return;
+        if (window.getSelection()?.toString()) return;
+        commandInputRef.current?.focus();
     };
 
     const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {

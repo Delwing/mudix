@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { MudSession } from '../../mud/MudSession';
 import type { DockSide, DragState, ScriptWindowRenderData } from '../windows/types';
@@ -6,6 +6,7 @@ import type { WindowManager } from '../windows/WindowManager';
 import { OutputArea } from '../output/OutputArea';
 import { DockArea } from './DockArea';
 import { FloatingWindowLayer } from './FloatingWindowLayer';
+import { WindowContextMenu } from './WindowContextMenu';
 import { TextPanel } from '../windows/panels/TextPanel';
 import { HtmlPanel } from '../windows/panels/HtmlPanel';
 import { MapPanel } from '../windows/panels/MapPanel';
@@ -29,6 +30,12 @@ export function ContentLayout({
         left: 300, right: 300, top: 200, bottom: 200,
     });
     const [dragState,   setDragState]   = useState<DragState | null>(null);
+    const [menuPos,     setMenuPos]     = useState<{ x: number; y: number } | null>(null);
+
+    const handleTitlebarContextMenu = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        setMenuPos({ x: e.clientX, y: e.clientY });
+    }, []);
 
     useEffect(() => {
         manager.onWindowsChange = (ws, extents) => {
@@ -46,7 +53,7 @@ export function ContentLayout({
         setDockExtents(prev => ({ ...prev, [side]: n }));
     };
 
-    const dockAreaProps = { manager, dragState, onSetExtent: handleSetExtent, onDragStateChange: setDragState };
+    const dockAreaProps = { manager, dragState, onSetExtent: handleSetExtent, onDragStateChange: setDragState, onTitlebarContextMenu: handleTitlebarContextMenu };
 
     const hasLeft   = windows.some(w => w.docked === 'left'   && w.visible);
     const hasRight  = windows.some(w => w.docked === 'right'  && w.visible);
@@ -88,7 +95,18 @@ export function ContentLayout({
                 windows={windows}
                 manager={manager}
                 onDragStateChange={setDragState}
+                onTitlebarContextMenu={handleTitlebarContextMenu}
             />
+
+            {menuPos && (
+                <WindowContextMenu
+                    windows={windows}
+                    manager={manager}
+                    x={menuPos.x}
+                    y={menuPos.y}
+                    onClose={() => setMenuPos(null)}
+                />
+            )}
 
             {/* Content pool — one panel component per open window, mounted once for its lifetime.
                 Each panel renders into a stable portal-target div that shells physically move

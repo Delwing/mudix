@@ -13,6 +13,7 @@ export function MapPanel() {
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<MapRenderer | null>(null);
     const readerRef = useRef<MapReader | null>(null);
+    const prevWidthRef = useRef<number>(0);
     const [status, setStatus] = useState<MapStatus>('loading');
     const [errorMsg, setErrorMsg] = useState('');
     const [areas, setAreas] = useState<Array<{ id: number; name: string }>>([]);
@@ -29,8 +30,9 @@ export function MapPanel() {
         setAreas(areaList);
 
         const settings = createSettings();
+        settings.areaName = false;
         const renderer = new MapRenderer(reader, settings, containerRef.current);
-        renderer.centerOnResize = true;
+        renderer.centerOnResize = false;
         rendererRef.current = renderer;
 
         if (areaList.length > 0) {
@@ -67,11 +69,27 @@ export function MapPanel() {
 
 
     // Divs don't fire "resize" natively; the renderer needs it to update canvas size.
+    // After the canvas resizes, scale zoom proportionally to preserve visible world bounds
+    // (same behavior as Mudlet: bigger window = zoom in, smaller = zoom out).
     useEffect(() => {
         const el = containerRef.current;
         if (!el) return;
-        const ro = new ResizeObserver(() => {
-            el.dispatchEvent(new Event('resize'));
+        const ro = new ResizeObserver((entries) => {
+            const newWidth = entries[0].contentRect.width;
+            const renderer = rendererRef.current;
+            if (renderer && prevWidthRef.current > 0 && newWidth > 0) {
+                const scale = newWidth / prevWidthRef.current;
+                const zoom = renderer.getZoom();
+                const bounds = renderer.getViewportBounds();
+                const cx = (bounds.minX + bounds.maxX) / 2;
+                const cy = (bounds.minY + bounds.maxY) / 2;
+                el.dispatchEvent(new Event('resize'));
+                renderer.setZoom(zoom * scale);
+                renderer.backend.viewport.panToMapPoint(cx, cy);
+            } else {
+                el.dispatchEvent(new Event('resize'));
+            }
+            prevWidthRef.current = newWidth;
         });
         ro.observe(el);
         return () => ro.disconnect();
