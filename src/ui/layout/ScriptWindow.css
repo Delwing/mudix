@@ -303,7 +303,7 @@
     align-items: center;
     gap: 2px;
     height: 28px;
-    padding: 0 4px 0 10px;
+    padding: 0 8px 0 14px;
     cursor: grab;
     user-select: none;
     flex-shrink: 0;

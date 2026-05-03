@@ -7,10 +7,10 @@
 
 :root {
     --bg:           #090909;
-    --bg-surface:   #121218;
-    --bg-input:     #1a1a22;
-    --bg-glass:     rgba(16, 16, 22, 0.72);
-    --border:       #252530;
+    --bg-surface:   #090909;
+    --bg-input:     #141414;
+    --bg-glass:     rgba(12, 12, 12, 0.72);
+    --border:       #222222;
     --border-hi:    rgba(255, 255, 255, 0.06);
     --text:         #d4d4d4;
     --text-dim:     #606070;
