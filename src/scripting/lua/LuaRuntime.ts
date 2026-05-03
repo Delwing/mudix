@@ -31,8 +31,9 @@ export class LuaRuntime implements IScriptingRuntime {
         this.exposeInternals();
         const bootstrapErr = this.exec(BOOTSTRAP, '@bootstrap');
         if (bootstrapErr) {
-            console.error('[LuaRuntime] bootstrap failed:', bootstrapErr);
-            this.api.printError(`[lua bootstrap error] ${bootstrapErr}`);
+            lua.lua_close(this.L);
+            this.L = null as unknown as LuaState;
+            throw new Error(`Lua bootstrap failed: ${bootstrapErr}`);
         }
         this.setupColorTable();
         for (const [src, name] of [
@@ -46,12 +47,15 @@ export class LuaRuntime implements IScriptingRuntime {
                 this.api.printError(`[lua ${name} error] ${err}`);
             }
         }
-        // Sanity-check: warn if key globals are missing after bootstrap.
+        // Verify bootstrap defined required globals.
         lua.lua_getglobal(this.L, ls('tempTrigger'));
-        if (lua.lua_type(this.L, -1) === lua.LUA_TNIL) {
-            console.error('[LuaRuntime] tempTrigger is nil after bootstrap — bootstrap likely failed silently');
-        }
+        const bootstrapOk = lua.lua_type(this.L, -1) !== lua.LUA_TNIL;
         lua.lua_pop(this.L, 1);
+        if (!bootstrapOk) {
+            lua.lua_close(this.L);
+            this.L = null as unknown as LuaState;
+            throw new Error('Lua bootstrap did not define required globals (tempTrigger missing)');
+        }
     }
 
     // ── Public interface ──────────────────────────────────────────────────────
@@ -485,6 +489,16 @@ export class LuaRuntime implements IScriptingRuntime {
             return 0;
         });
 
+        this.cfunction('__mudix_windows_hide__', (L) => {
+            api.windows.hide(lua.lua_tojsstring(L, 1));
+            return 0;
+        });
+
+        this.cfunction('__mudix_windows_show__', (L) => {
+            api.windows.show(lua.lua_tojsstring(L, 1));
+            return 0;
+        });
+
         this.cfunction('__mudix_windows_close__', (L) => {
             api.windows.close(lua.lua_tojsstring(L, 1));
             return 0;
@@ -493,6 +507,12 @@ export class LuaRuntime implements IScriptingRuntime {
         this.cfunction('__mudix_windows_has__', (L) => {
             lua.lua_pushboolean(L, api.windows.has(lua.lua_tojsstring(L, 1)) ? 1 : 0);
             return 1;
+        });
+
+        this.cfunction('__mudix_clear_window__', (L) => {
+            const name = this.optstring(L, 1, undefined);
+            api.clearWindow(name);
+            return 0;
         });
 
         this.cfunction('__mudix_delete_line__', (L) => {

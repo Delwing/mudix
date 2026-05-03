@@ -90,8 +90,8 @@ export class EventBus<Events extends Record<PropertyKey, any>> {
             }
             try {
                 handler(...args);
-            } catch (_err) {
-                // swallow
+            } catch (err) {
+                console.error(`[EventBus] handler for "${String(event)}" threw:`, err);
             }
             invoked++;
         }

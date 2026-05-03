@@ -10,6 +10,7 @@ type MessageListener = (message?: string | AnsiAwareBuffer, type?: string, times
 type MessageSource = {
     on(event: 'message', listener: MessageListener): () => void;
     on(event: 'script.deleteline', listener: () => void): () => void;
+    on(event: 'script.clearwindow', listener: () => void): () => void;
     on(event: 'script.movecursorup', listener: () => void): () => void;
     on(event: 'script.movecursordown', listener: () => void): () => void;
 };
@@ -423,12 +424,14 @@ export function setupOutputRenderer(
             cursorEl = null;
         });
 
+        const unsubscribeClearWindow    = source.on('script.clearwindow',    clearAll);
         const unsubscribeMoveCursorUp   = source.on('script.movecursorup',   cursorOps.moveUp);
         const unsubscribeMoveCursorDown = source.on('script.movecursordown', cursorOps.moveDown);
 
         teardownSubscriptions = () => {
             unsubscribeMessage();
             unsubscribeDeleteLine();
+            unsubscribeClearWindow();
             unsubscribeMoveCursorUp();
             unsubscribeMoveCursorDown();
         };

@@ -41,6 +41,14 @@ class ScriptingWindowsAPI {
         this.session.windows.focus(id);
     }
 
+    hide(id: string): void {
+        this.session.windows.hide(id);
+    }
+
+    show(id: string): void {
+        this.session.windows.show(id);
+    }
+
     close(id: string): void {
         this.session.windows.close(id);
     }
@@ -61,7 +69,9 @@ export class ScriptingAPI {
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
     readonly gmcp: Record<string, unknown> = {};
-    private lineBuffer = '';
+    // Buffers partial lines for echo/cecho/decho/hecho — always routes to the main output panel.
+    // windows.write() bypasses this entirely, so there is no per-window buffering needed.
+    private mainOutputBuffer = '';
 
     constructor(private readonly session: MudSession, aliasEngine: AliasEngine, triggerEngine: TriggerEngine) {
         this.windows = new ScriptingWindowsAPI(session);
@@ -168,11 +178,13 @@ export class ScriptingAPI {
         this.getWindowCursor(windowName)?.moveTo(y);
     }
 
-    /** Flush any buffered partial line to the output. Called after each event dispatch. */
+    /** Flush any buffered partial lines to the main output and all open windows. Called after each event dispatch. */
     flushOutput(): void {
-        if (this.lineBuffer.length === 0) return;
-        this.session.events.emit('message', this.lineBuffer, 'script');
-        this.lineBuffer = '';
+        if (this.mainOutputBuffer.length > 0) {
+            this.session.events.emit('message', this.mainOutputBuffer, 'script');
+            this.mainOutputBuffer = '';
+        }
+        this.session.windows.flushAllLines();
     }
 
     /** @deprecated use echo() */
@@ -197,6 +209,14 @@ export class ScriptingAPI {
         node[parts[parts.length - 1]] = value;
     }
 
+    clearWindow(name?: string): void {
+        if (!name || name === 'main') {
+            this.session.events.emit('script.clearwindow');
+        } else {
+            this.session.windows.clear(name);
+        }
+    }
+
     deleteLine(windowName?: string): void {
         if (windowName && windowName !== 'main') {
             this.getWindowCursor(windowName)?.deleteLine();
@@ -219,11 +239,11 @@ export class ScriptingAPI {
 
     // Split on newlines: emit each complete line immediately, buffer the remainder.
     private bufferText(text: string): void {
-        const combined = this.lineBuffer + text;
+        const combined = this.mainOutputBuffer + text;
         const lines = combined.split('\n');
         for (let i = 0; i < lines.length - 1; i++) {
             this.session.events.emit('message', lines[i], 'script');
         }
-        this.lineBuffer = lines[lines.length - 1];
+        this.mainOutputBuffer = lines[lines.length - 1];
     }
 }

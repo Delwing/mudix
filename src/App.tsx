@@ -5,11 +5,7 @@ import { CommandBar } from './ui/CommandBar';
 import { DockRoot } from './ui/windows/DockRoot';
 import { ConnectionScreen } from './ui/ConnectionScreen';
 import { useAppStore, connectionUrl, type MudConnection } from './storage';
-import { ScriptingEngine } from './scripting/ScriptingEngine';
-import { AliasEngine } from './mud/aliases/AliasEngine';
-import { TriggerEngine } from './mud/triggers/TriggerEngine';
-import { TimerEngine } from './mud/timers/TimerEngine';
-import { KeyEngine } from './mud/keybindings/KeyEngine';
+import { useEngines } from './hooks/useEngines';
 import { ScriptEditorPanel } from './ui/windows/panels/ScriptEditorPanel';
 import { SettingsModal } from './ui/SettingsModal';
 import type { Script } from './storage/schema';
@@ -33,52 +29,39 @@ export default function App() {
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
     const saveWindowHint = useAppStore(s => s.saveWindowHint);
 
-    // All scripting engines — created per session, destroyed on disconnect/new-connection
-    const aliasEngineRef = useRef<AliasEngine | null>(null);
-    const triggerEngineRef = useRef<TriggerEngine | null>(null);
-    const timerEngineRef = useRef<TimerEngine | null>(null);
-    const keyEngineRef = useRef<KeyEngine | null>(null);
-    const engineRef = useRef<ScriptingEngine | null>(null);
-    useEffect(() => {
-        if (!sessionStarted) return;
-        const aliasEngine = new AliasEngine();
-        const triggerEngine = new TriggerEngine();
-        const timerEngine = new TimerEngine();
-        const keyEngine = new KeyEngine();
-        const engine = new ScriptingEngine(session, aliasEngine, triggerEngine, timerEngine, keyEngine);
-        aliasEngineRef.current = aliasEngine;
-        triggerEngineRef.current = triggerEngine;
-        timerEngineRef.current = timerEngine;
-        keyEngineRef.current = keyEngine;
-        engineRef.current = engine;
-        return () => {
-            engine.destroy();
-            aliasEngine.destroy();
-            triggerEngine.destroy();
-            timerEngine.destroy();
-            keyEngine.destroy();
-            engineRef.current = null;
-            aliasEngineRef.current = null;
-            triggerEngineRef.current = null;
-            timerEngineRef.current = null;
-            keyEngineRef.current = null;
-        };
-    }, [session, sessionStarted]);
+    const { aliasEngineRef, triggerEngineRef, timerEngineRef, keyEngineRef, engineRef } = useEngines(session, sessionStarted);
 
     // Reload scripts whenever the store changes for the active connection.
     const activeScripts = useAppStore(s =>
         activeConnection ? (s.connectionScripts[activeConnection.id] ?? NO_SCRIPTS) : NO_SCRIPTS,
     );
-    const suppressNextScriptReload = useRef(false);
+    // When handleScriptSave hot-reloads a single script, the subsequent Zustand
+    // update causes activeScripts to change and would trigger a full loadScripts
+    // (which destroys the runtime). We skip that full reload when the only change
+    // is the one script we already individually reloaded.
+    const pendingHotReload = useRef<string | null>(null);
+    const lastLoadedSnap = useRef<{ scripts: Script[]; session: typeof session } | null>(null);
     const pendingOutputReadyUnsub = useRef<(() => void) | null>(null);
     useEffect(() => {
-        if (suppressNextScriptReload.current) {
-            suppressNextScriptReload.current = false;
-            return;
-        }
+        const hotId = pendingHotReload.current;
+        pendingHotReload.current = null;
 
         pendingOutputReadyUnsub.current?.();
         pendingOutputReadyUnsub.current = null;
+
+        const snap = lastLoadedSnap.current;
+        if (hotId && snap && snap.session === session) {
+            const prev = snap.scripts;
+            const onlyHotChanged =
+                prev.length === activeScripts.length &&
+                activeScripts.every(s => s.id === hotId || prev.some(p => p === s));
+            if (onlyHotChanged) {
+                lastLoadedSnap.current = { scripts: activeScripts, session };
+                return;
+            }
+        }
+
+        lastLoadedSnap.current = { scripts: activeScripts, session };
 
         if (session.outputReady) {
             engineRef.current?.loadScripts(activeScripts);
@@ -96,7 +79,7 @@ export default function App() {
     }, [activeScripts, session]);
 
     const handleScriptSave = useCallback((script: Script) => {
-        suppressNextScriptReload.current = true;
+        pendingHotReload.current = script.id;
         engineRef.current?.reloadScript(script);
     }, []);
 

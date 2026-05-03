@@ -110,6 +110,18 @@ end
 unpack = table.unpack
 
 -- Mudlet-compatible globals
+function openUserWindow(name)
+    mudix.windows.open(name, { kind = 'text', title = name, position = 'right' })
+end
+
+function clearWindow(name)
+    mudix.windows.clear(name)
+end
+
+function setWindowTitle(name, title)
+    mudix.windows.setTitle(name, title)
+end
+
 send         = __mudix_send__
 printError   = __mudix_printerror__
 
@@ -216,17 +228,9 @@ function registerAnonymousEventHandler(name, fn)
 end
 
 -- Window shortcuts
-function clearWindow(name)
-    mudix.windows.clear(name)
-end
-
-function openWindow(id, options)
-    mudix.windows.open(id, options)
-end
-
-function closeWindow(id)
-    mudix.windows.close(id)
-end
+clearWindow  = __mudix_clear_window__
+hideWindow   = __mudix_windows_hide__
+showWindow   = __mudix_windows_show__
 
 -- display: pretty-print a value to the output window
 function display(what, indent, seen)

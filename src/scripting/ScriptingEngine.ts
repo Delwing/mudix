@@ -40,9 +40,13 @@ export class ScriptingEngine {
 
         const lua = scripts.filter(s => s.enabled && s.language === 'lua');
         if (lua.length > 0) {
-            const rt = new LuaRuntime(this.api);
-            this.runtimes.lua = rt;
-            for (const s of lua) rt.load(s.code, s.name);
+            try {
+                const rt = new LuaRuntime(this.api);
+                this.runtimes.lua = rt;
+                for (const s of lua) rt.load(s.code, s.name);
+            } catch (err) {
+                this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
+            }
         }
         this.api.flushOutput();
     }
@@ -51,7 +55,12 @@ export class ScriptingEngine {
     reloadScript(script: Script): void {
         if (script.language !== 'lua') return;
         if (!this.runtimes.lua) {
-            this.runtimes.lua = new LuaRuntime(this.api);
+            try {
+                this.runtimes.lua = new LuaRuntime(this.api);
+            } catch (err) {
+                this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
+                return;
+            }
         }
         this.runtimes.lua.load(script.code, script.name);
         this.api.flushOutput();

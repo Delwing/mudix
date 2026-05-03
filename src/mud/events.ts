@@ -24,6 +24,7 @@ export type MudEvents = MudClientEvents & {
     'script.log': [text: string, level: 'error' | 'info'];
     'output.ready': void;
     'script.deleteline': void;
+    'script.clearwindow': void;
     'script.appendcmd': [text: string];
     'script.setcmd': [text: string];
     'prompt': void;

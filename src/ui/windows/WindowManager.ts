@@ -24,6 +24,8 @@ export class WindowManager {
     private api: DockviewApi | null = null;
     private readonly entries = new Map<string, PanelEntry>();
     private readonly pendingOpens: Array<{ id: string; options: WindowOpenOptions }> = [];
+    // Per-window partial-line buffers — accumulate text until \n, matching main output behaviour.
+    private readonly lineBuffers = new Map<string, string>();
     private cursorRegistry: Map<string, CursorOps> | null = null;
     private windowHints: Record<string, WindowOpenOptions> = {};
 
@@ -148,6 +150,7 @@ export class WindowManager {
     }
 
     close(id: string): void {
+        this.lineBuffers.delete(id);
         const panel = this.api?.getPanel(id);
         if (!panel) {
             this.entries.delete(id);
@@ -166,20 +169,56 @@ export class WindowManager {
         }
         if (entry.kind === 'output') return;
         if (entry.kind === 'text') {
-            if (!entry.controls) {
-                entry.pendingText.push(text);
-                if (entry.pendingText.length > TEXT_BUFFER_LIMIT) {
-                    entry.pendingText.splice(0, entry.pendingText.length - TEXT_BUFFER_LIMIT);
-                }
+            // Buffer partial lines — only push complete lines (terminated by \n).
+            const buffered = (this.lineBuffers.get(id) ?? '') + text;
+            const lines = buffered.split('\n');
+            for (let i = 0; i < lines.length - 1; i++) {
+                this.pushLine(entry, id, lines[i]);
+            }
+            const remainder = lines[lines.length - 1];
+            if (remainder) {
+                this.lineBuffers.set(id, remainder);
             } else {
-                entry.controls.push(text);
+                this.lineBuffers.delete(id);
             }
             return;
         }
         if (entry.element) entry.element.insertAdjacentHTML('beforeend', text);
     }
 
+    /** Flush the partial-line buffer for a single window to its renderer. */
+    flushLine(id: string): void {
+        const partial = this.lineBuffers.get(id);
+        if (!partial) return;
+        this.lineBuffers.delete(id);
+        const entry = this.entries.get(id);
+        if (entry?.kind === 'text') this.pushLine(entry, id, partial);
+    }
+
+    /** Flush all pending partial lines across every open window. */
+    flushAllLines(): void {
+        for (const id of this.lineBuffers.keys()) this.flushLine(id);
+    }
+
+    hide(id: string): void {
+        const el = this.groupElement(id);
+        if (el) el.style.display = 'none';
+    }
+
+    show(id: string): void {
+        const el = this.groupElement(id);
+        if (el) el.style.display = '';
+    }
+
+    private groupElement(id: string): HTMLElement | null {
+        const panel = this.api?.getPanel(id);
+        // DockviewGroupPanel extends BasePanelView which has element, but
+        // BasePanelViewExported (the interface) doesn't expose it.
+        return panel ? ((panel.api.group as any).element as HTMLElement) ?? null : null;
+    }
+
     clear(id: string): void {
+        this.lineBuffers.delete(id);
         const entry = this.entries.get(id);
         if (!entry) return;
         if (entry.kind === 'output') return;
@@ -188,6 +227,18 @@ export class WindowManager {
             entry.controls?.clear();
         } else if (entry.element) {
             entry.element.replaceChildren();
+        }
+    }
+
+    private pushLine(entry: PanelEntry, id: string, line: string): void {
+        if (!entry.controls) {
+            entry.pendingText.push(line);
+            if (entry.pendingText.length > TEXT_BUFFER_LIMIT) {
+                entry.pendingText.splice(0, entry.pendingText.length - TEXT_BUFFER_LIMIT);
+                console.warn(`[WindowManager] pre-mount buffer for panel "${id}" exceeded ${TEXT_BUFFER_LIMIT} lines — oldest entries dropped`);
+            }
+        } else {
+            entry.controls.push(line);
         }
     }
 
