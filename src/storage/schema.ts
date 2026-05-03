@@ -1,4 +1,4 @@
-import type { SerializedLayout } from '../ui/windows/types';
+import type { WindowOpenOptions } from '../ui/windows/types';
 
 export interface MudConnection {
     id: string;
@@ -62,7 +62,7 @@ export interface PermanentKeybinding {
 export interface AppSchema {
     connections: MudConnection[];
     ui: UISettings;
-    connectionLayouts: Record<string, SerializedLayout>;
+    connectionWindowHints: Record<string, Record<string, WindowOpenOptions>>;
     connectionScripts: Record<string, Script[]>;
     connectionAliases: Record<string, PermanentAlias[]>;
     connectionTriggers: Record<string, PermanentTrigger[]>;
@@ -78,7 +78,7 @@ export const APP_DEFAULTS: AppSchema = {
         stickyLines: 5,
         outputBackground: '',
     },
-    connectionLayouts: {},
+    connectionWindowHints: {},
     connectionScripts: {},
     connectionAliases: {},
     connectionTriggers: {},

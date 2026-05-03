@@ -10,6 +10,8 @@ import {
     GMCP_WILL,
     MccpHandler,
     stripTelnetSequences,
+    TELNET_GA,
+    TELNET_EOR,
 } from "../protocol";
 import type { MudClientEvents } from "../events";
 
@@ -199,11 +201,20 @@ export class MudClient {
         this.eventBus.emit('message', text, type, ts);
     }
 
+    /** Push a line directly into the message buffer for trigger processing + rendering via flushLines. */
+    pushLine(text: string, type: string): void {
+        this.messageBuffer.push({ text, type });
+    }
+
     private processIncomingData(data: string, timestamp?: number): void {
+        const hasPrompt = data.includes(TELNET_GA) || data.includes(TELNET_EOR);
         const sanitized = stripTelnetSequences(data, this.telnetOptionHandler).replace(/\r/g, '');
         const ts = typeof timestamp === 'number' ? timestamp : Date.now();
         if (sanitized.length > 0) {
             this.chunkProcessor.processChunk(sanitized, ts, this);
+        }
+        if (hasPrompt) {
+            this.eventBus.emit('prompt');
         }
         this.flushMessageBuffer();
     }

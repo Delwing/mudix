@@ -26,4 +26,7 @@ export type MudEvents = MudClientEvents & {
     'script.deleteline': void;
     'script.appendcmd': [text: string];
     'script.setcmd': [text: string];
+    'prompt': void;
+    'script.movecursorup': void;
+    'script.movecursordown': void;
 };

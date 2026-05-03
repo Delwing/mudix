@@ -111,10 +111,26 @@ unpack = table.unpack
 
 -- Mudlet-compatible globals
 send         = __mudix_send__
-echo         = __mudix_echo__
-cecho        = __mudix_cecho__
-decho        = __mudix_decho__
-hecho        = __mudix_hecho__
+printError   = __mudix_printerror__
+
+-- echo/cecho/decho/hecho: Mudlet allows an optional first arg as window name.
+--   echo("text")               → main output (plain)
+--   echo("windowName", "text") → named window (plain ANSI)
+--   cecho("text")              → main output (Mudlet color tags)
+--   cecho("windowName","text") → named window (Mudlet color tags, parsed before write)
+local function _dispatch(win_fn, main_fn, ...)
+    local args = {...}
+    if #args >= 2 and type(args[1]) == "string" and type(args[2]) == "string" then
+        win_fn(args[1], args[2])
+    else
+        main_fn(args[1] or "")
+    end
+end
+
+echo  = function(...) _dispatch(__mudix_windows_write__,  __mudix_echo__,  ...) end
+cecho = function(...) _dispatch(__mudix_windows_cecho__,  __mudix_cecho__, ...) end
+decho = function(...) _dispatch(__mudix_windows_decho__,  __mudix_decho__, ...) end
+hecho = function(...) _dispatch(__mudix_windows_hecho__,  __mudix_hecho__, ...) end
 fg           = __mudix_fg__
 bg           = __mudix_bg__
 resetFormat  = __mudix_reset_format__
@@ -240,3 +256,34 @@ function display(what, indent, seen)
         echo(val .. "\n")
     end
 end
+
+-- os.setlocale is not available in fengari (browser has no OS locale).
+-- Stub it so Mudlet's stdlib.lua can load without error.
+if os then
+    os.setlocale = os.setlocale or function() return "C" end
+end
+
+-- utf8 compatibility: Mudlet extends the standard utf8 library with gsub/find/match.
+-- fengari provides the Lua 5.3 utf8 library (char/codepoint/codes/len/offset) but not
+-- the string-like functions, so we fill those in with string equivalents.
+if type(utf8) ~= 'table' then utf8 = {} end
+utf8.gsub  = utf8.gsub  or string.gsub
+utf8.find  = utf8.find  or string.find
+utf8.match = utf8.match or string.match
+
+-- Trigger-context functions backed by C implementations in LuaRuntime.
+getCurrentLine   = __mudix_get_current_line__
+isPrompt         = __mudix_is_prompt__
+tempLineTrigger  = __mudix_temp_line_trigger__
+insertText       = __mudix_insert_text__
+moveCursorUp     = __mudix_move_cursor_up__
+moveCursorDown   = __mudix_move_cursor_down__
+moveCursor       = __mudix_move_cursor__
+getLineNumber    = __mudix_get_line_number__
+getLineCount     = __mudix_get_line_count__
+getColumnNumber  = __mudix_get_column_number__
+getLines         = __mudix_get_lines__
+
+-- multiline trigger context globals — populated by the trigger engine when a multiline
+-- trigger fires. Initialised here so scripts can safely call table.size(multimatches).
+multimatches = multimatches or {}

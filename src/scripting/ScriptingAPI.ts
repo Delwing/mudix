@@ -2,43 +2,7 @@ import type { MudSession } from '../mud/MudSession';
 import type { AliasEngine } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
-import mudletColors from '../mud/text/mudletColors.json';
-
-// ── Color conversion utilities ────────────────────────────────────────────────
-
-const MUDLET_COLORS = mudletColors as unknown as Record<string, [number, number, number]>;
-
-function namedColorToAnsi(name: string, bg = false): string {
-    if (name === 'r' || name === 'reset') return '\x1b[0m';
-    const c = MUDLET_COLORS[name];
-    if (!c) return '';
-    return `\x1b[${bg ? 48 : 38};2;${c[0]};${c[1]};${c[2]}m`;
-}
-
-/** cecho: <color_name>text<r>  or  <b:color_name>text for background */
-function parseCecho(text: string): string {
-    return text.replace(/<([^>]+)>/g, (_, tag: string) => {
-        if (tag.startsWith('b:')) return namedColorToAnsi(tag.slice(2), true);
-        return namedColorToAnsi(tag);
-    }) + '\x1b[0m';
-}
-
-/** decho: <r,g,b>text  or  <:r,g,b>text for background, <r> to reset */
-function parseDecho(text: string): string {
-    return text
-        .replace(/<(:?)(\d+),(\d+),(\d+)>/g, (_, bg, r, g, b) =>
-            `\x1b[${bg ? 48 : 38};2;${r};${g};${b}m`)
-        .replace(/<r>/g, '\x1b[0m') + '\x1b[0m';
-}
-
-/** hecho: #RRGGBBtext  or  #:RRGGBBtext for background, #r to reset */
-function parseHecho(text: string): string {
-    return text
-        .replace(/#(:?)([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})/g,
-            (_, bg, rh, gh, bh) =>
-                `\x1b[${bg ? 48 : 38};2;${parseInt(rh, 16)};${parseInt(gh, 16)};${parseInt(bh, 16)}m`)
-        .replace(/#r/g, '\x1b[0m') + '\x1b[0m';
-}
+import { namedColorToAnsi, parseCecho, parseDecho, parseHecho } from '../mud/text/colorParsers';
 
 // ── Windows ───────────────────────────────────────────────────────────────────
 
@@ -51,6 +15,18 @@ class ScriptingWindowsAPI {
 
     write(id: string, text: string): void {
         this.session.windows.write(id, text);
+    }
+
+    cecho(id: string, text: string): void {
+        this.session.windows.write(id, parseCecho(text));
+    }
+
+    decho(id: string, text: string): void {
+        this.session.windows.write(id, parseDecho(text));
+    }
+
+    hecho(id: string, text: string): void {
+        this.session.windows.write(id, parseHecho(text));
     }
 
     clear(id: string): void {
@@ -135,14 +111,61 @@ export class ScriptingAPI {
 
     /**
      * Feed `text` through the trigger pipeline as if it arrived from the MUD.
-     * Emits `message` so the text appears in the output window, then emits
-     * `flushLines` so ScriptingEngine runs pattern triggers and fires the Lua
-     * `output` event — identical to what real MUD data does.
+     * ScriptingEngine's flushLines handler takes care of both rendering (via
+     * 'message') and trigger processing, so we only emit flushLines here.
      */
     feedTriggers(text: string): void {
         this.flushOutput();
-        this.session.events.emit('message', text, 'mud', Date.now());
         this.session.events.emit('flushLines', [{ text, type: 'mud' }]);
+    }
+
+    private getWindowCursor(name?: string) {
+        return this.session.windowCursors.get(name ?? 'main') ?? null;
+    }
+
+    getCurrentLine(windowName?: string): string {
+        return this.getWindowCursor(windowName)?.getLine() ?? '';
+    }
+
+    getLineNumber(windowName?: string): number {
+        return this.getWindowCursor(windowName)?.getLineNumber() ?? 0;
+    }
+
+    getLineCount(windowName?: string): number {
+        return this.getWindowCursor(windowName)?.getLineCount() ?? 0;
+    }
+
+    getLines(from: number, to: number, windowName?: string): string[] {
+        return this.getWindowCursor(windowName)?.getLines(from, to) ?? [];
+    }
+
+    getColumnNumber(_windowName?: string): number {
+        // In-line column cursor is not yet tracked; return 0.
+        return 0;
+    }
+
+    insertText(text: string): void {
+        this.bufferText(text);
+    }
+
+    moveCursorUp(windowName?: string): void {
+        if (windowName && windowName !== 'main') {
+            this.getWindowCursor(windowName)?.moveUp();
+        } else {
+            this.session.events.emit('script.movecursorup');
+        }
+    }
+
+    moveCursorDown(windowName?: string): void {
+        if (windowName && windowName !== 'main') {
+            this.getWindowCursor(windowName)?.moveDown();
+        } else {
+            this.session.events.emit('script.movecursordown');
+        }
+    }
+
+    moveCursor(windowName: string | undefined, x: number, y: number): void {
+        this.getWindowCursor(windowName)?.moveTo(y);
     }
 
     /** Flush any buffered partial line to the output. Called after each event dispatch. */
@@ -174,8 +197,12 @@ export class ScriptingAPI {
         node[parts[parts.length - 1]] = value;
     }
 
-    deleteLine(): void {
-        this.session.events.emit('script.deleteline');
+    deleteLine(windowName?: string): void {
+        if (windowName && windowName !== 'main') {
+            this.getWindowCursor(windowName)?.deleteLine();
+        } else {
+            this.session.events.emit('script.deleteline');
+        }
     }
 
     appendCmdLine(text: string): void {

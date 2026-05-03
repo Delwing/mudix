@@ -1,4 +1,8 @@
 export const TELNET_OPTION_REGEX = /ÿú.*?ÿð|ÿ.[^ÿ]/g;
+
+// Telnet Go Ahead / End-of-Record — used by MUDs to signal a prompt line
+export const TELNET_GA  = "\xFF\xF9"; // IAC GA  (249)
+export const TELNET_EOR = "\xFF\xEF"; // IAC EOR (239)
 export const GMCP_COMMAND_CODE = 201;
 export const GMCP_IAC = "\xFF";
 export const GMCP_SB = "\xFA";

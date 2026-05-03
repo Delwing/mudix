@@ -1,14 +1,14 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { APP_DEFAULTS, type AppSchema, type MudConnection, type PermanentAlias, type PermanentKeybinding, type PermanentTimer, type PermanentTrigger, type Script, type UISettings } from './schema';
-import type { SerializedLayout } from '../ui/windows/types';
+import type { WindowOpenOptions } from '../ui/windows/types';
 
 interface AppStore extends AppSchema {
     addConnection: (data: Omit<MudConnection, 'id'>) => void;
     removeConnection: (id: string) => void;
     patchUI: (patch: Partial<UISettings>) => void;
-    saveLayout: (connectionId: string, layout: SerializedLayout) => void;
-    clearLayout: (connectionId: string) => void;
+    saveWindowHint: (connectionId: string, panelId: string, hint: WindowOpenOptions) => void;
+    clearWindowHints: (connectionId: string) => void;
     addScript: (connectionId: string, data: Omit<Script, 'id'>) => string;
     updateScript: (connectionId: string, id: string, patch: Partial<Omit<Script, 'id'>>) => void;
     removeScript: (connectionId: string, id: string) => void;
@@ -34,19 +34,22 @@ export const useAppStore = create<AppStore>()(
                 connections: [...s.connections, { ...data, id: crypto.randomUUID() }],
             })),
             removeConnection: id => set(s => {
-                const { [id]: _, ...rest } = s.connectionLayouts;
+                const { [id]: _layout, ...restHints } = s.connectionWindowHints;
                 return {
                     connections: s.connections.filter(c => c.id !== id),
-                    connectionLayouts: rest,
+                    connectionWindowHints: restHints,
                 };
             }),
             patchUI: patch => set(s => ({ ui: { ...s.ui, ...patch } })),
-            saveLayout: (connectionId, layout) => set(s => ({
-                connectionLayouts: { ...s.connectionLayouts, [connectionId]: layout },
+            saveWindowHint: (connectionId, panelId, hint) => set(s => ({
+                connectionWindowHints: {
+                    ...s.connectionWindowHints,
+                    [connectionId]: { ...(s.connectionWindowHints[connectionId] ?? {}), [panelId]: hint },
+                },
             })),
-            clearLayout: (connectionId) => set(s => {
-                const { [connectionId]: _, ...rest } = s.connectionLayouts;
-                return { connectionLayouts: rest };
+            clearWindowHints: (connectionId) => set(s => {
+                const { [connectionId]: _, ...rest } = s.connectionWindowHints;
+                return { connectionWindowHints: rest };
             }),
             addScript: (connectionId, data) => {
                 const id = crypto.randomUUID();
@@ -171,9 +174,9 @@ export const useAppStore = create<AppStore>()(
         }),
         {
             name: 'mudix_v1',
-            version: 7,
-            partialize: ({ connections, ui, connectionLayouts, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings }) => ({
-                connections, ui, connectionLayouts, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings,
+            version: 8,
+            partialize: ({ connections, ui, connectionWindowHints, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings }) => ({
+                connections, ui, connectionWindowHints, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings,
             }),
             migrate: (saved, version) => {
                 const s = saved as Partial<AppSchema> & { connections?: any[] };
@@ -190,7 +193,7 @@ export const useAppStore = create<AppStore>()(
                     ...s,
                     ui: { ...APP_DEFAULTS.ui, ...(s.ui ?? {}) },
                     connections,
-                    connectionLayouts: s.connectionLayouts ?? {},
+                    connectionWindowHints: s.connectionWindowHints ?? {},
                     connectionScripts: s.connectionScripts ?? {},
                     connectionAliases: s.connectionAliases ?? {},
                     connectionTriggers: s.connectionTriggers ?? {},

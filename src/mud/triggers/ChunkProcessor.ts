@@ -5,11 +5,15 @@ export interface ChunkProcessor {
     processChunk(data: string, timestamp: number, client: MudClient): void;
 }
 
-/** Passthrough — outputs each chunk directly with no processing. */
+/**
+ * Passthrough — pushes each chunk to the message buffer so it travels through
+ * flushLines → ScriptingEngine, which handles both rendering (via 'message')
+ * and trigger processing in one pass.
+ */
 export function createPassthroughProcessor(): ChunkProcessor {
     return {
-        processChunk(data, timestamp, client) {
-            client.output(data, undefined, timestamp);
+        processChunk(data, _timestamp, client) {
+            client.pushLine(data, 'mud');
         },
     };
 }

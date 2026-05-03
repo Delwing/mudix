@@ -1,5 +1,5 @@
 import type { DockviewApi } from 'dockview';
-import { AnsiAwareBuffer } from '../../mud/text/FormatState';
+import { type CursorOps, type OutputRendererControls } from '../output/OutputRenderer';
 import type {
     PanelKind,
     PanelPosition,
@@ -14,6 +14,8 @@ interface PanelEntry {
     element: HTMLElement | null;
     /** Buffered text written before the element was ready (text-kind only). */
     pendingText: string[];
+    /** Renderer controls for text panels — provides push/clear and split-view. */
+    controls?: OutputRendererControls | null;
 }
 
 const TEXT_BUFFER_LIMIT = 5000;
@@ -22,6 +24,21 @@ export class WindowManager {
     private api: DockviewApi | null = null;
     private readonly entries = new Map<string, PanelEntry>();
     private readonly pendingOpens: Array<{ id: string; options: WindowOpenOptions }> = [];
+    private cursorRegistry: Map<string, CursorOps> | null = null;
+    private windowHints: Record<string, WindowOpenOptions> = {};
+
+    /** Called by App to supply saved position hints for the active connection. */
+    setWindowHints(hints: Record<string, WindowOpenOptions>): void {
+        this.windowHints = hints;
+    }
+
+    /** Called after a NEW panel is opened with the effective positional options used. */
+    onWindowHint?: (id: string, hint: WindowOpenOptions) => void;
+
+    /** Wired up by MudSession so cursor ops are registered per text window. */
+    setCursorRegistry(registry: Map<string, CursorOps>): void {
+        this.cursorRegistry = registry;
+    }
 
     /** Called by DockRoot once Dockview is ready. */
     attach(api: DockviewApi): void {
@@ -36,32 +53,45 @@ export class WindowManager {
     }
 
     /**
-     * Called by panel components from a mount effect. Creates or updates the
-     * entry for this id — restored panels (after fromJSON) won't have an entry
-     * yet, so this is the canonical place to wire one up.
+     * Called by non-text panel components from a mount effect (html, output).
+     * Creates or updates the entry for this id.
      */
     register(id: string, element: HTMLElement, kind: PanelKind): void {
         const existing = this.entries.get(id);
         if (existing) {
             existing.element = element;
             existing.kind = kind;
-            if (kind === 'text' && existing.pendingText.length > 0) {
-                for (const text of existing.pendingText) this.appendText(element, text);
-                existing.pendingText = [];
-            }
             return;
         }
-        this.entries.set(id, {
-            id,
-            kind,
-            element,
-            pendingText: [],
-        });
+        this.entries.set(id, { id, kind, element, pendingText: [] });
+    }
+
+    /**
+     * Called by TextPanel once its OutputRenderer is ready.
+     * Drains any text buffered before the panel mounted.
+     */
+    registerTextPanel(id: string, controls: OutputRendererControls, element: HTMLElement): void {
+        const existing = this.entries.get(id);
+        if (existing) {
+            existing.controls = controls;
+            existing.element = element;
+            for (const text of existing.pendingText) controls.push(text);
+            existing.pendingText = [];
+            return;
+        }
+        this.entries.set(id, { id, kind: 'text', element, pendingText: [], controls });
+    }
+
+    registerCursor(id: string, ops: CursorOps): void {
+        this.cursorRegistry?.set(id, ops);
     }
 
     unregister(id: string): void {
         const entry = this.entries.get(id);
-        if (entry) entry.element = null;
+        if (!entry) return;
+        entry.element = null;
+        entry.controls = null;
+        this.cursorRegistry?.delete(id);
     }
 
     open(id: string, options: WindowOpenOptions = {}): WindowHandle {
@@ -74,16 +104,45 @@ export class WindowManager {
         if (existing) {
             if (options.title) existing.api.setTitle(options.title);
             if (options.activate !== false) existing.api.setActive();
-            return this.makeHandle(id, this.entries.get(id)?.kind ?? 'text');
+            const kind = this.entries.get(id)?.kind ?? (options.kind ?? 'text');
+            // Panel was restored from a saved layout — ensure a manager entry exists
+            // so that write() calls buffer correctly until registerTextPanel fires.
+            if (!this.entries.has(id)) {
+                this.entries.set(id, { id, kind, element: null, pendingText: [] });
+            }
+            return this.makeHandle(id, kind);
         }
 
-        const kind = options.kind ?? 'text';
+        // Merge saved position hint: hint provides positional fields only where
+        // the caller has not explicitly specified them.
+        const hint = this.windowHints[id];
+        const mergedOptions: WindowOpenOptions = hint
+            ? {
+                kind: options.kind ?? hint.kind,
+                position: options.position ?? hint.position,
+                referencePanelId: options.referencePanelId ?? hint.referencePanelId,
+                floatSize: options.floatSize ?? hint.floatSize,
+                title: options.title,
+                activate: options.activate,
+            }
+            : options;
+
+        const kind = mergedOptions.kind ?? 'text';
         if (!this.entries.has(id)) {
             this.entries.set(id, { id, kind, element: null, pendingText: [] });
         }
 
-        const addOptions = this.buildAddPanelOptions(id, kind, options);
+        const addOptions = this.buildAddPanelOptions(id, kind, mergedOptions);
         this.api.addPanel(addOptions);
+
+        // Persist the effective positional options as a new hint.
+        const effectiveHint: WindowOpenOptions = {
+            kind,
+            position: mergedOptions.position,
+            referencePanelId: mergedOptions.referencePanelId,
+            floatSize: mergedOptions.floatSize,
+        };
+        this.onWindowHint?.(id, effectiveHint);
 
         return this.makeHandle(id, kind);
     }
@@ -106,25 +165,30 @@ export class WindowManager {
             return;
         }
         if (entry.kind === 'output') return;
-        if (!entry.element) {
-            if (entry.kind === 'text') {
+        if (entry.kind === 'text') {
+            if (!entry.controls) {
                 entry.pendingText.push(text);
                 if (entry.pendingText.length > TEXT_BUFFER_LIMIT) {
                     entry.pendingText.splice(0, entry.pendingText.length - TEXT_BUFFER_LIMIT);
                 }
+            } else {
+                entry.controls.push(text);
             }
             return;
         }
-        if (entry.kind === 'text') this.appendText(entry.element, text);
-        else entry.element.insertAdjacentHTML('beforeend', text);
+        if (entry.element) entry.element.insertAdjacentHTML('beforeend', text);
     }
 
     clear(id: string): void {
         const entry = this.entries.get(id);
         if (!entry) return;
         if (entry.kind === 'output') return;
-        if (entry.element) entry.element.replaceChildren();
         entry.pendingText = [];
+        if (entry.kind === 'text') {
+            entry.controls?.clear();
+        } else if (entry.element) {
+            entry.element.replaceChildren();
+        }
     }
 
     setTitle(id: string, title: string): void {
@@ -154,21 +218,6 @@ export class WindowManager {
             element: null,
             pendingText: [],
         });
-    }
-
-    private appendText(element: HTMLElement, text: string): void {
-        const buffer = new AnsiAwareBuffer(text);
-        const line = document.createElement('div');
-        line.classList.add('window-text-line');
-        line.style.whiteSpace = 'pre-wrap';
-        if (buffer.length === 0) {
-            line.innerHTML = '&nbsp;';
-        } else {
-            line.appendChild(buffer.toDom());
-            buffer.notifyRender(line);
-        }
-        element.appendChild(line);
-        element.scrollTop = element.scrollHeight;
     }
 
     private buildAddPanelOptions(

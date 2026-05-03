@@ -10,10 +10,17 @@ import type { IScriptingRuntime } from './IScriptingRuntime';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
+// Some MUDs send lines that carry only ANSI colour codes (no visible text) between
+// real output lines — an artifact of how they format their output.  Filtering them
+// removes unintended blank lines, but also removes intentional spacing in MUDs that
+// use ANSI-only lines deliberately.  Toggle this flag per preference.
+const FILTER_ANSI_ONLY_LINES = true;
+
 export class ScriptingEngine {
     private runtimes: { lua: IScriptingRuntime | null } = { lua: null };
     private readonly unsubs: (() => void)[] = [];
     private readonly api: ScriptingAPI;
+    private promptPending = false;
 
     constructor(
         session: MudSession,
@@ -129,8 +136,9 @@ export class ScriptingEngine {
         }
     }
 
-    private processLineTriggers(line: string): void {
+    private processLineTriggers(line: string, isPrompt = false): void {
         const plain = line.replace(ANSI_RE, '');
+        (this.runtimes.lua as LuaRuntime | null)?.setCurrentLine(plain, isPrompt);
         this.triggerEngine.processTemp(plain);
         for (const { trigger, captures } of this.triggerEngine.matchPerm(plain)) {
             this.executePermTrigger(trigger, [plain, ...captures]);
@@ -146,10 +154,29 @@ export class ScriptingEngine {
 
     private bridgeEvents(session: MudSession): void {
         this.unsubs.push(
+            session.events.on('prompt', () => {
+                this.promptPending = true;
+            }),
             session.events.on('flushLines', (groups) => {
                 for (const { text, type } of groups) {
-                    this.processLineTriggers(text);
-                    this.emit('output', [text, type]);
+                    const lines = text.split('\n');
+                    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+                    for (let i = 0; i < lines.length; i++) {
+                        const line = lines[i];
+                        const plain = line.replace(ANSI_RE, '');
+                        // Last line in a chunk that arrived with GA/EOR is the prompt
+                        const isPrompt = this.promptPending && i === lines.length - 1;
+                        if (isPrompt) this.promptPending = false;
+                        // Skip rendering lines that carry only ANSI codes (no visible text).
+                        // Genuine blank lines (empty string) are still rendered.
+                        if (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES) {
+                            session.events.emit('message', line, type, Date.now());
+                        }
+                        if (plain.length > 0) {
+                            this.processLineTriggers(line, isPrompt);
+                            this.emit('output', [line, type]);
+                        }
+                    }
                 }
             }),
             session.events.on('client.connect', () => this.emit('connect', [])),

@@ -11,6 +11,8 @@ export type MudSessionOptions = Omit<MudClientOptions, 'url'>;
 export class MudSession {
     readonly events = new EventBus<MudEvents>();
     readonly windows = new WindowManager();
+    /** Per-window cursor op registries. 'main' is the primary output window. */
+    readonly windowCursors = new Map<string, import('../ui/output/OutputRenderer').CursorOps>();
     private client: MudClient | null = null;
     private pingTracker: PingTracker | null = null;
     private stateUnsubs: (() => void)[] = [];
@@ -18,7 +20,9 @@ export class MudSession {
     private _ping: number | null = null;
     private _outputReady = false;
 
-    constructor(private readonly options: MudSessionOptions = {}) {}
+    constructor(private readonly options: MudSessionOptions = {}) {
+        this.windows.setCursorRegistry(this.windowCursors);
+    }
 
     get status(): SessionStatus { return this._status; }
     get ping(): number | null { return this._ping; }

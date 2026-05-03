@@ -12,7 +12,6 @@ import { TimerEngine } from './mud/timers/TimerEngine';
 import { KeyEngine } from './mud/keybindings/KeyEngine';
 import { ScriptEditorPanel } from './ui/windows/panels/ScriptEditorPanel';
 import { SettingsModal } from './ui/SettingsModal';
-import type { SerializedLayout } from './ui/windows/types';
 import type { Script } from './storage/schema';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 
@@ -31,8 +30,8 @@ export default function App() {
     const connections = useAppStore(s => s.connections);
     const addConnection = useAppStore(s => s.addConnection);
     const removeConnection = useAppStore(s => s.removeConnection);
-    const connectionLayouts = useAppStore(s => s.connectionLayouts);
-    const saveLayout = useAppStore(s => s.saveLayout);
+    const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
+    const saveWindowHint = useAppStore(s => s.saveWindowHint);
 
     // All scripting engines — created per session, destroyed on disconnect/new-connection
     const aliasEngineRef = useRef<AliasEngine | null>(null);
@@ -199,12 +198,18 @@ export default function App() {
     };
 
     const activeConnectionId = activeConnection?.id ?? null;
-    const handleLayoutChange = useCallback(
-        (layout: SerializedLayout) => {
-            if (activeConnectionId) saveLayout(activeConnectionId, layout);
-        },
-        [activeConnectionId, saveLayout],
-    );
+
+    // Wire up window position hints for the active connection.
+    useEffect(() => {
+        const hints = activeConnectionId ? (connectionWindowHints[activeConnectionId] ?? {}) : {};
+        session.windows.setWindowHints(hints);
+        session.windows.onWindowHint = activeConnectionId
+            ? (id, hint) => saveWindowHint(activeConnectionId, id, hint)
+            : undefined;
+        return () => {
+            session.windows.onWindowHint = undefined;
+        };
+    }, [session, activeConnectionId, connectionWindowHints, saveWindowHint]);
 
     if (!sessionStarted) {
         return (
@@ -223,8 +228,6 @@ export default function App() {
             </div>
         );
     }
-
-    const initialLayout = activeConnectionId ? connectionLayouts[activeConnectionId] ?? null : null;
 
     return (
         <div className="app">
@@ -246,8 +249,6 @@ export default function App() {
                     session={session}
                     manager={session.windows}
                     stickyLines={DEFAULT_STICKY_LINES}
-                    initialLayout={initialLayout}
-                    onLayoutChange={handleLayoutChange}
                     commandInputRef={commandInputRef}
                 />
                 {scriptsOpen && (

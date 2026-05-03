@@ -3,9 +3,14 @@ import type { ScriptingAPI } from '../ScriptingAPI';
 import type { IScriptingRuntime } from '../IScriptingRuntime';
 import mudletColorsRaw from '../../mud/text/mudletColors.json';
 import BOOTSTRAP from './bootstrap.lua?raw';
+import STDLIB from './stdlib.lua?raw';
+import STRING_UTILS from './StringUtils.lua?raw';
+import TABLE_UTILS from './TableUtils.lua?raw';
 
 type LuaState = ReturnType<typeof lauxlib.luaL_newstate>;
 
+
+type PendingLineTrigger = { linesAhead: number; remaining: number; code: string };
 
 export class LuaRuntime implements IScriptingRuntime {
     private L: LuaState;
@@ -17,6 +22,8 @@ export class LuaRuntime implements IScriptingRuntime {
     private nextAliasId = 1;
     private nextTriggerId = 1;
     private nextKeyId = 1;
+    private currentLineIsPrompt = false;
+    private pendingLineTriggers: PendingLineTrigger[] = [];
 
     constructor(private readonly api: ScriptingAPI) {
         this.L = lauxlib.luaL_newstate();
@@ -28,6 +35,17 @@ export class LuaRuntime implements IScriptingRuntime {
             this.api.printError(`[lua bootstrap error] ${bootstrapErr}`);
         }
         this.setupColorTable();
+        for (const [src, name] of [
+            [STDLIB,       '@stdlib'],
+            [STRING_UTILS, '@StringUtils'],
+            [TABLE_UTILS,  '@TableUtils'],
+        ] as const) {
+            const err = this.exec(src, name);
+            if (err) {
+                console.error(`[LuaRuntime] ${name} failed:`, err);
+                this.api.printError(`[lua ${name} error] ${err}`);
+            }
+        }
         // Sanity-check: warn if key globals are missing after bootstrap.
         lua.lua_getglobal(this.L, ls('tempTrigger'));
         if (lua.lua_type(this.L, -1) === lua.LUA_TNIL) {
@@ -41,6 +59,12 @@ export class LuaRuntime implements IScriptingRuntime {
     load(code: string, name: string): void {
         const err = this.exec(code, `@${name}`);
         if (err) this.api.printError(`[lua error in "${name}"] ${err}`);
+    }
+
+    setCurrentLine(line: string, isPrompt: boolean): void {
+        this.currentLineIsPrompt = isPrompt;
+        lua.lua_pushstring(this.L, ls(line));
+        lua.lua_setglobal(this.L, ls('line'));
     }
 
     /** Test input against Lua-registered PCRE aliases. Sets `matches` global and calls handler on match. */
@@ -70,6 +94,26 @@ export class LuaRuntime implements IScriptingRuntime {
     processTrigger(line: string): void {
         lua.lua_pushstring(this.L, ls(line));
         lua.lua_setglobal(this.L, ls('line'));
+
+        // Drain pending tempLineTriggers first
+        const stillPending: PendingLineTrigger[] = [];
+        for (const t of this.pendingLineTriggers) {
+            t.linesAhead--;
+            if (t.linesAhead <= 0) {
+                const err = this.exec(t.code, '@tempLineTrigger');
+                if (err) this.api.printError('[lua tempLineTrigger] ' + err);
+                this.api.flushOutput();
+                t.remaining--;
+                if (t.remaining > 0) {
+                    t.linesAhead = 1;
+                    stillPending.push(t);
+                }
+            } else {
+                stillPending.push(t);
+            }
+        }
+        this.pendingLineTriggers = stillPending;
+
         for (const { pattern, ref } of this.triggers.values()) {
             const m = line.match(pattern);
             if (!m) continue;
@@ -263,7 +307,9 @@ export class LuaRuntime implements IScriptingRuntime {
             lua.lua_pushvalue(L, 2);
             const ref = lauxlib.luaL_ref(L, lua.LUA_REGISTRYINDEX);
             const id = this.nextTimerId++;
-            const repeat = lua.lua_type(L, 3) !== lua.LUA_TNIL && lua.lua_toboolean(L, 3) !== 0;
+            // LUA_TNONE=-1, LUA_TNIL=0; t3 > LUA_TNIL means arg exists and is not nil.
+            // Must use Boolean() because lua_toboolean returns JS `false`, and `false !== 0` is true.
+            const repeat = lua.lua_type(L, 3) > lua.LUA_TNIL && Boolean(lua.lua_toboolean(L, 3));
 
             const callRef = () => {
                 if (!this.L) return;
@@ -284,8 +330,8 @@ export class LuaRuntime implements IScriptingRuntime {
             } else {
                 handle = setTimeout(() => {
                     this.timers.delete(id);
-                    lauxlib.luaL_unref(this.L, lua.LUA_REGISTRYINDEX, ref);
                     callRef();
+                    lauxlib.luaL_unref(this.L, lua.LUA_REGISTRYINDEX, ref);
                 }, seconds * 1000) as unknown as number;
             }
 
@@ -414,6 +460,21 @@ export class LuaRuntime implements IScriptingRuntime {
             return 0;
         });
 
+        this.cfunction('__mudix_windows_cecho__', (L) => {
+            api.windows.cecho(lua.lua_tojsstring(L, 1), lua.lua_tojsstring(L, 2));
+            return 0;
+        });
+
+        this.cfunction('__mudix_windows_decho__', (L) => {
+            api.windows.decho(lua.lua_tojsstring(L, 1), lua.lua_tojsstring(L, 2));
+            return 0;
+        });
+
+        this.cfunction('__mudix_windows_hecho__', (L) => {
+            api.windows.hecho(lua.lua_tojsstring(L, 1), lua.lua_tojsstring(L, 2));
+            return 0;
+        });
+
         this.cfunction('__mudix_windows_clear__', (L) => {
             api.windows.clear(lua.lua_tojsstring(L, 1));
             return 0;
@@ -434,8 +495,9 @@ export class LuaRuntime implements IScriptingRuntime {
             return 1;
         });
 
-        this.cfunction('__mudix_delete_line__', (_L) => {
-            api.deleteLine();
+        this.cfunction('__mudix_delete_line__', (L) => {
+            const win = this.optstring(L, 1, undefined);
+            api.deleteLine(win);
             return 0;
         });
 
@@ -447,6 +509,76 @@ export class LuaRuntime implements IScriptingRuntime {
         this.cfunction('__mudix_set_cmd_line__', (L) => {
             api.setCmdLine(lua.lua_tojsstring(L, 1));
             return 0;
+        });
+
+        this.cfunction('__mudix_get_current_line__', (_L) => {
+            lua.lua_pushstring(this.L, ls(api.getCurrentLine()));
+            return 1;
+        });
+
+        this.cfunction('__mudix_is_prompt__', (_L) => {
+            lua.lua_pushboolean(this.L, this.currentLineIsPrompt ? 1 : 0);
+            return 1;
+        });
+
+        this.cfunction('__mudix_temp_line_trigger__', (L) => {
+            const from    = Math.max(1, lua.lua_tonumber(L, 1) | 0);
+            const count   = Math.max(1, lua.lua_tonumber(L, 2) | 0);
+            const code    = lua.lua_tojsstring(L, 3);
+            this.pendingLineTriggers.push({ linesAhead: from, remaining: count, code });
+            return 0;
+        });
+
+        this.cfunction('__mudix_insert_text__', (L) => {
+            api.insertText(lua.lua_tojsstring(L, 1));
+            return 0;
+        });
+
+        this.cfunction('__mudix_move_cursor_up__', (L) => {
+            const win = this.optstring(L, 1, undefined);
+            api.moveCursorUp(win);
+            return 0;
+        });
+
+        this.cfunction('__mudix_move_cursor_down__', (L) => {
+            const win = this.optstring(L, 1, undefined);
+            api.moveCursorDown(win);
+            return 0;
+        });
+
+        this.cfunction('__mudix_move_cursor__', (L) => {
+            const win = lua.lua_type(L, 1) === lua.LUA_TSTRING ? lua.lua_tojsstring(L, 1) : undefined;
+            const x   = lua.lua_tonumber(L, win !== undefined ? 2 : 1) | 0;
+            const y   = lua.lua_tonumber(L, win !== undefined ? 3 : 2) | 0;
+            api.moveCursor(win, x, y);
+            return 0;
+        });
+
+        this.cfunction('__mudix_get_line_number__', (L) => {
+            const win = this.optstring(L, 1, undefined);
+            lua.lua_pushnumber(L, api.getLineNumber(win));
+            return 1;
+        });
+
+        this.cfunction('__mudix_get_line_count__', (L) => {
+            const win = this.optstring(L, 1, undefined);
+            lua.lua_pushnumber(L, api.getLineCount(win));
+            return 1;
+        });
+
+        this.cfunction('__mudix_get_column_number__', (L) => {
+            const win = this.optstring(L, 1, undefined);
+            lua.lua_pushnumber(L, api.getColumnNumber(win));
+            return 1;
+        });
+
+        this.cfunction('__mudix_get_lines__', (L) => {
+            const win  = lua.lua_type(L, 1) === lua.LUA_TSTRING ? lua.lua_tojsstring(L, 1) : undefined;
+            const base = win !== undefined ? 2 : 1;
+            const from = lua.lua_tonumber(L, base)     | 0;
+            const to   = lua.lua_tonumber(L, base + 1) | 0;
+            this.push(api.getLines(from, to, win));
+            return 1;
         });
     }
 
@@ -474,7 +606,8 @@ export class LuaRuntime implements IScriptingRuntime {
 
     /** Get an optional string argument from the Lua stack. */
     private optstring(L: LuaState, idx: number, def: string | undefined): string | undefined {
-        return lua.lua_type(L, idx) === lua.LUA_TNIL ? def : lua.lua_tojsstring(L, idx);
+        // LUA_TNONE=-1, LUA_TNIL=0; <= LUA_TNIL covers both absent and nil.
+        return lua.lua_type(L, idx) <= lua.LUA_TNIL ? def : lua.lua_tojsstring(L, idx);
     }
 
     /** Push a JS value onto the Lua stack as a native Lua value.
