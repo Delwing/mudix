@@ -69,38 +69,28 @@ function slotDropInfo(dockEl: HTMLElement, side: DockSide, mx: number, my: numbe
     const horizontal = side === 'top' || side === 'bottom';
 
     // ── Ghost-slot hysteresis ──────────────────────────────────────────────────
-    // When the cursor is inside a ghost slot, merge it with the adjacent real
-    // panel and run zone detection against the combined bounding box.
-    // Without this, reaching the center zone requires dragging across the entire
-    // ghost width (because the real panel was pushed far away).
+    // When the cursor is inside a ghost slot, lock the ghost at its current
+    // insert position. Any re-evaluation (merged-box zone detection or Pass-2
+    // midpoint logic) creates a feedback loop: the ghost shifts real panels,
+    // changing their bounding boxes, yielding a different slotIndex, which
+    // moves the ghost, which shifts panels again — visible as rapid flicker.
+    // The last-slot ghost never flickers because appending after the last slot
+    // shifts nothing; all other positions shift the panels that follow.
     for (let j = 0; j < allSlots.length; j++) {
         if (!allSlots[j].classList.contains('dock-panel-slot--preview')) continue;
+        // Inner split-preview ghosts live inside a real slot; skip them.
+        // Only outer positional-insert ghosts (direct dock-area children) should
+        // lock the slotIndex — inner ones are part of the cross-axis split UI and
+        // picking them up here creates the same feedback loop we're fixing.
+        if (allSlots[j].closest('.dock-panel-slot:not(.dock-panel-slot--preview)')) continue;
         const gr = allSlots[j].getBoundingClientRect();
         if (mx < gr.left || mx > gr.right || my < gr.top || my > gr.bottom) continue;
 
-        // Prefer merging with the slot AFTER the ghost (the panel that was pushed).
-        // Fall back to the slot BEFORE the ghost if there's nothing after.
-        let adj: HTMLElement | null = null;
-        for (let k = j + 1; k < allSlots.length && !adj; k++) {
-            if (!allSlots[k].classList.contains('dock-panel-slot--preview')) adj = allSlots[k];
+        let insertIdx = 0;
+        for (let k = 0; k < j; k++) {
+            if (!allSlots[k].classList.contains('dock-panel-slot--preview')) insertIdx++;
         }
-        for (let k = j - 1; k >= 0 && !adj; k--) {
-            if (!allSlots[k].classList.contains('dock-panel-slot--preview')) adj = allSlots[k];
-        }
-        if (!adj) break;
-
-        const ar    = adj.getBoundingClientRect();
-        const mL    = Math.min(gr.left, ar.left);
-        const mR    = Math.max(gr.right, ar.right);
-        const mT    = Math.min(gr.top, ar.top);
-        const mB    = Math.max(gr.bottom, ar.bottom);
-        const relX  = (mx - mL) / ((mR - mL) || 1);
-        const relY  = (my - mT) / ((mB - mT) || 1);
-        const idx   = realSlotIndex(realSlots, adj);
-        const tid   = adj.getAttribute('data-dock-panel') ?? undefined;
-        const hit   = zones(relX, relY, horizontal, tid, idx);
-        if (hit) return hit;
-        break; // edge zone of merged area → fall to midpoint
+        return { slotIndex: insertIdx };
     }
 
     // ── Pass 1: real-slot zone detection ──────────────────────────────────────
@@ -123,11 +113,4 @@ function slotDropInfo(dockEl: HTMLElement, side: DockSide, mx: number, my: numbe
         if (primary < mid) return { slotIndex: i };
     }
     return { slotIndex: realSlots.length };
-}
-
-function realSlotIndex(realSlots: NodeListOf<HTMLElement>, el: HTMLElement): number {
-    for (let i = 0; i < realSlots.length; i++) {
-        if (realSlots[i] === el) return i;
-    }
-    return realSlots.length;
 }
