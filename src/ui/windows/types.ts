@@ -33,6 +33,8 @@ export interface WindowOpenOptions {
     splitGroup?: string;
     splitOrder?: number;
     splitFlex?: number;
+    /** If true, window is restored in hidden state. */
+    hidden?: boolean;
     /** If false, skip restoring the saved hint (Mudlet restoreLayout=false). */
     ignoreHint?: boolean;
     /** If false, force floating regardless of dockingArea (Mudlet autoDock=false). */

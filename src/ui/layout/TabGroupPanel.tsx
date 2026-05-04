@@ -20,19 +20,21 @@ export function TabGroupPanel({ side, panels, activeId, manager, onDragStateChan
 
     return (
         <div className={`tab-group-panel tab-group-panel--${side}`}>
-            <div className="tab-group-tabbar" onContextMenu={onTitlebarContextMenu}>
-                {sorted.map(p => (
-                    <TabItem
-                        key={p.id}
-                        panel={p}
-                        isActive={p.id === activeId}
-                        manager={manager}
-                        onDragStateChange={onDragStateChange}
-                        onActivate={() => manager.setActiveTab(p.id)}
-                        onClose={() => manager.hide(p.id)}
-                    />
-                ))}
-            </div>
+            {sorted.length > 1 && (
+                <div className="tab-group-tabbar" onContextMenu={onTitlebarContextMenu}>
+                    {sorted.map(p => (
+                        <TabItem
+                            key={p.id}
+                            panel={p}
+                            isActive={p.id === activeId}
+                            manager={manager}
+                            onDragStateChange={onDragStateChange}
+                            onActivate={() => manager.setActiveTab(p.id)}
+                            onClose={() => manager.hide(p.id)}
+                        />
+                    ))}
+                </div>
+            )}
             <TabContent id={activeId} manager={manager} />
         </div>
     );
@@ -67,13 +69,37 @@ function TabItem({ panel, isActive, manager, onDragStateChange, onActivate, onCl
         let floatingEl: HTMLElement | null = null;
         let lastX = 0;
         let lastY = 0;
+        let lastClientX = startX;
+        let lastClientY = startY;
         let potentialDock: DockSide | null = null;
         let potentialSlot = 0;
         let potentialStackTarget: string | undefined;
         let potentialSplitTarget: string | undefined;
         let potentialSplitBefore: boolean | undefined;
 
+        const updateDockState = (shiftHeld: boolean, clientX: number, clientY: number) => {
+            if (!hasDragged || !floatingEl) return;
+            const { side, slotIndex, stackTargetId, splitTargetId, splitBefore } = shiftHeld
+                ? { side: null, slotIndex: 0, stackTargetId: undefined, splitTargetId: undefined, splitBefore: undefined }
+                : detectDock(clientX, clientY);
+
+            if (side !== potentialDock || slotIndex !== potentialSlot || stackTargetId !== potentialStackTarget || splitTargetId !== potentialSplitTarget) {
+                potentialDock        = side;
+                potentialSlot        = slotIndex;
+                potentialStackTarget = stackTargetId;
+                potentialSplitTarget = splitTargetId;
+                potentialSplitBefore = splitBefore;
+                manager.setPosition(panel.id, lastX, lastY);
+                onDragStateChange(side
+                    ? { panelId: panel.id, potentialDock: side, insertSlotIndex: slotIndex, stackTargetId, splitTargetId, splitBefore }
+                    : null);
+            }
+        };
+
         const onMove = (ev: PointerEvent) => {
+            lastClientX = ev.clientX;
+            lastClientY = ev.clientY;
+
             if (!hasDragged) {
                 if (Math.hypot(ev.clientX - startX, ev.clientY - startY) <= DRAG_THRESHOLD) return;
                 hasDragged = true;
@@ -98,21 +124,12 @@ function TabItem({ panel, isActive, manager, onDragStateChange, onActivate, onCl
             floatingEl.style.left = `${lastX}px`;
             floatingEl.style.top  = `${lastY}px`;
 
-            const { side, slotIndex, stackTargetId, splitTargetId, splitBefore } = ev.shiftKey
-                ? { side: null, slotIndex: 0, stackTargetId: undefined, splitTargetId: undefined, splitBefore: undefined }
-                : detectDock(ev.clientX, ev.clientY);
+            updateDockState(ev.shiftKey, ev.clientX, ev.clientY);
+        };
 
-            if (side !== potentialDock || slotIndex !== potentialSlot || stackTargetId !== potentialStackTarget || splitTargetId !== potentialSplitTarget) {
-                potentialDock        = side;
-                potentialSlot        = slotIndex;
-                potentialStackTarget = stackTargetId;
-                potentialSplitTarget = splitTargetId;
-                potentialSplitBefore = splitBefore;
-                manager.setPosition(panel.id, lastX, lastY);
-                onDragStateChange(side
-                    ? { panelId: panel.id, potentialDock: side, insertSlotIndex: slotIndex, stackTargetId, splitTargetId, splitBefore }
-                    : null);
-            }
+        const onKeyChange = (ev: KeyboardEvent) => {
+            if (ev.key !== 'Shift') return;
+            updateDockState(ev.type === 'keydown', lastClientX, lastClientY);
         };
 
         const onUp = () => {
@@ -132,10 +149,14 @@ function TabItem({ panel, isActive, manager, onDragStateChange, onActivate, onCl
             }
             document.removeEventListener('pointermove', onMove);
             document.removeEventListener('pointerup', onUp);
+            document.removeEventListener('keydown', onKeyChange);
+            document.removeEventListener('keyup', onKeyChange);
         };
 
         document.addEventListener('pointermove', onMove);
         document.addEventListener('pointerup', onUp);
+        document.addEventListener('keydown', onKeyChange);
+        document.addEventListener('keyup', onKeyChange);
     };
 
     return (

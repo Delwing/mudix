@@ -50,13 +50,37 @@ export function DockedPanel({ id, title, manager, onHide, onDragStateChange, onT
         let floatingEl: HTMLElement | null = null;
         let lastX = panelRect?.left ?? 0;
         let lastY = panelRect?.top  ?? 0;
+        let lastClientX = startX;
+        let lastClientY = startY;
         let potentialDock: DockSide | null = null;
         let potentialSlot = 0;
         let potentialStackTarget: string | undefined;
         let potentialSplitTarget: string | undefined;
         let potentialSplitBefore: boolean | undefined;
 
+        const updateDockState = (shiftHeld: boolean, clientX: number, clientY: number) => {
+            if (!hasDragged || !floatingEl) return;
+            const { side, slotIndex, stackTargetId, splitTargetId, splitBefore } = shiftHeld
+                ? { side: null, slotIndex: 0, stackTargetId: undefined, splitTargetId: undefined, splitBefore: undefined }
+                : detectDock(clientX, clientY);
+
+            if (side !== potentialDock || slotIndex !== potentialSlot || stackTargetId !== potentialStackTarget || splitTargetId !== potentialSplitTarget) {
+                potentialDock        = side;
+                potentialSlot        = slotIndex;
+                potentialStackTarget = stackTargetId;
+                potentialSplitTarget = splitTargetId;
+                potentialSplitBefore = splitBefore;
+                manager.setPosition(id, lastX, lastY);
+                onDragStateChange(side
+                    ? { panelId: id, potentialDock: side, insertSlotIndex: slotIndex, stackTargetId, splitTargetId, splitBefore }
+                    : null);
+            }
+        };
+
         const onMove = (ev: PointerEvent) => {
+            lastClientX = ev.clientX;
+            lastClientY = ev.clientY;
+
             if (!hasDragged) {
                 if (Math.hypot(ev.clientX - startX, ev.clientY - startY) <= DRAG_THRESHOLD) return;
                 hasDragged = true;
@@ -89,21 +113,12 @@ export function DockedPanel({ id, title, manager, onHide, onDragStateChange, onT
             floatingEl.style.left = `${lastX}px`;
             floatingEl.style.top  = `${lastY}px`;
 
-            const { side, slotIndex, stackTargetId, splitTargetId, splitBefore } = ev.shiftKey
-                ? { side: null, slotIndex: 0, stackTargetId: undefined, splitTargetId: undefined, splitBefore: undefined }
-                : detectDock(ev.clientX, ev.clientY);
+            updateDockState(ev.shiftKey, ev.clientX, ev.clientY);
+        };
 
-            if (side !== potentialDock || slotIndex !== potentialSlot || stackTargetId !== potentialStackTarget || splitTargetId !== potentialSplitTarget) {
-                potentialDock        = side;
-                potentialSlot        = slotIndex;
-                potentialStackTarget = stackTargetId;
-                potentialSplitTarget = splitTargetId;
-                potentialSplitBefore = splitBefore;
-                manager.setPosition(id, lastX, lastY);
-                onDragStateChange(side
-                    ? { panelId: id, potentialDock: side, insertSlotIndex: slotIndex, stackTargetId, splitTargetId, splitBefore }
-                    : null);
-            }
+        const onKeyChange = (ev: KeyboardEvent) => {
+            if (ev.key !== 'Shift') return;
+            updateDockState(ev.type === 'keydown', lastClientX, lastClientY);
         };
 
         const onUp = () => {
@@ -123,10 +138,14 @@ export function DockedPanel({ id, title, manager, onHide, onDragStateChange, onT
             }
             document.removeEventListener('pointermove', onMove);
             document.removeEventListener('pointerup', onUp);
+            document.removeEventListener('keydown', onKeyChange);
+            document.removeEventListener('keyup', onKeyChange);
         };
 
         document.addEventListener('pointermove', onMove);
         document.addEventListener('pointerup', onUp);
+        document.addEventListener('keydown', onKeyChange);
+        document.addEventListener('keyup', onKeyChange);
     };
 
     return (

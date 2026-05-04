@@ -423,7 +423,7 @@ export class WindowManager {
             id,
             title:       options.title ?? (kind === 'map' ? 'Map' : id),
             kind,
-            visible:     true,
+            visible:     hint?.hidden !== true,
             x:           hint?.x      ?? this.defaultX(options.position),
             y:           hint?.y      ?? this.defaultY(options.position),
             width:       hint?.width  ?? options.width  ?? def.w,
@@ -478,6 +478,7 @@ export class WindowManager {
         const win = this.windows.get(id);
         if (!win || !win.visible) return;
         win.visible = false;
+        this.saveHint(id, win);
         this.notify();
     }
 
@@ -487,6 +488,7 @@ export class WindowManager {
         if (win.visible) return;
         win.visible = true;
         win.zIndex  = ++this.nextZ;
+        this.saveHint(id, win);
         this.notify();
     }
 
@@ -591,6 +593,7 @@ export class WindowManager {
             kind:      win.kind,
             title:     win.title,
             autoOpen:  this.windowHints[id]?.autoOpen,
+            hidden:    win.visible ? undefined : true,
             docked:    win.docked,    dockOrder:  win.dockOrder,  dockFlex:  win.dockFlex,
             dockGroup: win.dockGroup, tabOrder:   win.tabOrder,
             isActiveTab: win.dockGroup ? this.activeTabGroups.get(win.dockGroup) === id : undefined,

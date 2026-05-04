@@ -23,6 +23,7 @@ export default function App() {
     const [scriptsOpen, setScriptsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const commandInputRef = useRef<HTMLInputElement>(null);
+    const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
     const connections = useAppStore(s => s.connections);
     const addConnection = useAppStore(s => s.addConnection);
     const updateConnection = useAppStore(s => s.updateConnection);
@@ -253,6 +254,7 @@ export default function App() {
                 onOpenMap={handleOpenMap}
                 onOpenScripts={handleOpenScripts}
                 onOpenSettings={handleOpenSettings}
+                onContextMenu={e => windowContextMenuHandlerRef.current?.(e)}
             />
             {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
             <div className="app-content">
@@ -261,6 +263,16 @@ export default function App() {
                     manager={session.windows}
                     stickyLines={DEFAULT_STICKY_LINES}
                     commandInputRef={commandInputRef}
+                    contextMenuHandlerRef={windowContextMenuHandlerRef}
+                    commandBar={
+                        <CommandBar
+                            command={command}
+                            onCommandChange={setCommand}
+                            passwordMode={passwordMode}
+                            commandInputRef={commandInputRef}
+                            onSubmit={handleSend}
+                        />
+                    }
                 />
             </div>
             {scriptsOpen && (
@@ -271,13 +283,6 @@ export default function App() {
                     onClose={() => setScriptsOpen(false)}
                 />
             )}
-            <CommandBar
-                command={command}
-                onCommandChange={setCommand}
-                passwordMode={passwordMode}
-                commandInputRef={commandInputRef}
-                onSubmit={handleSend}
-            />
         </div>
     );
 }

@@ -218,7 +218,17 @@ export function DockArea({ side, windows, extent, dragState, manager, onSetExten
                 // a ghost and the existing content so the preview matches the real result.
                 const crossVertical = side === 'top' || side === 'bottom';
 
-                const panelContent = slot.kind === 'tabs' ? (
+                const panelContent = slot.kind === 'tabs' && slot.panels.length === 1 ? (
+                    <DockedPanel
+                        id={slot.panels[0].id}
+                        title={slot.panels[0].title}
+                        kind={slot.panels[0].kind}
+                        manager={manager}
+                        onHide={() => manager.hide(slot.panels[0].id)}
+                        onDragStateChange={onDragStateChange}
+                        onTitlebarContextMenu={onTitlebarContextMenu}
+                    />
+                ) : slot.kind === 'tabs' ? (
                     <TabGroupPanel
                         side={side}
                         panels={slot.panels}

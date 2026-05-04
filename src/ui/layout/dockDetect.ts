@@ -31,10 +31,23 @@ export function detectDock(mx: number, my: number): {
         const el = document.querySelector<HTMLElement>(`.dock-area-${side}`);
         if (!el) continue;
         const r = el.getBoundingClientRect();
-        if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) {
-            const info = slotDropInfo(el, side, mx, my);
-            return { side, ...info };
+        if (mx < r.left || mx > r.right || my < r.top || my > r.bottom) continue;
+
+        // If the dock area is empty (only a preview ghost, no real panels), apply the
+        // same EMPTY_DOCK_ZONE constraint used for activation, so deactivation is symmetric.
+        const hasRealPanels = !!el.querySelector('.dock-panel-slot:not(.dock-panel-slot--preview)');
+        if (!hasRealPanels) {
+            const inZone =
+                side === 'left'   ? mx - r.left   < EMPTY_DOCK_ZONE :
+                side === 'right'  ? r.right  - mx < EMPTY_DOCK_ZONE :
+                side === 'top'    ? my - r.top    < EMPTY_DOCK_ZONE :
+                /* bottom */        r.bottom - my < EMPTY_DOCK_ZONE;
+            if (!inZone) continue;
+            return { side, slotIndex: 0 };
         }
+
+        const info = slotDropInfo(el, side, mx, my);
+        return { side, ...info };
     }
     const vp = document.querySelector<HTMLElement>('.main-viewport');
     if (vp) {

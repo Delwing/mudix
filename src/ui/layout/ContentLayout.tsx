@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { MudSession } from '../../mud/MudSession';
 import type { DockSide, DragState, ScriptWindowRenderData } from '../windows/types';
@@ -18,12 +18,16 @@ interface ContentLayoutProps {
     manager: WindowManager;
     stickyLines?: number;
     commandInputRef?: React.RefObject<HTMLInputElement>;
+    commandBar?: React.ReactNode;
+    contextMenuHandlerRef?: React.MutableRefObject<((e: React.MouseEvent) => void) | null>;
 }
 
 export function ContentLayout({
     session, manager,
     stickyLines = DEFAULT_STICKY_LINES,
     commandInputRef,
+    commandBar,
+    contextMenuHandlerRef,
 }: ContentLayoutProps) {
     const [windows,     setWindows]     = useState<ScriptWindowRenderData[]>([]);
     const [dockExtents, setDockExtents] = useState<Record<DockSide, number>>({
@@ -36,6 +40,15 @@ export function ContentLayout({
         e.preventDefault();
         setMenuPos({ x: e.clientX, y: e.clientY });
     }, []);
+
+    const handlerRef = useRef(handleTitlebarContextMenu);
+    handlerRef.current = handleTitlebarContextMenu;
+    useEffect(() => {
+        if (contextMenuHandlerRef) {
+            contextMenuHandlerRef.current = handlerRef.current;
+            return () => { contextMenuHandlerRef.current = null; };
+        }
+    }, [contextMenuHandlerRef]);
 
     useEffect(() => {
         manager.onWindowsChange = (ws, extents) => {
@@ -85,6 +98,8 @@ export function ContentLayout({
                     <DockArea side="right" windows={windows} extent={dockExtents.right} {...dockAreaProps} />
                 )}
             </div>
+
+            {commandBar}
 
             {showBottom && (
                 <DockArea side="bottom" windows={windows} extent={dockExtents.bottom} {...dockAreaProps} />

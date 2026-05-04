@@ -11,11 +11,12 @@ interface ToolbarProps {
     onOpenMap: () => void;
     onOpenScripts: () => void;
     onOpenSettings: () => void;
+    onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }
 
-export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenSettings }: ToolbarProps) {
+export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenSettings, onContextMenu }: ToolbarProps) {
     return (
-        <div className="toolbar">
+        <div className="toolbar" onContextMenu={onContextMenu}>
             <span className="brand">mudix</span>
             <span className="toolbar-connection-name">{connectionName}</span>
             <span
