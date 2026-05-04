@@ -1,3 +1,4 @@
 - when closing windows in tab group, when there is only one panel left - remove tabbing
 - map selection label, make it wider, not just to fit current area name
 - shift when dragging floating window should right away prevent docking, not it prevents when i drag a window a bit
+- bottom dock should be below command input
