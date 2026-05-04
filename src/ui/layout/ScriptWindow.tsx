@@ -62,23 +62,18 @@ export function ScriptWindow({
         const startOffsetY = e.clientY - el.offsetTop;
         let lastX = el.offsetLeft;
         let lastY = el.offsetTop;
+        let lastClientX = e.clientX;
+        let lastClientY = e.clientY;
         let potentialDock: DockSide | null = null;
         let potentialSlot = 0;
         let potentialStackTarget: string | undefined;
         let potentialSplitTarget: string | undefined;
         let potentialSplitBefore: boolean | undefined;
 
-        const onMove = (ev: PointerEvent) => {
-            lastX = ev.clientX - startOffsetX;
-            lastY = ev.clientY - startOffsetY;
-
-            // Direct DOM update every frame for smooth drag.
-            el.style.left = `${lastX}px`;
-            el.style.top  = `${lastY}px`;
-
-            const { side, slotIndex, stackTargetId, splitTargetId, splitBefore } = ev.shiftKey
+        const updateDockState = (shiftHeld: boolean, clientX: number, clientY: number) => {
+            const { side, slotIndex, stackTargetId, splitTargetId, splitBefore } = shiftHeld
                 ? { side: null, slotIndex: 0, stackTargetId: undefined, splitTargetId: undefined, splitBefore: undefined }
-                : detectDock(ev.clientX, ev.clientY);
+                : detectDock(clientX, clientY);
 
             if (side !== potentialDock || slotIndex !== potentialSlot || stackTargetId !== potentialStackTarget || splitTargetId !== potentialSplitTarget) {
                 potentialDock        = side;
@@ -93,6 +88,24 @@ export function ScriptWindow({
             }
         };
 
+        const onMove = (ev: PointerEvent) => {
+            lastClientX = ev.clientX;
+            lastClientY = ev.clientY;
+            lastX = ev.clientX - startOffsetX;
+            lastY = ev.clientY - startOffsetY;
+
+            // Direct DOM update every frame for smooth drag.
+            el.style.left = `${lastX}px`;
+            el.style.top  = `${lastY}px`;
+
+            updateDockState(ev.shiftKey, ev.clientX, ev.clientY);
+        };
+
+        const onKeyChange = (ev: KeyboardEvent) => {
+            if (ev.key !== 'Shift') return;
+            updateDockState(ev.type === 'keydown', lastClientX, lastClientY);
+        };
+
         const onUp = () => {
             onDragStateChange(null);
             if (potentialDock !== null) {
@@ -102,10 +115,14 @@ export function ScriptWindow({
             }
             document.removeEventListener('pointermove', onMove);
             document.removeEventListener('pointerup', onUp);
+            document.removeEventListener('keydown', onKeyChange);
+            document.removeEventListener('keyup', onKeyChange);
         };
 
         document.addEventListener('pointermove', onMove);
         document.addEventListener('pointerup', onUp);
+        document.addEventListener('keydown', onKeyChange);
+        document.addEventListener('keyup', onKeyChange);
     };
 
     // ── Edge / corner resize ──────────────────────────────────────────────────

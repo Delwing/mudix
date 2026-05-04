@@ -18,12 +18,14 @@ interface ContentLayoutProps {
     manager: WindowManager;
     stickyLines?: number;
     commandInputRef?: React.RefObject<HTMLInputElement>;
+    commandBar?: React.ReactNode;
 }
 
 export function ContentLayout({
     session, manager,
     stickyLines = DEFAULT_STICKY_LINES,
     commandInputRef,
+    commandBar,
 }: ContentLayoutProps) {
     const [windows,     setWindows]     = useState<ScriptWindowRenderData[]>([]);
     const [dockExtents, setDockExtents] = useState<Record<DockSide, number>>({
@@ -85,6 +87,8 @@ export function ContentLayout({
                     <DockArea side="right" windows={windows} extent={dockExtents.right} {...dockAreaProps} />
                 )}
             </div>
+
+            {commandBar}
 
             {showBottom && (
                 <DockArea side="bottom" windows={windows} extent={dockExtents.bottom} {...dockAreaProps} />

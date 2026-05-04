@@ -261,6 +261,15 @@ export default function App() {
                     manager={session.windows}
                     stickyLines={DEFAULT_STICKY_LINES}
                     commandInputRef={commandInputRef}
+                    commandBar={
+                        <CommandBar
+                            command={command}
+                            onCommandChange={setCommand}
+                            passwordMode={passwordMode}
+                            commandInputRef={commandInputRef}
+                            onSubmit={handleSend}
+                        />
+                    }
                 />
             </div>
             {scriptsOpen && (
@@ -271,13 +280,6 @@ export default function App() {
                     onClose={() => setScriptsOpen(false)}
                 />
             )}
-            <CommandBar
-                command={command}
-                onCommandChange={setCommand}
-                passwordMode={passwordMode}
-                commandInputRef={commandInputRef}
-                onSubmit={handleSend}
-            />
         </div>
     );
 }
