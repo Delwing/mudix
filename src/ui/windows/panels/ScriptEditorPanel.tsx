@@ -34,20 +34,37 @@ function formatKeyCombo(key: string, modifiers: string[]): string {
 
 const EMPTY: never[] = [];
 
-const DEFAULT_LUA = `-- mudix Lua script
--- Available API:
---   send(text)                     send a command to the MUD
---   echo(text)                     print to main output
---   cecho("<color>text<r>")        print with named colors
---   mudix.on('output', fn)         receive MUD output lines
---   mudix.on('gmcp', fn)           receive GMCP packets
---   mudix.on('connect', fn)        fired on connect
---   mudix.on('disconnect', fn)     fired on disconnect
---   mudix.windows.open(id, opts)   open a panel
---   mudix.windows.write(id, text)  write to a panel
+const DEFAULT_LUA = `-- Mudlet-compatible Lua script
+-- Core:
+--   send(text)                              send a command to the MUD
+--   sendAll(cmd1, cmd2, ...)                send multiple commands
+--   echo(text) / echo(window, text)         plain output
+--   cecho("<green>text<r>")                 named-color output (Mudlet color tags)
+--   decho("<0,255,0>text<r>")               decimal RGB output
+--   hecho("#00ff00text#r")                  hex RGB output
+-- Timers:
+--   id = tempTimer(seconds, fn)             one-shot timer
+--   id = tempTimer(seconds, fn, true)       repeating timer
+--   killTimer(id)
+-- Aliases:
+--   id = tempAlias(pattern, fn)             fn receives: matches[1]=full, matches[2..]=captures
+--   killAlias(id)
+-- Triggers:
+--   id = tempTrigger(pattern, fn)           fn receives: matches[1]=full, matches[2..]=captures
+--   killTrigger(id)
+-- Events:
+--   id = registerAnonymousEventHandler(event, fn)
+--   killAnonymousEventHandler(id)
+--   raiseEvent(name, ...)
+-- Windows:
+--   openUserWindow(name)                    open a text panel
+--   clearWindow(name)
+--   setWindowTitle(name, title)
+-- GMCP:
+--   gmcp.Module.SubKey                      auto-populated from server packets
 
-mudix.on('connect', function()
-    echo('Connected!')
+registerAnonymousEventHandler("sysConnectionEvent", function()
+    echo("Connected!\\n")
 end)
 `;
 
