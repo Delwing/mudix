@@ -157,7 +157,7 @@ export class LuaRuntime implements IScriptingRuntime {
     /** Fire the first matching Lua-registered temp keybinding. Returns true if consumed. */
     processKey(event: KeyboardEvent): boolean {
         for (const { key, modifiers, ref } of this.keys.values()) {
-            if (event.key !== key) continue;
+            if (event.code !== key) continue;
             if (event.ctrlKey  !== modifiers.includes('ctrl'))  continue;
             if (event.shiftKey !== modifiers.includes('shift')) continue;
             if (event.altKey   !== modifiers.includes('alt'))   continue;

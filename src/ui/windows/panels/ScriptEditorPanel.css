@@ -284,6 +284,53 @@
     color: var(--text-dim);
 }
 
+/* ── Key capture ────────────────────────────────────────── */
+.script-editor__key-capture {
+    flex: 1;
+    height: 26px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 0 10px;
+    text-align: left;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.script-editor__key-capture:hover {
+    border-color: var(--accent-dim);
+    color: var(--text);
+}
+
+.script-editor__key-capture--active {
+    border-color: var(--accent);
+    color: var(--accent);
+    animation: key-capture-pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes key-capture-pulse {
+    from { opacity: 1; }
+    to   { opacity: 0.6; }
+}
+
+.script-editor__item-key {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* ── Empty state ────────────────────────────────────────── */
 .script-editor__empty {
     flex: 1;

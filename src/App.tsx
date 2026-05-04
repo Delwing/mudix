@@ -140,6 +140,7 @@ export default function App() {
         const handleKeyDown = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement;
             if (target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+            if (target.tagName === 'INPUT' && !(target as HTMLInputElement).classList.contains('command-input')) return;
             if (engineRef.current?.processKey(e)) e.preventDefault();
         };
         document.addEventListener('keydown', handleKeyDown);
@@ -200,7 +201,7 @@ export default function App() {
             session.echoCommand(command);
             send(command, false);
         }
-        setCommand('');
+        commandInputRef.current?.select();
     };
 
     const activeConnectionId = activeConnection?.id ?? null;

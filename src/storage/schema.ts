@@ -62,7 +62,7 @@ export interface PermanentTimer {
 export interface PermanentKeybinding {
     id: string;
     name: string;
-    key: string;        // KeyboardEvent.key value, e.g. "F1", "Enter"
+    key: string;        // KeyboardEvent.code value, e.g. "F1", "KeyA", "Numpad1"
     modifiers: string[]; // subset of ["ctrl", "shift", "alt", "meta"]
     code: string;
     language: 'lua' | 'js';

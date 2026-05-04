@@ -1,7 +1,7 @@
 export interface PermanentKeybinding {
     id: string;
     name: string;
-    key: string;        // KeyboardEvent.key value, e.g. "F1", "Enter", "a"
+    key: string;        // KeyboardEvent.code value, e.g. "F1", "KeyA", "Numpad1"
     modifiers: string[]; // subset of ["ctrl", "shift", "alt", "meta"]
     code: string;
     language: 'lua' | 'js';
@@ -11,7 +11,7 @@ export interface PermanentKeybinding {
 type TempFn = () => void;
 
 function matchesEvent(key: string, modifiers: string[], event: KeyboardEvent): boolean {
-    if (event.key !== key) return false;
+    if (event.code !== key) return false;
     return (
         event.ctrlKey  === modifiers.includes('ctrl')  &&
         event.shiftKey === modifiers.includes('shift') &&
