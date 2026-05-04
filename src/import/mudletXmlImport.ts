@@ -40,8 +40,8 @@ function qtModifiers(mod: number): string[] {
 // Mudlet triggerType integer → our TriggerPatternType
 const MUDLET_PATTERN_TYPES: TriggerPatternType[] = [
     'substring',    // 0
-    'startOfLine',  // 1
-    'regex',        // 2
+    'regex',        // 1
+    'startOfLine',  // 2
     'exactMatch',   // 3
     'luaFunction',  // 4
     'lineSpacer',   // 5
