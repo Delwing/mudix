@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Clock, Folder, FolderOpen, Keyboard, CornerDownRight, FileCode2, Zap } from 'lucide-react';
 import { Button, Input } from '../../components';
 import { useAppStore } from '../../../storage';
-import type { PermanentAlias, PermanentKeybinding, PermanentTimer, PermanentTrigger, Script } from '../../../storage/schema';
+import type { AliasNode, KeyNode, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
+import { isEffectivelyEnabled } from '../../../storage/schema';
 import type { MudSession } from '../../../mud/MudSession';
 import { LuaEditor } from './LuaEditor';
 import './ScriptEditorPanel.css';
 
 type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys';
+type AnyNode = ScriptNode | AliasNode | TriggerNode | TimerNode | KeyNode;
 
 const CATEGORY_LABELS: Record<Category, string> = {
     scripts: 'Scripts',
@@ -32,7 +35,65 @@ function formatKeyCombo(key: string, modifiers: string[]): string {
     return parts.join('+');
 }
 
+function isAncestorOf(ancestorId: string, itemId: string, items: AnyNode[]): boolean {
+    const byId = new Map(items.map(i => [i.id, i]));
+    let node = byId.get(itemId);
+    while (node?.parentId) {
+        if (node.parentId === ancestorId) return true;
+        node = byId.get(node.parentId);
+    }
+    return false;
+}
+
+const ICON_SIZE = 13;
+const ICON_STROKE = 1.6;
+
+function ItemIcon({ category, isGroup, isExpanded }: { category: Category; isGroup: boolean; isExpanded: boolean }) {
+    if (isGroup) {
+        const F = isExpanded ? FolderOpen : Folder;
+        return <F size={ICON_SIZE} strokeWidth={ICON_STROKE} className="script-editor__item-icon script-editor__item-icon--folder" />;
+    }
+    const props = { size: ICON_SIZE, strokeWidth: ICON_STROKE, className: 'script-editor__item-icon' };
+    switch (category) {
+        case 'scripts':  return <FileCode2       {...props} />;
+        case 'aliases':  return <CornerDownRight  {...props} />;
+        case 'triggers': return <Zap              {...props} />;
+        case 'timers':   return <Clock            {...props} />;
+        case 'keys':     return <Keyboard         {...props} />;
+    }
+}
+
+/** Build a flat, ordered render list from a tree stored as a flat array. */
+function flattenTree<T extends { id: string; parentId: string | null; isGroup: boolean }>(
+    items: T[],
+    parentId: string | null,
+    expanded: Set<string>,
+    depth = 0,
+): Array<{ item: T; depth: number }> {
+    const result: Array<{ item: T; depth: number }> = [];
+    for (const item of items.filter(i => i.parentId === parentId)) {
+        result.push({ item, depth });
+        if (item.isGroup && expanded.has(item.id)) {
+            result.push(...flattenTree(items, item.id, expanded, depth + 1));
+        }
+    }
+    return result;
+}
+
 const EMPTY: never[] = [];
+
+const PATTERN_TYPE_LABELS: Record<TriggerPatternType, string> = {
+    substring:    'substring',
+    regex:        'perl regex',
+    startOfLine:  'start of line',
+    exactMatch:   'exact match',
+    luaFunction:  'lua function',
+    lineSpacer:   'line spacer',
+    colorTrigger: 'color trigger',
+    prompt:       'prompt',
+};
+
+const PATTERN_NEEDS_TEXT = new Set<TriggerPatternType>(['substring', 'regex', 'startOfLine', 'exactMatch', 'luaFunction']);
 
 const DEFAULT_LUA = `-- Mudlet-compatible Lua script
 -- Core:
@@ -79,11 +140,12 @@ interface LogEntry {
 interface ScriptEditorPanelProps {
     connectionId: string;
     session: MudSession;
-    onScriptSave?: (script: Script) => void;
+    onScriptSave?: (script: ScriptNode) => void;
 }
 
 export function ScriptEditorPanel({ connectionId, session, onScriptSave }: ScriptEditorPanelProps) {
     const [category, setCategory] = useState<Category>('scripts');
+    const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
     const scripts     = useAppStore(s => s.connectionScripts[connectionId] ?? EMPTY);
     const aliases     = useAppStore(s => s.connectionAliases[connectionId] ?? EMPTY);
@@ -94,52 +156,67 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
     const addScript        = useAppStore(s => s.addScript);
     const updateScript     = useAppStore(s => s.updateScript);
     const removeScript     = useAppStore(s => s.removeScript);
+    const moveScript       = useAppStore(s => s.moveScript);
     const addAlias         = useAppStore(s => s.addAlias);
     const updateAlias      = useAppStore(s => s.updateAlias);
     const removeAlias      = useAppStore(s => s.removeAlias);
+    const moveAlias        = useAppStore(s => s.moveAlias);
     const addTrigger       = useAppStore(s => s.addTrigger);
     const updateTrigger    = useAppStore(s => s.updateTrigger);
     const removeTrigger    = useAppStore(s => s.removeTrigger);
+    const moveTrigger      = useAppStore(s => s.moveTrigger);
     const addTimer         = useAppStore(s => s.addTimer);
     const updateTimer      = useAppStore(s => s.updateTimer);
     const removeTimer      = useAppStore(s => s.removeTimer);
+    const moveTimer        = useAppStore(s => s.moveTimer);
     const addKeybinding    = useAppStore(s => s.addKeybinding);
     const updateKeybinding = useAppStore(s => s.updateKeybinding);
     const removeKeybinding = useAppStore(s => s.removeKeybinding);
+    const moveKeybinding   = useAppStore(s => s.moveKeybinding);
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
 
     // Common edit state
-    const [editName, setEditName] = useState('');
-    const [editLang, setEditLang] = useState<'lua' | 'js'>('lua');
-    const [editCode, setEditCode] = useState('');
-    // Alias / trigger extra
-    const [editPattern, setEditPattern] = useState('');
+    const [editName, setEditName]     = useState('');
+    const [editLang, setEditLang]     = useState<'lua' | 'js'>('lua');
+    const [editCode, setEditCode]     = useState('');
+    // Alias extra
+    const [editPattern, setEditPattern]   = useState('');
+    // Trigger extra
+    const [editPatterns, setEditPatterns] = useState<TriggerPattern[]>([]);
     // Timer extra
-    const [editSeconds, setEditSeconds] = useState(60);
-    const [editRepeat, setEditRepeat]   = useState(true);
+    const [editSeconds, setEditSeconds]   = useState(60);
+    const [editRepeat, setEditRepeat]     = useState(true);
     // Key extra
-    const [editKey, setEditKey]             = useState('');
-    const [editModifiers, setEditModifiers] = useState<string[]>([]);
-    const [capturing, setCapturing]         = useState(false);
+    const [editKey, setEditKey]               = useState('');
+    const [editModifiers, setEditModifiers]   = useState<string[]>([]);
+    const [capturing, setCapturing]           = useState(false);
+    // Script extra: event handlers (newline-separated)
+    const [editEventHandlers, setEditEventHandlers] = useState('');
 
     const [dirty, setDirty] = useState(false);
     const [logs, setLogs]   = useState<LogEntry[]>([]);
     const logEndRef = useRef<HTMLDivElement>(null);
 
-    const items: Array<Script | PermanentAlias | PermanentTrigger | PermanentTimer | PermanentKeybinding> =
+    // Drag-and-drop state
+    const [dragId, setDragId]   = useState<string | null>(null);
+    const [dragOver, setDragOver] = useState<{ id: string; intent: 'before' | 'into' | 'after' } | null>(null);
+
+    const items: AnyNode[] =
         category === 'scripts'  ? scripts  :
         category === 'aliases'  ? aliases  :
         category === 'triggers' ? triggers :
         category === 'timers'   ? timers   :
         keybindings;
 
+    const treeEntries = flattenTree(items, null, expanded);
     const selected = items.find(i => i.id === selectedId) ?? null;
 
     useEffect(() => {
         setSelectedId(null);
         setCapturing(false);
         setDirty(false);
+        setExpanded(new Set());
     }, [category]);
 
     useEffect(() => {
@@ -147,21 +224,23 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
         setEditName(selected.name);
         setEditLang(selected.language);
         setEditCode(selected.code);
-        if ('pattern' in selected) setEditPattern((selected as { pattern: string }).pattern);
-        if ('seconds' in selected) {
-            const t = selected as unknown as { seconds: number; repeat: boolean };
+        if (category === 'aliases') setEditPattern((selected as AliasNode).pattern ?? '');
+        if (category === 'triggers') setEditPatterns((selected as TriggerNode).patterns ?? []);
+        if (category === 'scripts') setEditEventHandlers((selected as ScriptNode).eventHandlers?.join('\n') ?? '');
+        if (category === 'timers') {
+            const t = selected as TimerNode;
             setEditSeconds(t.seconds);
             setEditRepeat(t.repeat);
         }
-        if ('key' in selected) {
-            const k = selected as PermanentKeybinding;
+        if (category === 'keys') {
+            const k = selected as KeyNode;
             setEditKey(k.key);
             setEditModifiers(k.modifiers);
         }
         setCapturing(false);
         setDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedId]);
+    }, [selectedId, category]);
 
     useEffect(() => {
         return session.events.on('script.log', (text, level) => {
@@ -194,18 +273,134 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
         return () => document.removeEventListener('keydown', onKeyDown, { capture: true });
     }, [capturing]);
 
-    const handleNew = () => {
+    const handleDragStart = (e: React.DragEvent, id: string) => {
+        if ((e.target as HTMLElement).closest('.script-editor__item-expand')) {
+            e.preventDefault();
+            return;
+        }
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', id);
+        // Delay so the item doesn't immediately look "dragging" before the ghost renders
+        setTimeout(() => setDragId(id), 0);
+    };
+
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>, item: AnyNode) => {
+        if (!dragId || dragId === item.id || isAncestorOf(dragId, item.id, items)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const rect = e.currentTarget.getBoundingClientRect();
+        const relY = (e.clientY - rect.top) / rect.height;
+        const intent: 'before' | 'into' | 'after' =
+            item.isGroup && relY > 0.3 && relY < 0.7 ? 'into' :
+            relY < 0.5 ? 'before' : 'after';
+        setDragOver(prev => (prev?.id === item.id && prev?.intent === intent) ? prev : { id: item.id, intent });
+    };
+
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>, target: AnyNode) => {
+        e.preventDefault();
+        const id = dragId ?? e.dataTransfer.getData('text/plain');
+        if (!id || id === target.id || isAncestorOf(id, target.id, items)) return;
+
+        const intent = dragOver?.intent ?? 'before';
+        let newParentId: string | null;
+        let insertBeforeId: string | null;
+
+        if (intent === 'into') {
+            newParentId = target.id;
+            insertBeforeId = null;
+        } else {
+            newParentId = target.parentId;
+            if (intent === 'before') {
+                insertBeforeId = target.id;
+            } else {
+                const siblings = items.filter(i => i.parentId === target.parentId);
+                const idx = siblings.findIndex(i => i.id === target.id);
+                insertBeforeId = siblings[idx + 1]?.id ?? null;
+            }
+        }
+
+        if (category === 'scripts')        moveScript(connectionId, id, newParentId, insertBeforeId);
+        else if (category === 'aliases')   moveAlias(connectionId, id, newParentId, insertBeforeId);
+        else if (category === 'triggers')  moveTrigger(connectionId, id, newParentId, insertBeforeId);
+        else if (category === 'timers')    moveTimer(connectionId, id, newParentId, insertBeforeId);
+        else                               moveKeybinding(connectionId, id, newParentId, insertBeforeId);
+
+        // Auto-expand the group we dropped into
+        if (intent === 'into') {
+            setExpanded(prev => { const next = new Set(prev); next.add(target.id); return next; });
+        }
+
+        setDragId(null);
+        setDragOver(null);
+    };
+
+    const handleDragEnd = () => {
+        setDragId(null);
+        setDragOver(null);
+    };
+
+    const handleNew = (asGroup = false) => {
+        const parentId = selected?.isGroup
+            ? selected.id
+            : selected?.parentId ?? null;
+
+        if (parentId) {
+            setExpanded(prev => { const next = new Set(prev); next.add(parentId); return next; });
+        }
+
         let id: string;
         if (category === 'scripts') {
-            id = addScript(connectionId, { name: 'New Script', language: 'lua', code: DEFAULT_LUA, enabled: true });
+            id = addScript(connectionId, {
+                name: asGroup ? 'New Group' : 'New Script',
+                language: 'lua',
+                code: asGroup ? '' : DEFAULT_LUA,
+                enabled: true,
+                isGroup: asGroup,
+                parentId,
+                eventHandlers: [],
+            });
         } else if (category === 'aliases') {
-            id = addAlias(connectionId, { name: 'New Alias', pattern: '^$', language: 'lua', code: '', enabled: true });
+            id = addAlias(connectionId, {
+                name: asGroup ? 'New Group' : 'New Alias',
+                pattern: '',
+                language: 'lua',
+                code: '',
+                enabled: true,
+                isGroup: asGroup,
+                parentId,
+            });
         } else if (category === 'triggers') {
-            id = addTrigger(connectionId, { name: 'New Trigger', pattern: '^$', language: 'lua', code: '', enabled: true });
+            id = addTrigger(connectionId, {
+                name: asGroup ? 'New Group' : 'New Trigger',
+                patterns: asGroup ? [] : [{ text: '', type: 'regex' }],
+                language: 'lua',
+                code: '',
+                enabled: true,
+                isGroup: asGroup,
+                parentId,
+            });
         } else if (category === 'timers') {
-            id = addTimer(connectionId, { name: 'New Timer', seconds: 60, language: 'lua', code: '', repeat: true, enabled: true });
+            id = addTimer(connectionId, {
+                name: asGroup ? 'New Group' : 'New Timer',
+                seconds: 60,
+                language: 'lua',
+                code: '',
+                repeat: true,
+                enabled: true,
+                isGroup: asGroup,
+                parentId,
+            });
         } else {
-            id = addKeybinding(connectionId, { name: 'New Key', key: '', modifiers: [], language: 'lua', code: '', enabled: true });
+            id = addKeybinding(connectionId, {
+                name: asGroup ? 'New Group' : 'New Key',
+                key: '',
+                modifiers: [],
+                language: 'lua',
+                code: '',
+                enabled: true,
+                isGroup: asGroup,
+                parentId,
+            });
         }
         setSelectedId(id);
     };
@@ -221,16 +416,26 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
         else                               updateKeybinding(connectionId, id, { enabled: !item.enabled });
     };
 
+    const handleToggleExpand = (id: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setExpanded(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    };
+
     const handleSave = () => {
         if (!selectedId || !selected) return;
         setLogs([]);
         if (category === 'scripts') {
-            updateScript(connectionId, selectedId, { name: editName, language: editLang, code: editCode });
-            onScriptSave?.({ ...(selected as Script), name: editName, language: editLang, code: editCode });
+            const handlers = editEventHandlers.split('\n').map(s => s.trim()).filter(Boolean);
+            updateScript(connectionId, selectedId, { name: editName, language: editLang, code: editCode, eventHandlers: handlers });
+            onScriptSave?.({ ...(selected as ScriptNode), name: editName, language: editLang, code: editCode, eventHandlers: handlers });
         } else if (category === 'aliases') {
             updateAlias(connectionId, selectedId, { name: editName, pattern: editPattern, language: editLang, code: editCode });
         } else if (category === 'triggers') {
-            updateTrigger(connectionId, selectedId, { name: editName, pattern: editPattern, language: editLang, code: editCode });
+            updateTrigger(connectionId, selectedId, { name: editName, patterns: editPatterns, language: editLang, code: editCode });
         } else if (category === 'timers') {
             updateTimer(connectionId, selectedId, { name: editName, seconds: editSeconds, repeat: editRepeat, language: editLang, code: editCode });
         } else {
@@ -284,32 +489,73 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
             {/* Item list */}
             <div className="script-editor__list">
                 <div className="script-editor__list-header">
-                    <Button variant="secondary" size="sm" onClick={handleNew}>+ New</Button>
+                    <Button variant="secondary" size="sm" onClick={() => handleNew(false)}>+ New</Button>
+                    <Button variant="secondary" size="sm" onClick={() => handleNew(true)}>+ Group</Button>
                 </div>
-                <div className="script-editor__items">
-                    {items.map(item => (
-                        <div
-                            key={item.id}
-                            className={`script-editor__item${item.id === selectedId ? ' script-editor__item--selected' : ''}`}
-                            onClick={() => setSelectedId(item.id)}
-                        >
-                            <input
-                                type="checkbox"
-                                checked={item.enabled}
-                                onChange={() => {}}
-                                onClick={e => handleToggle(item.id, e)}
-                                style={{ accentColor: 'var(--accent)', cursor: 'pointer', flexShrink: 0 }}
-                            />
-                            <span className="script-editor__item-name">
-                                {item.name}
-                                {'key' in item && (item as PermanentKeybinding).key && (
-                                    <span className="script-editor__item-key">
-                                        {formatKeyCombo((item as PermanentKeybinding).key, (item as PermanentKeybinding).modifiers)}
+                <div
+                    className="script-editor__items"
+                    onDragLeave={e => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(null);
+                    }}
+                >
+                    {treeEntries.map(({ item, depth }) => {
+                        const effective = isEffectivelyEnabled(item, items);
+                        const isSelected = item.id === selectedId;
+                        const isExpanded = expanded.has(item.id);
+                        const isOver = dragOver?.id === item.id;
+                        return (
+                            <div
+                                key={item.id}
+                                draggable
+                                className={[
+                                    'script-editor__item',
+                                    isSelected ? 'script-editor__item--selected' : '',
+                                    item.isGroup ? 'script-editor__item--group' : '',
+                                    !effective ? 'script-editor__item--inherited-disabled' : '',
+                                    item.id === dragId ? 'script-editor__item--dragging' : '',
+                                    isOver && dragOver!.intent === 'before' ? 'script-editor__item--drop-before' : '',
+                                    isOver && dragOver!.intent === 'after'  ? 'script-editor__item--drop-after'  : '',
+                                    isOver && dragOver!.intent === 'into'   ? 'script-editor__item--drop-into'   : '',
+                                ].filter(Boolean).join(' ')}
+                                onClick={() => setSelectedId(item.id)}
+                                style={{ paddingLeft: `${8 + depth * 14}px` }}
+                                onDragStart={e => handleDragStart(e, item.id)}
+                                onDragOver={e => handleDragOver(e, item)}
+                                onDrop={e => handleDrop(e, item)}
+                                onDragEnd={handleDragEnd}
+                            >
+                                {item.isGroup ? (
+                                    <button
+                                        className="script-editor__item-expand"
+                                        onClick={e => handleToggleExpand(item.id, e)}
+                                        tabIndex={-1}
+                                        title={isExpanded ? 'Collapse' : 'Expand'}
+                                    >
+                                        <ItemIcon category={category} isGroup={true} isExpanded={isExpanded} />
+                                    </button>
+                                ) : (
+                                    <span className="script-editor__item-spacer">
+                                        <ItemIcon category={category} isGroup={false} isExpanded={false} />
                                     </span>
                                 )}
-                            </span>
-                        </div>
-                    ))}
+                                <input
+                                    type="checkbox"
+                                    checked={item.enabled}
+                                    onChange={() => {}}
+                                    onClick={e => handleToggle(item.id, e)}
+                                    style={{ accentColor: 'var(--accent)', cursor: 'pointer', flexShrink: 0 }}
+                                />
+                                <span className="script-editor__item-name">
+                                    {item.name}
+                                    {'key' in item && (item as KeyNode).key && (
+                                        <span className="script-editor__item-key">
+                                            {formatKeyCombo((item as KeyNode).key, (item as KeyNode).modifiers)}
+                                        </span>
+                                    )}
+                                </span>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 
@@ -318,6 +564,9 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                 <div className="script-editor__pane">
                     <div className="script-editor__meta">
                         <div className="script-editor__meta-row">
+                            {selected.isGroup && (
+                                <span className="script-editor__group-badge">Group</span>
+                            )}
                             <Input
                                 className="script-editor__name"
                                 value={editName}
@@ -338,13 +587,75 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                                 <option value="js">JS</option>
                             </select>
                         </div>
-                        {(category === 'aliases' || category === 'triggers') && (
+                        {category === 'aliases' && (
                             <div className="script-editor__meta-row">
                                 <Input
                                     className="script-editor__pattern"
                                     value={editPattern}
                                     onChange={e => { setEditPattern(e.target.value); setDirty(true); }}
                                     placeholder="Pattern (regex)"
+                                />
+                            </div>
+                        )}
+                        {category === 'triggers' && !selected.isGroup && (
+                            <div className="script-editor__meta-row script-editor__meta-row--col">
+                                <span className="script-editor__field-label">Patterns</span>
+                                <div className="script-editor__pattern-list">
+                                    {editPatterns.map((p, i) => (
+                                        <div key={i} className="script-editor__pattern-row">
+                                            <select
+                                                className="script-editor__pattern-type"
+                                                value={p.type}
+                                                onChange={e => {
+                                                    const next = [...editPatterns];
+                                                    next[i] = { ...next[i], type: e.target.value as TriggerPatternType };
+                                                    setEditPatterns(next);
+                                                    setDirty(true);
+                                                }}
+                                            >
+                                                {(Object.entries(PATTERN_TYPE_LABELS) as [TriggerPatternType, string][]).map(([t, label]) => (
+                                                    <option key={t} value={t}>{label}</option>
+                                                ))}
+                                            </select>
+                                            <input
+                                                type="text"
+                                                className="script-editor__pattern-text"
+                                                value={p.text}
+                                                disabled={!PATTERN_NEEDS_TEXT.has(p.type)}
+                                                placeholder={p.type === 'luaFunction' ? 'function name' : 'pattern'}
+                                                spellCheck={false}
+                                                onChange={e => {
+                                                    const next = [...editPatterns];
+                                                    next[i] = { ...next[i], text: e.target.value };
+                                                    setEditPatterns(next);
+                                                    setDirty(true);
+                                                }}
+                                            />
+                                            <button
+                                                type="button"
+                                                className="script-editor__pattern-remove"
+                                                onClick={() => { setEditPatterns(editPatterns.filter((_, j) => j !== i)); setDirty(true); }}
+                                                title="Remove pattern"
+                                            >×</button>
+                                        </div>
+                                    ))}
+                                    <button
+                                        type="button"
+                                        className="script-editor__pattern-add"
+                                        onClick={() => { setEditPatterns([...editPatterns, { text: '', type: 'regex' }]); setDirty(true); }}
+                                    >+ Add pattern</button>
+                                </div>
+                            </div>
+                        )}
+                        {category === 'scripts' && (
+                            <div className="script-editor__meta-row script-editor__meta-row--col">
+                                <span className="script-editor__field-label">Event handlers (one event name per line)</span>
+                                <textarea
+                                    className="script-editor__patterns"
+                                    value={editEventHandlers}
+                                    onChange={e => { setEditEventHandlers(e.target.value); setDirty(true); }}
+                                    placeholder="sysConnectionEvent"
+                                    spellCheck={false}
                                 />
                             </div>
                         )}

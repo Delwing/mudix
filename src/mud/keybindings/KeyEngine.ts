@@ -1,12 +1,7 @@
-export interface PermanentKeybinding {
-    id: string;
-    name: string;
-    key: string;        // KeyboardEvent.code value, e.g. "F1", "KeyA", "Numpad1"
-    modifiers: string[]; // subset of ["ctrl", "shift", "alt", "meta"]
-    code: string;
-    language: 'lua' | 'js';
-    enabled: boolean;
-}
+import type { KeyNode } from '../../storage/schema';
+import { isEffectivelyEnabled } from '../../storage/schema';
+
+export type { KeyNode };
 
 type TempFn = () => void;
 
@@ -22,7 +17,7 @@ function matchesEvent(key: string, modifiers: string[], event: KeyboardEvent): b
 
 export class KeyEngine {
     private readonly temp = new Map<number, { key: string; modifiers: string[]; fn: TempFn }>();
-    private perm: PermanentKeybinding[] = [];
+    private perm: KeyNode[] = [];
     private nextId = 1;
 
     // ── Temp keybindings (session-scoped, created by scripts) ─────────────────
@@ -51,11 +46,11 @@ export class KeyEngine {
 
     // ── Perm keybindings (persisted, visible in UI) ────────────────────────────
 
-    loadPerm(keybindings: PermanentKeybinding[]): void {
-        this.perm = keybindings.filter(k => k.enabled);
+    loadPerm(keybindings: KeyNode[]): void {
+        this.perm = keybindings.filter(k => isEffectivelyEnabled(k, keybindings) && k.key);
     }
 
-    matchPerm(event: KeyboardEvent): PermanentKeybinding | null {
+    matchPerm(event: KeyboardEvent): KeyNode | null {
         for (const binding of this.perm) {
             if (matchesEvent(binding.key, binding.modifiers, event)) return binding;
         }

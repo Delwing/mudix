@@ -1,12 +1,7 @@
-export interface PermanentTimer {
-    id: string;
-    name: string;
-    seconds: number;
-    code: string;
-    language: 'lua' | 'js';
-    repeat: boolean;
-    enabled: boolean;
-}
+import type { TimerNode } from '../../storage/schema';
+import { isEffectivelyEnabled } from '../../storage/schema';
+
+export type { TimerNode };
 
 type TempFn = () => void;
 type ExecuteFn = (code: string, language: string, name: string) => void;
@@ -40,10 +35,11 @@ export class TimerEngine {
         return true;
     }
 
-    loadPerm(timers: PermanentTimer[], executeFn: ExecuteFn): void {
+    loadPerm(timers: TimerNode[], executeFn: ExecuteFn): void {
         this.stopPerm();
         for (const timer of timers) {
-            if (!timer.enabled) continue;
+            if (!isEffectivelyEnabled(timer, timers)) continue;
+            if (timer.isGroup && !timer.code) continue;
             const fire = () => executeFn(timer.code, timer.language, timer.name);
             if (timer.repeat) {
                 const handle = setInterval(fire, timer.seconds * 1000) as unknown as ReturnType<typeof setTimeout>;

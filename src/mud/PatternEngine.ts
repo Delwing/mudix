@@ -1,3 +1,5 @@
+import { isEffectivelyEnabled } from '../storage/schema';
+
 type TempFn = (matches: RegExpMatchArray) => void;
 
 type PatternItem = {
@@ -7,6 +9,8 @@ type PatternItem = {
     code: string;
     language: 'lua' | 'js';
     enabled: boolean;
+    isGroup: boolean;
+    parentId: string | null;
 };
 
 export class PatternEngine<T extends PatternItem> {
@@ -24,7 +28,8 @@ export class PatternEngine<T extends PatternItem> {
     loadPerm(items: T[]): void {
         this.permCompiled = [];
         for (const item of items) {
-            if (!item.enabled) continue;
+            if (!isEffectivelyEnabled(item, items)) continue;
+            if (!item.pattern) continue;
             try {
                 this.permCompiled.push({ item, re: new RegExp(item.pattern) });
             } catch {

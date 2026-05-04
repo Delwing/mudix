@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { ScriptEditorPanel } from './panels/ScriptEditorPanel';
 import { useAppStore } from '../../storage';
 import type { MudSession } from '../../mud/MudSession';
-import type { Script } from '../../storage/schema';
+import type { ScriptNode } from '../../storage/schema';
 
 const MIN_W = 500;
 const MIN_H = 320;
@@ -12,7 +12,7 @@ const DEFAULT_H = 640;
 interface Props {
     connectionId: string;
     session: MudSession;
-    onScriptSave?: (script: Script) => void;
+    onScriptSave?: (script: ScriptNode) => void;
     onClose: () => void;
 }
 

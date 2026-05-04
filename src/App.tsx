@@ -8,12 +8,12 @@ import { useAppStore, connectionUrl, type MudConnection } from './storage';
 import { useEngines } from './hooks/useEngines';
 import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
-import type { Script } from './storage/schema';
+import type { ScriptNode } from './storage/schema';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 
 // Stable fallback so the Zustand selector always returns the same reference
 // when there are no scripts — avoids an infinite re-render loop.
-const NO_SCRIPTS: Script[] = [];
+const NO_SCRIPTS: ScriptNode[] = [];
 
 export default function App() {
     const { session, status, ping, passwordMode, connect, disconnect, send } = useMudSession();
@@ -44,7 +44,7 @@ export default function App() {
     // (which destroys the runtime). We skip that full reload when the only change
     // is the one script we already individually reloaded.
     const pendingHotReload = useRef<string | null>(null);
-    const lastLoadedSnap = useRef<{ scripts: Script[]; session: typeof session } | null>(null);
+    const lastLoadedSnap = useRef<{ scripts: ScriptNode[]; session: typeof session } | null>(null);
     const pendingOutputReadyUnsub = useRef<(() => void) | null>(null);
     useEffect(() => {
         const hotId = pendingHotReload.current;
@@ -82,7 +82,7 @@ export default function App() {
         };
     }, [activeScripts, session]);
 
-    const handleScriptSave = useCallback((script: Script) => {
+    const handleScriptSave = useCallback((script: ScriptNode) => {
         pendingHotReload.current = script.id;
         engineRef.current?.reloadScript(script);
     }, []);

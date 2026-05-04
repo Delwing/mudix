@@ -23,50 +23,80 @@ export interface UISettings {
     outputBackground: string;
 }
 
-export interface Script {
+// ── Tree node base ────────────────────────────────────────────────────────────
+
+interface BaseNode {
     id: string;
     name: string;
-    language: 'lua' | 'js';
-    code: string;
     enabled: boolean;
+    isGroup: boolean;       // true = folder/group that may contain children
+    parentId: string | null; // null = root level
 }
 
-export interface PermanentAlias {
-    id: string;
-    name: string;
-    pattern: string;   // regex string
+// ── Item types (mirrors Mudlet's TScript / TAlias / TTrigger / TTimer / TKey) ──
+
+export interface ScriptNode extends BaseNode {
     code: string;
     language: 'lua' | 'js';
-    enabled: boolean;
+    eventHandlers: string[]; // event names this script handles (Mudlet TScript.mEventHandlerList)
 }
 
-export interface PermanentTrigger {
-    id: string;
-    name: string;
-    pattern: string;   // regex string, matched against ANSI-stripped MUD output
+export interface AliasNode extends BaseNode {
+    pattern: string;   // single regex string (Mudlet TAlias.mRegexCode)
     code: string;
     language: 'lua' | 'js';
-    enabled: boolean;
 }
 
-export interface PermanentTimer {
-    id: string;
-    name: string;
+export type TriggerPatternType =
+    | 'substring'
+    | 'regex'
+    | 'startOfLine'
+    | 'exactMatch'
+    | 'luaFunction'
+    | 'lineSpacer'
+    | 'colorTrigger'
+    | 'prompt';
+
+export interface TriggerPattern {
+    text: string;
+    type: TriggerPatternType;
+}
+
+export interface TriggerNode extends BaseNode {
+    patterns: TriggerPattern[];  // one or more patterns — any match fires (Mudlet TTrigger.mPatterns)
+    code: string;
+    language: 'lua' | 'js';
+}
+
+export interface TimerNode extends BaseNode {
     seconds: number;
     code: string;
     language: 'lua' | 'js';
     repeat: boolean;
-    enabled: boolean;
 }
 
-export interface PermanentKeybinding {
-    id: string;
-    name: string;
-    key: string;        // KeyboardEvent.code value, e.g. "F1", "KeyA", "Numpad1"
+export interface KeyNode extends BaseNode {
+    key: string;         // KeyboardEvent.code value, e.g. "F1", "KeyA", "Numpad1"
     modifiers: string[]; // subset of ["ctrl", "shift", "alt", "meta"]
     code: string;
     language: 'lua' | 'js';
-    enabled: boolean;
+}
+
+// ── Tree utilities ────────────────────────────────────────────────────────────
+
+/** Returns true if the item and all its ancestors are enabled. */
+export function isEffectivelyEnabled<T extends { id: string; enabled: boolean; parentId: string | null }>(
+    item: T,
+    allItems: T[],
+): boolean {
+    const byId = new Map(allItems.map(i => [i.id, i]));
+    let node: { enabled: boolean; parentId: string | null } | undefined = item;
+    while (node) {
+        if (!node.enabled) return false;
+        if (!node.parentId) break;
+        node = byId.get(node.parentId);
+    }
+    return true;
 }
 
 export interface ScriptEditorBounds {
@@ -82,11 +112,11 @@ export interface AppSchema {
     connectionWindowHints: Record<string, Record<string, WindowOpenOptions>>;
     /** Per-connection dock area extents: { left, right, top, bottom } in pixels. */
     connectionDockExtents: Record<string, Record<string, number>>;
-    connectionScripts: Record<string, Script[]>;
-    connectionAliases: Record<string, PermanentAlias[]>;
-    connectionTriggers: Record<string, PermanentTrigger[]>;
-    connectionTimers: Record<string, PermanentTimer[]>;
-    connectionKeybindings: Record<string, PermanentKeybinding[]>;
+    connectionScripts: Record<string, ScriptNode[]>;
+    connectionAliases: Record<string, AliasNode[]>;
+    connectionTriggers: Record<string, TriggerNode[]>;
+    connectionTimers: Record<string, TimerNode[]>;
+    connectionKeybindings: Record<string, KeyNode[]>;
     connectionScriptEditorBounds: Record<string, ScriptEditorBounds>;
 }
 

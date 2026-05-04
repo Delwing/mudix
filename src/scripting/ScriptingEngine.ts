@@ -1,9 +1,10 @@
 import type { MudSession } from '../mud/MudSession';
-import type { AliasEngine, PermanentAlias } from '../mud/aliases/AliasEngine';
-import type { TriggerEngine, PermanentTrigger } from '../mud/triggers/TriggerEngine';
-import type { TimerEngine, PermanentTimer } from '../mud/timers/TimerEngine';
-import type { KeyEngine, PermanentKeybinding } from '../mud/keybindings/KeyEngine';
-import type { Script } from '../storage/schema';
+import type { AliasEngine, AliasNode } from '../mud/aliases/AliasEngine';
+import type { TriggerEngine, TriggerNode } from '../mud/triggers/TriggerEngine';
+import type { TimerEngine, TimerNode } from '../mud/timers/TimerEngine';
+import type { KeyEngine, KeyNode } from '../mud/keybindings/KeyEngine';
+import type { ScriptNode } from '../storage/schema';
+import { isEffectivelyEnabled } from '../storage/schema';
 import { AnsiAwareBuffer } from '../mud/text/FormatState';
 import { ScriptingAPI } from './ScriptingAPI';
 import { LuaRuntime } from './lua/LuaRuntime';
@@ -35,13 +36,16 @@ export class ScriptingEngine {
     }
 
     /** Load (or reload) scripts. Restarts each runtime cleanly. */
-    loadScripts(scripts: Script[]): void {
+    loadScripts(scripts: ScriptNode[]): void {
         this.runtimes.lua?.destroy();
         try {
             const rt = new LuaRuntime(this.api);
             this.runtimes.lua = rt;
-            const lua = scripts.filter(s => s.enabled && s.language === 'lua');
-            for (const s of lua) rt.load(s.code, s.name);
+            const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
+            for (const s of enabled) {
+                if (!s.code) continue;
+                rt.load(this.wrapScript(s), s.name);
+            }
         } catch (err) {
             this.runtimes.lua = null;
             this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
@@ -50,7 +54,7 @@ export class ScriptingEngine {
     }
 
     /** Run a single script on the existing runtime without restarting it. */
-    reloadScript(script: Script): void {
+    reloadScript(script: ScriptNode): void {
         if (script.language !== 'lua') return;
         if (!this.runtimes.lua) {
             try {
@@ -60,12 +64,13 @@ export class ScriptingEngine {
                 return;
             }
         }
-        this.runtimes.lua.load(script.code, script.name);
+        if (!script.code) return;
+        this.runtimes.lua.load(this.wrapScript(script), script.name);
         this.api.flushOutput();
     }
 
     /** Start all enabled permanent timers. Called when the timer list changes. */
-    loadPermTimers(timers: PermanentTimer[]): void {
+    loadPermTimers(timers: TimerNode[]): void {
         this.timerEngine.loadPerm(timers, (code, language, name) => {
             if (language === 'lua') this.runtimes.lua?.run(code, name);
             this.api.flushOutput();
@@ -73,7 +78,7 @@ export class ScriptingEngine {
     }
 
     /** Reload permanent keybindings into the engine. Called when the keybinding list changes. */
-    loadPermKeybindings(keybindings: PermanentKeybinding[]): void {
+    loadPermKeybindings(keybindings: KeyNode[]): void {
         this.keyEngine.loadPerm(keybindings);
     }
 
@@ -125,19 +130,30 @@ export class ScriptingEngine {
         this.api.destroy();
     }
 
-    private executePermAlias(alias: PermanentAlias, matches: string[]): void {
+    // If the script declares eventHandlers, wrap it so the code runs as a
+    // handler function rather than at load time (mirrors Mudlet TScript).
+    private wrapScript(script: ScriptNode): string {
+        if (script.eventHandlers.length === 0) return script.code;
+        const safeId = script.id.replace(/-/g, '_');
+        const registrations = script.eventHandlers
+            .map(e => `registerAnonymousEventHandler(${JSON.stringify(e)}, __handler_${safeId})`)
+            .join('\n');
+        return `local __handler_${safeId} = function(event, ...)\n${script.code}\nend\n${registrations}`;
+    }
+
+    private executePermAlias(alias: AliasNode, matches: string[]): void {
         if (alias.language === 'lua') {
             this.runtimes.lua?.runWithMatches(alias.code, alias.name, matches);
         }
     }
 
-    private executePermTrigger(trigger: PermanentTrigger, matches: string[]): void {
+    private executePermTrigger(trigger: TriggerNode, matches: string[]): void {
         if (trigger.language === 'lua') {
             this.runtimes.lua?.runWithMatches(trigger.code, trigger.name, matches);
         }
     }
 
-    private executePermKeybinding(binding: PermanentKeybinding): void {
+    private executePermKeybinding(binding: KeyNode): void {
         if (binding.language === 'lua') {
             this.runtimes.lua?.run(binding.code, binding.name);
         }
@@ -156,7 +172,7 @@ export class ScriptingEngine {
         this.api.setLineBuffer(buffer);
         (this.runtimes.lua as LuaRuntime | null)?.setCurrentLine(plain, isPrompt);
         this.triggerEngine.processTemp(plain);
-        for (const { trigger, captures } of this.triggerEngine.matchPerm(plain)) {
+        for (const { trigger, captures } of this.triggerEngine.matchPerm(plain, isPrompt)) {
             this.executePermTrigger(trigger, [plain, ...captures]);
         }
         this.runtimes.lua?.processTrigger(plain);

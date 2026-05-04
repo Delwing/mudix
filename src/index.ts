@@ -57,4 +57,4 @@ export { PingTracker } from "./mud/connection/PingTracker";
 export { createPassthroughProcessor } from "./mud/triggers/ChunkProcessor";
 export type { ChunkProcessor } from "./mud/triggers/ChunkProcessor";
 export { TriggerEngine } from "./mud/triggers/TriggerEngine";
-export type { PermanentTrigger } from "./mud/triggers/TriggerEngine";
+export type { TriggerNode } from "./mud/triggers/TriggerEngine";
