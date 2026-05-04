@@ -9,10 +9,13 @@ import { LuaEditor } from './LuaEditor';
 import { parseMudletXml } from '../../../import/mudletXmlImport';
 import './ScriptEditorPanel.css';
 
-type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys';
+type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys' | 'errors';
+type EditCategory = Exclude<Category, 'errors'>;
 type AnyNode = ScriptNode | AliasNode | TriggerNode | TimerNode | KeyNode;
 
-const CATEGORY_LABELS: Record<Category, string> = {
+const EDIT_CATEGORIES: EditCategory[] = ['scripts', 'aliases', 'triggers', 'timers', 'keys'];
+
+const CATEGORY_LABELS: Record<EditCategory, string> = {
     scripts: 'Scripts',
     aliases: 'Aliases',
     triggers: 'Triggers',
@@ -20,7 +23,7 @@ const CATEGORY_LABELS: Record<Category, string> = {
     keys: 'Keys',
 };
 
-const CATEGORY_SINGULAR: Record<Category, string> = {
+const CATEGORY_SINGULAR: Record<EditCategory, string> = {
     scripts: 'Script',
     aliases: 'Alias',
     triggers: 'Trigger',
@@ -28,7 +31,7 @@ const CATEGORY_SINGULAR: Record<Category, string> = {
     keys: 'Key',
 };
 
-const CATEGORY_ICON: Record<Category, React.ElementType> = {
+const CATEGORY_ICON: Record<EditCategory, React.ElementType> = {
     scripts:  FileCode2,
     aliases:  Shuffle,
     triggers: Zap,
@@ -83,11 +86,12 @@ function ItemIcon({ category, isGroup, isExpanded }: { category: Category; isGro
     }
     const props = { size: ICON_SIZE, strokeWidth: ICON_STROKE, className: 'script-editor__item-icon' };
     switch (category) {
-        case 'scripts':  return <FileCode2       {...props} />;
-        case 'aliases':  return <Shuffle           {...props} />;
-        case 'triggers': return <Zap              {...props} />;
-        case 'timers':   return <Clock            {...props} />;
-        case 'keys':     return <Keyboard         {...props} />;
+        case 'scripts':  return <FileCode2  {...props} />;
+        case 'aliases':  return <Shuffle    {...props} />;
+        case 'triggers': return <Zap        {...props} />;
+        case 'timers':   return <Clock      {...props} />;
+        case 'keys':     return <Keyboard   {...props} />;
+        default:         return null;
     }
 }
 
@@ -121,7 +125,62 @@ const PATTERN_TYPE_LABELS: Record<TriggerPatternType, string> = {
     prompt:       'prompt',
 };
 
+const PATTERN_TYPE_COLORS: Record<TriggerPatternType, string> = {
+    substring:    '#000000',
+    regex:        '#0000ff',
+    startOfLine:  '#ff0000',
+    exactMatch:   '#00ff00',
+    luaFunction:  '#00ffff',
+    lineSpacer:   '#ff00ff',
+    colorTrigger: '#c0c0c0',
+    prompt:       '#ffff00',
+};
+
 const PATTERN_NEEDS_TEXT = new Set<TriggerPatternType>(['substring', 'regex', 'startOfLine', 'exactMatch', 'luaFunction']);
+
+function PatternTypeSelect({ value, onChange }: { value: TriggerPatternType; onChange: (t: TriggerPatternType) => void }) {
+    const [open, setOpen] = useState(false);
+    const [pos, setPos]   = useState({ x: 0, y: 0 });
+    const btnRef          = useRef<HTMLButtonElement>(null);
+
+    const toggle = () => {
+        if (!open && btnRef.current) {
+            const r = btnRef.current.getBoundingClientRect();
+            setPos({ x: r.left, y: r.bottom + 2 });
+        }
+        setOpen(v => !v);
+    };
+
+    return (
+        <>
+            <button
+                ref={btnRef}
+                type="button"
+                className="script-editor__pattern-type-btn"
+                onClick={toggle}
+            >
+                <span className="script-editor__pattern-type-swatch" style={{ background: PATTERN_TYPE_COLORS[value] }} />
+                <span className="script-editor__pattern-type-label">{PATTERN_TYPE_LABELS[value]}</span>
+                <span className="script-editor__pattern-type-arrow">▾</span>
+            </button>
+            {open && (
+                <ContextMenu x={pos.x} y={pos.y} onClose={() => setOpen(false)}>
+                    {(Object.entries(PATTERN_TYPE_LABELS) as [TriggerPatternType, string][]).map(([t, label]) => (
+                        <button
+                            key={t}
+                            type="button"
+                            className={`ctx-menu__item script-editor__pattern-type-option${t === value ? ' script-editor__pattern-type-option--active' : ''}`}
+                            onClick={() => { onChange(t); setOpen(false); }}
+                        >
+                            <span className="script-editor__pattern-type-swatch" style={{ background: PATTERN_TYPE_COLORS[t] }} />
+                            {label}
+                        </button>
+                    ))}
+                </ContextMenu>
+            )}
+        </>
+    );
+}
 
 const DEFAULT_LUA = `-- Mudlet-compatible Lua script
 -- Core:
@@ -163,6 +222,11 @@ const DEFAULT_JS = `// mudix JS script (coming soon)
 interface LogEntry {
     text: string;
     level: 'error' | 'info';
+    timestamp: Date;
+}
+
+function formatTime(d: Date): string {
+    return d.toTimeString().slice(0, 8);
 }
 
 interface ScriptEditorPanelProps {
@@ -220,9 +284,13 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
             importMudletNodes(connectionId, data);
             const total = data.scripts.length + data.aliases.length + data.triggers.length + data.timers.length + data.keys.length;
             setImportError(null);
-            const newEntries: LogEntry[] = [{ text: `Imported ${total} items from ${file.name}`, level: 'info' }];
-            for (const w of data.warnings) newEntries.push({ text: `Warning: ${w}`, level: 'error' });
+            const now = new Date();
+            const newEntries: LogEntry[] = [{ text: `Imported ${total} items from ${file.name}`, level: 'info', timestamp: now }];
+            for (const w of data.warnings) newEntries.push({ text: `Warning: ${w}`, level: 'error', timestamp: now });
             setLogs(prev => [...prev, ...newEntries]);
+            setErrorLog(prev => [...prev, ...newEntries]);
+            const warnCount = data.warnings.length;
+            if (warnCount > 0) setUnreadErrors(prev => prev + warnCount);
         } catch (err) {
             setImportError(err instanceof Error ? err.message : String(err));
         }
@@ -264,10 +332,13 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
     const [editEventHandlers, setEditEventHandlers] = useState('');
 
     const [dirty, setDirty] = useState(false);
-    const [logs, setLogs]   = useState<LogEntry[]>([]);
+    const [logs, setLogs]         = useState<LogEntry[]>([]);
+    const [errorLog, setErrorLog] = useState<LogEntry[]>([]);
+    const [unreadErrors, setUnreadErrors] = useState(0);
 
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; targetId: string | null } | null>(null);
-    const logEndRef = useRef<HTMLDivElement>(null);
+    const logEndRef      = useRef<HTMLDivElement>(null);
+    const errorLogEndRef = useRef<HTMLDivElement>(null);
 
     const [listWidth, setListWidth]     = useState(() => initialListWidth ?? 180);
     const [metaHeight, setMetaHeight]   = useState<number | null>(() => initialMetaHeight ?? null);
@@ -300,10 +371,11 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
     const [dragOver, setDragOver] = useState<{ id: string; intent: 'before' | 'into' | 'after' } | null>(null);
 
     const items: AnyNode[] =
-        category === 'scripts'  ? scripts  :
-        category === 'aliases'  ? aliases  :
-        category === 'triggers' ? triggers :
-        category === 'timers'   ? timers   :
+        category === 'scripts'  ? scripts    :
+        category === 'aliases'  ? aliases    :
+        category === 'triggers' ? triggers   :
+        category === 'timers'   ? timers     :
+        category === 'errors'   ? EMPTY      :
         keybindings;
 
     const treeEntries = flattenTree(items, null, expanded);
@@ -364,13 +436,25 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
 
     useEffect(() => {
         return session.events.on('script.log', (text, level) => {
-            setLogs(prev => [...prev, { text, level }]);
+            const entry: LogEntry = { text, level, timestamp: new Date() };
+            setLogs(prev => [...prev, entry]);
+            setErrorLog(prev => [...prev, entry]);
+            if (level === 'error') setUnreadErrors(prev => prev + 1);
         });
     }, [session]);
+
+    // Clear unread badge when visiting the Errors tab
+    useEffect(() => {
+        if (category === 'errors') setUnreadErrors(0);
+    }, [category]);
 
     useEffect(() => {
         logEndRef.current?.scrollIntoView({ behavior: 'instant' });
     }, [logs]);
+
+    useEffect(() => {
+        errorLogEndRef.current?.scrollIntoView({ behavior: 'instant' });
+    }, [errorLog]);
 
     useEffect(() => {
         if (!capturing) return;
@@ -659,7 +743,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + 2; });
     };
 
-    const categoryLabel = CATEGORY_LABELS[category].toLowerCase();
+    const categoryLabel = category !== 'errors' ? CATEGORY_LABELS[category].toLowerCase() : '';
     const emptyMsg = items.length === 0
         ? `No ${categoryLabel} yet — click "+ New" to create one`
         : `Select a ${categoryLabel.replace(/s$/, '')} to edit`;
@@ -668,7 +752,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         <div className="script-editor">
             {/* Category nav */}
             <div className="script-editor__nav">
-                {(Object.keys(CATEGORY_LABELS) as Category[]).map(cat => (
+                {EDIT_CATEGORIES.map(cat => (
                     <button
                         key={cat}
                         className={`script-editor__nav-btn${category === cat ? ' script-editor__nav-btn--active' : ''}`}
@@ -677,14 +761,24 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                         {CATEGORY_LABELS[cat]}
                     </button>
                 ))}
+                <button
+                    className={`script-editor__nav-btn${category === 'errors' ? ' script-editor__nav-btn--active' : ''}`}
+                    onClick={() => setCategory('errors')}
+                    style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                >
+                    Errors
+                    {unreadErrors > 0 && (
+                        <span className="script-editor__error-badge">{unreadErrors > 99 ? '99+' : unreadErrors}</span>
+                    )}
+                </button>
                 <button className="script-editor__nav-import" onClick={() => importFileRef.current?.click()} title="Import Mudlet XML package">
                     Import XML
                 </button>
                 <input ref={importFileRef} type="file" accept=".xml" style={{ display: 'none' }} onChange={handleImportFile} />
             </div>
 
-            {/* Item list */}
-            <div className="script-editor__list" style={{ width: listWidth }}>
+            {/* Item list — hidden on the Errors tab */}
+            {category !== 'errors' && <div className="script-editor__list" style={{ width: listWidth }}>
                 <div className="script-editor__list-resize" onMouseDown={handleListResizeStart} />
                 <div className="script-editor__list-header">
                     <Button variant="secondary" size="sm" onClick={() => handleNew(false)}>+ New</Button>
@@ -758,10 +852,41 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                         );
                     })}
                 </div>
-            </div>
+            </div>}
+
+            {/* Errors view */}
+            {category === 'errors' && (
+                <div className="script-editor__error-log-view">
+                    <div className="script-editor__error-log-header">
+                        <span className="script-editor__error-log-title">
+                            {errorLog.length === 0 ? 'No output yet' : `${errorLog.length} entr${errorLog.length === 1 ? 'y' : 'ies'}`}
+                        </span>
+                        <button
+                            className="script-editor__error-log-clear"
+                            onClick={() => { setErrorLog([]); setUnreadErrors(0); }}
+                            disabled={errorLog.length === 0}
+                        >
+                            Clear
+                        </button>
+                    </div>
+                    <div className="script-editor__error-log-entries">
+                        {errorLog.length === 0 ? (
+                            <span className="script-editor__log-empty">Lua errors and script output will appear here.</span>
+                        ) : (
+                            errorLog.map((entry, i) => (
+                                <div key={i} className={`script-editor__error-log-entry script-editor__error-log-entry--${entry.level}`}>
+                                    <span className="script-editor__error-log-time">{formatTime(entry.timestamp)}</span>
+                                    <span className="script-editor__error-log-text">{entry.text}</span>
+                                </div>
+                            ))
+                        )}
+                        <div ref={errorLogEndRef} />
+                    </div>
+                </div>
+            )}
 
             {/* Editor pane */}
-            {selected ? (
+            {category !== 'errors' && selected ? (
                 <div className="script-editor__pane">
                     <div
                         className="script-editor__meta"
@@ -820,20 +945,15 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                                     <div className="script-editor__pattern-list">
                                         {editPatterns.map((p, i) => (
                                             <div key={i} className="script-editor__pattern-row">
-                                                <select
-                                                    className="script-editor__pattern-type"
+                                                <PatternTypeSelect
                                                     value={p.type}
-                                                    onChange={e => {
+                                                    onChange={t => {
                                                         const next = [...editPatterns];
-                                                        next[i] = { ...next[i], type: e.target.value as TriggerPatternType };
+                                                        next[i] = { ...next[i], type: t };
                                                         setEditPatterns(next);
                                                         setDirty(true);
                                                     }}
-                                                >
-                                                    {(Object.entries(PATTERN_TYPE_LABELS) as [TriggerPatternType, string][]).map(([t, label]) => (
-                                                        <option key={t} value={t}>{label}</option>
-                                                    ))}
-                                                </select>
+                                                />
                                                 <input
                                                     type="text"
                                                     className="script-editor__pattern-text"
@@ -1127,10 +1247,10 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                     </div>
                 </div>
             ) : (
-                <div className="script-editor__empty">{emptyMsg}</div>
+                category !== 'errors' && <div className="script-editor__empty">{emptyMsg}</div>
             )}
 
-            {ctxMenu && (
+            {ctxMenu && category !== 'errors' && (
                 <ContextMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)}>
                     {ctxMenu.targetId !== null && (
                         <>
@@ -1154,8 +1274,8 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                             setCtxMenu(null);
                         }}
                     >
-                        {React.createElement(CATEGORY_ICON[category], { size: 13, strokeWidth: 1.6 })}
-                        Add {CATEGORY_SINGULAR[category]}
+                        {React.createElement(CATEGORY_ICON[category as EditCategory], { size: 13, strokeWidth: 1.6 })}
+                        Add {CATEGORY_SINGULAR[category as EditCategory]}
                     </button>
                     <button
                         className="ctx-menu__item"

@@ -62,14 +62,20 @@ export class ScriptingEngine {
                 this.triggerEngine.setLuaEval((code, line) =>
                     (this.runtimes.lua as LuaRuntime | null)?.evalBoolean(code, line) ?? false,
                 );
+                this.api.setExecuteScript((code) => (this.runtimes.lua as LuaRuntime | null)?.run(code, 'link'));
                 const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
                 for (const s of enabled) {
                     if (!s.code) continue;
                     rt.load(this.wrapScript(s), s.name);
                 }
+                this.raiseEvent('sysLoadEvent');
+                if (this.api.windows.isVisible('map')) {
+                    this.raiseEvent('mapOpenEvent');
+                }
             } catch (err) {
                 this.runtimes.lua = null;
                 this.triggerEngine.setLuaEval(null);
+                this.api.setExecuteScript(null);
                 this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
             }
             this.api.flushOutput();
@@ -123,7 +129,7 @@ export class ScriptingEngine {
     loadPermTimers(timers: TimerNode[]): void {
         this.timerEngine.loadPerm(timers, (timer) => {
             if (timer.command) this.api.send(timer.command, false);
-            if (timer.code && timer.language === 'lua') this.runtimes.lua?.run(timer.code, timer.name);
+            if (timer.code && timer.language === 'lua') this.runtimes.lua?.run(timer.code, `timer "${timer.name}"`);
             this.api.flushOutput();
         });
     }
@@ -184,6 +190,7 @@ export class ScriptingEngine {
         this.runtimes.lua?.destroy();
         this.runtimes.lua = null;
         this.triggerEngine.setLuaEval(null);
+        this.api.setExecuteScript(null);
         this.api.destroy();
         const oldVfs = this.vfs;
         this.vfs = null;
@@ -259,7 +266,7 @@ export class ScriptingEngine {
     private executePermKeybinding(binding: KeyNode): void {
         if (binding.command) this.api.send(binding.command, false);
         if (binding.code && binding.language === 'lua') {
-            this.runtimes.lua?.run(binding.code, binding.name);
+            this.runtimes.lua?.run(binding.code, `key "${binding.name}"`);
         }
     }
 
@@ -274,15 +281,16 @@ export class ScriptingEngine {
      */
     private processLineTriggers(plain: string, buffer: AnsiAwareBuffer, isPrompt = false): void {
         this.api.setLineBuffer(buffer);
-        (this.runtimes.lua as LuaRuntime | null)?.setCurrentLine(plain, isPrompt);
-        this.triggerEngine.processTemp(plain);
-        for (const { trigger, captures, matchedText, multimatches, namedGroups } of this.triggerEngine.matchPerm(plain, isPrompt)) {
-            this.executePermTrigger(trigger, [plain, ...captures], matchedText, multimatches, namedGroups);
+        try {
+            (this.runtimes.lua as LuaRuntime | null)?.setCurrentLine(plain, isPrompt);
+            this.triggerEngine.processTemp(plain);
+            for (const { trigger, captures, matchedText, multimatches, namedGroups } of this.triggerEngine.matchPerm(plain, isPrompt)) {
+                this.executePermTrigger(trigger, [plain, ...captures], matchedText, multimatches, namedGroups);
+            }
+            this.runtimes.lua?.processTrigger(plain);
+        } finally {
+            this.api.clearLineBuffer();
         }
-        this.runtimes.lua?.processTrigger(plain);
-        this.api.clearLineBuffer();
-        // Do NOT call flushOutput here — ScriptingEngine.bridgeEvents handles
-        // the flush after render via flushDeferredEcho().
     }
 
     private emit(event: string, args: unknown[]): void {
@@ -297,38 +305,42 @@ export class ScriptingEngine {
             }),
             session.events.on('flushLines', (groups) => {
                 for (const { text, type } of groups) {
-                    const lines = text.split('\n');
-                    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+                    try {
+                        const lines = text.split('\n');
+                        if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
 
-                    for (let i = 0; i < lines.length; i++) {
-                        const line = lines[i];
-                        const plain = line.replace(ANSI_RE, '');
-                        const isPrompt = this.promptPending && i === lines.length - 1;
-                        if (isPrompt) this.promptPending = false;
+                        for (let i = 0; i < lines.length; i++) {
+                            const line = lines[i];
+                            const plain = line.replace(ANSI_RE, '');
+                            const isPrompt = this.promptPending && i === lines.length - 1;
+                            if (isPrompt) this.promptPending = false;
 
-                        // Build the buffer before triggers so handlers can colour it.
-                        const buffer = new AnsiAwareBuffer(line);
+                            // Build the buffer before triggers so handlers can colour it.
+                            const buffer = new AnsiAwareBuffer(line);
 
-                        // 1. Run triggers first — they may colour or delete the buffer.
-                        if (plain.length > 0) {
-                            this.processLineTriggers(plain, buffer, isPrompt);
-                            this.emit('output', [line, type]);
+                            // 1. Run triggers first — they may colour or delete the buffer.
+                            if (plain.length > 0) {
+                                this.processLineTriggers(plain, buffer, isPrompt);
+                                this.emit('output', [line, type]);
+                            }
+
+                            // 2. Render the (possibly modified) buffer, unless a trigger
+                            //    deleted it or it should be filtered.
+                            const shouldRender =
+                                !buffer.deleted &&
+                                (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
+                            if (shouldRender) {
+                                session.events.emit('message', buffer, type, Date.now());
+                            }
                         }
-
-                        // 2. Render the (possibly modified) buffer, unless a trigger
-                        //    deleted it or it should be filtered.
-                        const shouldRender =
-                            !buffer.deleted &&
-                            (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
-                        if (shouldRender) {
-                            session.events.emit('message', buffer, type, Date.now());
-                        }
+                    } finally {
+                        // 3. After all lines in the group are rendered, flush any echo
+                        //    output that trigger handlers produced. This ensures trigger
+                        //    echo always appears after the batch, never interleaved with it.
+                        //    The finally block guarantees this runs even if processing throws,
+                        //    preventing isDeferringEcho from getting permanently stuck.
+                        this.api.flushDeferredEcho();
                     }
-
-                    // 3. After all lines in the group are rendered, flush any echo
-                    //    output that trigger handlers produced. This ensures trigger
-                    //    echo always appears after the batch, never interleaved with it.
-                    this.api.flushDeferredEcho();
                 }
             }),
             session.events.on('client.connect', () => this.emit('connect', [])),

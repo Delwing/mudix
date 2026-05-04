@@ -161,7 +161,7 @@ function statesEqual(a?: FormatStateSnapshot, b?: FormatStateSnapshot): boolean 
     );
 }
 
-class FormatState {
+export class FormatState {
 
     static DEFAULT = {}
 

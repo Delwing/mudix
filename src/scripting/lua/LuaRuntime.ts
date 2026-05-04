@@ -96,14 +96,14 @@ export class LuaRuntime implements IScriptingRuntime {
             this.push([text, ...m.slice(1).map(c => c ?? '')]);
             lua.lua_setglobal(this.L, ls('matches'));
 
-            const top = lua.lua_gettop(this.L);
+            const errfunc = this.pushDebugTraceback();
             lua.lua_rawgeti(this.L, lua.LUA_REGISTRYINDEX, ref);
-            const status = lua.lua_pcall(this.L, 0, 0, 0);
+            const status = lua.lua_pcall(this.L, 0, 0, errfunc);
             if (status !== 0) {
                 const err = lua.lua_tojsstring(this.L, -1);
-                lua.lua_settop(this.L, top);
                 this.api.printError('[lua alias error] ' + err);
             }
+            lua.lua_settop(this.L, errfunc - 1);
             return true;
         }
         return false;
@@ -140,14 +140,14 @@ export class LuaRuntime implements IScriptingRuntime {
             this.push([line, ...m.slice(1).map(c => c ?? '')]);
             lua.lua_setglobal(this.L, ls('matches'));
 
-            const top = lua.lua_gettop(this.L);
+            const errfunc = this.pushDebugTraceback();
             lua.lua_rawgeti(this.L, lua.LUA_REGISTRYINDEX, ref);
-            const status = lua.lua_pcall(this.L, 0, 0, 0);
+            const status = lua.lua_pcall(this.L, 0, 0, errfunc);
             if (status !== 0) {
                 const err = lua.lua_tojsstring(this.L, -1);
-                lua.lua_settop(this.L, top);
                 this.api.printError('[lua trigger error] ' + err);
             }
+            lua.lua_settop(this.L, errfunc - 1);
         }
     }
 
@@ -246,14 +246,14 @@ export class LuaRuntime implements IScriptingRuntime {
             if (event.altKey   !== modifiers.includes('alt'))   continue;
             if (event.metaKey  !== modifiers.includes('meta'))  continue;
 
-            const top = lua.lua_gettop(this.L);
+            const errfunc = this.pushDebugTraceback();
             lua.lua_rawgeti(this.L, lua.LUA_REGISTRYINDEX, ref);
-            const status = lua.lua_pcall(this.L, 0, 0, 0);
+            const status = lua.lua_pcall(this.L, 0, 0, errfunc);
             if (status !== 0) {
                 const err = lua.lua_tojsstring(this.L, -1);
-                lua.lua_settop(this.L, top);
                 this.api.printError('[lua key error] ' + err);
             }
+            lua.lua_settop(this.L, errfunc - 1);
             return true;
         }
         return false;
@@ -264,19 +264,20 @@ export class LuaRuntime implements IScriptingRuntime {
         const top = lua.lua_gettop(L);
 
         lua.lua_getglobal(L, ls('__dispatch__'));
-        if (lua.lua_type(L, -1) === lua.LUA_TNIL) {
-            lua.lua_settop(L, top);
-            return;
-        }
+        const exists = lua.lua_type(L, -1) !== lua.LUA_TNIL;
+        lua.lua_pop(L, 1);
+        if (!exists) return;
 
+        const errfunc = this.pushDebugTraceback();
+        lua.lua_getglobal(L, ls('__dispatch__'));
         lua.lua_pushstring(L, ls(event));
         for (const arg of args) this.push(arg);
 
-        const status = lua.lua_pcall(L, 1 + args.length, 0, 0);
+        const status = lua.lua_pcall(L, 1 + args.length, 0, errfunc);
         if (status !== 0) {
             console.error('[LuaRuntime] dispatch:', lua.lua_tojsstring(L, -1));
-            lua.lua_settop(L, top);
         }
+        lua.lua_settop(L, top);
     }
 
     destroy(): void {
@@ -318,6 +319,7 @@ export class LuaRuntime implements IScriptingRuntime {
     /** Execute a Lua source string. Returns an error message on failure. */
     private exec(code: string, chunkname: string): string | null {
         const L = this.L;
+        const errfunc = this.pushDebugTraceback();
         const src = to_luastring(code);
         const chunk = to_luastring(chunkname);
         const loadStatus = lauxlib.luaL_loadbuffer(L, src, null, chunk);
@@ -326,18 +328,37 @@ export class LuaRuntime implements IScriptingRuntime {
             lua.lua_settop(L, 0);
             return msg;
         }
-        const callStatus = lua.lua_pcall(L, 0, 0, 0);
+        const callStatus = lua.lua_pcall(L, 0, 0, errfunc);
         if (callStatus !== 0) {
             const msg = lua.lua_tojsstring(L, -1);
             lua.lua_settop(L, 0);
             return msg;
         }
+        lua.lua_pop(L, 1); // pop traceback handler
         return null;
+    }
+
+    /** Push the traceback message handler onto the stack and return its absolute index. */
+    private pushDebugTraceback(): number {
+        lua.lua_getglobal(this.L, ls('__mudix_traceback__'));
+        return lua.lua_gettop(this.L);
     }
 
     /** Register all internal JS functions that the bootstrap code references. */
     private exposeInternals(): void {
         const { api } = this;
+
+        // Message handler used as the errfunc in all lua_pcall calls.
+        // Receives the error at arg 1, appends a stack traceback, and returns the result.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const luaL_traceback = (lauxlib as any).luaL_traceback as (
+            L: LuaState, L1: LuaState, msg: Uint8Array | null, level: number
+        ) => void;
+        this.cfunction('__mudix_traceback__', (L) => {
+            const msg = lua.lua_tojsstring(L, 1) ?? '';
+            luaL_traceback(L, L, to_luastring(msg), 1);
+            return 1;
+        });
 
         this.cfunction('__mudix_send__', (L) => {
             const echo = lua.lua_type(L, 2) === lua.LUA_TBOOLEAN ? !!lua.lua_toboolean(L, 2) : true;
@@ -395,25 +416,60 @@ export class LuaRuntime implements IScriptingRuntime {
             return 0;
         });
 
+        this.cfunction('__mudix_echoLink__', (L) => {
+            const text = lua.lua_tojsstring(L, 1) ?? '';
+            const cmd = lua.lua_tojsstring(L, 2) ?? '';
+            const tooltip = lua.lua_tojsstring(L, 3) ?? '';
+            api.echoLink(text, cmd, tooltip);
+            return 0;
+        });
+
+        this.cfunction('__mudix_openWebPage__', (L) => {
+            const url = lua.lua_tojsstring(L, 1);
+            if (url) window.open(url, '_blank', 'noopener,noreferrer');
+            return 0;
+        });
+
         this.cfunction('__mudix_temp_timer__', (L) => {
             const seconds = lua.lua_tonumber(L, 1);
-            lua.lua_pushvalue(L, 2);
+            const argType = lua.lua_type(L, 2);
+            let codeLabel = 'tempTimer';
+
+            if (argType === lua.LUA_TSTRING) {
+                // Mudlet-compatible: string callback — compile to a function now so the
+                // registry holds a callable and we catch syntax errors at registration time.
+                codeLabel = lua.lua_tojsstring(L, 2) ?? 'tempTimer';
+                const src = to_luastring(codeLabel);
+                const loadStatus = lauxlib.luaL_loadbuffer(L, src, null, to_luastring('@tempTimer'));
+                if (loadStatus !== 0) {
+                    const msg = lua.lua_tojsstring(L, -1);
+                    lua.lua_pop(L, 1);
+                    this.api.printError(`[lua tempTimer] compile error: ${msg}`);
+                    lua.lua_pushnil(L);
+                    return 1;
+                }
+                // Compiled function is now on top of the stack — fall through to luaL_ref.
+            } else {
+                lua.lua_pushvalue(L, 2);
+            }
+
             const ref = lauxlib.luaL_ref(L, lua.LUA_REGISTRYINDEX);
             const id = this.nextTimerId++;
             // LUA_TNONE=-1, LUA_TNIL=0; t3 > LUA_TNIL means arg exists and is not nil.
             // Must use Boolean() because lua_toboolean returns JS `false`, and `false !== 0` is true.
             const repeat = lua.lua_type(L, 3) > lua.LUA_TNIL && Boolean(lua.lua_toboolean(L, 3));
+            const label = codeLabel;
 
             const callRef = () => {
                 if (!this.L) return;
-                const top = lua.lua_gettop(this.L);
+                const errfunc = this.pushDebugTraceback();
                 lua.lua_rawgeti(this.L, lua.LUA_REGISTRYINDEX, ref);
-                const status = lua.lua_pcall(this.L, 0, 0, 0);
+                const status = lua.lua_pcall(this.L, 0, 0, errfunc);
                 if (status !== 0) {
                     const err = lua.lua_tojsstring(this.L, -1);
-                    lua.lua_settop(this.L, top);
-                    this.api.printError('[lua timer error] ' + err);
+                    this.api.printError(`[lua tempTimer "${label}"] ${err}`);
                 }
+                lua.lua_settop(this.L, errfunc - 1);
                 this.api.flushOutput();
             };
 
@@ -456,7 +512,19 @@ export class LuaRuntime implements IScriptingRuntime {
                 lua.lua_pushnil(L);
                 return 1;
             }
-            lua.lua_pushvalue(L, 2);
+            if (lua.lua_type(L, 2) === lua.LUA_TSTRING) {
+                const code = lua.lua_tojsstring(L, 2);
+                const loadStatus = lauxlib.luaL_loadbuffer(L, to_luastring(code), null, to_luastring('@tempAlias'));
+                if (loadStatus !== 0) {
+                    const msg = lua.lua_tojsstring(L, -1);
+                    lua.lua_pop(L, 1);
+                    this.api.printError(`[lua tempAlias] compile error: ${msg}`);
+                    lua.lua_pushnil(L);
+                    return 1;
+                }
+            } else {
+                lua.lua_pushvalue(L, 2);
+            }
             const ref = lauxlib.luaL_ref(L, lua.LUA_REGISTRYINDEX);
             const id = this.nextAliasId++;
             this.aliases.set(id, { pattern: re, ref });
@@ -485,7 +553,19 @@ export class LuaRuntime implements IScriptingRuntime {
                 lua.lua_pushnil(L);
                 return 1;
             }
-            lua.lua_pushvalue(L, 2);
+            if (lua.lua_type(L, 2) === lua.LUA_TSTRING) {
+                const code = lua.lua_tojsstring(L, 2);
+                const loadStatus = lauxlib.luaL_loadbuffer(L, to_luastring(code), null, to_luastring('@tempTrigger'));
+                if (loadStatus !== 0) {
+                    const msg = lua.lua_tojsstring(L, -1);
+                    lua.lua_pop(L, 1);
+                    this.api.printError(`[lua tempTrigger] compile error: ${msg}`);
+                    lua.lua_pushnil(L);
+                    return 1;
+                }
+            } else {
+                lua.lua_pushvalue(L, 2);
+            }
             const ref = lauxlib.luaL_ref(L, lua.LUA_REGISTRYINDEX);
             const id = this.nextTriggerId++;
             this.triggers.set(id, { pattern: re, ref });
@@ -615,6 +695,229 @@ export class LuaRuntime implements IScriptingRuntime {
             const id = api.getRoomIDbyHash(hash);
             if (id === undefined) lua.lua_pushnil(L);
             else lua.lua_pushnumber(L, id);
+            return 1;
+        });
+
+        // ── Map API ───────────────────────────────────────────────────────────
+
+        this.cfunction('__map_create_room_id__', (_L) => {
+            lua.lua_pushnumber(this.L, api.map.createRoomID());
+            return 1;
+        });
+
+        this.cfunction('__map_add_room__', (L) => {
+            lua.lua_pushboolean(L, api.map.addRoom(lua.lua_tonumber(L, 1)) ? 1 : 0);
+            return 1;
+        });
+
+        this.cfunction('__map_delete_room__', (L) => {
+            api.map.deleteRoom(lua.lua_tonumber(L, 1));
+            return 0;
+        });
+
+        this.cfunction('__map_room_exists__', (L) => {
+            lua.lua_pushboolean(L, api.map.roomExists(lua.lua_tonumber(L, 1)) ? 1 : 0);
+            return 1;
+        });
+
+        this.cfunction('__map_get_room_name__', (L) => {
+            const name = api.map.getRoomName(lua.lua_tonumber(L, 1));
+            if (name === undefined) lua.lua_pushnil(L);
+            else lua.lua_pushstring(L, ls(name));
+            return 1;
+        });
+
+        this.cfunction('__map_set_room_name__', (L) => {
+            api.map.setRoomName(lua.lua_tonumber(L, 1), lua.lua_tojsstring(L, 2) ?? '');
+            return 0;
+        });
+
+        this.cfunction('__map_get_room_area__', (L) => {
+            const id = api.map.getRoomArea(lua.lua_tonumber(L, 1));
+            if (id === undefined) lua.lua_pushnil(L);
+            else lua.lua_pushnumber(L, id);
+            return 1;
+        });
+
+        this.cfunction('__map_set_room_area__', (L) => {
+            api.map.setRoomArea(lua.lua_tonumber(L, 1), lua.lua_tonumber(L, 2));
+            return 0;
+        });
+
+        this.cfunction('__map_get_room_coordinates__', (L) => {
+            const coords = api.map.getRoomCoordinates(lua.lua_tonumber(L, 1));
+            if (!coords) { lua.lua_pushnil(L); return 1; }
+            lua.lua_pushnumber(L, coords[0]);
+            lua.lua_pushnumber(L, coords[1]);
+            lua.lua_pushnumber(L, coords[2]);
+            return 3;
+        });
+
+        this.cfunction('__map_set_room_coordinates__', (L) => {
+            api.map.setRoomCoordinates(
+                lua.lua_tonumber(L, 1), lua.lua_tonumber(L, 2),
+                lua.lua_tonumber(L, 3), lua.lua_tonumber(L, 4),
+            );
+            return 0;
+        });
+
+        this.cfunction('__map_get_rooms_by_position__', (L) => {
+            const rooms = api.map.getRoomsByPosition(
+                lua.lua_tonumber(L, 1), lua.lua_tonumber(L, 2),
+                lua.lua_tonumber(L, 3), lua.lua_tonumber(L, 4),
+            );
+            lua.lua_newtable(L);
+            rooms.forEach((id, i) => {
+                lua.lua_pushnumber(L, i);          // 0-indexed (Mudlet compat)
+                lua.lua_pushnumber(L, id);
+                lua.lua_settable(L, -3);
+            });
+            return 1;
+        });
+
+        this.cfunction('__map_set_room_id_by_hash__', (L) => {
+            api.map.setRoomIDbyHash(lua.lua_tonumber(L, 1), lua.lua_tojsstring(L, 2) ?? '');
+            return 0;
+        });
+
+        this.cfunction('__map_get_room_hash_by_id__', (L) => {
+            const hash = api.map.getRoomHashByID(lua.lua_tonumber(L, 1));
+            if (hash === undefined) lua.lua_pushnil(L);
+            else lua.lua_pushstring(L, ls(hash));
+            return 1;
+        });
+
+        this.cfunction('__map_get_room_exits__', (L) => {
+            this.push(api.map.getRoomExits(lua.lua_tonumber(L, 1)));
+            return 1;
+        });
+
+        this.cfunction('__map_set_exit__', (L) => {
+            api.map.setExit(
+                lua.lua_tonumber(L, 1), lua.lua_tonumber(L, 2), lua.lua_tonumber(L, 3),
+            );
+            return 0;
+        });
+
+        this.cfunction('__map_get_exit_stubs__', (L) => {
+            const stubs = api.map.getExitStubs(lua.lua_tonumber(L, 1));
+            lua.lua_newtable(L);
+            stubs.forEach((dir, i) => {
+                lua.lua_pushnumber(L, i + 1);      // 1-indexed array
+                lua.lua_pushnumber(L, dir);
+                lua.lua_settable(L, -3);
+            });
+            return 1;
+        });
+
+        this.cfunction('__map_set_exit_stub__', (L) => {
+            api.map.setExitStub(
+                lua.lua_tonumber(L, 1), lua.lua_tonumber(L, 2),
+                lua.lua_toboolean(L, 3) !== 0,
+            );
+            return 0;
+        });
+
+        this.cfunction('__map_add_special_exit__', (L) => {
+            api.map.addSpecialExit(
+                lua.lua_tonumber(L, 1), lua.lua_tonumber(L, 2), lua.lua_tojsstring(L, 3) ?? '',
+            );
+            return 0;
+        });
+
+        this.cfunction('__map_remove_special_exit__', (L) => {
+            api.map.removeSpecialExit(lua.lua_tonumber(L, 1), lua.lua_tojsstring(L, 2) ?? '');
+            return 0;
+        });
+
+        this.cfunction('__map_get_special_exits_swap__', (L) => {
+            this.push(api.map.getSpecialExitsSwap(lua.lua_tonumber(L, 1)));
+            return 1;
+        });
+
+        this.cfunction('__map_get_doors__', (L) => {
+            this.push(api.map.getDoors(lua.lua_tonumber(L, 1)));
+            return 1;
+        });
+
+        this.cfunction('__map_set_door__', (L) => {
+            api.map.setDoor(
+                lua.lua_tonumber(L, 1), lua.lua_tojsstring(L, 2) ?? '',
+                lua.lua_tonumber(L, 3),
+            );
+            return 0;
+        });
+
+        this.cfunction('__map_get_user_data__', (L) => {
+            lua.lua_pushstring(L, ls(
+                api.map.getRoomUserData(lua.lua_tonumber(L, 1), lua.lua_tojsstring(L, 2) ?? ''),
+            ));
+            return 1;
+        });
+
+        this.cfunction('__map_set_user_data__', (L) => {
+            api.map.setRoomUserData(
+                lua.lua_tonumber(L, 1), lua.lua_tojsstring(L, 2) ?? '',
+                lua.lua_tojsstring(L, 3) ?? '',
+            );
+            return 0;
+        });
+
+        this.cfunction('__map_get_room_env__', (L) => {
+            lua.lua_pushnumber(L, api.map.getRoomEnv(lua.lua_tonumber(L, 1)));
+            return 1;
+        });
+
+        this.cfunction('__map_set_room_env__', (L) => {
+            api.map.setRoomEnv(lua.lua_tonumber(L, 1), lua.lua_tonumber(L, 2));
+            return 0;
+        });
+
+        this.cfunction('__map_get_room_char__', (L) => {
+            lua.lua_pushstring(L, ls(api.map.getRoomChar(lua.lua_tonumber(L, 1))));
+            return 1;
+        });
+
+        this.cfunction('__map_set_room_char__', (L) => {
+            api.map.setRoomChar(lua.lua_tonumber(L, 1), lua.lua_tojsstring(L, 2) ?? '');
+            return 0;
+        });
+
+        this.cfunction('__map_add_area_name__', (L) => {
+            lua.lua_pushnumber(L, api.map.addAreaName(lua.lua_tojsstring(L, 1) ?? ''));
+            return 1;
+        });
+
+        this.cfunction('__map_delete_area__', (L) => {
+            api.map.deleteArea(lua.lua_tonumber(L, 1));
+            return 0;
+        });
+
+        this.cfunction('__map_get_area_table__', (_L) => {
+            this.push(api.map.getAreaTable());
+            return 1;
+        });
+
+        this.cfunction('__map_get_room_area_name__', (L) => {
+            const name = api.map.getRoomAreaName(lua.lua_tonumber(L, 1));
+            if (name === undefined) lua.lua_pushnil(L);
+            else lua.lua_pushstring(L, ls(name));
+            return 1;
+        });
+
+        this.cfunction('__map_set_area_name__', (L) => {
+            api.map.setAreaName(lua.lua_tonumber(L, 1), lua.lua_tojsstring(L, 2) ?? '');
+            return 0;
+        });
+
+        this.cfunction('__map_get_area_rooms__', (L) => {
+            const rooms = api.map.getAreaRooms(lua.lua_tonumber(L, 1));
+            lua.lua_newtable(L);
+            rooms.forEach((id, i) => {
+                lua.lua_pushnumber(L, i);          // 0-indexed (Mudlet compat)
+                lua.lua_pushnumber(L, id);
+                lua.lua_settable(L, -3);
+            });
             return 1;
         });
 
@@ -749,6 +1052,61 @@ export class LuaRuntime implements IScriptingRuntime {
         this.cfunction('__mudix_deselect__', (_L) => {
             api.deselect();
             return 0;
+        });
+
+        // ── rex: PCRE-compatible via JS RegExp ────────────────────────────────
+        // Pushes each capture; undefined → false (lrexlib convention for non-participating groups).
+        this.cfunction('__rex_match__', (L) => {
+            const subject = lua.lua_tojsstring(L, 1) ?? '';
+            const pattern = lua.lua_tojsstring(L, 2) ?? '';
+            const initLua = lua.lua_type(L, 3) === lua.LUA_TNUMBER ? lua.lua_tonumber(L, 3) : 1;
+            // Lua: 0 is treated the same as 1 (start of string); negative counts from end
+            const normInit = initLua === 0 ? 1 : initLua;
+            const startIdx = normInit > 0 ? normInit - 1 : Math.max(0, subject.length + normInit);
+            const sub = startIdx > 0 ? subject.slice(startIdx) : subject;
+
+            let re: RegExp;
+            try { re = new RegExp(pattern, 's'); } catch { lua.lua_pushnil(L); return 1; }
+
+            const m = sub.match(re);
+            if (!m) { lua.lua_pushnil(L); return 1; }
+
+            if (m.length <= 1) {
+                lua.lua_pushstring(L, ls(m[0]));
+                return 1;
+            }
+            for (let i = 1; i < m.length; i++) {
+                if (m[i] == null) lua.lua_pushboolean(L, 0);
+                else lua.lua_pushstring(L, ls(m[i]));
+            }
+            return m.length - 1;
+        });
+
+        // rex.find: returns (from, to [, cap1, ...]) — 1-based indices
+        this.cfunction('__rex_find__', (L) => {
+            const subject = lua.lua_tojsstring(L, 1) ?? '';
+            const pattern = lua.lua_tojsstring(L, 2) ?? '';
+            const initLua = lua.lua_type(L, 3) === lua.LUA_TNUMBER ? lua.lua_tonumber(L, 3) : 1;
+            // Lua: 0 is treated the same as 1 (start of string); negative counts from end
+            const normInit = initLua === 0 ? 1 : initLua;
+            const startIdx = normInit > 0 ? normInit - 1 : Math.max(0, subject.length + normInit);
+            const sub = startIdx > 0 ? subject.slice(startIdx) : subject;
+
+            let re: RegExp;
+            try { re = new RegExp(pattern, 's'); } catch { lua.lua_pushnil(L); return 1; }
+
+            const m = re.exec(sub);
+            if (!m) { lua.lua_pushnil(L); return 1; }
+
+            const from = startIdx + m.index + 1;
+            const to   = from + m[0].length - 1;
+            lua.lua_pushnumber(L, from);
+            lua.lua_pushnumber(L, to);
+            for (let i = 1; i < m.length; i++) {
+                if (m[i] == null) lua.lua_pushboolean(L, 0);
+                else lua.lua_pushstring(L, ls(m[i]));
+            }
+            return 2 + m.length - 1;
         });
     }
 

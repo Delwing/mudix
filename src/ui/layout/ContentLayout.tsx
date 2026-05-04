@@ -16,6 +16,7 @@ import './ScriptWindow.css';
 interface ContentLayoutProps {
     session: MudSession;
     manager: WindowManager;
+    connectionId: string;
     stickyLines?: number;
     commandInputRef?: React.RefObject<HTMLInputElement>;
     commandBar?: React.ReactNode;
@@ -23,7 +24,7 @@ interface ContentLayoutProps {
 }
 
 export function ContentLayout({
-    session, manager,
+    session, manager, connectionId,
     stickyLines = DEFAULT_STICKY_LINES,
     commandInputRef,
     commandBar,
@@ -129,7 +130,7 @@ export function ContentLayout({
             {windows.map(w => createPortal(
                 w.kind === 'text' ? <TextPanel id={w.id} manager={manager} />
               : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} />
-              : <MapPanel id={w.id} manager={manager} />,
+              : <MapPanel id={w.id} manager={manager} connectionId={connectionId} />,
                 manager.getOrCreatePortalTarget(w.id),
                 w.id,
             ))}

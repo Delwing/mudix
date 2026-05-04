@@ -1,6 +1,5 @@
 const DB_NAME = 'mudix_maps';
 const STORE_NAME = 'maps';
-const MAP_KEY = 'current';
 
 function openDb(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
@@ -11,21 +10,21 @@ function openDb(): Promise<IDBDatabase> {
     });
 }
 
-export async function saveMap(data: ArrayBuffer): Promise<void> {
+export async function saveMap(connectionId: string, data: ArrayBuffer): Promise<void> {
     const db = await openDb();
     return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE_NAME, 'readwrite');
-        tx.objectStore(STORE_NAME).put(data, MAP_KEY);
+        tx.objectStore(STORE_NAME).put(data, connectionId);
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
     });
 }
 
-export async function loadMap(): Promise<ArrayBuffer | null> {
+export async function loadMap(connectionId: string): Promise<ArrayBuffer | null> {
     const db = await openDb();
     return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE_NAME, 'readonly');
-        const req = tx.objectStore(STORE_NAME).get(MAP_KEY);
+        const req = tx.objectStore(STORE_NAME).get(connectionId);
         req.onsuccess = () => resolve((req.result as ArrayBuffer) ?? null);
         req.onerror = () => reject(req.error);
     });

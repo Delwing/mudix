@@ -13,13 +13,15 @@ type AnyArea = any;
 interface MapPanelProps {
     id: string;
     manager: WindowManager;
+    connectionId: string;
 }
 
-export function MapPanel({ id, manager }: MapPanelProps) {
+export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<MapRenderer | null>(null);
     const readerRef = useRef<MapReader | null>(null);
     const prevWidthRef = useRef<number>(0);
+    const needsFitRef = useRef<boolean>(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -31,8 +33,14 @@ export function MapPanel({ id, manager }: MapPanelProps) {
     const [currentLevel, setCurrentLevel] = useState<number>(0);
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
+    const [storeInitialized, setStoreInitialized] = useState(() => manager.mapStore.isInitialized());
 
-    const initRenderer = useCallback((mapData: AnyArea[], colors: { envId: number; colors: number[] }[]) => {
+    const initRenderer = useCallback((
+        mapData: AnyArea[],
+        colors: { envId: number; colors: number[] }[],
+        keepAreaId?: number,
+        keepLevel?: number,
+    ) => {
         if (!containerRef.current) return;
         rendererRef.current?.destroy();
 
@@ -51,14 +59,20 @@ export function MapPanel({ id, manager }: MapPanelProps) {
         rendererRef.current = renderer;
 
         if (areaList.length > 0) {
-            const firstId = areaList[0].id;
-            const firstLevels = reader.getArea(firstId).getZLevels().sort((a, b) => a - b);
-            const firstLevel = firstLevels.includes(0) ? 0 : (firstLevels[0] ?? 0);
-            setLevels(firstLevels);
-            setCurrentLevel(firstLevel);
-            renderer.drawArea(firstId, firstLevel);
+            // Restore previous area/level if still available, otherwise pick first.
+            const restoredArea = keepAreaId != null && areaList.some(a => a.id === keepAreaId)
+                ? keepAreaId
+                : areaList[0].id;
+            const areaLevels = reader.getArea(restoredArea).getZLevels().sort((a, b) => a - b);
+            const restoredLevel =
+                keepLevel != null && areaLevels.includes(keepLevel) ? keepLevel
+                : areaLevels.includes(0) ? 0 : (areaLevels[0] ?? 0);
+            setLevels(areaLevels);
+            setCurrentLevel(restoredLevel);
+            renderer.drawArea(restoredArea, restoredLevel);
+            needsFitRef.current = true;
             renderer.fitArea();
-            setCurrentArea(firstId);
+            setCurrentArea(restoredArea);
         }
 
         setStatus('ready');
@@ -78,14 +92,14 @@ export function MapPanel({ id, manager }: MapPanelProps) {
 
     // Load from IndexedDB on mount
     useEffect(() => {
-        loadMap().then(buf => {
+        loadMap(connectionId).then(buf => {
             if (buf) {
                 loadFromBuffer(buf);
             } else {
                 setStatus('empty');
             }
         }).catch(() => setStatus('empty'));
-    }, [loadFromBuffer]);
+    }, [connectionId, loadFromBuffer]);
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -127,6 +141,10 @@ export function MapPanel({ id, manager }: MapPanelProps) {
                 renderer.backend.viewport.panToMapPoint(cx, cy);
             } else {
                 el.dispatchEvent(new Event('resize'));
+                if (renderer && newWidth > 0 && needsFitRef.current) {
+                    renderer.fitArea();
+                    needsFitRef.current = false;
+                }
             }
             prevWidthRef.current = newWidth;
         });
@@ -138,6 +156,32 @@ export function MapPanel({ id, manager }: MapPanelProps) {
     useEffect(() => {
         return () => { rendererRef.current?.destroy(); };
     }, []);
+
+    // Subscribe to MapStore changes (scripting-built maps). Re-init renderer when
+    // the store gains rooms, preserving the current area/level across updates.
+    const currentAreaRef = useRef<number | null>(null);
+    const currentLevelRef = useRef<number>(0);
+    currentAreaRef.current = currentArea;
+    currentLevelRef.current = currentLevel;
+    useEffect(() => {
+        const unsub = manager.mapStore.subscribe(() => {
+            setStoreInitialized(manager.mapStore.isInitialized());
+            const data = manager.mapStore.toRendererData();
+            if (!data) return;
+            initRenderer(
+                data.mapData as AnyArea[],
+                data.colors,
+                currentAreaRef.current ?? undefined,
+                currentLevelRef.current,
+            );
+        });
+        // If MapStore already has rooms when we mount (e.g. re-opening the panel), render immediately.
+        const data = manager.mapStore.toRendererData();
+        if (data) {
+            initRenderer(data.mapData as AnyArea[], data.colors);
+        }
+        return unsub;
+    }, [manager, initRenderer]);
 
     // centerview: switch to the room's area/level, mark player position, and center.
     // The callback is stored in a ref so it always captures the latest renderer state.
@@ -172,7 +216,7 @@ export function MapPanel({ id, manager }: MapPanelProps) {
         setStatus('loading');
         try {
             const buf = await file.arrayBuffer();
-            await saveMap(buf);
+            await saveMap(connectionId, buf);
             await loadFromBuffer(buf);
         } catch (err) {
             setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -278,10 +322,22 @@ export function MapPanel({ id, manager }: MapPanelProps) {
             )}
             {status === 'empty' && (
                 <div className="map-overlay">
-                    <label className="map-load-btn">
-                        Load Mudlet Map
-                        <input type="file" accept=".dat" onChange={handleFileChange} hidden />
-                    </label>
+                    {storeInitialized ? (
+                        <span className="map-overlay-hint">Map initialized — run your mapper script to add rooms</span>
+                    ) : (
+                        <>
+                            <label className="map-load-btn">
+                                Load Mudlet Map
+                                <input type="file" accept=".dat" onChange={handleFileChange} hidden />
+                            </label>
+                            <button
+                                className="map-load-btn"
+                                onClick={() => { manager.mapStore.newEmptyMap(); }}
+                            >
+                                New Empty Map
+                            </button>
+                        </>
+                    )}
                 </div>
             )}
             {status === 'error' && (

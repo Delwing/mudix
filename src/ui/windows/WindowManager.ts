@@ -1,5 +1,6 @@
 import { type CursorOps, type OutputRendererControls } from '../output/OutputRenderer';
 import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
+import { MapStore } from '../../map/MapStore';
 
 interface ScriptWindowData extends ScriptWindowRenderData {
     pendingText: string[];
@@ -23,6 +24,7 @@ export type WindowsChangedFn = (
 ) => void;
 
 export class WindowManager {
+    readonly mapStore = new MapStore();
     private readonly windows       = new Map<string, ScriptWindowData>();
     private readonly controls      = new Map<string, OutputRendererControls>();
     private readonly elements      = new Map<string, HTMLElement>();
@@ -141,7 +143,7 @@ export class WindowManager {
     }
 
     getRoomIDbyHash(hash: string): number | undefined {
-        return this.hashToRoomId[hash];
+        return this.hashToRoomId[hash] ?? this.mapStore.getRoomIDbyHash(hash);
     }
 
     // ── Floating window drag / resize ─────────────────────────────────────────

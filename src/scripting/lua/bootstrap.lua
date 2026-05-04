@@ -97,18 +97,35 @@ mudix = {
     end,
 }
 
+local function _resolve_fn(fn)
+    if type(fn) ~= 'string' then return fn end
+    -- Support dotted paths like "map.eventHandler"
+    local obj = _G
+    for part in fn:gmatch('[^.]+') do
+        if type(obj) ~= 'table' then return nil end
+        obj = obj[part]
+    end
+    return obj
+end
+
 -- Dispatches a named event to all registered Lua handlers.
 -- Called from JavaScript via emitEvent().
 function __dispatch__(event, ...)
+    -- Lua 5.1 compat: Mudlet scripts use `arg` inside event handlers.
+    arg = {...}
+
     if event == 'gmcp' then
         local path, value = ...
         _gmcp_set(path, value)
         local path_hs = _handlers['gmcp.' .. path]
         if path_hs then
             for _, fn in ipairs(path_hs) do
-                local ok, err = pcall(fn, value)
-                if not ok then
-                    mudix.printerror('[lua] ' .. tostring(err))
+                fn = _resolve_fn(fn)
+                if type(fn) == 'function' then
+                    local ok, err = xpcall(fn, debug.traceback, value)
+                    if not ok then
+                        mudix.printerror('[lua] ' .. tostring(err))
+                    end
                 end
             end
         end
@@ -116,15 +133,21 @@ function __dispatch__(event, ...)
     local hs = _handlers[event]
     if not hs then return end
     for _, fn in ipairs(hs) do
-        local ok, err = pcall(fn, ...)
-        if not ok then
-            mudix.printerror('[lua] ' .. tostring(err))
+        fn = _resolve_fn(fn)
+        if type(fn) == 'function' then
+            local ok, err = xpcall(fn, debug.traceback, event, ...)
+            if not ok then
+                mudix.printerror('[lua] ' .. tostring(err))
+            end
         end
     end
+
+    arg = nil
 end
 
 -- Lua 5.1 compat
-unpack = table.unpack
+unpack      = table.unpack
+loadstring  = function(s, name) return load(s, name, 't', _ENV) end
 
 -- Mudlet-compatible globals
 -- openUserWindow(name, [restoreLayout=true], [autoDock=true], [dockingArea="r"])
@@ -340,6 +363,42 @@ hideWindow   = __mudix_windows_hide__
 showWindow   = __mudix_windows_show__
 centerview         = __mudix_centerview__
 getRoomIDbyHash    = __mudix_get_room_id_by_hash__
+
+-- ── Map API (Mudlet-compatible) ───────────────────────────────────────────────
+createRoomID        = __map_create_room_id__
+addRoom             = __map_add_room__
+deleteRoom          = __map_delete_room__
+roomExists          = __map_room_exists__
+getRoomName         = __map_get_room_name__
+setRoomName         = __map_set_room_name__
+getRoomArea         = __map_get_room_area__
+setRoomArea         = __map_set_room_area__
+getRoomCoordinates  = __map_get_room_coordinates__
+setRoomCoordinates  = __map_set_room_coordinates__
+getRoomsByPosition  = __map_get_rooms_by_position__
+setRoomIDbyHash     = __map_set_room_id_by_hash__
+getRoomHashByID     = __map_get_room_hash_by_id__
+getRoomExits        = __map_get_room_exits__
+setExit             = __map_set_exit__
+getExitStubs        = __map_get_exit_stubs__
+setExitStub         = __map_set_exit_stub__
+addSpecialExit      = __map_add_special_exit__
+removeSpecialExit   = __map_remove_special_exit__
+getSpecialExitsSwap = __map_get_special_exits_swap__
+getDoors            = __map_get_doors__
+setDoor             = __map_set_door__
+getRoomUserData     = __map_get_user_data__
+setRoomUserData     = __map_set_user_data__
+getRoomEnv          = __map_get_room_env__
+setRoomEnv          = __map_set_room_env__
+getRoomChar         = __map_get_room_char__
+setRoomChar         = __map_set_room_char__
+addAreaName         = __map_add_area_name__
+deleteArea          = __map_delete_area__
+getAreaTable        = __map_get_area_table__
+getRoomAreaName     = __map_get_room_area_name__
+setAreaName         = __map_set_area_name__
+getAreaRooms        = __map_get_area_rooms__
 
 -- display(...): Mudlet-compatible pretty-print; each argument is printed on its own line.
 local function _display_one(what, indent, seen)
@@ -564,6 +623,88 @@ do
         end,
     }
 end
+
+-- moveCursorEnd: Mudlet-compatible cursor-to-end-of-line (stub)
+function moveCursorEnd(win) end
+
+-- setUnderline: emit ANSI underline on/off
+function setUnderline(bool)
+    if bool then
+        echo("\27[4m")
+    else
+        echo("\27[24m")
+    end
+end
+
+-- openWebPage: open URL in a new browser tab
+function openWebPage(url)
+    __mudix_openWebPage__(url)
+end
+
+-- echoLink: Mudlet-compatible clickable text link
+-- Mudlet: echoLink([window,] text, command, tooltip [, useCurrentFormatting])
+function echoLink(...)
+    local args = {...}
+    local n = select('#', ...)
+    local text, cmd, tooltip
+    if n >= 5 or (n == 4 and type(args[4]) == 'string') then
+        -- windowed form: window, text, command, tooltip [, useCurrentFmt]
+        text    = args[2] or ''
+        cmd     = args[3] or ''
+        tooltip = args[4] or ''
+    else
+        -- main form: text, command, tooltip [, useCurrentFmt]
+        text    = args[1] or ''
+        cmd     = args[2] or ''
+        tooltip = args[3] or ''
+    end
+    __mudix_echoLink__(text, cmd, tooltip)
+end
+
+-- cechoLink: like echoLink but color-tagged text (cecho format); outputs colored text as clickable link
+function cechoLink(...)
+    local args = {...}
+    local n = select('#', ...)
+    local text, cmd, tooltip
+    if n >= 5 or (n == 4 and type(args[4]) == 'string') then
+        text    = args[2] or ''
+        cmd     = args[3] or ''
+        tooltip = args[4] or ''
+    else
+        text    = args[1] or ''
+        cmd     = args[2] or ''
+        tooltip = args[3] or ''
+    end
+    -- Output the colored text via cecho (no click support yet for multi-color links)
+    cecho(text)
+end
+
+-- io.exists: Mudlet-compatible file/directory existence check
+io.exists = function(path)
+    return lfs.attributes(path) ~= nil
+end
+
+-- rex: PCRE-compatible regex module backed by JavaScript RegExp
+-- lrexlib convention: non-participating optional captures return false (not nil)
+rex = {
+    match = function(subject, pattern, init)
+        return __rex_match__(subject, pattern, init)
+    end,
+    find = function(subject, pattern, init)
+        return __rex_find__(subject, pattern, init)
+    end,
+    new = function(pattern)
+        local p = pattern
+        return setmetatable({}, { __index = {
+            match = function(self, subject, init)
+                return __rex_match__(subject, p, init)
+            end,
+            find = function(self, subject, init)
+                return __rex_find__(subject, p, init)
+            end,
+        }})
+    end,
+}
 
 -- ── VFS: lfs ─────────────────────────────────────────────────────────────────
 

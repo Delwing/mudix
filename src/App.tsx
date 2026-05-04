@@ -280,6 +280,7 @@ export default function App() {
                 <ContentLayout
                     session={session}
                     manager={session.windows}
+                    connectionId={activeConnectionId ?? ''}
                     stickyLines={DEFAULT_STICKY_LINES}
                     commandInputRef={commandInputRef}
                     contextMenuHandlerRef={windowContextMenuHandlerRef}
