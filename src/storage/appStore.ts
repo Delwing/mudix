@@ -63,6 +63,7 @@ interface AppStore extends AppSchema {
     moveTrigger: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     moveTimer: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     moveKeybinding: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
+    groupTriggers: (connectionId: string, targetId: string, draggedId: string) => void;
     saveScriptEditorBounds: (connectionId: string, bounds: ScriptEditorBounds) => void;
 }
 
@@ -272,6 +273,20 @@ export const useAppStore = create<AppStore>()(
                     [connectionId]: moveInList(s.connectionKeybindings[connectionId] ?? [], id, newParentId, insertBeforeId),
                 },
             })),
+            groupTriggers: (connectionId, targetId, draggedId) => set(s => {
+                const current = s.connectionTriggers[connectionId] ?? [];
+                // Target becomes the group; dragged becomes a child of target.
+                return {
+                    connectionTriggers: {
+                        ...s.connectionTriggers,
+                        [connectionId]: current.map(t => {
+                            if (t.id === targetId) return { ...t, isGroup: true };
+                            if (t.id === draggedId) return { ...t, parentId: targetId };
+                            return t;
+                        }),
+                    },
+                };
+            }),
             saveScriptEditorBounds: (connectionId, bounds) => set(s => ({
                 connectionScriptEditorBounds: {
                     ...s.connectionScriptEditorBounds,
@@ -281,7 +296,7 @@ export const useAppStore = create<AppStore>()(
         }),
         {
             name: 'mudix_v1',
-            version: 11,
+            version: 13,
             partialize: ({ connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds }) => ({
                 connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds,
             }),
@@ -297,6 +312,8 @@ export const useAppStore = create<AppStore>()(
                 });
 
                 // v11: trigger patterns migrated from string[] to TriggerPattern[].
+                // v12: added fireLength (chain length), multipleMatches, highlight, command fields to TriggerNode.
+                // v13: added multiline, delta, isFilter fields to TriggerNode.
                 // For version < 10 all tree data was intentionally reset (tree structure change in v10).
                 const rawTriggers: Record<string, any[]> = version >= 10 ? ((s as any).connectionTriggers ?? {}) : {};
                 const connectionTriggers = Object.fromEntries(
@@ -309,6 +326,11 @@ export const useAppStore = create<AppStore>()(
                                     typeof p === 'string' ? { text: p, type: 'regex' } : p
                                 )
                                 : [],
+                            fireLength: t.fireLength ?? 0,
+                            multipleMatches: t.multipleMatches ?? false,
+                            multiline: t.multiline ?? false,
+                            delta: t.delta ?? 0,
+                            isFilter: t.isFilter ?? false,
                         })),
                     ])
                 );

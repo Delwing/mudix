@@ -5,10 +5,17 @@ import type { TimerEngine, TimerNode } from '../mud/timers/TimerEngine';
 import type { KeyEngine, KeyNode } from '../mud/keybindings/KeyEngine';
 import type { ScriptNode } from '../storage/schema';
 import { isEffectivelyEnabled } from '../storage/schema';
+import type { RgbColor } from '../mud/text/FormatState';
 import { AnsiAwareBuffer } from '../mud/text/FormatState';
 import { ScriptingAPI } from './ScriptingAPI';
 import { LuaRuntime } from './lua/LuaRuntime';
 import type { IScriptingRuntime } from './IScriptingRuntime';
+
+function hexToRgb(hex: string): RgbColor | null {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    if (!m) return null;
+    return { space: 'rgb', r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+}
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
@@ -38,9 +45,11 @@ export class ScriptingEngine {
     /** Load (or reload) scripts. Restarts each runtime cleanly. */
     loadScripts(scripts: ScriptNode[]): void {
         this.runtimes.lua?.destroy();
+        this.triggerEngine.setLuaEval(null);
         try {
             const rt = new LuaRuntime(this.api);
             this.runtimes.lua = rt;
+            this.triggerEngine.setLuaEval((code, line) => (this.runtimes.lua as LuaRuntime | null)?.evalBoolean(code, line) ?? false);
             const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
             for (const s of enabled) {
                 if (!s.code) continue;
@@ -48,6 +57,7 @@ export class ScriptingEngine {
             }
         } catch (err) {
             this.runtimes.lua = null;
+            this.triggerEngine.setLuaEval(null);
             this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
         }
         this.api.flushOutput();
@@ -71,8 +81,9 @@ export class ScriptingEngine {
 
     /** Start all enabled permanent timers. Called when the timer list changes. */
     loadPermTimers(timers: TimerNode[]): void {
-        this.timerEngine.loadPerm(timers, (code, language, name) => {
-            if (language === 'lua') this.runtimes.lua?.run(code, name);
+        this.timerEngine.loadPerm(timers, (timer) => {
+            if (timer.command) this.api.send(timer.command, false);
+            if (timer.code && timer.language === 'lua') this.runtimes.lua?.run(timer.code, timer.name);
             this.api.flushOutput();
         });
     }
@@ -127,6 +138,7 @@ export class ScriptingEngine {
         this.unsubs.length = 0;
         this.runtimes.lua?.destroy();
         this.runtimes.lua = null;
+        this.triggerEngine.setLuaEval(null);
         this.api.destroy();
     }
 
@@ -154,14 +166,50 @@ export class ScriptingEngine {
         }
     }
 
-    private executePermTrigger(trigger: TriggerNode, matches: string[]): void {
-        if (trigger.language === 'lua') {
-            this.runtimes.lua?.runWithMatches(trigger.code, trigger.name, matches);
+    private executePermTrigger(
+        trigger: TriggerNode,
+        matches: string[],
+        matchedText: string,
+        multimatches?: string[][],
+        namedGroups?: Record<string, string>,
+    ): void {
+        // Built-in command send
+        if (trigger.command) {
+            const cmd = trigger.command.replace(/%(\d)/g, (_, d) => {
+                const idx = Number(d);
+                return idx === 0 ? matches[0] : (matches[idx] ?? '');
+            });
+            this.api.send(cmd, false);
+        }
+
+        // Built-in highlight
+        if (trigger.highlight && matchedText) {
+            const { fg, bg } = trigger.highlight;
+            if (fg || bg) {
+                const idx = this.api.selectString(matchedText, 1);
+                if (idx >= 0) {
+                    const fgColor = fg ? hexToRgb(fg) : null;
+                    const bgColor = bg ? hexToRgb(bg) : null;
+                    if (fgColor || bgColor) {
+                        this.api.applyFormatToSelection({
+                            ...(fgColor ? { foreground: fgColor } : {}),
+                            ...(bgColor ? { background: bgColor } : {}),
+                        });
+                    }
+                    this.api.deselect();
+                }
+            }
+        }
+
+        // User code
+        if (trigger.code && trigger.language === 'lua') {
+            this.runtimes.lua?.runWithMatches(trigger.code, trigger.name, matches, multimatches, namedGroups);
         }
     }
 
     private executePermKeybinding(binding: KeyNode): void {
-        if (binding.language === 'lua') {
+        if (binding.command) this.api.send(binding.command, false);
+        if (binding.code && binding.language === 'lua') {
             this.runtimes.lua?.run(binding.code, binding.name);
         }
     }
@@ -179,8 +227,8 @@ export class ScriptingEngine {
         this.api.setLineBuffer(buffer);
         (this.runtimes.lua as LuaRuntime | null)?.setCurrentLine(plain, isPrompt);
         this.triggerEngine.processTemp(plain);
-        for (const { trigger, captures } of this.triggerEngine.matchPerm(plain, isPrompt)) {
-            this.executePermTrigger(trigger, [plain, ...captures]);
+        for (const { trigger, captures, matchedText, multimatches, namedGroups } of this.triggerEngine.matchPerm(plain, isPrompt)) {
+            this.executePermTrigger(trigger, [plain, ...captures], matchedText, multimatches, namedGroups);
         }
         this.runtimes.lua?.processTrigger(plain);
         this.api.clearLineBuffer();

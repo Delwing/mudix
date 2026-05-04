@@ -67,6 +67,16 @@ export interface TriggerNode extends BaseNode {
     patterns: TriggerPattern[];  // one or more patterns — any match fires (Mudlet TTrigger.mPatterns)
     code: string;
     language: 'lua' | 'js';
+    fireLength: number;          // chain length: 0 = only the current line; N = current + N more lines (groups with patterns only)
+    multipleMatches: boolean;    // fire once per regex occurrence on a line, not just the first
+    multiline: boolean;          // AND mode: all patterns must match in sequence
+    delta: number;               // 0 = unlimited; N = max lines from first condition match to last
+    isFilter: boolean;           // filter chain: pass captured/matched text to children instead of full line
+    highlight?: {                // built-in colorization applied to the matched text
+        fg?: string;             // hex color e.g. "#ff0000"
+        bg?: string;
+    };
+    command?: string;            // plain command to send on fire (%1..%9 = capture groups)
 }
 
 export interface TimerNode extends BaseNode {
@@ -74,6 +84,7 @@ export interface TimerNode extends BaseNode {
     code: string;
     language: 'lua' | 'js';
     repeat: boolean;
+    command?: string;    // plain command to send when the timer fires
 }
 
 export interface KeyNode extends BaseNode {
@@ -81,6 +92,7 @@ export interface KeyNode extends BaseNode {
     modifiers: string[]; // subset of ["ctrl", "shift", "alt", "meta"]
     code: string;
     language: 'lua' | 'js';
+    command?: string;    // plain command to send when the keybinding fires
 }
 
 // ── Tree utilities ────────────────────────────────────────────────────────────

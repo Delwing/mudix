@@ -2,7 +2,7 @@ import type { MudSession } from '../mud/MudSession';
 import type { AliasEngine } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
-import type { AnsiAwareBuffer } from '../mud/text/FormatState';
+import type { AnsiAwareBuffer, FormatStateSnapshot } from '../mud/text/FormatState';
 import { namedColorToAnsi, namedColorToState, parseCecho, parseDecho, parseHecho } from '../mud/text/colorParsers';
 
 // ── Windows ───────────────────────────────────────────────────────────────────
@@ -187,6 +187,10 @@ export class ScriptingAPI {
 
     deselect(): void {
         this.selection = null;
+    }
+
+    applyFormatToSelection(state: FormatStateSnapshot): void {
+        this.applyStateToSelection(state);
     }
 
     // ── Trigger pipeline hooks (called by ScriptingEngine) ────────────────────

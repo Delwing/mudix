@@ -8,6 +8,6 @@ export interface IScriptingRuntime {
     processTrigger(line: string): void;
     /** Fire the first matching Lua-registered temp keybinding. Returns true if consumed. */
     processKey(event: KeyboardEvent): boolean;
-    runWithMatches(code: string, name: string, matches: string[]): void;
+    runWithMatches(code: string, name: string, matches: string[], multimatches?: string[][], namedGroups?: Record<string, string>): void;
     destroy(): void;
 }

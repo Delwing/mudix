@@ -137,15 +137,75 @@ export class LuaRuntime implements IScriptingRuntime {
     }
 
     /** Execute `code` with the `matches` and `line` globals pre-set. Used for permanent alias/trigger execution. */
-    runWithMatches(code: string, name: string, matches: string[]): void {
-        this.push(matches);
-        lua.lua_setglobal(this.L, ls('matches'));
-        if (matches.length > 0) {
-            lua.lua_pushstring(this.L, ls(matches[0]));
-            lua.lua_setglobal(this.L, ls('line'));
+    runWithMatches(
+        code: string,
+        name: string,
+        matches: string[],
+        multimatches?: string[][],
+        namedGroups?: Record<string, string>,
+    ): void {
+        const L = this.L;
+        // Build matches table: numeric keys 1..N plus any named capture keys
+        lua.lua_newtable(L);
+        matches.forEach((item, i) => {
+            lua.lua_pushnumber(L, i + 1);
+            lua.lua_pushstring(L, ls(item));
+            lua.lua_settable(L, -3);
+        });
+        if (namedGroups) {
+            for (const [k, v] of Object.entries(namedGroups)) {
+                lua.lua_pushstring(L, ls(k));
+                lua.lua_pushstring(L, ls(v));
+                lua.lua_settable(L, -3);
+            }
         }
+        lua.lua_setglobal(L, ls('matches'));
+
+        if (matches.length > 0) {
+            lua.lua_pushstring(L, ls(matches[0]));
+            lua.lua_setglobal(L, ls('line'));
+        }
+
+        if (multimatches) {
+            // multimatches[1] = first condition's captures, etc. (1-indexed)
+            lua.lua_newtable(L);
+            multimatches.forEach((condCaptures, i) => {
+                lua.lua_pushnumber(L, i + 1);
+                lua.lua_newtable(L);
+                condCaptures.forEach((cap, j) => {
+                    lua.lua_pushnumber(L, j + 1);
+                    lua.lua_pushstring(L, ls(cap));
+                    lua.lua_settable(L, -3);
+                });
+                lua.lua_settable(L, -3);
+            });
+            lua.lua_setglobal(L, ls('multimatches'));
+        }
+
         const err = this.exec(code, `@alias:${name}`);
         if (err) this.api.printError(`[lua alias "${name}"] ${err}`);
+    }
+
+    /** Evaluate a Lua code snippet in the context of `line`, returning a boolean result. */
+    evalBoolean(code: string, line: string): boolean {
+        const L = this.L;
+        lua.lua_pushstring(L, ls(line));
+        lua.lua_setglobal(L, ls('line'));
+        const wrapped = `local result = (function() ${code} end)(); return result ~= false and result ~= nil`;
+        const src = to_luastring(wrapped);
+        const loadStatus = lauxlib.luaL_loadbuffer(L, src, null, to_luastring('@luaFunction'));
+        if (loadStatus !== 0) {
+            lua.lua_pop(L, 1);
+            return false;
+        }
+        const callStatus = lua.lua_pcall(L, 0, 1, 0);
+        if (callStatus !== 0) {
+            lua.lua_pop(L, 1);
+            return false;
+        }
+        const result = Boolean(lua.lua_toboolean(L, -1));
+        lua.lua_pop(L, 1);
+        return result;
     }
 
     /** Execute a code chunk once, without match context. Used for timers and keybindings. */

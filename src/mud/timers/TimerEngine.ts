@@ -4,7 +4,7 @@ import { isEffectivelyEnabled } from '../../storage/schema';
 export type { TimerNode };
 
 type TempFn = () => void;
-type ExecuteFn = (code: string, language: string, name: string) => void;
+type ExecuteFn = (timer: TimerNode) => void;
 
 export class TimerEngine {
     private readonly temp = new Map<number, { handle: ReturnType<typeof setTimeout>; repeat: boolean }>();
@@ -40,7 +40,7 @@ export class TimerEngine {
         for (const timer of timers) {
             if (!isEffectivelyEnabled(timer, timers)) continue;
             if (timer.isGroup && !timer.code) continue;
-            const fire = () => executeFn(timer.code, timer.language, timer.name);
+            const fire = () => executeFn(timer);
             if (timer.repeat) {
                 const handle = setInterval(fire, timer.seconds * 1000) as unknown as ReturnType<typeof setTimeout>;
                 this.perm.set(timer.id, { handle, repeat: true });

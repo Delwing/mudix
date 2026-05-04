@@ -176,6 +176,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
     const updateTrigger    = useAppStore(s => s.updateTrigger);
     const removeTrigger    = useAppStore(s => s.removeTrigger);
     const moveTrigger      = useAppStore(s => s.moveTrigger);
+    const groupTriggers    = useAppStore(s => s.groupTriggers);
     const addTimer         = useAppStore(s => s.addTimer);
     const updateTimer      = useAppStore(s => s.updateTimer);
     const removeTimer      = useAppStore(s => s.removeTimer);
@@ -196,6 +197,14 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
     const [editCommand, setEditCommand]   = useState('');
     // Trigger extra
     const [editPatterns, setEditPatterns] = useState<TriggerPattern[]>([]);
+    const [editFireLength, setEditFireLength] = useState(0);
+    const [editMultipleMatches, setEditMultipleMatches] = useState(false);
+    const [editMultiline, setEditMultiline] = useState(false);
+    const [editDelta, setEditDelta] = useState(0);
+    const [editIsFilter, setEditIsFilter] = useState(false);
+    const [editHighlightFg, setEditHighlightFg] = useState('');
+    const [editHighlightBg, setEditHighlightBg] = useState('');
+    const [editTriggerCommand, setEditTriggerCommand] = useState('');
     // Timer extra
     const [editHours,   setEditHours]   = useState(0);
     const [editMinutes, setEditMinutes] = useState(1);
@@ -206,6 +215,9 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
     const [editKey, setEditKey]               = useState('');
     const [editModifiers, setEditModifiers]   = useState<string[]>([]);
     const [capturing, setCapturing]           = useState(false);
+    const [editKeyCommand, setEditKeyCommand] = useState('');
+    // Timer extra (command)
+    const [editTimerCommand, setEditTimerCommand] = useState('');
     // Script extra: event handlers (newline-separated)
     const [editEventHandlers, setEditEventHandlers] = useState('');
 
@@ -243,7 +255,18 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
             setEditPattern((selected as AliasNode).pattern ?? '');
             setEditCommand((selected as AliasNode).command ?? '');
         }
-        if (category === 'triggers') setEditPatterns((selected as TriggerNode).patterns ?? []);
+        if (category === 'triggers') {
+            const t = selected as TriggerNode;
+            setEditPatterns(t.patterns ?? []);
+            setEditFireLength(t.fireLength ?? 0);
+            setEditMultipleMatches(t.multipleMatches ?? false);
+            setEditMultiline(t.multiline ?? false);
+            setEditDelta(t.delta ?? 0);
+            setEditIsFilter(t.isFilter ?? false);
+            setEditHighlightFg(t.highlight?.fg ?? '');
+            setEditHighlightBg(t.highlight?.bg ?? '');
+            setEditTriggerCommand(t.command ?? '');
+        }
         if (category === 'scripts') setEditEventHandlers((selected as ScriptNode).eventHandlers?.join('\n') ?? '');
         if (category === 'timers') {
             const t = selected as TimerNode;
@@ -253,11 +276,13 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
             setEditSecs(s);
             setEditMs(ms);
             setEditRepeat(t.repeat);
+            setEditTimerCommand(t.command ?? '');
         }
         if (category === 'keys') {
             const k = selected as KeyNode;
             setEditKey(k.key);
             setEditModifiers(k.modifiers);
+            setEditKeyCommand(k.command ?? '');
         }
         setCapturing(false);
         setDirty(false);
@@ -312,8 +337,9 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
         e.dataTransfer.dropEffect = 'move';
         const rect = e.currentTarget.getBoundingClientRect();
         const relY = (e.clientY - rect.top) / rect.height;
+        const canDropInto = item.isGroup || category === 'triggers';
         const intent: 'before' | 'into' | 'after' =
-            item.isGroup && relY > 0.3 && relY < 0.7 ? 'into' :
+            canDropInto && relY > 0.3 && relY < 0.7 ? 'into' :
             relY < 0.5 ? 'before' : 'after';
         setDragOver(prev => (prev?.id === item.id && prev?.intent === intent) ? prev : { id: item.id, intent });
     };
@@ -324,6 +350,17 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
         if (!id || id === target.id || isAncestorOf(id, target.id, items)) return;
 
         const intent = dragOver?.intent ?? 'before';
+
+        // Special case: dropping onto a non-group trigger → target becomes the group, dragged becomes child
+        if (intent === 'into' && !target.isGroup && category === 'triggers') {
+            groupTriggers(connectionId, target.id, id);
+            setExpanded(prev => { const next = new Set(prev); next.add(target.id); return next; });
+            setSelectedId(target.id);
+            setDragId(null);
+            setDragOver(null);
+            return;
+        }
+
         let newParentId: string | null;
         let insertBeforeId: string | null;
 
@@ -401,6 +438,11 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                 enabled: true,
                 isGroup: asGroup,
                 parentId,
+                fireLength: 0,
+                multipleMatches: false,
+                multiline: false,
+                delta: 0,
+                isFilter: false,
             });
         } else if (category === 'timers') {
             id = addTimer(connectionId, {
@@ -458,12 +500,27 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
         } else if (category === 'aliases') {
             updateAlias(connectionId, selectedId, { name: editName, pattern: editPattern, command: editCommand, language: editLang, code: editCode });
         } else if (category === 'triggers') {
-            updateTrigger(connectionId, selectedId, { name: editName, patterns: editPatterns, language: editLang, code: editCode });
+            const highlight = (editHighlightFg || editHighlightBg)
+                ? { fg: editHighlightFg || undefined, bg: editHighlightBg || undefined }
+                : undefined;
+            updateTrigger(connectionId, selectedId, {
+                name: editName,
+                patterns: editPatterns,
+                language: editLang,
+                code: editCode,
+                fireLength: editFireLength,
+                multipleMatches: editMultipleMatches,
+                multiline: editMultiline,
+                delta: editDelta,
+                isFilter: editIsFilter,
+                highlight,
+                command: editTriggerCommand || undefined,
+            });
         } else if (category === 'timers') {
             const seconds = editHours * 3600 + editMinutes * 60 + editSecs + editMs / 1000;
-            updateTimer(connectionId, selectedId, { name: editName, seconds, repeat: editRepeat, language: editLang, code: editCode });
+            updateTimer(connectionId, selectedId, { name: editName, seconds, repeat: editRepeat, language: editLang, code: editCode, command: editTimerCommand || undefined });
         } else {
-            updateKeybinding(connectionId, selectedId, { name: editName, key: editKey, modifiers: editModifiers, language: editLang, code: editCode });
+            updateKeybinding(connectionId, selectedId, { name: editName, key: editKey, modifiers: editModifiers, language: editLang, code: editCode, command: editKeyCommand || undefined });
         }
         setDirty(false);
     };
@@ -631,55 +688,183 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                                 </div>
                             </>
                         )}
-                        {category === 'triggers' && !selected.isGroup && (
-                            <div className="script-editor__meta-row script-editor__meta-row--col">
-                                <span className="script-editor__field-label">Patterns</span>
-                                <div className="script-editor__pattern-list">
-                                    {editPatterns.map((p, i) => (
-                                        <div key={i} className="script-editor__pattern-row">
-                                            <select
-                                                className="script-editor__pattern-type"
-                                                value={p.type}
-                                                onChange={e => {
-                                                    const next = [...editPatterns];
-                                                    next[i] = { ...next[i], type: e.target.value as TriggerPatternType };
-                                                    setEditPatterns(next);
-                                                    setDirty(true);
-                                                }}
-                                            >
-                                                {(Object.entries(PATTERN_TYPE_LABELS) as [TriggerPatternType, string][]).map(([t, label]) => (
-                                                    <option key={t} value={t}>{label}</option>
-                                                ))}
-                                            </select>
+                        {category === 'triggers' && (
+                            <>
+                                {/* Patterns */}
+                                <div className="script-editor__meta-row script-editor__meta-row--col">
+                                    <span className="script-editor__field-label">Patterns</span>
+                                    <div className="script-editor__pattern-list">
+                                        {editPatterns.map((p, i) => (
+                                            <div key={i} className="script-editor__pattern-row">
+                                                <select
+                                                    className="script-editor__pattern-type"
+                                                    value={p.type}
+                                                    onChange={e => {
+                                                        const next = [...editPatterns];
+                                                        next[i] = { ...next[i], type: e.target.value as TriggerPatternType };
+                                                        setEditPatterns(next);
+                                                        setDirty(true);
+                                                    }}
+                                                >
+                                                    {(Object.entries(PATTERN_TYPE_LABELS) as [TriggerPatternType, string][]).map(([t, label]) => (
+                                                        <option key={t} value={t}>{label}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    type="text"
+                                                    className="script-editor__pattern-text"
+                                                    value={p.text}
+                                                    disabled={!PATTERN_NEEDS_TEXT.has(p.type)}
+                                                    placeholder={p.type === 'luaFunction' ? 'function name' : 'pattern'}
+                                                    spellCheck={false}
+                                                    onChange={e => {
+                                                        const next = [...editPatterns];
+                                                        next[i] = { ...next[i], text: e.target.value };
+                                                        setEditPatterns(next);
+                                                        setDirty(true);
+                                                    }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    className="script-editor__pattern-remove"
+                                                    onClick={() => { setEditPatterns(editPatterns.filter((_, j) => j !== i)); setDirty(true); }}
+                                                    title="Remove pattern"
+                                                >×</button>
+                                            </div>
+                                        ))}
+                                        <button
+                                            type="button"
+                                            className="script-editor__pattern-add"
+                                            onClick={() => { setEditPatterns([...editPatterns, { text: '', type: 'regex' }]); setDirty(true); }}
+                                        >+ Add pattern</button>
+                                    </div>
+                                </div>
+
+                                {/* Command */}
+                                <div className="script-editor__meta-row">
+                                    <Input
+                                        className="script-editor__pattern"
+                                        value={editTriggerCommand}
+                                        onChange={e => { setEditTriggerCommand(e.target.value); setDirty(true); }}
+                                        placeholder="Command to send (%1..%9 = captures)"
+                                    />
+                                </div>
+
+                                {/* Matching section */}
+                                <div className="script-editor__trigger-card">
+                                    <span className="script-editor__trigger-card-label">Matching</span>
+                                    <div className="script-editor__trigger-card-row">
+                                        <label className="script-editor__trigger-opt">
                                             <input
-                                                type="text"
-                                                className="script-editor__pattern-text"
-                                                value={p.text}
-                                                disabled={!PATTERN_NEEDS_TEXT.has(p.type)}
-                                                placeholder={p.type === 'luaFunction' ? 'function name' : 'pattern'}
-                                                spellCheck={false}
+                                                type="checkbox"
+                                                checked={editMultipleMatches}
+                                                onChange={e => { setEditMultipleMatches(e.target.checked); setDirty(true); }}
+                                            />
+                                            Multiple matches
+                                        </label>
+                                        <label className="script-editor__trigger-opt script-editor__trigger-opt--fire">
+                                            Fire length
+                                            <input
+                                                type="number"
+                                                className="script-editor__fire-length"
+                                                value={editFireLength}
+                                                min={0}
+                                                title="0 = only the current line; N = also open for N more lines"
                                                 onChange={e => {
-                                                    const next = [...editPatterns];
-                                                    next[i] = { ...next[i], text: e.target.value };
-                                                    setEditPatterns(next);
+                                                    const v = parseInt(e.target.value, 10);
+                                                    setEditFireLength(isNaN(v) || v < 0 ? 0 : v);
                                                     setDirty(true);
                                                 }}
                                             />
-                                            <button
-                                                type="button"
-                                                className="script-editor__pattern-remove"
-                                                onClick={() => { setEditPatterns(editPatterns.filter((_, j) => j !== i)); setDirty(true); }}
-                                                title="Remove pattern"
-                                            >×</button>
-                                        </div>
-                                    ))}
-                                    <button
-                                        type="button"
-                                        className="script-editor__pattern-add"
-                                        onClick={() => { setEditPatterns([...editPatterns, { text: '', type: 'regex' }]); setDirty(true); }}
-                                    >+ Add pattern</button>
+                                        </label>
+                                    </div>
+                                    <div className="script-editor__trigger-card-row">
+                                        <label className="script-editor__trigger-opt">
+                                            <input
+                                                type="checkbox"
+                                                checked={editMultiline}
+                                                onChange={e => { setEditMultiline(e.target.checked); setDirty(true); }}
+                                            />
+                                            AND (multiline)
+                                        </label>
+                                        {editMultiline && (
+                                            <label className="script-editor__trigger-opt script-editor__trigger-opt--fire">
+                                                Delta
+                                                <input
+                                                    type="number"
+                                                    className="script-editor__fire-length"
+                                                    value={editDelta}
+                                                    min={0}
+                                                    title="0 = unlimited; N = max lines between first and last match"
+                                                    onChange={e => {
+                                                        const v = parseInt(e.target.value, 10);
+                                                        setEditDelta(isNaN(v) || v < 0 ? 0 : v);
+                                                        setDirty(true);
+                                                    }}
+                                                />
+                                                lines
+                                            </label>
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
+
+                                {/* Highlight section */}
+                                <div className="script-editor__trigger-card">
+                                    <span className="script-editor__trigger-card-label">Highlight</span>
+                                    <div className="script-editor__trigger-card-row">
+                                        <label className="script-editor__trigger-opt">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!editHighlightFg}
+                                                onChange={e => { setEditHighlightFg(e.target.checked ? '#ff0000' : ''); setDirty(true); }}
+                                            />
+                                            FG
+                                        </label>
+                                        {editHighlightFg && (
+                                            <input
+                                                type="color"
+                                                className="script-editor__color-pick"
+                                                value={editHighlightFg}
+                                                onChange={e => { setEditHighlightFg(e.target.value); setDirty(true); }}
+                                            />
+                                        )}
+                                        <div className="script-editor__trigger-card-divider" />
+                                        <label className="script-editor__trigger-opt">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!editHighlightBg}
+                                                onChange={e => { setEditHighlightBg(e.target.checked ? '#000080' : ''); setDirty(true); }}
+                                            />
+                                            BG
+                                        </label>
+                                        {editHighlightBg && (
+                                            <input
+                                                type="color"
+                                                className="script-editor__color-pick"
+                                                value={editHighlightBg}
+                                                onChange={e => { setEditHighlightBg(e.target.value); setDirty(true); }}
+                                            />
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Chain section — groups only */}
+                                {selected.isGroup && (
+                                    <div className="script-editor__trigger-card">
+                                        <span className="script-editor__trigger-card-label">Chain</span>
+                                        <div className="script-editor__trigger-card-row">
+                                            <label className="script-editor__trigger-opt">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editIsFilter}
+                                                    onChange={e => { setEditIsFilter(e.target.checked); setDirty(true); }}
+                                                />
+                                                Filter (pass match to children)
+                                            </label>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
                         )}
                         {category === 'scripts' && (
                             <div className="script-editor__meta-row script-editor__meta-row--col">
@@ -694,17 +879,29 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                             </div>
                         )}
                         {category === 'keys' && (
-                            <div className="script-editor__meta-row">
-                                <button
-                                    type="button"
-                                    className={`script-editor__key-capture${capturing ? ' script-editor__key-capture--active' : ''}`}
-                                    onClick={() => setCapturing(c => !c)}
-                                >
-                                    {capturing
-                                        ? 'Press a key… (Esc to cancel)'
-                                        : (formatKeyCombo(editKey, editModifiers) || 'Click to capture key')}
-                                </button>
-                            </div>
+                            <>
+                                <div className="script-editor__meta-row">
+                                    <button
+                                        type="button"
+                                        className={`script-editor__key-capture${capturing ? ' script-editor__key-capture--active' : ''}`}
+                                        onClick={() => setCapturing(c => !c)}
+                                    >
+                                        {capturing
+                                            ? 'Press a key… (Esc to cancel)'
+                                            : (formatKeyCombo(editKey, editModifiers) || 'Click to capture key')}
+                                    </button>
+                                </div>
+                                {!selected.isGroup && (
+                                    <div className="script-editor__meta-row">
+                                        <Input
+                                            className="script-editor__pattern"
+                                            value={editKeyCommand}
+                                            onChange={e => { setEditKeyCommand(e.target.value); setDirty(true); }}
+                                            placeholder="Command to send"
+                                        />
+                                    </div>
+                                )}
+                            </>
                         )}
                         {category === 'timers' && (
                             <div className="script-editor__meta-row">
@@ -752,6 +949,16 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                                     />
                                     Repeat
                                 </label>
+                            </div>
+                        )}
+                        {category === 'timers' && !selected.isGroup && (
+                            <div className="script-editor__meta-row">
+                                <Input
+                                    className="script-editor__pattern"
+                                    value={editTimerCommand}
+                                    onChange={e => { setEditTimerCommand(e.target.value); setDirty(true); }}
+                                    placeholder="Command to send"
+                                />
                             </div>
                         )}
                     </div>
