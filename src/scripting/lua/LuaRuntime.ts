@@ -1,6 +1,7 @@
 import { lauxlib, lua, lualib, to_luastring } from 'fengari-web';
 import type { ScriptingAPI } from '../ScriptingAPI';
 import type { IScriptingRuntime } from '../IScriptingRuntime';
+import type { ProfileVFS } from '../vfs/ProfileVFS';
 import mudletColorsRaw from '../../mud/text/mudletColors.json';
 import BOOTSTRAP from './bootstrap.lua?raw';
 import STDLIB from './stdlib.lua?raw';
@@ -8,6 +9,17 @@ import STRING_UTILS from './StringUtils.lua?raw';
 import TABLE_UTILS from './TableUtils.lua?raw';
 
 type LuaState = ReturnType<typeof lauxlib.luaL_newstate>;
+
+interface FileHandle {
+    path: string;
+    readable: boolean;
+    writable: boolean;
+    appendMode: boolean;
+    content: string;
+    position: number;
+    dirty: boolean;
+    closed: boolean;
+}
 
 
 type PendingLineTrigger = { linesAhead: number; remaining: number; code: string };
@@ -18,17 +30,20 @@ export class LuaRuntime implements IScriptingRuntime {
     private aliases: Map<number, { pattern: RegExp; ref: number }> = new Map();
     private triggers: Map<number, { pattern: RegExp; ref: number }> = new Map();
     private keys: Map<number, { key: string; modifiers: string[]; ref: number }> = new Map();
+    private fileHandles: Map<number, FileHandle> = new Map();
     private nextTimerId = 1;
     private nextAliasId = 1;
     private nextTriggerId = 1;
     private nextKeyId = 1;
+    private nextHandleId = 1;
     private currentLineIsPrompt = false;
     private pendingLineTriggers: PendingLineTrigger[] = [];
 
-    constructor(private readonly api: ScriptingAPI) {
+    constructor(private readonly api: ScriptingAPI, private readonly vfs: ProfileVFS | null = null) {
         this.L = lauxlib.luaL_newstate();
         lualib.luaL_openlibs(this.L);
         this.exposeInternals();
+        this.exposeVFS();
         const bootstrapErr = this.exec(BOOTSTRAP, '@bootstrap');
         if (bootstrapErr) {
             lua.lua_close(this.L);
@@ -191,13 +206,21 @@ export class LuaRuntime implements IScriptingRuntime {
         const L = this.L;
         lua.lua_pushstring(L, ls(line));
         lua.lua_setglobal(L, ls('line'));
-        const wrapped = `local result = (function() ${code} end)(); return result ~= false and result ~= nil`;
-        const src = to_luastring(wrapped);
-        const loadStatus = lauxlib.luaL_loadbuffer(L, src, null, to_luastring('@luaFunction'));
+
+        // Try as a return expression first so single-call patterns like raiseEvent("x")
+        // have their return value captured. Fall back to statement block for multi-line code.
+        let src = to_luastring(`return (${code})`);
+        let loadStatus = lauxlib.luaL_loadbuffer(L, src, null, to_luastring('@luaFunction'));
         if (loadStatus !== 0) {
             lua.lua_pop(L, 1);
-            return false;
+            src = to_luastring(code);
+            loadStatus = lauxlib.luaL_loadbuffer(L, src, null, to_luastring('@luaFunction'));
+            if (loadStatus !== 0) {
+                lua.lua_pop(L, 1);
+                return false;
+            }
         }
+
         const callStatus = lua.lua_pcall(L, 0, 1, 0);
         if (callStatus !== 0) {
             lua.lua_pop(L, 1);
@@ -278,6 +301,11 @@ export class LuaRuntime implements IScriptingRuntime {
             if (this.L) lauxlib.luaL_unref(this.L, lua.LUA_REGISTRYINDEX, ref);
         }
         this.keys.clear();
+
+        for (const handle of this.fileHandles.values()) {
+            if (!handle.closed) this.flushHandle(handle);
+        }
+        this.fileHandles.clear();
 
         if (this.L) {
             lua.lua_close(this.L);
@@ -701,9 +729,19 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         this.cfunction('__mudix_select_section__', (L) => {
-            const from   = lua.lua_tonumber(L, 1) | 0;
-            const length = lua.lua_tonumber(L, 2) | 0;
-            const win    = this.optstring(L, 3, undefined);
+            // selectSection([window,] from, length) — window is first when 3 args given
+            const nargs = lua.lua_gettop(L);
+            let win: string | undefined;
+            let from: number;
+            let length: number;
+            if (nargs >= 3) {
+                win    = lua.lua_tojsstring(L, 1);
+                from   = lua.lua_tonumber(L, 2) | 0;
+                length = lua.lua_tonumber(L, 3) | 0;
+            } else {
+                from   = lua.lua_tonumber(L, 1) | 0;
+                length = lua.lua_tonumber(L, 2) | 0;
+            }
             api.selectSection(from, length, win);
             return 0;
         });
@@ -734,6 +772,265 @@ export class LuaRuntime implements IScriptingRuntime {
             lua.lua_settable(this.L, -3);
         }
         lua.lua_setglobal(this.L, ls('color_table'));
+    }
+
+    // ── VFS (io / lfs / loadfile) ─────────────────────────────────────────────
+
+    private flushHandle(handle: FileHandle): void {
+        if (!handle.dirty || !handle.writable || !this.vfs) return;
+        try { this.vfs.writeFile(handle.path, handle.content); } catch { /* ignore */ }
+        handle.dirty = false;
+    }
+
+    private exposeVFS(): void {
+        const { vfs } = this;
+
+        // ── profile path ──────────────────────────────────────────────────────
+        this.cfunction('__vfs_profile_path__', () => {
+            lua.lua_pushstring(this.L, ls(vfs?.profilePath ?? ''));
+            return 1;
+        });
+
+        // ── io.open ───────────────────────────────────────────────────────────
+        this.cfunction('__vfs_io_open__', (L) => {
+            if (!vfs) {
+                lua.lua_pushnil(L);
+                lua.lua_pushstring(L, ls('no profile VFS'));
+                return 2;
+            }
+            const path = lua.lua_tojsstring(L, 1);
+            const mode = this.optstring(L, 2, 'r') ?? 'r';
+            const baseMode = mode.replace('+', '').replace('b', '');
+            const readable = baseMode === 'r' || mode.includes('+');
+            const writable = baseMode === 'w' || baseMode === 'a' || mode.includes('+');
+            const appendMode = baseMode === 'a';
+            const resolved = vfs.resolvePath(path);
+
+            let content = '';
+            if (baseMode === 'r' || baseMode === 'a' || mode === 'r+') {
+                if (!vfs.exists(path)) {
+                    lua.lua_pushnil(L);
+                    lua.lua_pushstring(L, ls(`${path}: no such file`));
+                    return 2;
+                }
+                try { content = vfs.readFile(path); } catch (e) {
+                    lua.lua_pushnil(L);
+                    lua.lua_pushstring(L, ls(String(e)));
+                    return 2;
+                }
+            }
+
+            const id = this.nextHandleId++;
+            const handle: FileHandle = {
+                path: resolved,
+                readable, writable, appendMode,
+                content,
+                position: appendMode ? content.length : 0,
+                dirty: false,
+                closed: false,
+            };
+            this.fileHandles.set(id, handle);
+            lua.lua_pushnumber(L, id);
+            return 1;
+        });
+
+        // ── io.close ──────────────────────────────────────────────────────────
+        this.cfunction('__vfs_io_close__', (L) => {
+            const id = lua.lua_tonumber(L, 1);
+            const handle = this.fileHandles.get(id);
+            if (!handle || handle.closed) {
+                lua.lua_pushboolean(L, 1);
+                return 1;
+            }
+            this.flushHandle(handle);
+            handle.closed = true;
+            this.fileHandles.delete(id);
+            lua.lua_pushboolean(L, 1);
+            return 1;
+        });
+
+        // ── io.read ───────────────────────────────────────────────────────────
+        this.cfunction('__vfs_io_read__', (L) => {
+            const id = lua.lua_tonumber(L, 1);
+            const handle = this.fileHandles.get(id);
+            if (!handle || handle.closed || !handle.readable) {
+                lua.lua_pushnil(L);
+                return 1;
+            }
+            const fmtType = lua.lua_type(L, 2);
+            let fmt: string | number;
+            if (fmtType === lua.LUA_TNUMBER) {
+                fmt = lua.lua_tonumber(L, 2);
+            } else if (fmtType === lua.LUA_TSTRING) {
+                fmt = lua.lua_tojsstring(L, 2);
+            } else {
+                fmt = '*l';
+            }
+            const result = readFromHandle(handle, fmt);
+            if (result === null) {
+                lua.lua_pushnil(L);
+            } else if (typeof result === 'number') {
+                lua.lua_pushnumber(L, result);
+            } else {
+                lua.lua_pushstring(L, ls(result));
+            }
+            return 1;
+        });
+
+        // ── io.write ──────────────────────────────────────────────────────────
+        this.cfunction('__vfs_io_write__', (L) => {
+            const id = lua.lua_tonumber(L, 1);
+            const handle = this.fileHandles.get(id);
+            if (!handle || handle.closed || !handle.writable) {
+                lua.lua_pushnil(L);
+                lua.lua_pushstring(L, ls('file not open for writing'));
+                return 2;
+            }
+            const nargs = lua.lua_gettop(L);
+            for (let i = 2; i <= nargs; i++) {
+                const typ = lua.lua_type(L, i);
+                const data = typ === lua.LUA_TNUMBER
+                    ? String(lua.lua_tonumber(L, i))
+                    : lua.lua_tojsstring(L, i);
+                if (handle.appendMode) {
+                    handle.content += data;
+                    handle.position = handle.content.length;
+                } else {
+                    handle.content =
+                        handle.content.slice(0, handle.position) +
+                        data +
+                        handle.content.slice(handle.position);
+                    handle.position += data.length;
+                }
+                handle.dirty = true;
+            }
+            lua.lua_pushboolean(L, 1);
+            return 1;
+        });
+
+        // ── io.seek ───────────────────────────────────────────────────────────
+        this.cfunction('__vfs_io_seek__', (L) => {
+            const id = lua.lua_tonumber(L, 1);
+            const handle = this.fileHandles.get(id);
+            if (!handle || handle.closed) {
+                lua.lua_pushnil(L);
+                lua.lua_pushstring(L, ls('invalid file handle'));
+                return 2;
+            }
+            const whence = this.optstring(L, 2, 'cur') ?? 'cur';
+            const offset = lua.lua_type(L, 3) === lua.LUA_TNUMBER ? lua.lua_tonumber(L, 3) : 0;
+            const len = handle.content.length;
+            let newPos: number;
+            if (whence === 'set') newPos = offset;
+            else if (whence === 'end') newPos = len + offset;
+            else newPos = handle.position + offset;
+            handle.position = Math.max(0, Math.min(newPos, len));
+            lua.lua_pushnumber(L, handle.position);
+            return 1;
+        });
+
+        // ── lfs.mkdir ─────────────────────────────────────────────────────────
+        this.cfunction('__vfs_lfs_mkdir__', (L) => {
+            if (!vfs) { this.pushVfsError(L); return 2; }
+            try {
+                vfs.mkdir(lua.lua_tojsstring(L, 1));
+                lua.lua_pushboolean(L, 1);
+                return 1;
+            } catch (e) {
+                lua.lua_pushnil(L);
+                lua.lua_pushstring(L, ls(String(e)));
+                return 2;
+            }
+        });
+
+        // ── lfs.rmdir ─────────────────────────────────────────────────────────
+        this.cfunction('__vfs_lfs_rmdir__', (L) => {
+            if (!vfs) { this.pushVfsError(L); return 2; }
+            try {
+                vfs.rmdir(lua.lua_tojsstring(L, 1));
+                lua.lua_pushboolean(L, 1);
+                return 1;
+            } catch (e) {
+                lua.lua_pushnil(L);
+                lua.lua_pushstring(L, ls(String(e)));
+                return 2;
+            }
+        });
+
+        // ── lfs.dir ───────────────────────────────────────────────────────────
+        this.cfunction('__vfs_lfs_dir__', (L) => {
+            if (!vfs) { this.pushVfsError(L); return 2; }
+            try {
+                const entries = vfs.readdir(lua.lua_tojsstring(L, 1));
+                this.push(entries);
+                return 1;
+            } catch (e) {
+                lua.lua_pushnil(L);
+                lua.lua_pushstring(L, ls(String(e)));
+                return 2;
+            }
+        });
+
+        // ── lfs.attributes ────────────────────────────────────────────────────
+        this.cfunction('__vfs_lfs_attr__', (L) => {
+            if (!vfs) { this.pushVfsError(L); return 2; }
+            const s = vfs.stat(lua.lua_tojsstring(L, 1));
+            if (!s) {
+                lua.lua_pushnil(L);
+                lua.lua_pushstring(L, ls('no such file or directory'));
+                return 2;
+            }
+            this.push({
+                mode: s.type === 'dir' ? 'directory' : 'file',
+                size: s.size,
+                modification: Math.floor(s.mtime.getTime() / 1000),
+                access: Math.floor(s.atime.getTime() / 1000),
+            });
+            return 1;
+        });
+
+        // ── lfs.currentdir ────────────────────────────────────────────────────
+        this.cfunction('__vfs_lfs_currentdir__', () => {
+            lua.lua_pushstring(this.L, ls(vfs?.cwd ?? ''));
+            return 1;
+        });
+
+        // ── lfs.chdir ─────────────────────────────────────────────────────────
+        this.cfunction('__vfs_lfs_chdir__', (L) => {
+            if (!vfs) { this.pushVfsError(L); return 2; }
+            const err = vfs.chdir(lua.lua_tojsstring(L, 1));
+            if (err) {
+                lua.lua_pushnil(L);
+                lua.lua_pushstring(L, ls(err));
+                return 2;
+            }
+            lua.lua_pushboolean(L, 1);
+            return 1;
+        });
+
+        // ── exists / readFile (for loadfile / require) ────────────────────────
+        this.cfunction('__vfs_exists__', (L) => {
+            lua.lua_pushboolean(L, vfs && vfs.exists(lua.lua_tojsstring(L, 1)) ? 1 : 0);
+            return 1;
+        });
+
+        this.cfunction('__vfs_read_file__', (L) => {
+            if (!vfs) { this.pushVfsError(L); return 2; }
+            try {
+                const content = vfs.readFile(lua.lua_tojsstring(L, 1));
+                lua.lua_pushstring(L, ls(content));
+                return 1;
+            } catch (e) {
+                lua.lua_pushnil(L);
+                lua.lua_pushstring(L, ls(String(e)));
+                return 2;
+            }
+        });
+    }
+
+    private pushVfsError(L: LuaState): void {
+        lua.lua_pushnil(L);
+        lua.lua_pushstring(L, ls('no profile VFS'));
     }
 
     /** Get an optional string argument from the Lua stack. */
@@ -777,4 +1074,60 @@ export class LuaRuntime implements IScriptingRuntime {
 /** Convert a JS string to a Lua string (Uint8Array). Short alias for readability. */
 function ls(s: string): Uint8Array {
     return to_luastring(s);
+}
+
+function readFromHandle(handle: FileHandle, fmt: string | number | null): string | number | null {
+    const { content, position } = handle;
+
+    if (typeof fmt === 'number') {
+        if (position >= content.length) return null;
+        const chunk = content.slice(position, position + fmt);
+        handle.position += chunk.length;
+        return chunk || null;
+    }
+
+    const f = fmt ?? '*l';
+
+    if (f === '*l' || f === 'l') {
+        if (position >= content.length) return null;
+        const nlIdx = content.indexOf('\n', position);
+        let line: string;
+        if (nlIdx === -1) {
+            line = content.slice(position);
+            handle.position = content.length;
+        } else {
+            line = content.slice(position, nlIdx);
+            handle.position = nlIdx + 1;
+        }
+        return line.endsWith('\r') ? line.slice(0, -1) : line;
+    }
+
+    if (f === '*L' || f === 'L') {
+        if (position >= content.length) return null;
+        const nlIdx = content.indexOf('\n', position);
+        let line: string;
+        if (nlIdx === -1) {
+            line = content.slice(position);
+            handle.position = content.length;
+        } else {
+            line = content.slice(position, nlIdx + 1);
+            handle.position = nlIdx + 1;
+        }
+        return line;
+    }
+
+    if (f === '*a' || f === 'a') {
+        const rest = content.slice(position);
+        handle.position = content.length;
+        return rest;
+    }
+
+    if (f === '*n' || f === 'n') {
+        const m = content.slice(position).match(/^\s*([-+]?\d+\.?\d*(?:[eE][-+]?\d+)?)/);
+        if (!m) return null;
+        handle.position += m[0].length;
+        return parseFloat(m[1]);
+    }
+
+    return null;
 }

@@ -53,8 +53,29 @@ const MUDIX_TRIGGERS: Completion[] = [
 // ── mudix.keys ────────────────────────────────────────────────────────────────
 
 const MUDIX_KEYS: Completion[] = [
-    fn('add',    '(key, modifiers?, fn) → id', 'Register a temporary keybinding'),
+    fn('add',    '(key, modifiers?, fn) → id', 'Register a keybinding. key: web code string (e.g. "F1", "KeyA"). modifiers: optional table e.g. {"ctrl","shift"}'),
     fn('remove', '(id)',                       'Remove a temporary keybinding'),
+];
+
+// ── io ────────────────────────────────────────────────────────────────────────
+
+const IO_COMPLETIONS: Completion[] = [
+    fn('open',  '(filename, mode?) → file',  'Open a file. mode: "r" (default), "w", "a", "r+", "w+", "a+"'),
+    fn('close', '([file])',                   'Close a file handle'),
+    fn('lines', '(filename, fmt?)',           'Iterate lines of a file'),
+    fn('type',  '(obj) → string|nil',        'Return "file", "closed file", or nil'),
+];
+
+// ── lfs ───────────────────────────────────────────────────────────────────────
+
+const LFS_COMPLETIONS: Completion[] = [
+    fn('mkdir',      '(path) → true|nil,err',          'Create a directory (recursive)'),
+    fn('rmdir',      '(path) → true|nil,err',          'Remove a directory'),
+    fn('dir',        '(path) → iterator',              'Iterate directory entries'),
+    fn('attributes', '(path, [attr]) → table|value',  'Get file/directory attributes (mode, size, modification, access)'),
+    fn('currentdir', '() → string',                   'Get current working directory'),
+    fn('chdir',      '(path) → true|nil,err',          'Change current working directory'),
+    fn('touch',      '(path)',                         'Create file if it does not exist'),
 ];
 
 // ── mudix (top-level) ─────────────────────────────────────────────────────────
@@ -203,7 +224,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('feedTriggers', '(text)',           'Feed text through triggers'),
     fn('deleteLine',   '([window])',       'Delete current trigger line'),
     fn('insertText',   '(text)',           'Insert text at trigger cursor'),
-    fn('display',      '(value)',          'Pretty-print a value to output'),
+    fn('display',      '(...)',             'Pretty-print each argument to output'),
     fn('printError',   '(text)',           'Print an error message'),
     // Windows
     fn('openUserWindow',  '(name, restoreLayout?, autoDock?, dockingArea?)', 'Open a user window'),
@@ -219,11 +240,14 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('getLineNumber',   '([window])',    'Get cursor line number'),
     fn('getLineCount',    '([window])',    'Get total line count'),
     fn('getColumnNumber', '([window])',    'Get cursor column'),
-    fn('getLines',        '(from, to [, window])', 'Get range of lines as table'),
+    fn('getLines',        '([window,] from, to)',  'Get range of lines as table'),
     fn('isPrompt',        '()',            'True if current line is a MUD prompt'),
     fn('moveCursorUp',    '([window])',    'Move cursor up one line'),
     fn('moveCursorDown',  '([window])',    'Move cursor down one line'),
-    fn('moveCursor',      '([window,] x, y)', 'Move cursor to position'),
+    fn('moveCursor',      '([window,] x, y)',              'Move cursor to position'),
+    fn('selectString',    '([window,] text, occurrence)', 'Select Nth occurrence of text on current line; returns column index or -1'),
+    fn('selectSection',   '([window,] from, length)',     'Select text by column position and length'),
+    fn('deselect',        '([window])',                   'Clear the current selection'),
     // Timers
     fn('tempTimer',      '(seconds, fn, repeat?)', 'Create a timer (one-shot or repeating)'),
     fn('killTimer',      '(id)',           'Cancel a timer'),
@@ -235,8 +259,15 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('killTrigger',    '(id)',           'Remove a trigger'),
     fn('tempLineTrigger','(linesAhead, count, code)', 'Trigger N lines ahead'),
     // Keys
-    fn('tempKey',        '(key, modifiers?, fn) → id', 'Create a temporary keybinding'),
-    fn('killKey',        '(id)',           'Remove a keybinding'),
+    fn('tempKey',        '(modifier, key, fn) → id',  'Create a temporary keybinding. modifier: Qt bitflag (0=none, 67108864=Ctrl, 33554432=Shift, 134217728=Alt). key: Qt::Key int or web code string'),
+    fn('killKey',        '(id)',                       'Remove a keybinding'),
+    // Events
+    // File system
+    fn('getMudixProfilePath', '() → string',        'Returns the VFS profile root path for this connection'),
+    fn('getMudletHomeDir',   '() → string',        'Mudlet-compatible alias for getMudixProfilePath()'),
+    fn('loadRawFile',        '(path) → string',    'Read entire file from VFS and return its contents'),
+    fn('loadfile',           '(filename)',          'Load a Lua file from VFS'),
+    fn('dofile',             '(filename)',          'Load and execute a Lua file from VFS'),
     // Events
     fn('raiseEvent',                    '(name, ...)',       'Fire a named event'),
     fn('registerAnonymousEventHandler', '(name, fn) → id',  'Register an event handler, returns an ID'),
@@ -269,6 +300,8 @@ export const HOVER_MAP = new Map<string, Completion>([
         c => [c.label, c] as [string, Completion]
     ),
     // Namespaced symbols
+    ...IO_COMPLETIONS .map(c => [`io.${c.label}`,             c] as [string, Completion]),
+    ...LFS_COMPLETIONS.map(c => [`lfs.${c.label}`,            c] as [string, Completion]),
     ...MUDIX_TOP     .map(c => [`mudix.${c.label}`,          c] as [string, Completion]),
     ...MUDIX_WINDOWS .map(c => [`mudix.windows.${c.label}`,  c] as [string, Completion]),
     ...MUDIX_TIMERS  .map(c => [`mudix.timers.${c.label}`,   c] as [string, Completion]),
@@ -284,6 +317,8 @@ export const HOVER_MAP = new Map<string, Completion>([
 // Order matters: more specific prefixes must come first.
 
 const NAMESPACE_MAP: Array<[string, Completion[]]> = [
+    ['io.',   IO_COMPLETIONS],
+    ['lfs.',  LFS_COMPLETIONS],
     ['mudix.windows.',  MUDIX_WINDOWS],
     ['mudix.timers.',   MUDIX_TIMERS],
     ['mudix.aliases.',  MUDIX_ALIASES],

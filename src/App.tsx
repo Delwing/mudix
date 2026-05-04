@@ -8,7 +8,9 @@ import { useAppStore, connectionUrl, type MudConnection } from './storage';
 import { useEngines } from './hooks/useEngines';
 import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
+import { FileBrowserModal } from './ui/FileBrowserModal';
 import type { ScriptNode } from './storage/schema';
+import { isEffectivelyEnabled } from './storage/schema';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 
 // Stable fallback so the Zustand selector always returns the same reference
@@ -22,6 +24,7 @@ export default function App() {
     const [sessionStarted, setSessionStarted] = useState(false);
     const [scriptsOpen, setScriptsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [filesOpen, setFilesOpen] = useState(false);
     const commandInputRef = useRef<HTMLInputElement>(null);
     const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
     const connections = useAppStore(s => s.connections);
@@ -39,12 +42,10 @@ export default function App() {
     const activeScripts = useAppStore(s =>
         activeConnection ? (s.connectionScripts[activeConnection.id] ?? NO_SCRIPTS) : NO_SCRIPTS,
     );
-    // When handleScriptSave hot-reloads a single script, the subsequent Zustand
-    // update causes activeScripts to change and would trigger a full loadScripts
-    // (which destroys the runtime). We skip that full reload when the only change
-    // is the one script we already individually reloaded.
+    // Set when handleScriptSave pre-emptively reloads a single script so the
+    // subsequent store update doesn't double-reload it via the diff below.
     const pendingHotReload = useRef<string | null>(null);
-    const lastLoadedSnap = useRef<{ scripts: ScriptNode[]; session: typeof session } | null>(null);
+    const lastLoadedSnap = useRef<{ scripts: ScriptNode[]; session: typeof session; connId: string } | null>(null);
     const pendingOutputReadyUnsub = useRef<(() => void) | null>(null);
     useEffect(() => {
         const hotId = pendingHotReload.current;
@@ -53,34 +54,47 @@ export default function App() {
         pendingOutputReadyUnsub.current?.();
         pendingOutputReadyUnsub.current = null;
 
+        const connId = activeConnection?.id ?? '';
         const snap = lastLoadedSnap.current;
-        if (hotId && snap && snap.session === session) {
-            const prev = snap.scripts;
-            const onlyHotChanged =
-                prev.length === activeScripts.length &&
-                activeScripts.every(s => s.id === hotId || prev.some(p => p === s));
-            if (onlyHotChanged) {
-                lastLoadedSnap.current = { scripts: activeScripts, session };
-                return;
+        lastLoadedSnap.current = { scripts: activeScripts, session, connId };
+
+        // First load, session change, or connection switch → full reload.
+        if (!snap || snap.session !== session || snap.connId !== connId) {
+            if (session.outputReady) {
+                engineRef.current?.loadScripts(activeScripts, connId);
+            } else {
+                pendingOutputReadyUnsub.current = session.events.on('output.ready', () => {
+                    pendingOutputReadyUnsub.current = null;
+                    engineRef.current?.loadScripts(activeScripts, connId);
+                }, { once: true });
             }
-        }
-
-        lastLoadedSnap.current = { scripts: activeScripts, session };
-
-        if (session.outputReady) {
-            engineRef.current?.loadScripts(activeScripts);
-        } else {
-            pendingOutputReadyUnsub.current = session.events.on('output.ready', () => {
+            return () => {
+                pendingOutputReadyUnsub.current?.();
                 pendingOutputReadyUnsub.current = null;
-                engineRef.current?.loadScripts(activeScripts);
-            }, { once: true });
+            };
         }
 
-        return () => {
-            pendingOutputReadyUnsub.current?.();
-            pendingOutputReadyUnsub.current = null;
-        };
-    }, [activeScripts, session]);
+        // Incremental diff: run only newly-enabled scripts or those whose code/
+        // handlers changed. Deleted or disabled scripts leave dirty Lua state that
+        // persists until the next full reload (connection switch / reconnect).
+        const prevEnabled = new Map(
+            snap.scripts
+                .filter(s => s.language === 'lua' && isEffectivelyEnabled(s, snap.scripts))
+                .map(s => [s.id, s]),
+        );
+
+        for (const s of activeScripts) {
+            if (s.language !== 'lua' || !isEffectivelyEnabled(s, activeScripts)) continue;
+            if (s.id === hotId) continue; // Already reloaded by handleScriptSave.
+            const was = prevEnabled.get(s.id);
+            if (!was) {
+                engineRef.current?.reloadScript(s); // Newly enabled or created.
+            } else if (was.code !== s.code || was.eventHandlers.join('\n') !== s.eventHandlers.join('\n')) {
+                engineRef.current?.reloadScript(s); // Code or event-handler binding changed.
+            }
+            // Metadata-only changes (name, parentId, ordering) → no reload.
+        }
+    }, [activeScripts, session, activeConnection]);
 
     const handleScriptSave = useCallback((script: ScriptNode) => {
         pendingHotReload.current = script.id;
@@ -193,6 +207,7 @@ export default function App() {
     };
 
     const handleOpenScripts = () => setScriptsOpen(v => !v);
+    const handleOpenFiles = () => setFilesOpen(v => !v);
     const handleOpenSettings = () => setSettingsOpen(v => !v);
 
     const handleSend = () => {
@@ -217,12 +232,14 @@ export default function App() {
         session.windows.onDockExtentsChange = activeConnectionId
             ? (extents) => saveDockExtents(activeConnectionId, extents)
             : undefined;
+        session.windows.onMapOpen = () => engineRef.current?.raiseEvent('mapOpenEvent');
         return () => {
             session.windows.onWindowHint        = undefined;
             session.windows.onWindowClosed      = undefined;
             session.windows.onDockExtentsChange = undefined;
+            session.windows.onMapOpen           = undefined;
         };
-    }, [session, activeConnectionId, saveWindowHint, saveDockExtents]);
+    }, [session, activeConnectionId, saveWindowHint, saveDockExtents, engineRef]);
 
     if (!sessionStarted) {
         return (
@@ -254,6 +271,7 @@ export default function App() {
                 onNewConnection={handleNewConnection}
                 onOpenMap={handleOpenMap}
                 onOpenScripts={handleOpenScripts}
+                onOpenFiles={handleOpenFiles}
                 onOpenSettings={handleOpenSettings}
                 onContextMenu={e => windowContextMenuHandlerRef.current?.(e)}
             />
@@ -282,6 +300,13 @@ export default function App() {
                     session={session}
                     onScriptSave={handleScriptSave}
                     onClose={() => setScriptsOpen(false)}
+                />
+            )}
+            {filesOpen && (
+                <FileBrowserModal
+                    connectionId={activeConnectionId ?? ''}
+                    vfs={engineRef.current?.currentVFS ?? null}
+                    onClose={() => setFilesOpen(false)}
                 />
             )}
         </div>

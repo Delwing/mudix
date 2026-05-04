@@ -36,7 +36,7 @@
 
 .script-window-title {
     flex: 1;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 12px;
     color: var(--text-dim);
     overflow: hidden;
@@ -216,7 +216,7 @@
 
 .docked-panel-title {
     flex: 1;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 12px;
     color: var(--text-dim);
     overflow: hidden;
@@ -319,7 +319,7 @@
 }
 
 .tab-group-tab-title {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 12px;
     color: var(--text-dim);
     overflow: hidden;
@@ -330,36 +330,3 @@
 }
 .tab-group-tab--active .tab-group-tab-title { color: var(--text); }
 
-/* ── Window list context menu ───────────────────────────────────── */
-.window-context-menu {
-    position: fixed;
-    z-index: 9999;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    box-shadow: var(--shadow-float);
-    border-radius: 4px;
-    padding: 4px 0;
-    min-width: 160px;
-    font-family: var(--font-ui);
-}
-
-.window-context-menu-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 12px;
-    font-size: 12px;
-    color: var(--text);
-    cursor: pointer;
-    user-select: none;
-}
-
-.window-context-menu-item:hover { background: var(--bg-glass); }
-
-.window-context-menu-item input[type=checkbox] { cursor: pointer; flex-shrink: 0; }
-
-.window-context-menu-empty {
-    padding: 5px 12px;
-    font-size: 12px;
-    color: var(--text-dim);
-}

@@ -112,11 +112,16 @@ export function isEffectivelyEnabled<T extends { id: string; enabled: boolean; p
     return true;
 }
 
-export interface ScriptEditorBounds {
+export interface ModalBounds {
     x: number;
     y: number;
     width: number;
     height: number;
+}
+
+export interface ScriptEditorBounds extends ModalBounds {
+    listWidth?: number;
+    metaHeight?: number;
 }
 
 export interface AppSchema {
@@ -131,6 +136,7 @@ export interface AppSchema {
     connectionTimers: Record<string, TimerNode[]>;
     connectionKeybindings: Record<string, KeyNode[]>;
     connectionScriptEditorBounds: Record<string, ScriptEditorBounds>;
+    connectionModalBounds: Record<string, Record<string, ModalBounds>>;
 }
 
 export const APP_DEFAULTS: AppSchema = {
@@ -149,6 +155,7 @@ export const APP_DEFAULTS: AppSchema = {
     connectionTimers: {},
     connectionKeybindings: {},
     connectionScriptEditorBounds: {},
+    connectionModalBounds: {},
 };
 
 export function connectionUrl(c: MudConnection): string {

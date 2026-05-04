@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type UISettings } from './schema';
+import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type UISettings } from './schema';
+import type { MudletImportResult } from '../import/mudletXmlImport';
 import type { WindowOpenOptions } from '../ui/windows/types';
 
 function getDescendantIds(id: string, items: { id: string; parentId: string | null }[]): string[] {
@@ -65,6 +66,8 @@ interface AppStore extends AppSchema {
     moveKeybinding: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     groupTriggers: (connectionId: string, targetId: string, draggedId: string) => void;
     saveScriptEditorBounds: (connectionId: string, bounds: ScriptEditorBounds) => void;
+    saveModalBounds: (connectionId: string, key: string, bounds: ModalBounds) => void;
+    importMudletNodes: (connectionId: string, data: MudletImportResult) => void;
 }
 
 export const useAppStore = create<AppStore>()(
@@ -80,10 +83,24 @@ export const useAppStore = create<AppStore>()(
             removeConnection: id => set(s => {
                 const { [id]: _h, ...restHints } = s.connectionWindowHints;
                 const { [id]: _e, ...restExtents } = s.connectionDockExtents;
+                const { [id]: _sc, ...restScripts } = s.connectionScripts;
+                const { [id]: _al, ...restAliases } = s.connectionAliases;
+                const { [id]: _tr, ...restTriggers } = s.connectionTriggers;
+                const { [id]: _ti, ...restTimers } = s.connectionTimers;
+                const { [id]: _kb, ...restKeybindings } = s.connectionKeybindings;
+                const { [id]: _sb, ...restBounds } = s.connectionScriptEditorBounds;
+                const { [id]: _mb, ...restModalBounds } = s.connectionModalBounds;
                 return {
                     connections: s.connections.filter(c => c.id !== id),
                     connectionWindowHints: restHints,
                     connectionDockExtents: restExtents,
+                    connectionScripts: restScripts,
+                    connectionAliases: restAliases,
+                    connectionTriggers: restTriggers,
+                    connectionTimers: restTimers,
+                    connectionKeybindings: restKeybindings,
+                    connectionScriptEditorBounds: restBounds,
+                    connectionModalBounds: restModalBounds,
                 };
             }),
             patchUI: patch => set(s => ({ ui: { ...s.ui, ...patch } })),
@@ -293,12 +310,25 @@ export const useAppStore = create<AppStore>()(
                     [connectionId]: bounds,
                 },
             })),
+            saveModalBounds: (connectionId, key, bounds) => set(s => ({
+                connectionModalBounds: {
+                    ...s.connectionModalBounds,
+                    [connectionId]: { ...(s.connectionModalBounds[connectionId] ?? {}), [key]: bounds },
+                },
+            })),
+            importMudletNodes: (connectionId, data) => set(s => ({
+                connectionScripts:     { ...s.connectionScripts,     [connectionId]: [...(s.connectionScripts[connectionId]     ?? []), ...data.scripts]   },
+                connectionAliases:     { ...s.connectionAliases,     [connectionId]: [...(s.connectionAliases[connectionId]     ?? []), ...data.aliases]   },
+                connectionTriggers:    { ...s.connectionTriggers,    [connectionId]: [...(s.connectionTriggers[connectionId]    ?? []), ...data.triggers]  },
+                connectionTimers:      { ...s.connectionTimers,      [connectionId]: [...(s.connectionTimers[connectionId]      ?? []), ...data.timers]    },
+                connectionKeybindings: { ...s.connectionKeybindings, [connectionId]: [...(s.connectionKeybindings[connectionId] ?? []), ...data.keys]      },
+            })),
         }),
         {
             name: 'mudix_v1',
-            version: 13,
-            partialize: ({ connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds }) => ({
-                connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds,
+            version: 14,
+            partialize: ({ connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds, connectionModalBounds }) => ({
+                connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds, connectionModalBounds,
             }),
             migrate: (saved, version) => {
                 const s = saved as Partial<AppSchema> & { connections?: any[] };
@@ -349,6 +379,7 @@ export const useAppStore = create<AppStore>()(
                         connectionTimers: s.connectionTimers ?? {},
                         connectionKeybindings: s.connectionKeybindings ?? {},
                         connectionScriptEditorBounds: s.connectionScriptEditorBounds ?? {},
+                        connectionModalBounds: s.connectionModalBounds ?? {},
                     } : {}),
                     connectionTriggers,
                 };

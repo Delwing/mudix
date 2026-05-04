@@ -10,6 +10,7 @@ import { AnsiAwareBuffer } from '../mud/text/FormatState';
 import { ScriptingAPI } from './ScriptingAPI';
 import { LuaRuntime } from './lua/LuaRuntime';
 import type { IScriptingRuntime } from './IScriptingRuntime';
+import { ProfileVFS } from './vfs/ProfileVFS';
 
 function hexToRgb(hex: string): RgbColor | null {
     const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
@@ -30,6 +31,9 @@ export class ScriptingEngine {
     private readonly unsubs: (() => void)[] = [];
     private readonly api: ScriptingAPI;
     private promptPending = false;
+    private currentConnectionId: string | null = null;
+    private vfs: ProfileVFS | null = null;
+    private loadGeneration = 0;
 
     constructor(
         session: MudSession,
@@ -42,25 +46,59 @@ export class ScriptingEngine {
         this.bridgeEvents(session);
     }
 
-    /** Load (or reload) scripts. Restarts each runtime cleanly. */
-    loadScripts(scripts: ScriptNode[]): void {
+    /** Load (or reload) scripts. Remounts VFS when connectionId changes. */
+    loadScripts(scripts: ScriptNode[], connectionId: string): void {
         this.runtimes.lua?.destroy();
+        this.runtimes.lua = null;
         this.triggerEngine.setLuaEval(null);
-        try {
-            const rt = new LuaRuntime(this.api);
-            this.runtimes.lua = rt;
-            this.triggerEngine.setLuaEval((code, line) => (this.runtimes.lua as LuaRuntime | null)?.evalBoolean(code, line) ?? false);
-            const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
-            for (const s of enabled) {
-                if (!s.code) continue;
-                rt.load(this.wrapScript(s), s.name);
+
+        const gen = ++this.loadGeneration;
+
+        const doLoad = (vfs: ProfileVFS | null) => {
+            if (gen !== this.loadGeneration) return;
+            try {
+                const rt = new LuaRuntime(this.api, vfs);
+                this.runtimes.lua = rt;
+                this.triggerEngine.setLuaEval((code, line) =>
+                    (this.runtimes.lua as LuaRuntime | null)?.evalBoolean(code, line) ?? false,
+                );
+                const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
+                for (const s of enabled) {
+                    if (!s.code) continue;
+                    rt.load(this.wrapScript(s), s.name);
+                }
+            } catch (err) {
+                this.runtimes.lua = null;
+                this.triggerEngine.setLuaEval(null);
+                this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
             }
-        } catch (err) {
-            this.runtimes.lua = null;
-            this.triggerEngine.setLuaEval(null);
-            this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
+            this.api.flushOutput();
+        };
+
+        if (connectionId !== this.currentConnectionId) {
+            this.currentConnectionId = connectionId;
+            const oldVfs = this.vfs;
+            this.vfs = null;
+            oldVfs?.unmount();
+
+            if (!connectionId) {
+                doLoad(null);
+                return;
+            }
+
+            ProfileVFS.mount(connectionId).then(vfs => {
+                if (gen !== this.loadGeneration) { vfs.unmount(); return; }
+                this.vfs = vfs;
+                doLoad(vfs);
+            }).catch(err => {
+                if (gen !== this.loadGeneration) return;
+                console.error('[ScriptingEngine] VFS mount failed:', err);
+                this.api.printError(`[scripting] VFS mount failed: ${err instanceof Error ? err.message : String(err)}`);
+                doLoad(null);
+            });
+        } else {
+            doLoad(this.vfs);
         }
-        this.api.flushOutput();
     }
 
     /** Run a single script on the existing runtime without restarting it. */
@@ -68,7 +106,7 @@ export class ScriptingEngine {
         if (script.language !== 'lua') return;
         if (!this.runtimes.lua) {
             try {
-                this.runtimes.lua = new LuaRuntime(this.api);
+                this.runtimes.lua = new LuaRuntime(this.api, this.vfs);
             } catch (err) {
                 this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
                 return;
@@ -78,6 +116,8 @@ export class ScriptingEngine {
         this.runtimes.lua.load(this.wrapScript(script), script.name);
         this.api.flushOutput();
     }
+
+    get currentVFS(): ProfileVFS | null { return this.vfs; }
 
     /** Start all enabled permanent timers. Called when the timer list changes. */
     loadPermTimers(timers: TimerNode[]): void {
@@ -133,13 +173,22 @@ export class ScriptingEngine {
         return luaMatched;
     }
 
+    raiseEvent(event: string, args: unknown[] = []): void {
+        this.emit(event, args);
+    }
+
     destroy(): void {
+        this.loadGeneration++;
         for (const unsub of this.unsubs) unsub();
         this.unsubs.length = 0;
         this.runtimes.lua?.destroy();
         this.runtimes.lua = null;
         this.triggerEngine.setLuaEval(null);
         this.api.destroy();
+        const oldVfs = this.vfs;
+        this.vfs = null;
+        this.currentConnectionId = null;
+        oldVfs?.unmount();
     }
 
     // If the script declares eventHandlers, wrap it so the code runs as a

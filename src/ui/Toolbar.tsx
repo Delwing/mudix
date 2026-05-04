@@ -10,11 +10,12 @@ interface ToolbarProps {
     onNewConnection: () => void;
     onOpenMap: () => void;
     onOpenScripts: () => void;
+    onOpenFiles: () => void;
     onOpenSettings: () => void;
     onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }
 
-export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenSettings, onContextMenu }: ToolbarProps) {
+export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenFiles, onOpenSettings, onContextMenu }: ToolbarProps) {
     return (
         <div className="toolbar" onContextMenu={onContextMenu}>
             <span className="brand">mudix</span>
@@ -28,6 +29,7 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
                 <span className="ping">{Math.round(ping)} ms</span>
             )}
             <Button variant="ghost" onClick={onOpenScripts}>Scripts</Button>
+            <Button variant="ghost" onClick={onOpenFiles}>Files</Button>
             <Button variant="ghost" onClick={onOpenMap}>Map</Button>
             <Button variant="ghost" onClick={onOpenSettings}>Settings</Button>
             {status === 'disconnected'

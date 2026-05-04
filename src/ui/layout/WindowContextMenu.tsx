@@ -1,5 +1,4 @@
-import { useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import { ContextMenu } from '../components';
 import type { ScriptWindowRenderData } from '../windows/types';
 import type { WindowManager } from '../windows/WindowManager';
 
@@ -12,41 +11,24 @@ interface WindowContextMenuProps {
 }
 
 export function WindowContextMenu({ windows, manager, x, y, onClose }: WindowContextMenuProps) {
-    const ref = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        const onPointerDown = (e: PointerEvent) => {
-            if (!ref.current?.contains(e.target as Node)) onClose();
-        };
-        const onKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
-        };
-        document.addEventListener('pointerdown', onPointerDown);
-        document.addEventListener('keydown', onKeyDown);
-        return () => {
-            document.removeEventListener('pointerdown', onPointerDown);
-            document.removeEventListener('keydown', onKeyDown);
-        };
-    }, [onClose]);
-
     const sorted = [...windows].sort((a, b) => a.title.localeCompare(b.title));
 
-    return createPortal(
-        <div ref={ref} className="window-context-menu" style={{ left: x, top: y }}>
+    return (
+        <ContextMenu x={x} y={y} onClose={onClose}>
             {sorted.length === 0
-                ? <div className="window-context-menu-empty">No windows</div>
+                ? <div className="ctx-menu__empty">No windows</div>
                 : sorted.map(w => (
-                    <label key={w.id} className="window-context-menu-item">
+                    <label key={w.id} className="ctx-menu__item">
                         <input
                             type="checkbox"
                             checked={w.visible}
                             onChange={() => w.visible ? manager.hide(w.id) : manager.show(w.id)}
+                            style={{ cursor: 'pointer', flexShrink: 0, accentColor: 'var(--accent)' }}
                         />
                         <span>{w.title}</span>
                     </label>
                 ))
             }
-        </div>,
-        document.body,
+        </ContextMenu>
     );
 }

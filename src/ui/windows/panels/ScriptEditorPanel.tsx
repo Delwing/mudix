@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Clock, Folder, FolderOpen, Keyboard, Shuffle, FileCode2, Zap } from 'lucide-react';
-import { Button, Input } from '../../components';
+import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Clock, Folder, FolderOpen, FolderPlus, Keyboard, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
+import { Button, Input, ContextMenu } from '../../components';
 import { useAppStore } from '../../../storage';
 import type { AliasNode, KeyNode, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
 import { isEffectivelyEnabled } from '../../../storage/schema';
 import type { MudSession } from '../../../mud/MudSession';
 import { LuaEditor } from './LuaEditor';
+import { parseMudletXml } from '../../../import/mudletXmlImport';
 import './ScriptEditorPanel.css';
 
 type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys';
@@ -17,6 +18,22 @@ const CATEGORY_LABELS: Record<Category, string> = {
     triggers: 'Triggers',
     timers: 'Timers',
     keys: 'Keys',
+};
+
+const CATEGORY_SINGULAR: Record<Category, string> = {
+    scripts: 'Script',
+    aliases: 'Alias',
+    triggers: 'Trigger',
+    timers: 'Timer',
+    keys: 'Key',
+};
+
+const CATEGORY_ICON: Record<Category, React.ElementType> = {
+    scripts:  FileCode2,
+    aliases:  Shuffle,
+    triggers: Zap,
+    timers:   Clock,
+    keys:     Keyboard,
 };
 
 const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'NumLock', 'ScrollLock', 'Dead']);
@@ -152,9 +169,12 @@ interface ScriptEditorPanelProps {
     connectionId: string;
     session: MudSession;
     onScriptSave?: (script: ScriptNode) => void;
+    initialListWidth?: number;
+    initialMetaHeight?: number;
+    onSplitsChange?: (listWidth: number, metaHeight: number | null) => void;
 }
 
-export function ScriptEditorPanel({ connectionId, session, onScriptSave }: ScriptEditorPanelProps) {
+export function ScriptEditorPanel({ connectionId, session, onScriptSave, initialListWidth, initialMetaHeight, onSplitsChange }: ScriptEditorPanelProps) {
     const [category, setCategory] = useState<Category>('scripts');
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -185,6 +205,28 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
     const updateKeybinding = useAppStore(s => s.updateKeybinding);
     const removeKeybinding = useAppStore(s => s.removeKeybinding);
     const moveKeybinding   = useAppStore(s => s.moveKeybinding);
+    const importMudletNodes = useAppStore(s => s.importMudletNodes);
+
+    const importFileRef = useRef<HTMLInputElement>(null);
+    const [importError, setImportError] = useState<string | null>(null);
+
+    const handleImportFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        e.target.value = '';
+        try {
+            const text = await file.text();
+            const data = parseMudletXml(text);
+            importMudletNodes(connectionId, data);
+            const total = data.scripts.length + data.aliases.length + data.triggers.length + data.timers.length + data.keys.length;
+            setImportError(null);
+            const newEntries: LogEntry[] = [{ text: `Imported ${total} items from ${file.name}`, level: 'info' }];
+            for (const w of data.warnings) newEntries.push({ text: `Warning: ${w}`, level: 'error' });
+            setLogs(prev => [...prev, ...newEntries]);
+        } catch (err) {
+            setImportError(err instanceof Error ? err.message : String(err));
+        }
+    }, [connectionId, importMudletNodes]);
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -223,7 +265,35 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
 
     const [dirty, setDirty] = useState(false);
     const [logs, setLogs]   = useState<LogEntry[]>([]);
+
+    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; targetId: string | null } | null>(null);
     const logEndRef = useRef<HTMLDivElement>(null);
+
+    const [listWidth, setListWidth]     = useState(() => initialListWidth ?? 180);
+    const [metaHeight, setMetaHeight]   = useState<number | null>(() => initialMetaHeight ?? null);
+    const metaRef = useRef<HTMLDivElement>(null);
+
+    const handleItemContextMenu = useCallback((e: React.MouseEvent, id: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setSelectedId(id);
+        setCtxMenu({ x: e.clientX, y: e.clientY, targetId: id });
+    }, []);
+
+    const handlePaneContextMenu = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        setCtxMenu({ x: e.clientX, y: e.clientY, targetId: null });
+    }, []);
+
+    const handleContextDelete = useCallback((id: string) => {
+        if (category === 'scripts')        removeScript(connectionId, id);
+        else if (category === 'aliases')   removeAlias(connectionId, id);
+        else if (category === 'triggers')  removeTrigger(connectionId, id);
+        else if (category === 'timers')    removeTimer(connectionId, id);
+        else                               removeKeybinding(connectionId, id);
+        setSelectedId(prev => prev === id ? null : prev);
+        setCtxMenu(null);
+    }, [category, connectionId, removeScript, removeAlias, removeTrigger, removeTimer, removeKeybinding]);
 
     // Drag-and-drop state
     const [dragId, setDragId]   = useState<string | null>(null);
@@ -250,7 +320,10 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
         if (!selected) return;
         setEditName(selected.name);
         setEditLang(selected.language);
-        setEditCode(selected.code);
+        // New unsaved scripts have code='' in the store; show the template so the
+        // user has a starting point, and mark dirty so "Save & Run" is active.
+        const isNewScript = category === 'scripts' && !selected.isGroup && selected.code === '';
+        setEditCode(isNewScript ? DEFAULT_LUA : selected.code);
         if (category === 'aliases') {
             setEditPattern((selected as AliasNode).pattern ?? '');
             setEditCommand((selected as AliasNode).command ?? '');
@@ -285,7 +358,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
             setEditKeyCommand(k.command ?? '');
         }
         setCapturing(false);
-        setDirty(false);
+        setDirty(isNewScript);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedId, category]);
 
@@ -398,21 +471,53 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
         setDragOver(null);
     };
 
-    const handleNew = (asGroup = false) => {
-        const parentId = selected?.isGroup
-            ? selected.id
-            : selected?.parentId ?? null;
+    const metaHeightRef = useRef(metaHeight);
+    metaHeightRef.current = metaHeight;
+    const listWidthRef = useRef(listWidth);
+    listWidthRef.current = listWidth;
 
+    const handleListResizeStart = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = listWidthRef.current;
+        const onMove = (ev: MouseEvent) => {
+            setListWidth(Math.max(120, Math.min(400, startWidth + ev.clientX - startX)));
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            onSplitsChange?.(listWidthRef.current, metaHeightRef.current);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }, [onSplitsChange]);
+
+    const handleMetaResizeStart = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        const startY = e.clientY;
+        const startHeight = metaRef.current?.getBoundingClientRect().height ?? 100;
+        const onMove = (ev: MouseEvent) => {
+            setMetaHeight(Math.max(32, startHeight + ev.clientY - startY));
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            onSplitsChange?.(listWidthRef.current, metaHeightRef.current);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }, [onSplitsChange]);
+
+    const createItem = useCallback((asGroup: boolean, parentId: string | null) => {
         if (parentId) {
             setExpanded(prev => { const next = new Set(prev); next.add(parentId); return next; });
         }
-
         let id: string;
         if (category === 'scripts') {
             id = addScript(connectionId, {
                 name: asGroup ? 'New Group' : 'New Script',
                 language: 'lua',
-                code: asGroup ? '' : DEFAULT_LUA,
+                code: '',
                 enabled: true,
                 isGroup: asGroup,
                 parentId,
@@ -468,6 +573,13 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
             });
         }
         setSelectedId(id);
+    }, [category, connectionId, addScript, addAlias, addTrigger, addTimer, addKeybinding]);
+
+    const handleNew = (asGroup = false) => {
+        const parentId = selected?.isGroup
+            ? selected.id
+            : selected?.parentId ?? null;
+        createItem(asGroup, parentId);
     };
 
     const handleToggle = (id: string, e: React.MouseEvent) => {
@@ -565,19 +677,26 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                         {CATEGORY_LABELS[cat]}
                     </button>
                 ))}
+                <button className="script-editor__nav-import" onClick={() => importFileRef.current?.click()} title="Import Mudlet XML package">
+                    Import XML
+                </button>
+                <input ref={importFileRef} type="file" accept=".xml" style={{ display: 'none' }} onChange={handleImportFile} />
             </div>
 
             {/* Item list */}
-            <div className="script-editor__list">
+            <div className="script-editor__list" style={{ width: listWidth }}>
+                <div className="script-editor__list-resize" onMouseDown={handleListResizeStart} />
                 <div className="script-editor__list-header">
                     <Button variant="secondary" size="sm" onClick={() => handleNew(false)}>+ New</Button>
                     <Button variant="secondary" size="sm" onClick={() => handleNew(true)}>+ Group</Button>
                 </div>
+                {importError && <div className="script-editor__import-error" title={importError}>Import failed: {importError}</div>}
                 <div
                     className="script-editor__items"
                     onDragLeave={e => {
                         if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(null);
                     }}
+                    onContextMenu={handlePaneContextMenu}
                 >
                     {treeEntries.map(({ item, depth }) => {
                         const effective = isEffectivelyEnabled(item, items);
@@ -604,6 +723,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                                 onDragOver={e => handleDragOver(e, item)}
                                 onDrop={e => handleDrop(e, item)}
                                 onDragEnd={handleDragEnd}
+                                onContextMenu={e => handleItemContextMenu(e, item.id)}
                             >
                                 {item.isGroup ? (
                                     <button
@@ -643,7 +763,11 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
             {/* Editor pane */}
             {selected ? (
                 <div className="script-editor__pane">
-                    <div className="script-editor__meta">
+                    <div
+                        className="script-editor__meta"
+                        ref={metaRef}
+                        style={metaHeight !== null ? { height: metaHeight, overflowY: 'auto' } : {}}
+                    >
                         <div className="script-editor__meta-row">
                             {selected.isGroup && (
                                 <span className="script-editor__group-badge">Group</span>
@@ -963,6 +1087,8 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                         )}
                     </div>
 
+                    <div className="script-editor__meta-resize" onMouseDown={handleMetaResizeStart} />
+
                     {editLang === 'lua' ? (
                         <LuaEditor
                             value={editCode}
@@ -1002,6 +1128,49 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                 </div>
             ) : (
                 <div className="script-editor__empty">{emptyMsg}</div>
+            )}
+
+            {ctxMenu && (
+                <ContextMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)}>
+                    {ctxMenu.targetId !== null && (
+                        <>
+                            <button
+                                className="ctx-menu__item ctx-menu__item--danger"
+                                onClick={() => handleContextDelete(ctxMenu.targetId!)}
+                            >
+                                <Trash2 size={13} strokeWidth={1.6} />
+                                Delete
+                            </button>
+                            <div className="ctx-menu__sep" />
+                        </>
+                    )}
+                    <button
+                        className="ctx-menu__item"
+                        onClick={() => {
+                            const parentId = ctxMenu.targetId !== null
+                                ? (items.find(i => i.id === ctxMenu.targetId)?.parentId ?? null)
+                                : null;
+                            createItem(false, parentId);
+                            setCtxMenu(null);
+                        }}
+                    >
+                        {React.createElement(CATEGORY_ICON[category], { size: 13, strokeWidth: 1.6 })}
+                        Add {CATEGORY_SINGULAR[category]}
+                    </button>
+                    <button
+                        className="ctx-menu__item"
+                        onClick={() => {
+                            const parentId = ctxMenu.targetId !== null
+                                ? (items.find(i => i.id === ctxMenu.targetId)?.parentId ?? null)
+                                : null;
+                            createItem(true, parentId);
+                            setCtxMenu(null);
+                        }}
+                    >
+                        <FolderPlus size={13} strokeWidth={1.6} />
+                        Add Group
+                    </button>
+                </ContextMenu>
             )}
         </div>
     );

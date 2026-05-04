@@ -43,6 +43,8 @@ export class WindowManager {
     onWindowClosed?:      (id: string) => void;
     /** Called when a dock side's extent changes — use to persist it. */
     onDockExtentsChange?: (extents: Record<DockSide, number>) => void;
+    /** Called when a map window is opened or made visible. */
+    onMapOpen?:           (id: string) => void;
 
     setCursorRegistry(registry: Map<string, CursorOps>): void {
         this.cursorRegistry = registry;
@@ -394,6 +396,7 @@ export class WindowManager {
             existing.visible = true;
             existing.zIndex  = ++this.nextZ;
             this.notify();
+            if (existing.kind === 'map') this.onMapOpen?.(id);
             return this.makeHandle(id);
         }
 
@@ -470,6 +473,7 @@ export class WindowManager {
         };
         this.saveHint(id, win);
         this.notify();
+        if (kind === 'map') this.onMapOpen?.(id);
         return this.makeHandle(id);
     }
 

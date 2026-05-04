@@ -1,5 +1,4 @@
-import { useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import { ContextMenu } from '../components';
 
 interface OutputContextMenuProps {
     x: number;
@@ -16,41 +15,16 @@ export function OutputContextMenu({
     onToggleTimestamps,
     onClose,
 }: OutputContextMenuProps) {
-    const menuRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        const handlePointerDown = (e: PointerEvent) => {
-            if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-                onClose();
-            }
-        };
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
-        };
-        document.addEventListener('pointerdown', handlePointerDown);
-        document.addEventListener('keydown', handleKeyDown);
-        return () => {
-            document.removeEventListener('pointerdown', handlePointerDown);
-            document.removeEventListener('keydown', handleKeyDown);
-        };
-    }, [onClose]);
-
-    return createPortal(
-        <div
-            ref={menuRef}
-            className="output-context-menu"
-            style={{ left: x, top: y }}
-            onContextMenu={e => e.preventDefault()}
-        >
+    return (
+        <ContextMenu x={x} y={y} onClose={onClose}>
             <button
-                className="output-context-menu-item"
+                className="ctx-menu__item"
                 type="button"
                 onClick={() => { onToggleTimestamps(); onClose(); }}
             >
-                <span className="output-context-menu-check">{showTimestamps ? '✓' : ''}</span>
+                <span className="ctx-menu__check">{showTimestamps ? '✓' : ''}</span>
                 Show timestamps
             </button>
-        </div>,
-        document.body,
+        </ContextMenu>
     );
 }
