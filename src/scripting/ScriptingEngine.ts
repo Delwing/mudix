@@ -142,7 +142,14 @@ export class ScriptingEngine {
     }
 
     private executePermAlias(alias: AliasNode, matches: string[]): void {
-        if (alias.language === 'lua') {
+        if (alias.command) {
+            const cmd = alias.command.replace(/%(\d)/g, (_, d) => {
+                const idx = Number(d);
+                return idx === 0 ? matches[0] : (matches[idx] ?? '');
+            });
+            this.api.send(cmd);
+        }
+        if (alias.code && alias.language === 'lua') {
             this.runtimes.lua?.runWithMatches(alias.code, alias.name, matches);
         }
     }

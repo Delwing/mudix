@@ -43,6 +43,7 @@ export interface ScriptNode extends BaseNode {
 
 export interface AliasNode extends BaseNode {
     pattern: string;   // single regex string (Mudlet TAlias.mRegexCode)
+    command: string;   // plain command to send (%1..%9 = capture groups); Mudlet TAlias.mCommand
     code: string;
     language: 'lua' | 'js';
 }
