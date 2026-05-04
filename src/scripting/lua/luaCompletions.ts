@@ -238,8 +238,12 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('tempKey',        '(key, modifiers?, fn) → id', 'Create a temporary keybinding'),
     fn('killKey',        '(id)',           'Remove a keybinding'),
     // Events
-    fn('raiseEvent',                    '(name, ...)',    'Fire a named event'),
-    fn('registerAnonymousEventHandler', '(name, fn)',     'Register an event handler (alias for mudix.on)'),
+    fn('raiseEvent',                    '(name, ...)',       'Fire a named event'),
+    fn('registerAnonymousEventHandler', '(name, fn) → id',  'Register an event handler, returns an ID'),
+    fn('killAnonymousEventHandler',     '(id) → bool',       'Remove an event handler by ID'),
+    // Map
+    fn('centerview',        '(roomId)',          'Center map on a room'),
+    fn('getRoomIDbyHash',   '(hash) → id|nil',  'Look up a room ID by its hash string'),
     // Globals / tables
     variable('gmcp',         'GMCP state table — auto-populated from server packets'),
     variable('matches',      'Regex captures in trigger/alias context: [full, cap1, cap2, ...]'),

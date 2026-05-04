@@ -3,18 +3,26 @@ import { MapReader, MapRenderer, createSettings } from 'mudlet-map-renderer';
 import { readMapFromBuffer, readerExport } from 'mudlet-map-binary-reader';
 import { Buffer } from 'buffer';
 import { saveMap, loadMap } from '../../../storage/mapStorage';
+import type { WindowManager } from '../WindowManager';
 
 type MapStatus = 'loading' | 'empty' | 'ready' | 'error';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyArea = any;
 
-export function MapPanel() {
+interface MapPanelProps {
+    id: string;
+    manager: WindowManager;
+}
+
+export function MapPanel({ id, manager }: MapPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<MapRenderer | null>(null);
     const readerRef = useRef<MapReader | null>(null);
     const prevWidthRef = useRef<number>(0);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const [status, setStatus] = useState<MapStatus>('loading');
     const [errorMsg, setErrorMsg] = useState('');
     const [areas, setAreas] = useState<Array<{ id: number; name: string }>>([]);
@@ -22,6 +30,7 @@ export function MapPanel() {
     const [levels, setLevels] = useState<number[]>([]);
     const [currentLevel, setCurrentLevel] = useState<number>(0);
     const [dropdownOpen, setDropdownOpen] = useState(false);
+    const [menuOpen, setMenuOpen] = useState(false);
 
     const initRenderer = useCallback((mapData: AnyArea[], colors: { envId: number; colors: number[] }[]) => {
         if (!containerRef.current) return;
@@ -59,6 +68,7 @@ export function MapPanel() {
         try {
             const mudletMap = readMapFromBuffer(Buffer.from(buf));
             const { mapData, colors } = readerExport(mudletMap);
+            manager.setHashMap(mudletMap.mpRoomDbHashToRoomId ?? {});
             initRenderer(mapData as AnyArea[], colors);
         } catch (e) {
             setErrorMsg(e instanceof Error ? e.message : String(e));
@@ -86,6 +96,16 @@ export function MapPanel() {
         document.addEventListener('mousedown', onDown);
         return () => document.removeEventListener('mousedown', onDown);
     }, [dropdownOpen]);
+
+    // Close hamburger menu on outside click
+    useEffect(() => {
+        if (!menuOpen) return;
+        const onDown = (e: MouseEvent) => {
+            if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+        };
+        document.addEventListener('mousedown', onDown);
+        return () => document.removeEventListener('mousedown', onDown);
+    }, [menuOpen]);
 
     // Divs don't fire "resize" natively; the renderer needs it to update canvas size.
     // After the canvas resizes, scale zoom proportionally to preserve visible world bounds
@@ -118,6 +138,33 @@ export function MapPanel() {
     useEffect(() => {
         return () => { rendererRef.current?.destroy(); };
     }, []);
+
+    // centerview: switch to the room's area/level, mark player position, and center.
+    // The callback is stored in a ref so it always captures the latest renderer state.
+    const centerViewImplRef = useRef<(roomId: number) => void>(() => {});
+    centerViewImplRef.current = useCallback((roomId: number) => {
+        const renderer = rendererRef.current;
+        const reader = readerRef.current;
+        if (!renderer || !reader) return;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let room: any;
+        try { room = reader.getRoom(roomId); } catch { return; }
+        const areaId: number = room.area;
+        const zLevel: number = room.z;
+        const areaLevels = reader.getArea(areaId).getZLevels().sort((a, b) => a - b);
+        setLevels(areaLevels);
+        setCurrentLevel(zLevel);
+        setCurrentArea(areaId);
+        setDropdownOpen(false);
+        renderer.drawArea(areaId, zLevel);
+        renderer.setPosition(roomId, true);
+    }, []);
+
+    useEffect(() => {
+        const handler = (roomId: number) => centerViewImplRef.current(roomId);
+        manager.registerMapCallback(id, handler);
+        return () => manager.unregisterMapCallback(id);
+    }, [id, manager]);
 
     const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -159,53 +206,71 @@ export function MapPanel() {
     return (
         <div className="map-panel">
             <div ref={containerRef} className="map-canvas-container" />
-            {status === 'ready' && (
-                <div className="map-panel-toolbar">
-                    {areas.length > 1 && (
-                        <div className="map-area-dropdown" ref={dropdownRef}>
+            <input ref={fileInputRef} type="file" accept=".dat" onChange={handleFileChange} hidden />
+            <div className="map-panel-toolbar">
+                {status === 'ready' && areas.length > 1 && (
+                    <div className="map-area-dropdown" ref={dropdownRef}>
+                        <button
+                            className="map-area-dropdown-btn"
+                            onClick={() => setDropdownOpen(v => !v)}
+                        >
+                            <span className="map-area-dropdown-label">{currentAreaName}</span>
+                            <svg width="8" height="5" viewBox="0 0 8 5" fill="none">
+                                <path d="M0 0l4 5 4-5z" fill="currentColor" />
+                            </svg>
+                        </button>
+                        {dropdownOpen && (
+                            <div className="map-area-dropdown-list">
+                                {areas.map(a => (
+                                    <div
+                                        key={a.id}
+                                        className={`map-area-dropdown-item${a.id === currentArea ? ' map-area-dropdown-item--active' : ''}`}
+                                        onMouseDown={() => selectArea(a.id)}
+                                    >
+                                        {a.name}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+                {status === 'ready' && levels.length > 1 && (
+                    <div className="map-level-controls">
+                        <button
+                            className="btn btn--secondary btn--sm"
+                            onClick={() => handleLevelChange(1)}
+                            disabled={levels.indexOf(currentLevel) >= levels.length - 1}
+                            title="Level up"
+                        >▲</button>
+                        <span className="map-level-display">{currentLevel}</span>
+                        <button
+                            className="btn btn--secondary btn--sm"
+                            onClick={() => handleLevelChange(-1)}
+                            disabled={levels.indexOf(currentLevel) <= 0}
+                            title="Level down"
+                        >▼</button>
+                    </div>
+                )}
+                <div className="map-hamburger" ref={menuRef}>
+                    <button
+                        className="map-hamburger-btn"
+                        onClick={() => setMenuOpen(v => !v)}
+                        title="Map options"
+                    >
+                        <span /><span /><span />
+                    </button>
+                    {menuOpen && (
+                        <div className="map-hamburger-menu">
                             <button
-                                className="map-area-dropdown-btn"
-                                onClick={() => setDropdownOpen(v => !v)}
+                                className="map-hamburger-item"
+                                onMouseDown={() => { setMenuOpen(false); fileInputRef.current?.click(); }}
                             >
-                                <span className="map-area-dropdown-label">{currentAreaName}</span>
-                                <svg width="8" height="5" viewBox="0 0 8 5" fill="none">
-                                    <path d="M0 0l4 5 4-5z" fill="currentColor" />
-                                </svg>
+                                Load map…
                             </button>
-                            {dropdownOpen && (
-                                <div className="map-area-dropdown-list">
-                                    {areas.map(a => (
-                                        <div
-                                            key={a.id}
-                                            className={`map-area-dropdown-item${a.id === currentArea ? ' map-area-dropdown-item--active' : ''}`}
-                                            onMouseDown={() => selectArea(a.id)}
-                                        >
-                                            {a.name}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    {levels.length > 1 && (
-                        <div className="map-level-controls">
-                            <button
-                                className="btn btn--secondary btn--sm"
-                                onClick={() => handleLevelChange(1)}
-                                disabled={levels.indexOf(currentLevel) >= levels.length - 1}
-                                title="Level up"
-                            >▲</button>
-                            <span className="map-level-display">{currentLevel}</span>
-                            <button
-                                className="btn btn--secondary btn--sm"
-                                onClick={() => handleLevelChange(-1)}
-                                disabled={levels.indexOf(currentLevel) <= 0}
-                                title="Level down"
-                            >▼</button>
                         </div>
                     )}
                 </div>
-            )}
+            </div>
             {status === 'loading' && (
                 <div className="map-overlay">
                     <span>Loading map…</span>

@@ -29,6 +29,8 @@ export class WindowManager {
     private readonly lineBuffers   = new Map<string, string>();
     private readonly portalTargets = new Map<string, HTMLDivElement>();
     private readonly activeTabGroups = new Map<string, string>(); // groupId → active panelId
+    private readonly mapCallbacks  = new Map<string, (roomId: number) => void>();
+    private hashToRoomId: Record<string, number> = {};
     private cursorRegistry: Map<string, CursorOps> | null = null;
     private windowHints: Record<string, WindowOpenOptions> = {};
     private nextZ       = 10;
@@ -118,6 +120,26 @@ export class WindowManager {
         this.controls.delete(id);
         this.elements.delete(id);
         this.cursorRegistry?.delete(id);
+    }
+
+    registerMapCallback(id: string, cb: (roomId: number) => void): void {
+        this.mapCallbacks.set(id, cb);
+    }
+
+    unregisterMapCallback(id: string): void {
+        this.mapCallbacks.delete(id);
+    }
+
+    centerView(roomId: number): void {
+        for (const cb of this.mapCallbacks.values()) cb(roomId);
+    }
+
+    setHashMap(map: Record<string, number>): void {
+        this.hashToRoomId = map;
+    }
+
+    getRoomIDbyHash(hash: string): number | undefined {
+        return this.hashToRoomId[hash];
     }
 
     // ── Floating window drag / resize ─────────────────────────────────────────

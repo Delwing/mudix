@@ -860,7 +860,6 @@ html, body, #root {
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-left: auto;
 }
 
 .map-level-display {
@@ -876,6 +875,80 @@ html, body, #root {
     flex: 1;
     min-height: 0;
     width: 100%;
+}
+
+.map-hamburger {
+    position: relative;
+    margin-left: auto;
+}
+
+.map-hamburger-btn {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 3px;
+    width: 28px;
+    height: 28px;
+    background: var(--bg-glass);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: inset 0 1px 0 var(--border-hi), var(--shadow-float);
+    cursor: pointer;
+    padding: 0;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.map-hamburger-btn:hover {
+    border-color: var(--accent-dim);
+    box-shadow: inset 0 1px 0 var(--border-hi), 0 0 8px var(--accent-glow);
+}
+
+.map-hamburger-btn span {
+    display: block;
+    width: 12px;
+    height: 1.5px;
+    background: var(--text-dim);
+    border-radius: 1px;
+    transition: background 0.15s;
+}
+
+.map-hamburger-btn:hover span {
+    background: var(--accent);
+}
+
+.map-hamburger-menu {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    right: 0;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-float);
+    min-width: 130px;
+    overflow: hidden;
+    z-index: 100;
+}
+
+.map-hamburger-item {
+    display: block;
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    padding: 7px 12px;
+    text-align: left;
+    transition: background 0.1s, color 0.1s;
+}
+
+.map-hamburger-item:hover {
+    background: var(--bg-surface);
+    color: var(--text);
 }
 
 .map-overlay {

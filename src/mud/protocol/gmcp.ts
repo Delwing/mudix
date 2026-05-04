@@ -38,11 +38,11 @@ const parseGmcpPayload = (
     const spaceIndex = gmcpData.indexOf(" ");
     if (spaceIndex === -1) return;
 
-    const type = gmcpData.substring(0, spaceIndex).toLowerCase();
+    const type = gmcpData.substring(0, spaceIndex);
     let payload = gmcpData.substring(spaceIndex + 1);
 
     // Replace literal ESC characters inside JSON strings so JSON.parse succeeds
-    if (type === "gmcp_msgs") {
+    if (type.toLowerCase() === "gmcp_msgs") {
         payload = payload.replace(//g, "\\u001B");
     }
 
@@ -76,7 +76,7 @@ export const createGmcpStream = ({
         parseGmcpPayload(
             data,
             (type, payload) => {
-                if (type === "gmcp_msgs" && onMessage) {
+                if (type.toLowerCase() === "gmcp_msgs" && onMessage) {
                     const msgType = (payload as { type: string }).type ?? "";
                     const binaryString = atob((payload as { text: string }).text ?? "");
                     const text = new TextDecoder(textEncoding).decode(

@@ -326,6 +326,14 @@ export class ScriptingAPI {
         this.session.events.emit('script.setcmd', text);
     }
 
+    centerView(roomId: number): void {
+        this.session.windows.centerView(roomId);
+    }
+
+    getRoomIDbyHash(hash: string): number | undefined {
+        return this.session.windows.getRoomIDbyHash(hash);
+    }
+
     // ── Misc ──────────────────────────────────────────────────────────────────
 
     /** Flush any buffered partial lines to the main output and all open windows. Called after each event dispatch. */

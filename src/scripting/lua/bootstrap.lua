@@ -1,4 +1,6 @@
 local _handlers = {}
+local _anon_registry = {}  -- id → { event, fn }
+local _anon_next_id  = 1
 
 -- GMCP state table — populated automatically as packets arrive.
 gmcp = {}
@@ -101,6 +103,15 @@ function __dispatch__(event, ...)
     if event == 'gmcp' then
         local path, value = ...
         _gmcp_set(path, value)
+        local path_hs = _handlers['gmcp.' .. path]
+        if path_hs then
+            for _, fn in ipairs(path_hs) do
+                local ok, err = pcall(fn, value)
+                if not ok then
+                    mudix.printerror('[lua] ' .. tostring(err))
+                end
+            end
+        end
     end
     local hs = _handlers[event]
     if not hs then return end
@@ -254,15 +265,38 @@ function raiseEvent(name, ...)
     __dispatch__(name, ...)
 end
 
--- registerAnonymousEventHandler: Mudlet-compatible alias for mudix.on
+-- registerAnonymousEventHandler / killAnonymousEventHandler (Mudlet-compatible)
 function registerAnonymousEventHandler(name, fn)
-    mudix.on(name, fn)
+    local id = _anon_next_id
+    _anon_next_id = _anon_next_id + 1
+    _handlers[name] = _handlers[name] or {}
+    table.insert(_handlers[name], fn)
+    _anon_registry[id] = { event = name, fn = fn }
+    return id
+end
+
+function killAnonymousEventHandler(id)
+    local entry = _anon_registry[id]
+    if not entry then return false end
+    _anon_registry[id] = nil
+    local hs = _handlers[entry.event]
+    if hs then
+        for i = #hs, 1, -1 do
+            if hs[i] == entry.fn then
+                table.remove(hs, i)
+                break
+            end
+        end
+    end
+    return true
 end
 
 -- Window shortcuts
 clearWindow  = __mudix_clear_window__
 hideWindow   = __mudix_windows_hide__
 showWindow   = __mudix_windows_show__
+centerview         = __mudix_centerview__
+getRoomIDbyHash    = __mudix_get_room_id_by_hash__
 
 -- display: pretty-print a value to the output window
 function display(what, indent, seen)

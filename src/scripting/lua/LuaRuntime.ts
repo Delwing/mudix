@@ -517,6 +517,19 @@ export class LuaRuntime implements IScriptingRuntime {
             return 1;
         });
 
+        this.cfunction('__mudix_centerview__', (L) => {
+            api.centerView(lua.lua_tonumber(L, 1));
+            return 0;
+        });
+
+        this.cfunction('__mudix_get_room_id_by_hash__', (L) => {
+            const hash = lua.lua_tojsstring(L, 1);
+            const id = api.getRoomIDbyHash(hash);
+            if (id === undefined) lua.lua_pushnil(L);
+            else lua.lua_pushnumber(L, id);
+            return 1;
+        });
+
         this.cfunction('__mudix_clear_window__', (L) => {
             const name = this.optstring(L, 1, undefined);
             api.clearWindow(name);

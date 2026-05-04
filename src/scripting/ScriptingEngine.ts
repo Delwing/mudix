@@ -214,6 +214,7 @@ export class ScriptingEngine {
             session.events.on('client.connect', () => this.emit('connect', [])),
             session.events.on('client.disconnect', () => this.emit('disconnect', [])),
             session.events.on('gmcp', ({ path, value }) => {
+                console.log('[gmcp]', path, value);
                 this.api.updateGmcp(path, value);
                 this.emit('gmcp', [path, value]);
             }),

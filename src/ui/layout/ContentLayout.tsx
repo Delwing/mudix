@@ -129,7 +129,7 @@ export function ContentLayout({
             {windows.map(w => createPortal(
                 w.kind === 'text' ? <TextPanel id={w.id} manager={manager} />
               : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} />
-              : <MapPanel />,
+              : <MapPanel id={w.id} manager={manager} />,
                 manager.getOrCreatePortalTarget(w.id),
                 w.id,
             ))}
