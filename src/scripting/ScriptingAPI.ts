@@ -2,7 +2,8 @@ import type { MudSession } from '../mud/MudSession';
 import type { AliasEngine } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
-import { namedColorToAnsi, parseCecho, parseDecho, parseHecho } from '../mud/text/colorParsers';
+import type { AnsiAwareBuffer } from '../mud/text/FormatState';
+import { namedColorToAnsi, namedColorToState, parseCecho, parseDecho, parseHecho } from '../mud/text/colorParsers';
 
 // ── Windows ───────────────────────────────────────────────────────────────────
 
@@ -69,15 +70,29 @@ export class ScriptingAPI {
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
     readonly gmcp: Record<string, unknown> = {};
-    // Buffers partial lines for echo/cecho/decho/hecho — always routes to the main output panel.
-    // windows.write() bypasses this entirely, so there is no per-window buffering needed.
+
+    // Buffers a partial (no-trailing-newline) echo line across calls.
     private mainOutputBuffer = '';
+
+    // During trigger processing, holds the line buffer being built. When set,
+    // selectString/fg/bg/resetFormat/deleteLine operate on this buffer instead
+    // of the already-rendered DOM. Set to null between lines.
+    private lineBuffer: AnsiAwareBuffer | null = null;
+
+    // While lineBuffer is active, echo/cecho output is held here and flushed
+    // to the output *after* the triggering line (or batch) is rendered.
+    private echoDeferred: string[] = [];
+    private isDeferringEcho = false;
+
+    private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
     constructor(private readonly session: MudSession, aliasEngine: AliasEngine, triggerEngine: TriggerEngine) {
         this.windows = new ScriptingWindowsAPI(session);
         this.aliases = aliasEngine;
         this.triggers = triggerEngine;
     }
+
+    // ── Connection ────────────────────────────────────────────────────────────
 
     connect(url: string): void {
         this.session.connect(url);
@@ -90,6 +105,8 @@ export class ScriptingAPI {
     send(text: string, echo = true): void {
         this.session.send(text, echo);
     }
+
+    // ── Echo / output ─────────────────────────────────────────────────────────
 
     echo(text: string): void {
         this.bufferText(text);
@@ -107,17 +124,114 @@ export class ScriptingAPI {
         this.bufferText(parseHecho(text));
     }
 
+    // ── Formatting (selection-aware) ──────────────────────────────────────────
+
     fg(name: string): void {
+        if (this.selection) {
+            const state = namedColorToState(name, false);
+            if (state) this.applyStateToSelection(state);
+            return;
+        }
         this.bufferText(namedColorToAnsi(name, false));
     }
 
     bg(name: string): void {
+        if (this.selection) {
+            const state = namedColorToState(name, true);
+            if (state) this.applyStateToSelection(state);
+            return;
+        }
         this.bufferText(namedColorToAnsi(name, true));
     }
 
     resetFormat(): void {
+        if (this.selection) {
+            const sel = this.selection;
+            this.selection = null;
+            const buf = this.resolveBuffer(sel.windowName);
+            if (buf) {
+                buf.clearFormat([sel.start, sel.start + sel.length]);
+                if (!this.lineBuffer) buf.rerender();
+            }
+            return;
+        }
         this.bufferText('\x1b[0m');
     }
+
+    // ── Selection ─────────────────────────────────────────────────────────────
+
+    selectString(str: string, occurrence: number, windowName?: string): number {
+        const isMain = !windowName || windowName === 'main';
+        const line = (this.lineBuffer && isMain)
+            ? this.lineBuffer.text
+            : (this.getWindowCursor(windowName ?? 'main')?.getLine() ?? '');
+
+        let count = 0;
+        let searchFrom = 0;
+        while (searchFrom <= line.length - str.length) {
+            const idx = line.indexOf(str, searchFrom);
+            if (idx === -1) break;
+            count++;
+            if (count === occurrence) {
+                this.selection = { windowName, start: idx, length: str.length };
+                return idx;
+            }
+            searchFrom = idx + str.length;
+        }
+        return -1;
+    }
+
+    selectSection(from: number, length: number, windowName?: string): void {
+        this.selection = { windowName, start: from - 1, length };
+    }
+
+    deselect(): void {
+        this.selection = null;
+    }
+
+    // ── Trigger pipeline hooks (called by ScriptingEngine) ────────────────────
+
+    /**
+     * Called before trigger processing for each incoming line. Installs the
+     * buffer so that selectString/fg/bg/deleteLine modify it in-place before
+     * render. Also enables echo deferral so trigger echo output appears after
+     * the rendered line rather than before it.
+     */
+    setLineBuffer(buffer: AnsiAwareBuffer): void {
+        this.lineBuffer = buffer;
+        this.selection = null;
+        this.isDeferringEcho = true;
+    }
+
+    /**
+     * Called after all triggers for a line have run (but before render).
+     * Clears the pre-render buffer reference; echo deferral stays active until
+     * flushDeferredEcho() is called.
+     */
+    clearLineBuffer(): void {
+        this.lineBuffer = null;
+        this.selection = null;
+    }
+
+    /**
+     * Called after all lines in a flushLines batch have been rendered. Emits
+     * any echo output collected during trigger processing, in order, after the
+     * rendered lines.
+     */
+    flushDeferredEcho(): void {
+        this.isDeferringEcho = false;
+        for (const line of this.echoDeferred) {
+            this.session.events.emit('message', line, 'script');
+        }
+        this.echoDeferred = [];
+        if (this.mainOutputBuffer.length > 0) {
+            this.session.events.emit('message', this.mainOutputBuffer, 'script');
+            this.mainOutputBuffer = '';
+        }
+        this.session.windows.flushAllLines();
+    }
+
+    // ── Triggers ──────────────────────────────────────────────────────────────
 
     /**
      * Feed `text` through the trigger pipeline as if it arrived from the MUD.
@@ -129,11 +243,11 @@ export class ScriptingAPI {
         this.session.events.emit('flushLines', [{ text, type: 'mud' }]);
     }
 
-    private getWindowCursor(name?: string) {
-        return this.session.windowCursors.get(name ?? 'main') ?? null;
-    }
+    // ── Cursor / line access ──────────────────────────────────────────────────
 
     getCurrentLine(windowName?: string): string {
+        const isMain = !windowName || windowName === 'main';
+        if (this.lineBuffer && isMain) return this.lineBuffer.text;
         return this.getWindowCursor(windowName)?.getLine() ?? '';
     }
 
@@ -149,8 +263,10 @@ export class ScriptingAPI {
         return this.getWindowCursor(windowName)?.getLines(from, to) ?? [];
     }
 
-    getColumnNumber(_windowName?: string): number {
-        // In-line column cursor is not yet tracked; return 0.
+    getColumnNumber(windowName?: string): number {
+        if (this.selection && this.selection.windowName === windowName) {
+            return this.selection.start + 1;
+        }
         return 0;
     }
 
@@ -178,9 +294,45 @@ export class ScriptingAPI {
         this.getWindowCursor(windowName)?.moveTo(y);
     }
 
+    // ── Window / line management ──────────────────────────────────────────────
+
+    clearWindow(name?: string): void {
+        if (!name || name === 'main') {
+            this.session.events.emit('script.clearwindow');
+        } else {
+            this.session.windows.clear(name);
+        }
+    }
+
+    deleteLine(windowName?: string): void {
+        const isMain = !windowName || windowName === 'main';
+        if (this.lineBuffer && isMain) {
+            // Pre-render: mark buffer so ScriptingEngine skips the render step.
+            this.lineBuffer.markAsDeleted();
+            return;
+        }
+        if (windowName && windowName !== 'main') {
+            this.getWindowCursor(windowName)?.deleteLine();
+        } else {
+            this.session.events.emit('script.deleteline');
+        }
+    }
+
+    appendCmdLine(text: string): void {
+        this.session.events.emit('script.appendcmd', text);
+    }
+
+    setCmdLine(text: string): void {
+        this.session.events.emit('script.setcmd', text);
+    }
+
+    // ── Misc ──────────────────────────────────────────────────────────────────
+
     /** Flush any buffered partial lines to the main output and all open windows. Called after each event dispatch. */
     flushOutput(): void {
-        if (this.mainOutputBuffer.length > 0) {
+        // During trigger processing, don't emit the main buffer — it's deferred
+        // until flushDeferredEcho() is called after render.
+        if (!this.isDeferringEcho && this.mainOutputBuffer.length > 0) {
             this.session.events.emit('message', this.mainOutputBuffer, 'script');
             this.mainOutputBuffer = '';
         }
@@ -209,40 +361,49 @@ export class ScriptingAPI {
         node[parts[parts.length - 1]] = value;
     }
 
-    clearWindow(name?: string): void {
-        if (!name || name === 'main') {
-            this.session.events.emit('script.clearwindow');
-        } else {
-            this.session.windows.clear(name);
-        }
-    }
-
-    deleteLine(windowName?: string): void {
-        if (windowName && windowName !== 'main') {
-            this.getWindowCursor(windowName)?.deleteLine();
-        } else {
-            this.session.events.emit('script.deleteline');
-        }
-    }
-
-    appendCmdLine(text: string): void {
-        this.session.events.emit('script.appendcmd', text);
-    }
-
-    setCmdLine(text: string): void {
-        this.session.events.emit('script.setcmd', text);
-    }
-
     destroy(): void {
         this.flushOutput();
     }
 
-    // Split on newlines: emit each complete line immediately, buffer the remainder.
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    private getWindowCursor(name?: string) {
+        return this.session.windowCursors.get(name ?? 'main') ?? null;
+    }
+
+    /**
+     * Returns the buffer to target for selection operations. During trigger
+     * processing (lineBuffer set), that's the pre-render buffer. Otherwise it's
+     * the already-rendered DOM buffer via cursor ops.
+     */
+    private resolveBuffer(windowName: string | undefined): AnsiAwareBuffer | null {
+        const isMain = !windowName || windowName === 'main';
+        if (this.lineBuffer && isMain) return this.lineBuffer;
+        return this.getWindowCursor(windowName ?? 'main')?.getBuffer() ?? null;
+    }
+
+    private applyStateToSelection(state: ReturnType<typeof namedColorToState>): void {
+        if (!this.selection || !state) return;
+        const sel = this.selection;
+        const buf = this.resolveBuffer(sel.windowName);
+        if (!buf) return;
+        buf.applyFormat([sel.start, sel.start + sel.length], state);
+        // Only rerender if already in the DOM (post-trigger path).
+        if (!this.lineBuffer) buf.rerender();
+    }
+
+    // Split on newlines: emit each complete line, buffer the remainder.
+    // During trigger processing, complete lines go into echoDeferred instead
+    // of being emitted immediately, so they appear after the triggering lines.
     private bufferText(text: string): void {
         const combined = this.mainOutputBuffer + text;
         const lines = combined.split('\n');
         for (let i = 0; i < lines.length - 1; i++) {
-            this.session.events.emit('message', lines[i], 'script');
+            if (this.isDeferringEcho) {
+                this.echoDeferred.push(lines[i]);
+            } else {
+                this.session.events.emit('message', lines[i], 'script');
+            }
         }
         this.mainOutputBuffer = lines[lines.length - 1];
     }

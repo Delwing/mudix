@@ -34,6 +34,8 @@ function lineCount(parent: HTMLElement, sentinel: HTMLElement): number {
 export type CursorOps = {
     /** Plain text of the line at the current cursor position. */
     getLine: () => string;
+    /** AnsiAwareBuffer of the line at the current cursor position, for in-place coloring. */
+    getBuffer: () => AnsiAwareBuffer | null;
     /** Remove the line at the current cursor position. */
     deleteLine: () => void;
     /** Move the cursor one line toward older output. */
@@ -71,6 +73,11 @@ export function createWindowCursorOps(container: HTMLElement): {
         getLine(): string {
             const el = resolve();
             return el ? (elementBuffers.get(el)?.text ?? '') : '';
+        },
+
+        getBuffer(): AnsiAwareBuffer | null {
+            const el = resolve();
+            return el ? (elementBuffers.get(el) ?? null) : null;
         },
 
         deleteLine(): void {
@@ -259,6 +266,12 @@ export function setupOutputRenderer(
             const el = resolveElement();
             if (!el || el === sentinel) return '';
             return elementBuffers.get(el)?.text ?? '';
+        },
+
+        getBuffer(): AnsiAwareBuffer | null {
+            const el = resolveElement();
+            if (!el || el === sentinel) return null;
+            return elementBuffers.get(el) ?? null;
         },
 
         deleteLine(): void {

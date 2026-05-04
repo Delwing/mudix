@@ -390,6 +390,7 @@ export class AnsiAwareBuffer {
     private _deleted = false;
     private _onRender?: (container: HTMLElement) => void;
     private _textCache: string | null = null;
+    private _renderContainer: HTMLElement | null = null;
 
     constructor(initial?: string | BufferSegment[], state?: FormatStateSnapshot) {
         if (typeof initial === "string") {
@@ -422,10 +423,32 @@ export class AnsiAwareBuffer {
 
     /** @internal */
     notifyRender(container: HTMLElement): void {
+        this._renderContainer = container;
         if (this._onRender) {
             this._onRender(container);
             this._onRender = undefined;
         }
+    }
+
+    /** Re-renders the buffer into its previously notified container. No-op if not yet rendered. */
+    rerender(): void {
+        const container = this._renderContainer;
+        if (!container) return;
+        while (container.firstChild) container.removeChild(container.firstChild);
+        if (this.length === 0) {
+            container.innerHTML = '&nbsp;';
+        } else {
+            container.appendChild(this.toDom());
+        }
+    }
+
+    /** Removes all formatting from a range (clears colors, bold, etc.). */
+    clearFormat(range: TextRange): this {
+        const [start, end] = range;
+        if (start >= end) return this;
+        const text = this.text.slice(start, end);
+        this.replace([start, end], text, {});
+        return this;
     }
 
     clone(): AnsiAwareBuffer {

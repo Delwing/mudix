@@ -4,6 +4,7 @@ import type { TriggerEngine, PermanentTrigger } from '../mud/triggers/TriggerEng
 import type { TimerEngine, PermanentTimer } from '../mud/timers/TimerEngine';
 import type { KeyEngine, PermanentKeybinding } from '../mud/keybindings/KeyEngine';
 import type { Script } from '../storage/schema';
+import { AnsiAwareBuffer } from '../mud/text/FormatState';
 import { ScriptingAPI } from './ScriptingAPI';
 import { LuaRuntime } from './lua/LuaRuntime';
 import type { IScriptingRuntime } from './IScriptingRuntime';
@@ -142,15 +143,26 @@ export class ScriptingEngine {
         }
     }
 
-    private processLineTriggers(line: string, isPrompt = false): void {
-        const plain = line.replace(ANSI_RE, '');
+    /**
+     * Run all triggers against `plain` (the original ANSI-stripped text).
+     * Trigger handlers that call selectString/fg/bg/deleteLine modify `buffer`
+     * in-place. The buffer is NOT rendered here — the caller renders it after
+     * this returns, so the final rendered line already has all colorization.
+     *
+     * echo/cecho output from trigger handlers is deferred (via ScriptingAPI)
+     * and flushed after all lines in the batch are rendered.
+     */
+    private processLineTriggers(plain: string, buffer: AnsiAwareBuffer, isPrompt = false): void {
+        this.api.setLineBuffer(buffer);
         (this.runtimes.lua as LuaRuntime | null)?.setCurrentLine(plain, isPrompt);
         this.triggerEngine.processTemp(plain);
         for (const { trigger, captures } of this.triggerEngine.matchPerm(plain)) {
             this.executePermTrigger(trigger, [plain, ...captures]);
         }
         this.runtimes.lua?.processTrigger(plain);
-        this.api.flushOutput();
+        this.api.clearLineBuffer();
+        // Do NOT call flushOutput here — ScriptingEngine.bridgeEvents handles
+        // the flush after render via flushDeferredEcho().
     }
 
     private emit(event: string, args: unknown[]): void {
@@ -167,22 +179,36 @@ export class ScriptingEngine {
                 for (const { text, type } of groups) {
                     const lines = text.split('\n');
                     if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+
                     for (let i = 0; i < lines.length; i++) {
                         const line = lines[i];
                         const plain = line.replace(ANSI_RE, '');
-                        // Last line in a chunk that arrived with GA/EOR is the prompt
                         const isPrompt = this.promptPending && i === lines.length - 1;
                         if (isPrompt) this.promptPending = false;
-                        // Skip rendering lines that carry only ANSI codes (no visible text).
-                        // Genuine blank lines (empty string) are still rendered.
-                        if (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES) {
-                            session.events.emit('message', line, type, Date.now());
-                        }
+
+                        // Build the buffer before triggers so handlers can colour it.
+                        const buffer = new AnsiAwareBuffer(line);
+
+                        // 1. Run triggers first — they may colour or delete the buffer.
                         if (plain.length > 0) {
-                            this.processLineTriggers(line, isPrompt);
+                            this.processLineTriggers(plain, buffer, isPrompt);
                             this.emit('output', [line, type]);
                         }
+
+                        // 2. Render the (possibly modified) buffer, unless a trigger
+                        //    deleted it or it should be filtered.
+                        const shouldRender =
+                            !buffer.deleted &&
+                            (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
+                        if (shouldRender) {
+                            session.events.emit('message', buffer, type, Date.now());
+                        }
                     }
+
+                    // 3. After all lines in the group are rendered, flush any echo
+                    //    output that trigger handlers produced. This ensures trigger
+                    //    echo always appears after the batch, never interleaved with it.
+                    this.api.flushDeferredEcho();
                 }
             }),
             session.events.on('client.connect', () => this.emit('connect', [])),

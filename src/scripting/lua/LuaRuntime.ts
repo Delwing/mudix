@@ -608,6 +608,37 @@ export class LuaRuntime implements IScriptingRuntime {
             this.push(api.getLines(from, to, win));
             return 1;
         });
+
+        this.cfunction('__mudix_select_string__', (L) => {
+            // selectString([windowName], text, number_of_match)
+            const nargs = lua.lua_gettop(L);
+            let win: string | undefined;
+            let str: string;
+            let occurrence: number;
+            if (nargs >= 3) {
+                win        = lua.lua_tojsstring(L, 1);
+                str        = lua.lua_tojsstring(L, 2);
+                occurrence = (lua.lua_tonumber(L, 3) | 0) || 1;
+            } else {
+                str        = lua.lua_tojsstring(L, 1);
+                occurrence = (lua.lua_tonumber(L, 2) | 0) || 1;
+            }
+            lua.lua_pushnumber(L, api.selectString(str, occurrence, win));
+            return 1;
+        });
+
+        this.cfunction('__mudix_select_section__', (L) => {
+            const from   = lua.lua_tonumber(L, 1) | 0;
+            const length = lua.lua_tonumber(L, 2) | 0;
+            const win    = this.optstring(L, 3, undefined);
+            api.selectSection(from, length, win);
+            return 0;
+        });
+
+        this.cfunction('__mudix_deselect__', (_L) => {
+            api.deselect();
+            return 0;
+        });
     }
 
     /** Register a C function as a Lua global. */

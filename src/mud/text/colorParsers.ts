@@ -1,4 +1,5 @@
 import mudletColors from './mudletColors.json';
+import type { FormatStateSnapshot, RgbColor } from './FormatState';
 
 const MUDLET_COLORS = mudletColors as unknown as Record<string, [number, number, number]>;
 
@@ -7,6 +8,15 @@ export function namedColorToAnsi(name: string, bg = false): string {
     const c = MUDLET_COLORS[name];
     if (!c) return '';
     return `\x1b[${bg ? 48 : 38};2;${c[0]};${c[1]};${c[2]}m`;
+}
+
+/** Converts a named Mudlet color to a FormatStateSnapshot for buffer-level coloring. */
+export function namedColorToState(name: string, bg = false): FormatStateSnapshot | null {
+    if (name === 'r' || name === 'reset') return {};
+    const c = MUDLET_COLORS[name];
+    if (!c) return null;
+    const color: RgbColor = { space: 'rgb', r: c[0], g: c[1], b: c[2] };
+    return bg ? { background: color } : { foreground: color };
 }
 
 /** cecho: <color_name>text<r>  or  <b:color_name>text for background */

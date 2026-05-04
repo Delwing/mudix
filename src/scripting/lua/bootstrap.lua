@@ -319,6 +319,9 @@ getLineNumber    = __mudix_get_line_number__
 getLineCount     = __mudix_get_line_count__
 getColumnNumber  = __mudix_get_column_number__
 getLines         = __mudix_get_lines__
+selectString     = __mudix_select_string__
+selectSection    = __mudix_select_section__
+deselect         = __mudix_deselect__
 
 -- multiline trigger context globals — populated by the trigger engine when a multiline
 -- trigger fires. Initialised here so scripts can safely call table.size(multimatches).
