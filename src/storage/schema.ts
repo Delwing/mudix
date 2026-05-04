@@ -69,6 +69,13 @@ export interface PermanentKeybinding {
     enabled: boolean;
 }
 
+export interface ScriptEditorBounds {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
 export interface AppSchema {
     connections: MudConnection[];
     ui: UISettings;
@@ -80,6 +87,7 @@ export interface AppSchema {
     connectionTriggers: Record<string, PermanentTrigger[]>;
     connectionTimers: Record<string, PermanentTimer[]>;
     connectionKeybindings: Record<string, PermanentKeybinding[]>;
+    connectionScriptEditorBounds: Record<string, ScriptEditorBounds>;
 }
 
 export const APP_DEFAULTS: AppSchema = {
@@ -97,6 +105,7 @@ export const APP_DEFAULTS: AppSchema = {
     connectionTriggers: {},
     connectionTimers: {},
     connectionKeybindings: {},
+    connectionScriptEditorBounds: {},
 };
 
 export function connectionUrl(c: MudConnection): string {

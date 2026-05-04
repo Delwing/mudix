@@ -252,7 +252,8 @@ export class LuaRuntime implements IScriptingRuntime {
         const { api } = this;
 
         this.cfunction('__mudix_send__', (L) => {
-            api.send(lua.lua_tojsstring(L, 1));
+            const echo = lua.lua_type(L, 2) === lua.LUA_TBOOLEAN ? !!lua.lua_toboolean(L, 2) : true;
+            api.send(lua.lua_tojsstring(L, 1), echo);
             return 0;
         });
 

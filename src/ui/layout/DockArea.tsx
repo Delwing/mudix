@@ -58,17 +58,20 @@ export function DockArea({ side, windows, extent, dragState, manager, onSetExten
         const seenGroups = new Set<string>();
 
         for (const w of sorted) {
-            if (w.dockGroup) {
+            // splitGroup is checked first: a tab group can be a member of a split group,
+            // giving a panel both dockGroup and splitGroup. The split slot owns the outer
+            // rendering; SplitGroupPanel handles the inner tab group.
+            if (w.splitGroup) {
+                if (seenGroups.has(w.splitGroup)) continue;
+                seenGroups.add(w.splitGroup);
+                const group = sorted.filter(p => p.splitGroup === w.splitGroup).sort((a, b) => (a.splitOrder ?? 0) - (b.splitOrder ?? 0));
+                result.push({ id: w.splitGroup, targetId: group[0].id, flex: w.dockFlex ?? 1, kind: 'split', panels: group });
+            } else if (w.dockGroup) {
                 if (seenGroups.has(w.dockGroup)) continue;
                 seenGroups.add(w.dockGroup);
                 const group  = sorted.filter(p => p.dockGroup === w.dockGroup).sort((a, b) => (a.tabOrder ?? 0) - (b.tabOrder ?? 0));
                 const active = group.find(p => p.isActiveTab) ?? group[0];
                 result.push({ id: w.dockGroup, targetId: active.id, flex: w.dockFlex ?? 1, kind: 'tabs', panels: group, activeId: active.id });
-            } else if (w.splitGroup) {
-                if (seenGroups.has(w.splitGroup)) continue;
-                seenGroups.add(w.splitGroup);
-                const group = sorted.filter(p => p.splitGroup === w.splitGroup).sort((a, b) => (a.splitOrder ?? 0) - (b.splitOrder ?? 0));
-                result.push({ id: w.splitGroup, targetId: group[0].id, flex: w.dockFlex ?? 1, kind: 'split', panels: group });
             } else {
                 result.push({ id: w.id, targetId: w.id, flex: w.dockFlex ?? 1, kind: 'single', panels: [w] });
             }
@@ -204,9 +207,11 @@ export function DockArea({ side, windows, extent, dragState, manager, onSetExten
                 const realIdx  = realSlots.findIndex(r => r.id === slot.id);
                 const nextReal = realSlots[realIdx + 1];
 
+                // For split group slots, the stack-target highlight is delegated to
+                // SplitGroupPanel so it can highlight only the hovered sub-panel.
                 const slotClass = [
                     'dock-panel-slot',
-                    slot.isStackTarget ? 'dock-panel-slot--stack-target' : '',
+                    slot.isStackTarget && slot.kind !== 'split' ? 'dock-panel-slot--stack-target' : '',
                 ].filter(Boolean).join(' ');
 
                 // Cross-axis split preview: temporarily split the slot 50/50 between
@@ -230,6 +235,9 @@ export function DockArea({ side, windows, extent, dragState, manager, onSetExten
                         manager={manager}
                         onDragStateChange={onDragStateChange}
                         onTitlebarContextMenu={onTitlebarContextMenu}
+                        stackTargetId={slot.isStackTarget ? dragState?.stackTargetId : undefined}
+                        splitTargetId={slot.isSplitTarget ? dragState?.splitTargetId : undefined}
+                        splitBefore={dragState?.splitBefore}
                     />
                 ) : (
                     <DockedPanel
@@ -249,7 +257,9 @@ export function DockArea({ side, windows, extent, dragState, manager, onSetExten
                     </div>
                 );
 
-                const slotInner = slot.isSplitTarget ? (
+                // Split group slots handle their own inner ghost preview via SplitGroupPanel.
+                // The outer wrapper is only for single-panel and tab-group slots.
+                const slotInner = slot.isSplitTarget && slot.kind !== 'split' ? (
                     <div style={{ display: 'flex', flexDirection: crossVertical ? 'column' : 'row', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
                         {slot.splitBefore ? <>{ghostEl}<div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>{panelContent}</div></> : <><div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>{panelContent}</div>{ghostEl}</>}
                     </div>

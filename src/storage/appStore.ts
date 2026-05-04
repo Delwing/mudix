@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { APP_DEFAULTS, type AppSchema, type MudConnection, type PermanentAlias, type PermanentKeybinding, type PermanentTimer, type PermanentTrigger, type Script, type UISettings } from './schema';
+import { APP_DEFAULTS, type AppSchema, type MudConnection, type PermanentAlias, type PermanentKeybinding, type PermanentTimer, type PermanentTrigger, type Script, type ScriptEditorBounds, type UISettings } from './schema';
 import type { WindowOpenOptions } from '../ui/windows/types';
 
 interface AppStore extends AppSchema {
@@ -26,6 +26,7 @@ interface AppStore extends AppSchema {
     addKeybinding: (connectionId: string, data: Omit<PermanentKeybinding, 'id'>) => string;
     updateKeybinding: (connectionId: string, id: string, patch: Partial<Omit<PermanentKeybinding, 'id'>>) => void;
     removeKeybinding: (connectionId: string, id: string) => void;
+    saveScriptEditorBounds: (connectionId: string, bounds: ScriptEditorBounds) => void;
 }
 
 export const useAppStore = create<AppStore>()(
@@ -184,12 +185,18 @@ export const useAppStore = create<AppStore>()(
                     [connectionId]: (s.connectionKeybindings[connectionId] ?? []).filter(k => k.id !== id),
                 },
             })),
+            saveScriptEditorBounds: (connectionId, bounds) => set(s => ({
+                connectionScriptEditorBounds: {
+                    ...s.connectionScriptEditorBounds,
+                    [connectionId]: bounds,
+                },
+            })),
         }),
         {
             name: 'mudix_v1',
-            version: 8,
-            partialize: ({ connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings }) => ({
-                connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings,
+            version: 9,
+            partialize: ({ connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds }) => ({
+                connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds,
             }),
             migrate: (saved, version) => {
                 const s = saved as Partial<AppSchema> & { connections?: any[] };
@@ -213,6 +220,7 @@ export const useAppStore = create<AppStore>()(
                     connectionTriggers: s.connectionTriggers ?? {},
                     connectionTimers: s.connectionTimers ?? {},
                     connectionKeybindings: s.connectionKeybindings ?? {},
+                    connectionScriptEditorBounds: s.connectionScriptEditorBounds ?? {},
                 };
             },
         },

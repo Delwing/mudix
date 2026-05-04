@@ -87,8 +87,8 @@ export class ScriptingAPI {
         this.session.disconnect();
     }
 
-    send(text: string): void {
-        this.session.send(text);
+    send(text: string, echo = true): void {
+        this.session.send(text, echo);
     }
 
     echo(text: string): void {

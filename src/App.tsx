@@ -6,7 +6,7 @@ import { ContentLayout } from './ui/layout/ContentLayout';
 import { ConnectionScreen } from './ui/ConnectionScreen';
 import { useAppStore, connectionUrl, type MudConnection } from './storage';
 import { useEngines } from './hooks/useEngines';
-import { ScriptEditorPanel } from './ui/windows/panels/ScriptEditorPanel';
+import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
 import type { Script } from './storage/schema';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
@@ -183,7 +183,11 @@ export default function App() {
     };
 
     const handleOpenMap = () => {
-        session.windows.open('map', { kind: 'map', title: 'Map', position: 'right', autoOpen: true });
+        if (session.windows.isVisible('map')) {
+            session.windows.hide('map');
+        } else {
+            session.windows.open('map', { kind: 'map', title: 'Map', position: 'right', autoOpen: true });
+        }
     };
 
     const handleOpenScripts = () => setScriptsOpen(v => !v);
@@ -191,7 +195,10 @@ export default function App() {
 
     const handleSend = () => {
         const consumed = engineRef.current?.processInput(command) ?? false;
-        if (!consumed) send(command);
+        if (!consumed) {
+            session.echoCommand(command);
+            send(command, false);
+        }
         setCommand('');
     };
 
@@ -255,12 +262,15 @@ export default function App() {
                     stickyLines={DEFAULT_STICKY_LINES}
                     commandInputRef={commandInputRef}
                 />
-                {scriptsOpen && (
-                    <aside className="scripts-sidebar">
-                        <ScriptEditorPanel connectionId={activeConnectionId ?? ''} session={session} onScriptSave={handleScriptSave} />
-                    </aside>
-                )}
             </div>
+            {scriptsOpen && (
+                <ScriptEditorModal
+                    connectionId={activeConnectionId ?? ''}
+                    session={session}
+                    onScriptSave={handleScriptSave}
+                    onClose={() => setScriptsOpen(false)}
+                />
+            )}
             <CommandBar
                 command={command}
                 onCommandChange={setCommand}

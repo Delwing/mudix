@@ -63,11 +63,15 @@ export class MudSession {
         this.client?.disconnect();
     }
 
-    send(text: string): void {
-        if (!this.client) return;
-        if (this.client.shouldEchoCommand()) {
-            this.client.output(`> ${text}`);
+    echoCommand(text: string): void {
+        if (!this.client || this.client.shouldEchoCommand()) {
+            this.events.emit('message', `> ${text}`, 'echo', Date.now());
         }
+    }
+
+    send(text: string, echo = true): void {
+        if (echo) this.echoCommand(text);
+        if (!this.client) return;
         this.client.send(text);
     }
 

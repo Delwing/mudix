@@ -36,17 +36,14 @@ export class ScriptingEngine {
     /** Load (or reload) scripts. Restarts each runtime cleanly. */
     loadScripts(scripts: Script[]): void {
         this.runtimes.lua?.destroy();
-        this.runtimes.lua = null;
-
-        const lua = scripts.filter(s => s.enabled && s.language === 'lua');
-        if (lua.length > 0) {
-            try {
-                const rt = new LuaRuntime(this.api);
-                this.runtimes.lua = rt;
-                for (const s of lua) rt.load(s.code, s.name);
-            } catch (err) {
-                this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
-            }
+        try {
+            const rt = new LuaRuntime(this.api);
+            this.runtimes.lua = rt;
+            const lua = scripts.filter(s => s.enabled && s.language === 'lua');
+            for (const s of lua) rt.load(s.code, s.name);
+        } catch (err) {
+            this.runtimes.lua = null;
+            this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
         }
         this.api.flushOutput();
     }

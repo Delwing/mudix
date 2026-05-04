@@ -14,10 +14,14 @@ export function MapPanel() {
     const rendererRef = useRef<MapRenderer | null>(null);
     const readerRef = useRef<MapReader | null>(null);
     const prevWidthRef = useRef<number>(0);
+    const dropdownRef = useRef<HTMLDivElement>(null);
     const [status, setStatus] = useState<MapStatus>('loading');
     const [errorMsg, setErrorMsg] = useState('');
     const [areas, setAreas] = useState<Array<{ id: number; name: string }>>([]);
     const [currentArea, setCurrentArea] = useState<number | null>(null);
+    const [levels, setLevels] = useState<number[]>([]);
+    const [currentLevel, setCurrentLevel] = useState<number>(0);
+    const [dropdownOpen, setDropdownOpen] = useState(false);
 
     const initRenderer = useCallback((mapData: AnyArea[], colors: { envId: number; colors: number[] }[]) => {
         if (!containerRef.current) return;
@@ -26,7 +30,9 @@ export function MapPanel() {
         const reader = new MapReader(mapData, colors);
         readerRef.current = reader;
 
-        const areaList = reader.getAreas().map(a => ({ id: a.getAreaId(), name: a.getAreaName() }));
+        const areaList = reader.getAreas()
+            .map(a => ({ id: a.getAreaId(), name: a.getAreaName() }))
+            .sort((a, b) => a.name.localeCompare(b.name));
         setAreas(areaList);
 
         const settings = createSettings();
@@ -37,7 +43,11 @@ export function MapPanel() {
 
         if (areaList.length > 0) {
             const firstId = areaList[0].id;
-            renderer.drawArea(firstId, 0);
+            const firstLevels = reader.getArea(firstId).getZLevels().sort((a, b) => a - b);
+            const firstLevel = firstLevels.includes(0) ? 0 : (firstLevels[0] ?? 0);
+            setLevels(firstLevels);
+            setCurrentLevel(firstLevel);
+            renderer.drawArea(firstId, firstLevel);
             renderer.fitArea();
             setCurrentArea(firstId);
         }
@@ -67,6 +77,15 @@ export function MapPanel() {
         }).catch(() => setStatus('empty'));
     }, [loadFromBuffer]);
 
+    // Close dropdown on outside click
+    useEffect(() => {
+        if (!dropdownOpen) return;
+        const onDown = (e: MouseEvent) => {
+            if (!dropdownRef.current?.contains(e.target as Node)) setDropdownOpen(false);
+        };
+        document.addEventListener('mousedown', onDown);
+        return () => document.removeEventListener('mousedown', onDown);
+    }, [dropdownOpen]);
 
     // Divs don't fire "resize" natively; the renderer needs it to update canvas size.
     // After the canvas resizes, scale zoom proportionally to preserve visible world bounds
@@ -114,29 +133,79 @@ export function MapPanel() {
         }
     }, [loadFromBuffer]);
 
-    const handleAreaChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-        const id = Number(e.target.value);
+    const selectArea = useCallback((id: number) => {
+        const areaLevels = readerRef.current?.getArea(id).getZLevels().sort((a, b) => a - b) ?? [0];
+        const level = areaLevels.includes(0) ? 0 : (areaLevels[0] ?? 0);
+        setLevels(areaLevels);
+        setCurrentLevel(level);
         setCurrentArea(id);
-        rendererRef.current?.drawArea(id, 0);
+        setDropdownOpen(false);
+        rendererRef.current?.drawArea(id, level);
         rendererRef.current?.fitArea();
     }, []);
 
+    const handleLevelChange = useCallback((delta: number) => {
+        if (!rendererRef.current || !currentArea) return;
+        const idx = levels.indexOf(currentLevel);
+        const nextIdx = idx + delta;
+        if (nextIdx < 0 || nextIdx >= levels.length) return;
+        const nextLevel = levels[nextIdx];
+        setCurrentLevel(nextLevel);
+        rendererRef.current.drawArea(currentArea, nextLevel);
+    }, [currentArea, currentLevel, levels]);
+
+    const currentAreaName = areas.find(a => a.id === currentArea)?.name ?? '';
+
     return (
         <div className="map-panel">
-            {status === 'ready' && areas.length > 1 && (
+            <div ref={containerRef} className="map-canvas-container" />
+            {status === 'ready' && (
                 <div className="map-panel-toolbar">
-                    <select
-                        className="map-area-select"
-                        value={currentArea ?? ''}
-                        onChange={handleAreaChange}
-                    >
-                        {areas.map(a => (
-                            <option key={a.id} value={a.id}>{a.name}</option>
-                        ))}
-                    </select>
+                    {areas.length > 1 && (
+                        <div className="map-area-dropdown" ref={dropdownRef}>
+                            <button
+                                className="map-area-dropdown-btn"
+                                onClick={() => setDropdownOpen(v => !v)}
+                            >
+                                <span className="map-area-dropdown-label">{currentAreaName}</span>
+                                <svg width="8" height="5" viewBox="0 0 8 5" fill="none">
+                                    <path d="M0 0l4 5 4-5z" fill="currentColor" />
+                                </svg>
+                            </button>
+                            {dropdownOpen && (
+                                <div className="map-area-dropdown-list">
+                                    {areas.map(a => (
+                                        <div
+                                            key={a.id}
+                                            className={`map-area-dropdown-item${a.id === currentArea ? ' map-area-dropdown-item--active' : ''}`}
+                                            onMouseDown={() => selectArea(a.id)}
+                                        >
+                                            {a.name}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {levels.length > 1 && (
+                        <div className="map-level-controls">
+                            <button
+                                className="btn btn--secondary btn--sm"
+                                onClick={() => handleLevelChange(1)}
+                                disabled={levels.indexOf(currentLevel) >= levels.length - 1}
+                                title="Level up"
+                            >▲</button>
+                            <span className="map-level-display">{currentLevel}</span>
+                            <button
+                                className="btn btn--secondary btn--sm"
+                                onClick={() => handleLevelChange(-1)}
+                                disabled={levels.indexOf(currentLevel) <= 0}
+                                title="Level down"
+                            >▼</button>
+                        </div>
+                    )}
                 </div>
             )}
-            <div ref={containerRef} className="map-canvas-container" />
             {status === 'loading' && (
                 <div className="map-overlay">
                     <span>Loading map…</span>

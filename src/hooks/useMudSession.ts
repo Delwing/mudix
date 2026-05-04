@@ -21,7 +21,7 @@ export function useMudSession(options?: MudSessionOptions) {
 
     const connect = useCallback((url: string) => session.connect(url), [session]);
     const disconnect = useCallback(() => session.disconnect(), [session]);
-    const send = useCallback((text: string) => session.send(text), [session]);
+    const send = useCallback((text: string, echo = true) => session.send(text, echo), [session]);
 
     return { session, status, ping, passwordMode, connect, disconnect, send };
 }

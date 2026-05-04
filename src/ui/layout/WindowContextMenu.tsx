@@ -15,16 +15,16 @@ export function WindowContextMenu({ windows, manager, x, y, onClose }: WindowCon
     const ref = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        const onMouseDown = (e: MouseEvent) => {
+        const onPointerDown = (e: PointerEvent) => {
             if (!ref.current?.contains(e.target as Node)) onClose();
         };
         const onKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') onClose();
         };
-        document.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('pointerdown', onPointerDown);
         document.addEventListener('keydown', onKeyDown);
         return () => {
-            document.removeEventListener('mousedown', onMouseDown);
+            document.removeEventListener('pointerdown', onPointerDown);
             document.removeEventListener('keydown', onKeyDown);
         };
     }, [onClose]);

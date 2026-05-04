@@ -32,7 +32,7 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
             {status === 'disconnected'
                 ? <>
                     <Button variant="ghost" onClick={onReconnect}>Reconnect</Button>
-                    <Button variant="ghost" onClick={onNewConnection}>New Connection</Button>
+                    <Button variant="ghost" onClick={onNewConnection}>Close Profile</Button>
                   </>
                 : <Button variant="ghost" onClick={onDisconnect}>Disconnect</Button>
             }
