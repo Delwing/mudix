@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Clock, Folder, FolderOpen, Keyboard, CornerDownRight, FileCode2, Zap } from 'lucide-react';
+import { Clock, Folder, FolderOpen, Keyboard, Shuffle, FileCode2, Zap } from 'lucide-react';
 import { Button, Input } from '../../components';
 import { useAppStore } from '../../../storage';
 import type { AliasNode, KeyNode, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
@@ -35,6 +35,17 @@ function formatKeyCombo(key: string, modifiers: string[]): string {
     return parts.join('+');
 }
 
+function secsToHMSM(total: number) {
+    const totalMs = Math.round(total * 1000);
+    const ms = totalMs % 1000;
+    const totalSecs = Math.floor(totalMs / 1000);
+    const s = totalSecs % 60;
+    const totalMins = Math.floor(totalSecs / 60);
+    const m = totalMins % 60;
+    const h = Math.floor(totalMins / 60);
+    return { h, m, s, ms };
+}
+
 function isAncestorOf(ancestorId: string, itemId: string, items: AnyNode[]): boolean {
     const byId = new Map(items.map(i => [i.id, i]));
     let node = byId.get(itemId);
@@ -56,7 +67,7 @@ function ItemIcon({ category, isGroup, isExpanded }: { category: Category; isGro
     const props = { size: ICON_SIZE, strokeWidth: ICON_STROKE, className: 'script-editor__item-icon' };
     switch (category) {
         case 'scripts':  return <FileCode2       {...props} />;
-        case 'aliases':  return <CornerDownRight  {...props} />;
+        case 'aliases':  return <Shuffle           {...props} />;
         case 'triggers': return <Zap              {...props} />;
         case 'timers':   return <Clock            {...props} />;
         case 'keys':     return <Keyboard         {...props} />;
@@ -182,11 +193,15 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
     const [editCode, setEditCode]     = useState('');
     // Alias extra
     const [editPattern, setEditPattern]   = useState('');
+    const [editCommand, setEditCommand]   = useState('');
     // Trigger extra
     const [editPatterns, setEditPatterns] = useState<TriggerPattern[]>([]);
     // Timer extra
-    const [editSeconds, setEditSeconds]   = useState(60);
-    const [editRepeat, setEditRepeat]     = useState(true);
+    const [editHours,   setEditHours]   = useState(0);
+    const [editMinutes, setEditMinutes] = useState(1);
+    const [editSecs,    setEditSecs]    = useState(0);
+    const [editMs,      setEditMs]      = useState(0);
+    const [editRepeat, setEditRepeat]   = useState(true);
     // Key extra
     const [editKey, setEditKey]               = useState('');
     const [editModifiers, setEditModifiers]   = useState<string[]>([]);
@@ -224,12 +239,19 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
         setEditName(selected.name);
         setEditLang(selected.language);
         setEditCode(selected.code);
-        if (category === 'aliases') setEditPattern((selected as AliasNode).pattern ?? '');
+        if (category === 'aliases') {
+            setEditPattern((selected as AliasNode).pattern ?? '');
+            setEditCommand((selected as AliasNode).command ?? '');
+        }
         if (category === 'triggers') setEditPatterns((selected as TriggerNode).patterns ?? []);
         if (category === 'scripts') setEditEventHandlers((selected as ScriptNode).eventHandlers?.join('\n') ?? '');
         if (category === 'timers') {
             const t = selected as TimerNode;
-            setEditSeconds(t.seconds);
+            const { h, m, s, ms } = secsToHMSM(t.seconds);
+            setEditHours(h);
+            setEditMinutes(m);
+            setEditSecs(s);
+            setEditMs(ms);
             setEditRepeat(t.repeat);
         }
         if (category === 'keys') {
@@ -363,6 +385,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
             id = addAlias(connectionId, {
                 name: asGroup ? 'New Group' : 'New Alias',
                 pattern: '',
+                command: '',
                 language: 'lua',
                 code: '',
                 enabled: true,
@@ -433,11 +456,12 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
             updateScript(connectionId, selectedId, { name: editName, language: editLang, code: editCode, eventHandlers: handlers });
             onScriptSave?.({ ...(selected as ScriptNode), name: editName, language: editLang, code: editCode, eventHandlers: handlers });
         } else if (category === 'aliases') {
-            updateAlias(connectionId, selectedId, { name: editName, pattern: editPattern, language: editLang, code: editCode });
+            updateAlias(connectionId, selectedId, { name: editName, pattern: editPattern, command: editCommand, language: editLang, code: editCode });
         } else if (category === 'triggers') {
             updateTrigger(connectionId, selectedId, { name: editName, patterns: editPatterns, language: editLang, code: editCode });
         } else if (category === 'timers') {
-            updateTimer(connectionId, selectedId, { name: editName, seconds: editSeconds, repeat: editRepeat, language: editLang, code: editCode });
+            const seconds = editHours * 3600 + editMinutes * 60 + editSecs + editMs / 1000;
+            updateTimer(connectionId, selectedId, { name: editName, seconds, repeat: editRepeat, language: editLang, code: editCode });
         } else {
             updateKeybinding(connectionId, selectedId, { name: editName, key: editKey, modifiers: editModifiers, language: editLang, code: editCode });
         }
@@ -588,14 +612,24 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                             </select>
                         </div>
                         {category === 'aliases' && (
-                            <div className="script-editor__meta-row">
-                                <Input
-                                    className="script-editor__pattern"
-                                    value={editPattern}
-                                    onChange={e => { setEditPattern(e.target.value); setDirty(true); }}
-                                    placeholder="Pattern (regex)"
-                                />
-                            </div>
+                            <>
+                                <div className="script-editor__meta-row">
+                                    <Input
+                                        className="script-editor__pattern"
+                                        value={editPattern}
+                                        onChange={e => { setEditPattern(e.target.value); setDirty(true); }}
+                                        placeholder="Pattern (regex)"
+                                    />
+                                </div>
+                                <div className="script-editor__meta-row">
+                                    <Input
+                                        className="script-editor__pattern"
+                                        value={editCommand}
+                                        onChange={e => { setEditCommand(e.target.value); setDirty(true); }}
+                                        placeholder="Command (%1, %2… = captures)"
+                                    />
+                                </div>
+                            </>
                         )}
                         {category === 'triggers' && !selected.isGroup && (
                             <div className="script-editor__meta-row script-editor__meta-row--col">
@@ -677,12 +711,39 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave }: Scrip
                                 <span className="script-editor__field-label">Every</span>
                                 <input
                                     type="number"
-                                    className="script-editor__seconds"
-                                    value={editSeconds}
-                                    min={1}
-                                    onChange={e => { setEditSeconds(Number(e.target.value)); setDirty(true); }}
+                                    className="script-editor__time-part"
+                                    value={editHours}
+                                    min={0}
+                                    onChange={e => { setEditHours(Math.max(0, Number(e.target.value))); setDirty(true); }}
                                 />
-                                <span className="script-editor__field-label">sec</span>
+                                <span className="script-editor__field-label">h</span>
+                                <input
+                                    type="number"
+                                    className="script-editor__time-part"
+                                    value={editMinutes}
+                                    min={0}
+                                    max={59}
+                                    onChange={e => { setEditMinutes(Math.max(0, Math.min(59, Number(e.target.value)))); setDirty(true); }}
+                                />
+                                <span className="script-editor__field-label">m</span>
+                                <input
+                                    type="number"
+                                    className="script-editor__time-part"
+                                    value={editSecs}
+                                    min={0}
+                                    max={59}
+                                    onChange={e => { setEditSecs(Math.max(0, Math.min(59, Number(e.target.value)))); setDirty(true); }}
+                                />
+                                <span className="script-editor__field-label">s</span>
+                                <input
+                                    type="number"
+                                    className="script-editor__time-part"
+                                    value={editMs}
+                                    min={0}
+                                    max={999}
+                                    onChange={e => { setEditMs(Math.max(0, Math.min(999, Number(e.target.value)))); setDirty(true); }}
+                                />
+                                <span className="script-editor__field-label">ms</span>
                                 <label className="script-editor__repeat">
                                     <input
                                         type="checkbox"

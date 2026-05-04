@@ -343,9 +343,46 @@ export function setupOutputRenderer(
 
     // ── Message rendering ─────────────────────────────────────────────────────
 
+    // Tracks the current partial-line element (script echo without a trailing \n).
+    // On the next complete script line the partial is updated-in-place and finalized;
+    // on any MUD/other output the partial stays as-is and a new element is added below.
+    let partialLineEl: HTMLDivElement | null = null;
+    let partialStickyEl: HTMLDivElement | null = null;
+
+    function updateElementContent(el: HTMLDivElement, message: string | AnsiAwareBuffer): void {
+        const buffer = typeof message === 'string' ? new AnsiAwareBuffer(message) : message;
+        elementBuffers.set(el, buffer);
+        const contentSpan = el.querySelector('.output-msg-content') as HTMLElement | null;
+        if (!contentSpan) return;
+        if (buffer.length === 0) {
+            contentSpan.innerHTML = '&nbsp;';
+        } else {
+            contentSpan.replaceChildren(buffer.toDom());
+            buffer.notifyRender(contentSpan);
+        }
+    }
+
     function applyTimestampVisibility() {
         outputWrapper.classList.toggle(TIMESTAMP_CLASS, timestampsVisible);
         stickyArea.classList.toggle(TIMESTAMP_CLASS, timestampsVisible);
+    }
+
+    function maybeTrim(): void {
+        const maxElementsValue = typeof maxElements === 'function' ? maxElements() : maxElements;
+        if (!isSplitView() && outputWrapper.childElementCount - 1 > maxElementsValue + trimSlack) {
+            while (outputWrapper.childElementCount - 1 > maxElementsValue) {
+                const first = outputWrapper.firstElementChild;
+                if (first === sentinel) {
+                    const second = first.nextElementSibling;
+                    if (second) outputWrapper.removeChild(second);
+                    else break;
+                } else if (first) {
+                    outputWrapper.removeChild(first);
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     const handleMessage = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number) => {
@@ -354,7 +391,74 @@ export function setupOutputRenderer(
         }
 
         const timestampValue = typeof timestamp === 'number' ? timestamp : Date.now();
-        const wrapper = createMessageWrapper(message, type, timestampValue);
+
+        // 'trigger-echo' = trigger-mode cecho output (from flushDeferredEcho). Styled
+        // as 'script' but always creates a fresh element — never updates the timer
+        // partial. Map early so all branches below use the display class correctly.
+        // Note: 'echo' (command echo from echoCommand) is left as-is; it already
+        // falls to the normal path and correctly finalizes any pending partial.
+        const effectiveType = type === 'trigger-echo' ? 'script' : type;
+
+        // ── Partial script output (cecho / echo without trailing \n) ─────────
+        // The ScriptingAPI emits 'script-partial' and keeps mainOutputBuffer so
+        // subsequent cecho calls accumulate: combined = buffer + newText. We
+        // update (or create) the partial element in-place — no new DOM node.
+        if (type === 'script-partial') {
+            if (partialLineEl) {
+                updateElementContent(partialLineEl, message);
+                if (partialStickyEl) updateElementContent(partialStickyEl, message);
+                if (!isSplitView()) {
+                    requestAnimationFrame(() => { outputWrapper.scrollTop = outputWrapper.scrollHeight; });
+                }
+            } else {
+                const wrapper = createMessageWrapper(message, 'script', timestampValue);
+                outputWrapper.insertBefore(wrapper, sentinel);
+                partialLineEl = wrapper;
+                cursorEl = wrapper;
+                deletedPrev = null;
+                maybeTrim();
+                if (isSplitView()) {
+                    const stickyWrapper = createMessageWrapper(message, 'script', timestampValue);
+                    stickyArea.appendChild(stickyWrapper);
+                    partialStickyEl = stickyWrapper;
+                    while (stickyArea.childElementCount > stickyLines) {
+                        if (stickyArea.firstElementChild === partialStickyEl) break;
+                        stickyArea.removeChild(stickyArea.firstElementChild!);
+                    }
+                } else {
+                    suppressSplitView?.(250);
+                    requestAnimationFrame(() => { outputWrapper.scrollTop = outputWrapper.scrollHeight; });
+                }
+            }
+            return;
+        }
+
+        // ── Complete script line after a partial ──────────────────────────────
+        // bufferText combines mainOutputBuffer + new text, so the emitted
+        // complete line already contains the partial text. Update the existing
+        // element in-place and finalize it (no new node added).
+        // 'echo' (trigger mode) skips this — it always creates a fresh element.
+        if (type === 'script' && partialLineEl) {
+            updateElementContent(partialLineEl, message);
+            if (partialStickyEl) updateElementContent(partialStickyEl, message);
+            cursorEl = partialLineEl;
+            deletedPrev = null;
+            partialLineEl = null;
+            partialStickyEl = null;
+            if (!isSplitView()) {
+                suppressSplitView?.(250);
+                requestAnimationFrame(() => { outputWrapper.scrollTop = outputWrapper.scrollHeight; });
+            }
+            return;
+        }
+
+        // ── Normal: MUD output or first script line (no pending partial) ──────
+        // Any non-partial message finalizes partial tracking so the next partial
+        // starts a fresh line below the new element.
+        partialLineEl = null;
+        partialStickyEl = null;
+
+        const wrapper = createMessageWrapper(message, effectiveType, timestampValue);
 
         outputWrapper.insertBefore(wrapper, sentinel);
 
@@ -363,30 +467,10 @@ export function setupOutputRenderer(
         cursorEl = wrapper;
         deletedPrev = null;
 
-        const maxElementsValue = typeof maxElements === 'function' ? maxElements() : maxElements;
-
-        // Trim in batches while not in split view — removing nodes while the user is scrolled
-        // up would shift the content they are reading. Excess drains on the next message.
-        if (!isSplitView() && outputWrapper.childElementCount - 1 > maxElementsValue + trimSlack) {
-            while (outputWrapper.childElementCount - 1 > maxElementsValue) {
-                const first = outputWrapper.firstElementChild;
-                if (first === sentinel) {
-                    const second = first.nextElementSibling;
-                    if (second) {
-                        outputWrapper.removeChild(second);
-                    } else {
-                        break;
-                    }
-                } else if (first) {
-                    outputWrapper.removeChild(first);
-                } else {
-                    break;
-                }
-            }
-        }
+        maybeTrim();
 
         if (isSplitView()) {
-            const stickyWrapper = createMessageWrapper(message, type, timestampValue);
+            const stickyWrapper = createMessageWrapper(message, effectiveType, timestampValue);
             stickyArea.appendChild(stickyWrapper);
             while (stickyArea.childElementCount > stickyLines) {
                 const firstSticky = stickyArea.firstElementChild;
@@ -452,6 +536,8 @@ export function setupOutputRenderer(
 
     function clearAll() {
         clearStickyArea();
+        partialLineEl = null;
+        partialStickyEl = null;
         while (outputWrapper.firstElementChild !== sentinel) {
             if (outputWrapper.firstElementChild) {
                 outputWrapper.removeChild(outputWrapper.firstElementChild);

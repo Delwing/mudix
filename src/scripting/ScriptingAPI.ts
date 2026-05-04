@@ -221,11 +221,17 @@ export class ScriptingAPI {
     flushDeferredEcho(): void {
         this.isDeferringEcho = false;
         for (const line of this.echoDeferred) {
-            this.session.events.emit('message', line, 'script');
+            // 'trigger-echo' type: trigger-mode output that always creates a fresh element,
+            // never combining with any existing timer-cecho partial.
+            this.session.events.emit('message', line, 'trigger-echo');
         }
         this.echoDeferred = [];
         if (this.mainOutputBuffer.length > 0) {
-            this.session.events.emit('message', this.mainOutputBuffer, 'script');
+            // Trigger's partial echo also becomes a finalized element. Mudlet inserts
+            // it inline via insertInLine(), but in DOM terms a separate element is the
+            // closest equivalent. Clearing the buffer lets the next timer cecho start
+            // fresh on a new partial line (matching Mudlet's "new empty line" step).
+            this.session.events.emit('message', this.mainOutputBuffer, 'trigger-echo');
             this.mainOutputBuffer = '';
         }
         this.session.windows.flushAllLines();
@@ -239,8 +245,32 @@ export class ScriptingAPI {
      * 'message') and trigger processing, so we only emit flushLines here.
      */
     feedTriggers(text: string): void {
-        this.flushOutput();
-        this.session.events.emit('flushLines', [{ text, type: 'mud' }]);
+        const lines = text.split('\n');
+        const remainder = lines[lines.length - 1];
+        const completeLines = lines.slice(0, -1);
+
+        if (completeLines.length === 0) {
+            // No newlines — append to the partial buffer just like cecho, no triggers fired.
+            this.mainOutputBuffer += text;
+            if (this.mainOutputBuffer.length > 0) {
+                this.session.events.emit('message', this.mainOutputBuffer, 'script-partial');
+            }
+            return;
+        }
+
+        // Complete lines present. The existing partial (timer cecho etc.) stays in the DOM
+        // as-is — do NOT combine it with feedTriggers text (they are independent streams).
+        // Clear the buffer so flushDeferredEcho accumulates trigger echo output fresh.
+        this.mainOutputBuffer = '';
+
+        this.session.events.emit('flushLines', [{ text: completeLines.join('\n'), type: 'mud' }]);
+
+        // After flushLines, mainOutputBuffer holds whatever trigger callbacks echoed.
+        // Append the feedTriggers remainder (text after the last \n) to that.
+        this.mainOutputBuffer += remainder;
+        if (this.mainOutputBuffer.length > 0) {
+            this.session.events.emit('message', this.mainOutputBuffer, 'script-partial');
+        }
     }
 
     // ── Cursor / line access ──────────────────────────────────────────────────
@@ -341,8 +371,11 @@ export class ScriptingAPI {
         // During trigger processing, don't emit the main buffer — it's deferred
         // until flushDeferredEcho() is called after render.
         if (!this.isDeferringEcho && this.mainOutputBuffer.length > 0) {
-            this.session.events.emit('message', this.mainOutputBuffer, 'script');
-            this.mainOutputBuffer = '';
+            // Emit as partial — the renderer appends inline to the current line.
+            // Do NOT clear mainOutputBuffer: bufferText clears it naturally when
+            // a complete line (with \n) is formed, so subsequent cecho calls still
+            // combine with the accumulated partial text via `combined = buffer + text`.
+            this.session.events.emit('message', this.mainOutputBuffer, 'script-partial');
         }
         this.session.windows.flushAllLines();
     }
