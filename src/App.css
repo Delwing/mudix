@@ -20,6 +20,10 @@
     --danger:       #f14c4c;
     --font-mono:    'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace;
     --font-ui:      system-ui, -apple-system, sans-serif;
+    --dim-start:    1;
+    --dim-end:      0;
+    --dim-duration: 1000ms;
+    --dim-easing:   ease-in-out;
     --toolbar-h:    44px;
     --cmdbar-h:     44px;
     --radius:       6px;
@@ -30,7 +34,7 @@ html, body, #root {
     height: 100%;
     background: var(--bg);
     color: var(--text);
-    font-family: var(--font-mono);
+    font-family: var(--font-mono), monospace;
     font-size: 13px;
     line-height: 1.5;
     overflow: hidden;
@@ -61,7 +65,7 @@ html, body, #root {
 }
 
 .brand {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-weight: 700;
     font-size: 15px;
     color: var(--accent);
@@ -72,7 +76,7 @@ html, body, #root {
 
 .toolbar-connection-name {
     flex: 1;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 13px;
     color: var(--text-dim);
     overflow: hidden;
@@ -150,7 +154,7 @@ html, body, #root {
 }
 
 .script-editor-modal__title {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 13px;
     font-weight: 600;
     color: var(--text);
@@ -197,7 +201,6 @@ html, body, #root {
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    padding-top: 18vh;
     background: var(--bg);
     overflow-y: auto;
     padding: 24px 16px;
@@ -232,7 +235,7 @@ html, body, #root {
 }
 
 .connection-brand {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-weight: 700;
     font-size: 22px;
     color: var(--accent);
@@ -280,7 +283,7 @@ html, body, #root {
 }
 
 .connection-name {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 13px;
     font-weight: 500;
     color: var(--text);
@@ -292,7 +295,7 @@ html, body, #root {
 .connection-addr {
     font-size: 11px;
     color: var(--text-dim);
-    font-family: var(--font-mono);
+    font-family: var(--font-mono), monospace;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -318,7 +321,7 @@ html, body, #root {
 }
 
 .form-section-title {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
@@ -343,7 +346,7 @@ html, body, #root {
 .connection-mode-btn {
     flex: 1;
     padding: 5px 8px;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 11px;
     font-weight: 500;
     border: none;
@@ -386,7 +389,7 @@ html, body, #root {
 }
 
 .proxy-reset-btn {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 10px;
     font-weight: 500;
     color: var(--accent);
@@ -405,7 +408,7 @@ html, body, #root {
 .proxy-hint {
     display: block;
     margin-top: 4px;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 10px;
     color: var(--text-dim);
 }
@@ -417,7 +420,7 @@ html, body, #root {
 }
 
 .proxy-info-intro {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 13px;
     color: var(--text-dim);
     margin: 0;
@@ -429,7 +432,7 @@ html, body, #root {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 13px;
     color: var(--text);
     line-height: 1.5;
@@ -449,7 +452,7 @@ html, body, #root {
 }
 
 .proxy-info-steps code {
-    font-family: var(--font-mono);
+    font-family: var(--font-mono), monospace;
     font-size: 11px;
     background: var(--bg);
     border: 1px solid var(--border);
@@ -474,13 +477,13 @@ html, body, #root {
 }
 
 .proxy-code-label {
-    font-family: var(--font-mono);
+    font-family: var(--font-mono), monospace;
     font-size: 11px;
     color: var(--text-dim);
 }
 
 .proxy-copy-btn {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 11px;
     font-weight: 500;
     color: var(--accent);
@@ -502,7 +505,7 @@ html, body, #root {
     overflow: auto;
     max-height: 340px;
     background: var(--bg-glass);
-    font-family: var(--font-mono);
+    font-family: var(--font-mono), monospace;
     font-size: 11px;
     line-height: 1.6;
     color: var(--text);
@@ -521,7 +524,7 @@ html, body, #root {
 }
 
 .proxy-url-preview-label {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
@@ -530,7 +533,7 @@ html, body, #root {
 }
 
 .proxy-url-preview-url {
-    font-family: var(--font-mono);
+    font-family: var(--font-mono), monospace;
     font-size: 11px;
     color: var(--text);
     word-break: break-all;
@@ -643,7 +646,7 @@ html, body, #root {
     border-radius: 12px;
     color: var(--accent);
     cursor: pointer;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 11px;
     padding: 3px 10px;
     z-index: 10;
@@ -665,7 +668,7 @@ html, body, #root {
     border-radius: var(--radius);
     padding: 4px 0;
     min-width: 190px;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 12px;
 }
 
@@ -786,7 +789,7 @@ html, body, #root {
     box-shadow: inset 0 1px 0 var(--border-hi);
     color: var(--text);
     cursor: pointer;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 12px;
     font-weight: 500;
     height: 26px;
@@ -835,7 +838,7 @@ html, body, #root {
 .map-area-dropdown-item {
     color: var(--text-dim);
     cursor: pointer;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 12px;
     overflow: hidden;
     padding: 5px 10px;
@@ -862,7 +865,7 @@ html, body, #root {
 
 .map-level-display {
     color: var(--text-dim);
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 12px;
     min-width: 20px;
     text-align: center;
@@ -885,7 +888,7 @@ html, body, #root {
     gap: 12px;
     background: var(--bg);
     color: var(--text-dim);
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 13px;
 }
 
@@ -902,7 +905,7 @@ html, body, #root {
     border-radius: 6px;
     color: var(--accent);
     cursor: pointer;
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 13px;
     padding: 6px 16px;
     transition: background 0.1s, border-color 0.1s;
@@ -960,7 +963,7 @@ html, body, #root {
 }
 
 .modal-title {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 13px;
     font-weight: 600;
     color: var(--text);
@@ -1001,7 +1004,7 @@ html, body, #root {
 }
 
 .settings-section-title {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
@@ -1016,7 +1019,7 @@ html, body, #root {
 }
 
 .settings-label {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), sans-serif;
     font-size: 13px;
     color: var(--text);
     min-width: 90px;
