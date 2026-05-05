@@ -3,6 +3,7 @@ import { WindowManager } from '../ui/windows/WindowManager';
 import { MudClient, type MudClientOptions } from './connection/MudClient';
 import { PingTracker } from './connection/PingTracker';
 import { type MudClientEvents, type MudEvents, type SessionStatus } from './events';
+import type { Console } from './text/Console';
 
 export type { SessionStatus, MudEvents } from './events';
 
@@ -11,8 +12,8 @@ export type MudSessionOptions = Omit<MudClientOptions, 'url'>;
 export class MudSession {
     readonly events = new EventBus<MudEvents>();
     readonly windows = new WindowManager();
-    /** Per-window cursor op registries. 'main' is the primary output window. */
-    readonly windowCursors = new Map<string, import('../ui/output/OutputRenderer').CursorOps>();
+    /** Per-window Console instances. 'main' registered by ScriptingAPI; named windows by WindowManager. */
+    readonly consoles = new Map<string, Console>();
     private client: MudClient | null = null;
     private pingTracker: PingTracker | null = null;
     private stateUnsubs: (() => void)[] = [];
@@ -21,7 +22,7 @@ export class MudSession {
     private _outputReady = false;
 
     constructor(private readonly options: MudSessionOptions = {}) {
-        this.windows.setCursorRegistry(this.windowCursors);
+        this.windows.setConsoleRegistry(this.consoles);
     }
 
     get status(): SessionStatus { return this._status; }

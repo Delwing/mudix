@@ -83,8 +83,8 @@ local spairs_default_type_order = {
 }
 
 -- Consider merging this compare with the definition in inspect.lua.
---
--- note: is not used for the same purpose as compare.
+-- 
+-- note: is not used for the same purpose as compare.  
 --       compare checks equality without consideration for ordering.
 local function spairsCompare(a, b)
    local ta, tb = type(a), type(b)
@@ -231,7 +231,7 @@ function table.collect(tbl, func)
 end
 
 --- Checks each item in a table against a provided function and returns a table of items
---- for which the function returns true. Unlike table.collect it ignores keys and returns
+--- for which the function returns true. Unlike table.collect it ignores keys and returns 
 --- a table which is guaranteed to be traversable using ipairs()
 --- @param tbl table to collect items from
 --- @param func function which is called as func(value) for each item in tbl
@@ -251,7 +251,7 @@ function table.n_collect(tbl, func)
 end
 
 -- not LDoc: table.matches and table.n_matches below do not use table.collect
--- or n_collect above in order to reduce the potential number of times tables
+-- or n_collect above in order to reduce the potential number of times tables 
 -- need to be looped.
 
 --- Checks each item in a table against each other argument using string.match

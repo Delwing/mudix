@@ -416,6 +416,13 @@ export class AnsiAwareBuffer {
         return this;
     }
 
+    removeFromDom(): void {
+        const container = this._renderContainer;
+        if (!container) return;
+        container.parentElement?.removeChild(container);
+        this._renderContainer = null;
+    }
+
     onRender(callback: (container: HTMLElement) => void): this {
         this._onRender = callback;
         return this;
@@ -732,6 +739,12 @@ export class AnsiAwareBuffer {
         }
 
         return lines;
+    }
+
+    /** Returns the format state at the end of this buffer, for carrying into the next line. */
+    trailingState(): FormatStateSnapshot | undefined {
+        if (this.segments.length === 0) return undefined;
+        return cloneState(this.segments[this.segments.length - 1].state);
     }
 
     toHtml(): string {

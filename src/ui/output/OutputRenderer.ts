@@ -7,7 +7,7 @@ import { AnsiAwareBuffer } from "../../mud/text/FormatState";
 export const elementBuffers = new WeakMap<Element, AnsiAwareBuffer>();
 
 type MessageListener = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number) => void;
-type MessageSource = {
+export type MessageSource = {
     on(event: 'message', listener: MessageListener): () => void;
     on(event: 'script.deleteline', listener: () => void): () => void;
     on(event: 'script.clearwindow', listener: () => void): () => void;
@@ -368,21 +368,7 @@ export function setupOutputRenderer(
     }
 
     function maybeTrim(): void {
-        const maxElementsValue = typeof maxElements === 'function' ? maxElements() : maxElements;
-        if (!isSplitView() && outputWrapper.childElementCount - 1 > maxElementsValue + trimSlack) {
-            while (outputWrapper.childElementCount - 1 > maxElementsValue) {
-                const first = outputWrapper.firstElementChild;
-                if (first === sentinel) {
-                    const second = first.nextElementSibling;
-                    if (second) outputWrapper.removeChild(second);
-                    else break;
-                } else if (first) {
-                    outputWrapper.removeChild(first);
-                } else {
-                    break;
-                }
-            }
-        }
+        // Eviction is handled by Console.evict() via removeFromDom() — no DOM trimming here.
     }
 
     const handleMessage = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number) => {

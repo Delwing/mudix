@@ -55,17 +55,18 @@ export default function App() {
         pendingOutputReadyUnsub.current = null;
 
         const connId = activeConnection?.id ?? '';
+        const connName = activeConnection?.name ?? '';
         const snap = lastLoadedSnap.current;
         lastLoadedSnap.current = { scripts: activeScripts, session, connId };
 
         // First load, session change, or connection switch → full reload.
         if (!snap || snap.session !== session || snap.connId !== connId) {
             if (session.outputReady) {
-                engineRef.current?.loadScripts(activeScripts, connId);
+                engineRef.current?.loadScripts(activeScripts, connId, connName);
             } else {
                 pendingOutputReadyUnsub.current = session.events.on('output.ready', () => {
                     pendingOutputReadyUnsub.current = null;
-                    engineRef.current?.loadScripts(activeScripts, connId);
+                    engineRef.current?.loadScripts(activeScripts, connId, connName);
                 }, { once: true });
             }
             return () => {

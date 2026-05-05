@@ -39,7 +39,7 @@ export class ProfileVFS {
         await ensureRoot();
         const vfs = new ProfileVFS(connectionId);
         const fs = await resolveMountConfig({ backend: IndexedDB, storeName: `mudix_vfs_${connectionId}` });
-        await mount(vfs.profilePath, fs);
+        mount(vfs.profilePath, fs);
         // Ensure profile root exists inside the mounted FS
         if (!existsSync(vfs.profilePath)) {
             mkdirSync(vfs.profilePath, { recursive: true });

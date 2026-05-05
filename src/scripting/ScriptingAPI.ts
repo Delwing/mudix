@@ -1,9 +1,12 @@
 import type { MudSession } from '../mud/MudSession';
 import type { AliasEngine } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
+import type { TimerEngine } from '../mud/timers/TimerEngine';
+import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
-import { AnsiAwareBuffer, FormatState, type FormatStateSnapshot, type FormatHyperlink } from '../mud/text/FormatState';
-import { namedColorToAnsi, namedColorToState, parseCecho, parseDecho, parseHecho } from '../mud/text/colorParsers';
+import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink } from '../mud/text/FormatState';
+import { namedColorToState } from '../mud/text/colorParsers';
+import { Console } from '../mud/text/Console';
 
 // ── Windows ───────────────────────────────────────────────────────────────────
 
@@ -16,18 +19,6 @@ class ScriptingWindowsAPI {
 
     write(id: string, text: string): void {
         this.session.windows.write(id, text);
-    }
-
-    cecho(id: string, text: string): void {
-        this.session.windows.write(id, parseCecho(text));
-    }
-
-    decho(id: string, text: string): void {
-        this.session.windows.write(id, parseDecho(text));
-    }
-
-    hecho(id: string, text: string): void {
-        this.session.windows.write(id, parseHecho(text));
     }
 
     clear(id: string): void {
@@ -74,11 +65,11 @@ export class ScriptingAPI {
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
     readonly gmcp: Record<string, unknown> = {};
+    profileName = '';
+    readonly timers: TimerEngine;
+    readonly keys: KeyEngine;
 
-    // Buffers a partial (no-trailing-newline) echo line across calls.
-    private mainOutputBuffer: AnsiAwareBuffer = new AnsiAwareBuffer();
-    // Tracks the current ANSI formatting state so it carries across separate bufferText calls.
-    private currentAnsiState: FormatState = new FormatState();
+    private readonly mainConsole = new Console();
 
     // During trigger processing, holds the line buffer being built. When set,
     // selectString/fg/bg/resetFormat/deleteLine operate on this buffer instead
@@ -95,10 +86,19 @@ export class ScriptingAPI {
 
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
-    constructor(private readonly session: MudSession, aliasEngine: AliasEngine, triggerEngine: TriggerEngine) {
+    constructor(
+        private readonly session: MudSession,
+        aliasEngine: AliasEngine,
+        triggerEngine: TriggerEngine,
+        timerEngine: TimerEngine,
+        keyEngine: KeyEngine,
+    ) {
         this.windows = new ScriptingWindowsAPI(session);
         this.aliases = aliasEngine;
         this.triggers = triggerEngine;
+        this.timers = timerEngine;
+        this.keys = keyEngine;
+        session.consoles.set('main', this.mainConsole);
     }
 
     // ── Connection ────────────────────────────────────────────────────────────
@@ -118,57 +118,64 @@ export class ScriptingAPI {
     // ── Echo / output ─────────────────────────────────────────────────────────
 
     echo(text: string): void {
-        this.bufferText(text);
+        this.mainConsole.echo(text);
+        this.drainMain();
     }
 
-    cecho(text: string): void {
-        this.bufferText(parseCecho(text));
-    }
-
-    decho(text: string): void {
-        this.bufferText(parseDecho(text));
-    }
-
-    hecho(text: string): void {
-        this.bufferText(parseHecho(text));
-    }
-
-    echoLink(text: string, luaCmd: string, tooltip: string): void {
-        const hyperlink: FormatHyperlink = {
-            onClick: () => { this.executeScript?.(luaCmd); },
+    echoLink(text: string, cmd: string | (() => void), tooltip: string): void {
+        this.mainConsole.format.hyperlink = {
+            onClick: typeof cmd === 'function'
+                ? cmd
+                : () => { this.executeScript?.(cmd); },
             title: tooltip || undefined,
         };
-        const state: FormatStateSnapshot = { ...this.currentAnsiState.toSnapshot(), hyperlink };
-        const buf = new AnsiAwareBuffer();
-        buf.append(text, state);
-        this.appendToOutputBuffer(buf);
+        this.mainConsole.echo(text);
+        this.mainConsole.format.hyperlink = undefined;
+        this.drainMain();
     }
 
     setExecuteScript(fn: ((code: string) => void) | null): void {
         this.executeScript = fn;
     }
 
+    // ── Format state (delegated to mainConsole) ───────────────────────────────
+
+    setFgColor(r: number, g: number, b: number, win?: string): void {
+        const con = (win && win !== 'main') ? this.getConsole(win) : this.mainConsole;
+        (con ?? this.mainConsole).setFgColor(r, g, b);
+    }
+
+    setBgColor(r: number, g: number, b: number, win?: string): void {
+        const con = (win && win !== 'main') ? this.getConsole(win) : this.mainConsole;
+        (con ?? this.mainConsole).setBgColor(r, g, b);
+    }
+
+    setBold(v: boolean):          void { this.mainConsole.setBold(v); }
+    setItalic(v: boolean):        void { this.mainConsole.setItalic(v); }
+    setUnderline(v: boolean):     void { this.mainConsole.setUnderline(v); }
+    setStrikethrough(v: boolean): void { this.mainConsole.setStrikethrough(v); }
+
     // ── Formatting (selection-aware) ──────────────────────────────────────────
 
     fg(name: string): void {
-        if (this.selection) {
-            const state = namedColorToState(name, false);
-            if (state) this.applyStateToSelection(state);
-            return;
+        const state = namedColorToState(name, false);
+        if (!state) return;
+        if (this.selection) { this.applyStateToSelection(state); return; }
+        if (state.foreground?.space === 'rgb') {
+            this.mainConsole.setFgColor(state.foreground.r, state.foreground.g, state.foreground.b);
         }
-        this.bufferText(namedColorToAnsi(name, false));
     }
 
     bg(name: string): void {
-        if (this.selection) {
-            const state = namedColorToState(name, true);
-            if (state) this.applyStateToSelection(state);
-            return;
+        const state = namedColorToState(name, true);
+        if (!state) return;
+        if (this.selection) { this.applyStateToSelection(state); return; }
+        if (state.background?.space === 'rgb') {
+            this.mainConsole.setBgColor(state.background.r, state.background.g, state.background.b);
         }
-        this.bufferText(namedColorToAnsi(name, true));
     }
 
-    resetFormat(): void {
+    resetFormat(windowName?: string): void {
         if (this.selection) {
             const sel = this.selection;
             this.selection = null;
@@ -179,7 +186,9 @@ export class ScriptingAPI {
             }
             return;
         }
-        this.bufferText('\x1b[0m');
+        if (!windowName || windowName === 'main') {
+            this.mainConsole.resetFormat();
+        }
     }
 
     // ── Selection ─────────────────────────────────────────────────────────────
@@ -188,7 +197,7 @@ export class ScriptingAPI {
         const isMain = !windowName || windowName === 'main';
         const line = (this.lineBuffer && isMain)
             ? this.lineBuffer.text
-            : (this.getWindowCursor(windowName ?? 'main')?.getLine() ?? '');
+            : (this.getConsole(windowName)?.getLine() ?? '');
 
         let count = 0;
         let searchFrom = 0;
@@ -249,19 +258,13 @@ export class ScriptingAPI {
     flushDeferredEcho(): void {
         this.isDeferringEcho = false;
         for (const line of this.echoDeferred) {
-            // 'trigger-echo' type: trigger-mode output that always creates a fresh element,
-            // never combining with any existing timer-cecho partial.
             this.session.events.emit('message', line, 'trigger-echo');
         }
         this.echoDeferred = [];
-        if (this.mainOutputBuffer.length > 0) {
-            // Trigger's partial echo also becomes a finalized element. Mudlet inserts
-            // it inline via insertInLine(), but in DOM terms a separate element is the
-            // closest equivalent. Clearing the buffer lets the next timer cecho start
-            // fresh on a new partial line (matching Mudlet's "new empty line" step).
-            this.session.events.emit('message', this.mainOutputBuffer, 'trigger-echo');
-            this.mainOutputBuffer = new AnsiAwareBuffer();
-            this.currentAnsiState.reset();
+        const partial = this.mainConsole.currentPartial;
+        if (partial.length > 0) {
+            this.session.events.emit('message', partial, 'trigger-echo');
+            this.mainConsole.clear();
         }
         this.session.windows.flushAllLines();
     }
@@ -279,28 +282,23 @@ export class ScriptingAPI {
         const completeLines = lines.slice(0, -1);
 
         if (completeLines.length === 0) {
-            // No newlines — append to the partial buffer just like cecho, no triggers fired.
-            this.bufferText(text);
-            if (this.mainOutputBuffer.length > 0) {
-                this.session.events.emit('message', this.mainOutputBuffer, 'script-partial');
-            }
+            this.mainConsole.echo(text);
+            this.drainMain();
+            const partial = this.mainConsole.currentPartial;
+            if (partial.length > 0) this.session.events.emit('message', partial, 'script-partial');
             return;
         }
 
-        // Complete lines present. The existing partial (timer cecho etc.) stays in the DOM
-        // as-is — do NOT combine it with feedTriggers text (they are independent streams).
-        // Clear the buffer so flushDeferredEcho accumulates trigger echo output fresh.
-        this.mainOutputBuffer = new AnsiAwareBuffer();
-        this.currentAnsiState.reset();
-
+        // Complete lines present — clear console so trigger echo accumulates fresh.
+        this.mainConsole.clear();
         this.session.events.emit('flushLines', [{ text: completeLines.join('\n'), type: 'mud' }]);
 
-        // After flushLines, mainOutputBuffer holds whatever trigger callbacks echoed.
-        // Append the feedTriggers remainder (text after the last \n) to that.
-        if (remainder) this.bufferText(remainder);
-        if (this.mainOutputBuffer.length > 0) {
-            this.session.events.emit('message', this.mainOutputBuffer, 'script-partial');
+        if (remainder) {
+            this.mainConsole.echo(remainder);
+            this.drainMain();
         }
+        const partial = this.mainConsole.currentPartial;
+        if (partial.length > 0) this.session.events.emit('message', partial, 'script-partial');
     }
 
     // ── Cursor / line access ──────────────────────────────────────────────────
@@ -308,19 +306,19 @@ export class ScriptingAPI {
     getCurrentLine(windowName?: string): string {
         const isMain = !windowName || windowName === 'main';
         if (this.lineBuffer && isMain) return this.lineBuffer.text;
-        return this.getWindowCursor(windowName)?.getLine() ?? '';
+        return this.getConsole(windowName)?.getLine() ?? '';
     }
 
     getLineNumber(windowName?: string): number {
-        return this.getWindowCursor(windowName)?.getLineNumber() ?? 0;
+        return this.getConsole(windowName)?.getLineNumber() ?? 0;
     }
 
     getLineCount(windowName?: string): number {
-        return this.getWindowCursor(windowName)?.getLineCount() ?? 0;
+        return this.getConsole(windowName)?.getLineCount() ?? 0;
     }
 
     getLines(from: number, to: number, windowName?: string): string[] {
-        return this.getWindowCursor(windowName)?.getLines(from, to) ?? [];
+        return this.getConsole(windowName)?.getLines(from, to) ?? [];
     }
 
     getColumnNumber(windowName?: string): number {
@@ -331,27 +329,20 @@ export class ScriptingAPI {
     }
 
     insertText(text: string): void {
-        this.bufferText(text);
+        this.mainConsole.echo(text);
+        this.drainMain();
     }
 
     moveCursorUp(windowName?: string): void {
-        if (windowName && windowName !== 'main') {
-            this.getWindowCursor(windowName)?.moveUp();
-        } else {
-            this.session.events.emit('script.movecursorup');
-        }
+        this.getConsole(windowName)?.moveUp();
     }
 
     moveCursorDown(windowName?: string): void {
-        if (windowName && windowName !== 'main') {
-            this.getWindowCursor(windowName)?.moveDown();
-        } else {
-            this.session.events.emit('script.movecursordown');
-        }
+        this.getConsole(windowName)?.moveDown();
     }
 
-    moveCursor(windowName: string | undefined, x: number, y: number): void {
-        this.getWindowCursor(windowName)?.moveTo(y);
+    moveCursor(windowName: string | undefined, _x: number, y: number): void {
+        this.getConsole(windowName)?.moveTo(y);
     }
 
     // ── Window / line management ──────────────────────────────────────────────
@@ -367,15 +358,10 @@ export class ScriptingAPI {
     deleteLine(windowName?: string): void {
         const isMain = !windowName || windowName === 'main';
         if (this.lineBuffer && isMain) {
-            // Pre-render: mark buffer so ScriptingEngine skips the render step.
             this.lineBuffer.markAsDeleted();
             return;
         }
-        if (windowName && windowName !== 'main') {
-            this.getWindowCursor(windowName)?.deleteLine();
-        } else {
-            this.session.events.emit('script.deleteline');
-        }
+        this.getConsole(windowName)?.deleteLine();
     }
 
     appendCmdLine(text: string): void {
@@ -402,14 +388,9 @@ export class ScriptingAPI {
 
     /** Flush any buffered partial lines to the main output and all open windows. Called after each event dispatch. */
     flushOutput(): void {
-        // During trigger processing, don't emit the main buffer — it's deferred
-        // until flushDeferredEcho() is called after render.
-        if (!this.isDeferringEcho && this.mainOutputBuffer.length > 0) {
-            // Emit as partial — the renderer appends inline to the current line.
-            // Do NOT clear mainOutputBuffer: bufferText clears it naturally when
-            // a complete line (with \n) is formed, so subsequent cecho calls still
-            // combine with the accumulated partial text via `combined = buffer + text`.
-            this.session.events.emit('message', this.mainOutputBuffer, 'script-partial');
+        if (!this.isDeferringEcho) {
+            const partial = this.mainConsole.currentPartial;
+            if (partial.length > 0) this.session.events.emit('message', partial, 'script-partial');
         }
         this.session.windows.flushAllLines();
     }
@@ -442,19 +423,14 @@ export class ScriptingAPI {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private getWindowCursor(name?: string) {
-        return this.session.windowCursors.get(name ?? 'main') ?? null;
+    private getConsole(name?: string): Console | null {
+        return this.session.consoles.get(name ?? 'main') ?? null;
     }
 
-    /**
-     * Returns the buffer to target for selection operations. During trigger
-     * processing (lineBuffer set), that's the pre-render buffer. Otherwise it's
-     * the already-rendered DOM buffer via cursor ops.
-     */
     private resolveBuffer(windowName: string | undefined): AnsiAwareBuffer | null {
         const isMain = !windowName || windowName === 'main';
         if (this.lineBuffer && isMain) return this.lineBuffer;
-        return this.getWindowCursor(windowName ?? 'main')?.getBuffer() ?? null;
+        return this.getConsole(windowName)?.getBuffer() ?? null;
     }
 
     private applyStateToSelection(state: ReturnType<typeof namedColorToState>): void {
@@ -467,45 +443,12 @@ export class ScriptingAPI {
         if (!this.lineBuffer) buf.rerender();
     }
 
-    // Split on newlines: emit each complete line, buffer the remainder.
-    // During trigger processing, complete lines go into echoDeferred instead
-    // of being emitted immediately, so they appear after the triggering lines.
-    private bufferText(text: string): void {
-        const buf = new AnsiAwareBuffer(text, this.currentAnsiState.toSnapshot());
-        this.updateAnsiState(text);
-        this.appendToOutputBuffer(buf);
-    }
-
-    private appendToOutputBuffer(buf: AnsiAwareBuffer): void {
-        this.mainOutputBuffer.appendBuffer(buf);
-        const text = this.mainOutputBuffer.text;
-        if (!text.includes('\n')) return;
-        const lines = this.mainOutputBuffer.splitLines();
-        // splitLines() on "text\n" returns ["text"] (1 element, no trailing empty).
-        // Detect whether the buffer ended with \n to know if all elements are complete.
-        const endsWithNewline = text.endsWith('\n');
-        const completeCount = endsWithNewline ? lines.length : lines.length - 1;
-        for (let i = 0; i < completeCount; i++) {
+    private drainMain(): void {
+        for (const line of this.mainConsole.takeLines()) {
             if (this.isDeferringEcho) {
-                this.echoDeferred.push(lines[i]);
+                this.echoDeferred.push(line);
             } else {
-                this.session.events.emit('message', lines[i], 'script');
-            }
-        }
-        this.mainOutputBuffer = endsWithNewline ? new AnsiAwareBuffer() : lines[lines.length - 1];
-    }
-
-    private updateAnsiState(text: string): void {
-        const ESC = '\x1b';
-        for (let i = 0; i < text.length; i++) {
-            if (text[i] === ESC && text[i + 1] === '[') {
-                const end = text.indexOf('m', i + 2);
-                if (end === -1) break;
-                const seq = text.slice(i + 2, end);
-                this.currentAnsiState.applySgr(
-                    seq.split(';').filter(s => s.length > 0).map(s => parseInt(s, 10) || 0)
-                );
-                i = end;
+                this.session.events.emit('message', line, 'script');
             }
         }
     }

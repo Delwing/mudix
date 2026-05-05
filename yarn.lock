@@ -221,6 +221,11 @@
   dependencies:
     tslib "^2.4.0"
 
+"@types/emscripten@^1.39.10":
+  version "1.41.5"
+  resolved "https://registry.yarnpkg.com/@types/emscripten/-/emscripten-1.41.5.tgz#5670e4b52b098691cb844b84ee48c9176699b68d"
+  integrity sha512-cMQm7pxu6BxtHyqJ7mQZ2kXWV5SLmugybFdHCBbJ5eHzOo6VhBckEgAT3//rP5FwPHNPeEiq4SmQ5ucBwsOo4Q==
+
 "@types/estree@^1.0.0":
   version "1.0.8"
   resolved "https://registry.npmjs.org/@types/estree/-/estree-1.0.8.tgz"
@@ -1009,6 +1014,11 @@ lodash@4.18.0:
   resolved "https://registry.npmjs.org/lodash/-/lodash-4.18.0.tgz"
   integrity sha512-l1mfj2atMqndAHI3ls7XqPxEjV2J9ZkcNyHpoZA3r2T1LLwDB69jgkMWh71YKwhBbK0G2f4WSn05ahmQXVxupA==
 
+lodash@^4.17.21:
+  version "4.18.1"
+  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.18.1.tgz#ff2b66c1f6326d59513de2407bf881439812771c"
+  integrity sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==
+
 loose-envify@^1.1.0:
   version "1.4.0"
   resolved "https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0.tgz"
@@ -1228,6 +1238,11 @@ pbkdf2@^3.1.2, pbkdf2@^3.1.5:
     safe-buffer "^5.2.1"
     sha.js "^2.4.12"
     to-buffer "^1.2.1"
+
+pcre2-wasm-universal@^1.0.0:
+  version "1.0.0"
+  resolved "https://registry.yarnpkg.com/pcre2-wasm-universal/-/pcre2-wasm-universal-1.0.0.tgz#56964727500804fd66fca20a4c06906c24a8790e"
+  integrity sha512-dU56PEtHiETIkaoLwYS1Gz0xaTuqGTWqelaaeLvMzS49sat0BlYMY2SsNyZeH9J6l831ZYdbaVeyiakSOUsROw==
 
 picocolors@^1.1.1:
   version "1.1.1"
@@ -1682,6 +1697,14 @@ w3c-keyname@^2.2.4:
   version "2.2.8"
   resolved "https://registry.npmjs.org/w3c-keyname/-/w3c-keyname-2.2.8.tgz"
   integrity sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==
+
+wasmoon-lua5.1@^1.18.10:
+  version "1.18.10"
+  resolved "https://registry.yarnpkg.com/wasmoon-lua5.1/-/wasmoon-lua5.1-1.18.10.tgz#d8c4df52b174125aeaa38085ccfacfeffdda51b2"
+  integrity sha512-7ZLYj7FQgqzJOTJOLXqnIYYIUSRgG/Dw+uDMKnTor5G1Q9ykzRRPBomC3XgS0If+dbj+a8/Hj3+lA2URwKF0BA==
+  dependencies:
+    "@types/emscripten" "^1.39.10"
+    lodash "^4.17.21"
 
 which-typed-array@^1.1.16, which-typed-array@^1.1.2:
   version "1.1.20"

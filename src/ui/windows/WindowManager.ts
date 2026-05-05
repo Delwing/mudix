@@ -1,4 +1,5 @@
-import { type CursorOps, type OutputRendererControls } from '../output/OutputRenderer';
+import { type OutputRendererControls } from '../output/OutputRenderer';
+import type { Console } from '../../mud/text/Console';
 import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
 import { MapStore } from '../../map/MapStore';
 
@@ -33,7 +34,7 @@ export class WindowManager {
     private readonly activeTabGroups = new Map<string, string>(); // groupId → active panelId
     private readonly mapCallbacks  = new Map<string, (roomId: number) => void>();
     private hashToRoomId: Record<string, number> = {};
-    private cursorRegistry: Map<string, CursorOps> | null = null;
+    private consoleRegistry: Map<string, Console> | null = null;
     private windowHints: Record<string, WindowOpenOptions> = {};
     private nextZ       = 10;
     private nextDockOrder = 0;
@@ -48,8 +49,8 @@ export class WindowManager {
     /** Called when a map window is opened or made visible. */
     onMapOpen?:           (id: string) => void;
 
-    setCursorRegistry(registry: Map<string, CursorOps>): void {
-        this.cursorRegistry = registry;
+    setConsoleRegistry(registry: Map<string, Console>): void {
+        this.consoleRegistry = registry;
     }
 
     setWindowHints(hints: Record<string, WindowOpenOptions>): void {
@@ -116,14 +117,14 @@ export class WindowManager {
         }
     }
 
-    registerCursor(id: string, ops: CursorOps): void {
-        this.cursorRegistry?.set(id, ops);
+    registerConsole(id: string, console: Console): void {
+        this.consoleRegistry?.set(id, console);
     }
 
     unregister(id: string): void {
         this.controls.delete(id);
         this.elements.delete(id);
-        this.cursorRegistry?.delete(id);
+        this.consoleRegistry?.delete(id);
     }
 
     registerMapCallback(id: string, cb: (roomId: number) => void): void {
@@ -485,7 +486,7 @@ export class WindowManager {
         this.elements.delete(id);
         this.lineBuffers.delete(id);
         this.portalTargets.delete(id);
-        this.cursorRegistry?.delete(id);
+        this.consoleRegistry?.delete(id);
         this.onWindowClosed?.(id);
         this.notify();
     }
@@ -496,7 +497,7 @@ export class WindowManager {
             this.elements.delete(id);
             this.lineBuffers.delete(id);
             this.portalTargets.delete(id);
-            this.cursorRegistry?.delete(id);
+            this.consoleRegistry?.delete(id);
         }
         this.windows.clear();
         this.notify();
