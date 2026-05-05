@@ -776,9 +776,6 @@ export class AnsiAwareBuffer {
 
             if (state.hyperlink) {
                 styles.push("cursor: pointer");
-                styles.push("text-decoration: underline");
-                styles.push("text-decoration-style: dotted");
-                styles.push("text-decoration-skip-ink: auto");
                 const dataAttr = ' data-output-clickable="true"';
                 if (state.hyperlink.title) {
                     const titleAttr = ` title="${this.escapeHtml(state.hyperlink.title)}"`;
@@ -829,9 +826,6 @@ export class AnsiAwareBuffer {
 
             if (state.hyperlink) {
                 styles.push("cursor: pointer");
-                styles.push("text-decoration: underline");
-                styles.push("text-decoration-style: dotted");
-                styles.push("text-decoration-skip-ink: auto");
 
                 element.dataset.outputClickable = "true";
 

@@ -10,7 +10,8 @@ import {setupRex} from './rex';
 // All *.lua files under mudlet-lua/ are served via the VFS at /lua/<relative-path>.
 // Adding a new file to the directory tree automatically makes it available to dofile().
 const MUDLET_LUA_FILES = import.meta.glob('./mudlet-lua/**/*.lua', {
-    as: 'raw',
+    query: '?raw',
+    import: 'default',
     eager: true,
 }) as Record<string, string>;
 
@@ -265,7 +266,7 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__mudix_tempAlias', (pattern: string, cbId: number) => {
             const id = this.nextTempId++;
             const unsub = this.api.aliases.addTemp(pattern, (m: RegExpMatchArray) => {
-                this.lua.global.set('matches', Array.from(m));
+                this.setMatches(Array.from(m));
                 dispatchCb(cbId);
                 this.api.flushOutput();
             });
@@ -282,7 +283,7 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__mudix_tempTrigger', (pattern: string, cbId: number) => {
             const id = this.nextTempId++;
             const unsub = this.api.triggers.addTemp(pattern, (m: RegExpMatchArray) => {
-                this.lua.global.set('matches', Array.from(m));
+                this.setMatches(Array.from(m));
                 dispatchCb(cbId);
                 this.api.flushOutput();
             });
@@ -755,9 +756,25 @@ toNativeSeparators = function(p) return p end
         _namedGroups?: Record<string, string>,
     ): Promise<void> {
         this.currentMatches = matches;
-        this.lua.global.set('matches', matches);
-        this.lua.global.set('multimatches', multimatches ?? []);
+        this.setMatches(matches, multimatches);
         await this.exec(code, name);
+    }
+
+    // wasmoon's pushTable iterates Object.keys(arr) and uses the keys as
+    // numeric Lua indices — so a normal JS array becomes a 0-indexed Lua
+    // table. Object.keys skips holes, so a sparse array with index 0 empty
+    // pushes as a 1-indexed Lua sequence (which Mudlet user code expects:
+    // matches[1] = full match, matches[2] = first capture).
+    private setMatches(matches: string[], multimatches?: string[][]): void {
+        const oneIndexed = (arr: string[]): string[] => {
+            const t: string[] = [];
+            for (let i = 0; i < arr.length; i++) t[i + 1] = arr[i];
+            return t;
+        };
+        this.lua.global.set('matches', oneIndexed(matches));
+        const mm: string[][] = [];
+        if (multimatches) for (let i = 0; i < multimatches.length; i++) mm[i + 1] = oneIndexed(multimatches[i]);
+        this.lua.global.set('multimatches', mm);
     }
 
     private async exec(code: string, name: string): Promise<void> {

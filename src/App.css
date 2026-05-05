@@ -557,6 +557,7 @@ html, body, #root {
     height: 100%;
     display: flex;
     flex-direction: column;
+    line-height: 0.8;
 }
 
 .output-wrapper {
@@ -581,6 +582,7 @@ html, body, #root {
     display: flex;
     align-items: baseline;
     gap: 6px;
+    padding: 2px 0;
 }
 
 .output-msg-content {
@@ -588,6 +590,11 @@ html, body, #root {
     word-break: break-word;
     flex: 1;
     min-width: 0;
+    padding: 2px 0;
+}
+
+.output-msg-content span {
+    padding: 2px 0;
 }
 
 /* Timestamps */
@@ -597,6 +604,7 @@ html, body, #root {
     color: var(--text-dim);
     flex-shrink: 0;
     font-variant-numeric: tabular-nums;
+    padding: 2px 0;
 }
 
 .output-show-timestamps .output-timestamp {
@@ -1029,7 +1037,7 @@ html, body, #root {
     flex-shrink: 0;
     overflow-y: auto;
     border-right: 1px solid var(--border);
-    padding: 4px 0;
+    padding: 2px 0;
 }
 
 .vfs-preview-panel {

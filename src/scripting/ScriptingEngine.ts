@@ -65,12 +65,8 @@ export class ScriptingEngine {
         return LuaRuntime.create(this.api, vfs).then(rt => {
             this.runtimes.lua = rt;
             this.api.setExecuteScript((code) => {
-                console.log('[executeScript] code:', code, 'lua runtime alive:', !!this.runtimes.lua);
                 const lua = this.runtimes.lua;
-                if (!lua) {
-                    console.warn('[executeScript] no lua runtime — link click has no effect');
-                    return;
-                }
+                if (!lua) return;
                 lua.run(code, 'link')
                     .then(() => this.api.flushOutput())
                     .catch(err => this.api.printError(`[link] ${err instanceof Error ? err.message : String(err)}`));
