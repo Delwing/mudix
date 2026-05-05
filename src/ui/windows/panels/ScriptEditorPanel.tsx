@@ -1,19 +1,21 @@
 import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Clock, Folder, FolderOpen, FolderPlus, Keyboard, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
-import { Button, Input, ContextMenu } from '../../components';
+import { AlertCircle, Clock, Folder, FolderOpen, FolderPlus, Keyboard, MousePointerClick, Package, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
+import { Button, Input, ContextMenu, useConfirm } from '../../components';
 import { useAppStore } from '../../../storage';
-import type { AliasNode, KeyNode, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
+import type { AliasNode, ButtonLocation, ButtonNode, ButtonOrientation, KeyNode, PackageManifest, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
 import { isEffectivelyEnabled } from '../../../storage/schema';
 import type { MudSession } from '../../../mud/MudSession';
+import type { ProfileVFS } from '../../../scripting/vfs/ProfileVFS';
 import { LuaEditor } from './LuaEditor';
-import { parseMudletXml } from '../../../import/mudletXmlImport';
+import { installPackageFromFile, uninstallPackageFiles } from '../../../import/packageInstaller';
+import { strToU8 } from 'fflate';
 import './ScriptEditorPanel.css';
 
-type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys' | 'errors';
-type EditCategory = Exclude<Category, 'errors'>;
-type AnyNode = ScriptNode | AliasNode | TriggerNode | TimerNode | KeyNode;
+type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys' | 'buttons' | 'packages' | 'errors';
+type EditCategory = Exclude<Category, 'errors' | 'packages'>;
+type AnyNode = ScriptNode | AliasNode | TriggerNode | TimerNode | KeyNode | ButtonNode;
 
-const EDIT_CATEGORIES: EditCategory[] = ['scripts', 'aliases', 'triggers', 'timers', 'keys'];
+const EDIT_CATEGORIES: EditCategory[] = ['scripts', 'aliases', 'triggers', 'timers', 'keys', 'buttons'];
 
 const CATEGORY_LABELS: Record<EditCategory, string> = {
     scripts: 'Scripts',
@@ -21,6 +23,7 @@ const CATEGORY_LABELS: Record<EditCategory, string> = {
     triggers: 'Triggers',
     timers: 'Timers',
     keys: 'Keys',
+    buttons: 'Buttons',
 };
 
 const CATEGORY_SINGULAR: Record<EditCategory, string> = {
@@ -29,7 +32,10 @@ const CATEGORY_SINGULAR: Record<EditCategory, string> = {
     triggers: 'Trigger',
     timers: 'Timer',
     keys: 'Key',
+    buttons: 'Button',
 };
+
+const BUTTON_GROUP_SINGULAR = 'Toolbar';
 
 const CATEGORY_ICON: Record<EditCategory, React.ElementType> = {
     scripts:  FileCode2,
@@ -37,7 +43,11 @@ const CATEGORY_ICON: Record<EditCategory, React.ElementType> = {
     triggers: Zap,
     timers:   Clock,
     keys:     Keyboard,
+    buttons:  MousePointerClick,
 };
+
+const BUTTON_LOCATIONS: ButtonLocation[] = ['top', 'bottom', 'left', 'right', 'floating'];
+const BUTTON_ORIENTATIONS: ButtonOrientation[] = ['horizontal', 'vertical'];
 
 const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'NumLock', 'ScrollLock', 'Dead']);
 
@@ -86,11 +96,12 @@ function ItemIcon({ category, isGroup, isExpanded }: { category: Category; isGro
     }
     const props = { size: ICON_SIZE, strokeWidth: ICON_STROKE, className: 'script-editor__item-icon' };
     switch (category) {
-        case 'scripts':  return <FileCode2  {...props} />;
-        case 'aliases':  return <Shuffle    {...props} />;
-        case 'triggers': return <Zap        {...props} />;
-        case 'timers':   return <Clock      {...props} />;
-        case 'keys':     return <Keyboard   {...props} />;
+        case 'scripts':  return <FileCode2          {...props} />;
+        case 'aliases':  return <Shuffle            {...props} />;
+        case 'triggers': return <Zap                {...props} />;
+        case 'timers':   return <Clock              {...props} />;
+        case 'keys':     return <Keyboard           {...props} />;
+        case 'buttons':  return <MousePointerClick  {...props} />;
         default:         return null;
     }
 }
@@ -137,6 +148,79 @@ const PATTERN_TYPE_COLORS: Record<TriggerPatternType, string> = {
 };
 
 const PATTERN_NEEDS_TEXT = new Set<TriggerPatternType>(['substring', 'regex', 'startOfLine', 'exactMatch', 'luaFunction']);
+
+const ICON_MIME: Record<string, string> = {
+    png:  'image/png',
+    jpg:  'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif:  'image/gif',
+    webp: 'image/webp',
+    svg:  'image/svg+xml',
+    bmp:  'image/bmp',
+    ico:  'image/x-icon',
+};
+
+function PackageDescription({ text }: { text: string }) {
+    const [expanded, setExpanded] = useState(false);
+    const [overflows, setOverflows] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        setOverflows(el.scrollHeight > el.clientHeight + 1);
+    }, [text]);
+
+    return (
+        <div className="script-editor__pkg-desc-wrap">
+            <div
+                ref={ref}
+                className={`script-editor__pkg-desc${expanded ? ' script-editor__pkg-desc--expanded' : ''}`}
+            >
+                {text}
+            </div>
+            {(overflows || expanded) && (
+                <button
+                    className="script-editor__pkg-desc-toggle"
+                    onClick={() => setExpanded(e => !e)}
+                >
+                    {expanded ? 'Show less' : 'Show more'}
+                </button>
+            )}
+        </div>
+    );
+}
+
+function PackageIcon({ vfs, pkg }: { vfs: ProfileVFS | null; pkg: PackageManifest }) {
+    const [url, setUrl] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!vfs || !pkg.icon) { setUrl(null); return; }
+        const path = `${vfs.profilePath}/${pkg.name}/${pkg.icon}`;
+        if (!vfs.exists(path)) { setUrl(null); return; }
+        let revoke: string | null = null;
+        try {
+            // Binary files were written as Latin-1 strings; reverse with strToU8(_, true).
+            const bytes = strToU8(vfs.readFile(path), true);
+            const ext = pkg.icon.split('.').pop()?.toLowerCase() ?? '';
+            const mime = ICON_MIME[ext] ?? 'application/octet-stream';
+            const blobUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime }));
+            revoke = blobUrl;
+            setUrl(blobUrl);
+        } catch {
+            setUrl(null);
+        }
+        return () => { if (revoke) URL.revokeObjectURL(revoke); };
+    }, [vfs, pkg.name, pkg.icon]);
+
+    return (
+        <div className="script-editor__pkg-icon-frame">
+            {url
+                ? <img className="script-editor__pkg-icon-img" src={url} alt="" />
+                : <Package className="script-editor__pkg-icon-fallback" size={28} strokeWidth={1.4} />}
+        </div>
+    );
+}
 
 function PatternTypeSelect({ value, onChange }: { value: TriggerPatternType; onChange: (t: TriggerPatternType) => void }) {
     const [open, setOpen] = useState(false);
@@ -229,16 +313,25 @@ function formatTime(d: Date): string {
     return d.toTimeString().slice(0, 8);
 }
 
+/** config.lua's `created` field is free-form; render as a localized date when parseable, raw otherwise. */
+function formatPackageDate(raw: string): string {
+    const t = Date.parse(raw);
+    if (isNaN(t)) return raw;
+    return new Date(t).toLocaleDateString();
+}
+
 interface ScriptEditorPanelProps {
     connectionId: string;
     session: MudSession;
+    vfs: ProfileVFS | null;
     onScriptSave?: (script: ScriptNode) => void;
     initialListWidth?: number;
     initialMetaHeight?: number;
     onSplitsChange?: (listWidth: number, metaHeight: number | null) => void;
 }
 
-export function ScriptEditorPanel({ connectionId, session, onScriptSave, initialListWidth, initialMetaHeight, onSplitsChange }: ScriptEditorPanelProps) {
+export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, initialListWidth, initialMetaHeight, onSplitsChange }: ScriptEditorPanelProps) {
+    const confirm = useConfirm();
     const [category, setCategory] = useState<Category>('scripts');
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -247,6 +340,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
     const triggers    = useAppStore(s => s.connectionTriggers[connectionId] ?? EMPTY);
     const timers      = useAppStore(s => s.connectionTimers[connectionId] ?? EMPTY);
     const keybindings = useAppStore(s => s.connectionKeybindings[connectionId] ?? EMPTY);
+    const buttons     = useAppStore(s => s.connectionButtons[connectionId] ?? EMPTY);
 
     const addScript        = useAppStore(s => s.addScript);
     const updateScript     = useAppStore(s => s.updateScript);
@@ -269,7 +363,13 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
     const updateKeybinding = useAppStore(s => s.updateKeybinding);
     const removeKeybinding = useAppStore(s => s.removeKeybinding);
     const moveKeybinding   = useAppStore(s => s.moveKeybinding);
-    const importMudletNodes = useAppStore(s => s.importMudletNodes);
+    const addButton        = useAppStore(s => s.addButton);
+    const updateButton     = useAppStore(s => s.updateButton);
+    const removeButton     = useAppStore(s => s.removeButton);
+    const moveButton       = useAppStore(s => s.moveButton);
+    const packages         = useAppStore(s => s.connectionPackages[connectionId] ?? EMPTY);
+    const installPackage   = useAppStore(s => s.installPackage);
+    const uninstallPackage = useAppStore(s => s.uninstallPackage);
 
     const importFileRef = useRef<HTMLInputElement>(null);
     const [importError, setImportError] = useState<string | null>(null);
@@ -278,14 +378,17 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         const file = e.target.files?.[0];
         if (!file) return;
         e.target.value = '';
+        if (!vfs) {
+            setImportError('VFS not ready — wait for the profile to finish loading');
+            return;
+        }
         try {
-            const text = await file.text();
-            const data = parseMudletXml(text);
-            importMudletNodes(connectionId, data);
+            const { manifest, data } = await installPackageFromFile(file, vfs);
+            installPackage(connectionId, manifest, data);
             const total = data.scripts.length + data.aliases.length + data.triggers.length + data.timers.length + data.keys.length;
             setImportError(null);
             const now = new Date();
-            const newEntries: LogEntry[] = [{ text: `Imported ${total} items from ${file.name}`, level: 'info', timestamp: now }];
+            const newEntries: LogEntry[] = [{ text: `Installed package "${manifest.name}" (${total} items) from ${file.name}`, level: 'info', timestamp: now }];
             for (const w of data.warnings) newEntries.push({ text: `Warning: ${w}`, level: 'error', timestamp: now });
             setLogs(prev => [...prev, ...newEntries]);
             setErrorLog(prev => [...prev, ...newEntries]);
@@ -294,7 +397,17 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         } catch (err) {
             setImportError(err instanceof Error ? err.message : String(err));
         }
-    }, [connectionId, importMudletNodes]);
+    }, [connectionId, installPackage, vfs]);
+
+    const handleUninstall = useCallback(async (packageName: string) => {
+        uninstallPackage(connectionId, packageName);
+        if (vfs) {
+            try { await uninstallPackageFiles(packageName, vfs); }
+            catch (err) { console.warn('[ScriptEditor] failed to remove package files:', err); }
+        }
+        const now = new Date();
+        setLogs(prev => [...prev, { text: `Uninstalled package "${packageName}"`, level: 'info', timestamp: now }]);
+    }, [connectionId, uninstallPackage, vfs]);
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -330,6 +443,17 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
     const [editTimerCommand, setEditTimerCommand] = useState('');
     // Script extra: event handlers (newline-separated)
     const [editEventHandlers, setEditEventHandlers] = useState('');
+    // Button extra
+    const [editButtonCommand,     setEditButtonCommand]     = useState('');
+    const [editButtonCommandDown, setEditButtonCommandDown] = useState('');
+    const [editButtonIcon,        setEditButtonIcon]        = useState('');
+    const [editButtonTooltip,     setEditButtonTooltip]     = useState('');
+    const [editButtonIsPushDown,  setEditButtonIsPushDown]  = useState(false);
+    const [editButtonStyleSheet,  setEditButtonStyleSheet]  = useState('');
+    // Toolbar (button group) extra
+    const [editToolbarLocation,    setEditToolbarLocation]    = useState<ButtonLocation>('top');
+    const [editToolbarOrientation, setEditToolbarOrientation] = useState<ButtonOrientation>('horizontal');
+    const [editToolbarColumns,     setEditToolbarColumns]     = useState(0);
 
     const [dirty, setDirty] = useState(false);
     // Backfill from the session-level buffer so entries that fired before this
@@ -371,10 +495,11 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         else if (category === 'aliases')   removeAlias(connectionId, id);
         else if (category === 'triggers')  removeTrigger(connectionId, id);
         else if (category === 'timers')    removeTimer(connectionId, id);
-        else                               removeKeybinding(connectionId, id);
+        else if (category === 'keys')      removeKeybinding(connectionId, id);
+        else                               removeButton(connectionId, id);
         setSelectedId(prev => prev === id ? null : prev);
         setCtxMenu(null);
-    }, [category, connectionId, removeScript, removeAlias, removeTrigger, removeTimer, removeKeybinding]);
+    }, [category, connectionId, removeScript, removeAlias, removeTrigger, removeTimer, removeKeybinding, removeButton]);
 
     // Drag-and-drop state
     const [dragId, setDragId]   = useState<string | null>(null);
@@ -385,11 +510,17 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         category === 'aliases'  ? aliases    :
         category === 'triggers' ? triggers   :
         category === 'timers'   ? timers     :
-        category === 'errors'   ? EMPTY      :
-        keybindings;
+        category === 'keys'     ? keybindings:
+        category === 'buttons'  ? buttons    :
+        EMPTY;
 
     const treeEntries = flattenTree(items, null, expanded);
     const selected = items.find(i => i.id === selectedId) ?? null;
+
+    const childCounts = new Map<string, number>();
+    for (const it of items) {
+        if (it.parentId) childCounts.set(it.parentId, (childCounts.get(it.parentId) ?? 0) + 1);
+    }
 
     useEffect(() => {
         setSelectedId(null);
@@ -438,6 +569,18 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
             setEditKey(k.key);
             setEditModifiers(k.modifiers);
             setEditKeyCommand(k.command ?? '');
+        }
+        if (category === 'buttons') {
+            const b = selected as ButtonNode;
+            setEditButtonCommand(b.command ?? '');
+            setEditButtonCommandDown(b.commandDown ?? '');
+            setEditButtonIcon(b.icon ?? '');
+            setEditButtonTooltip(b.tooltip ?? '');
+            setEditButtonIsPushDown(b.isPushDown);
+            setEditButtonStyleSheet(b.styleSheet ?? '');
+            setEditToolbarLocation(b.location);
+            setEditToolbarOrientation(b.orientation);
+            setEditToolbarColumns(b.columns ?? 0);
         }
         setCapturing(false);
         setDirty(isNewScript);
@@ -545,6 +688,19 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         if (intent === 'into') {
             newParentId = target.id;
             insertBeforeId = null;
+        } else if (
+            intent === 'after' &&
+            target.isGroup &&
+            expanded.has(target.id) &&
+            items.some(i => i.parentId === target.id)
+        ) {
+            // The "after" line cue under an expanded non-empty group sits
+            // between the group's row and its first child, so land the drop at
+            // that exact slot (first child of the group). Otherwise the
+            // calculation can pick the dragged item itself as insertBeforeId
+            // and silently no-op.
+            newParentId = target.id;
+            insertBeforeId = items.find(i => i.parentId === target.id)?.id ?? null;
         } else {
             newParentId = target.parentId;
             if (intent === 'before') {
@@ -560,7 +716,8 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         else if (category === 'aliases')   moveAlias(connectionId, id, newParentId, insertBeforeId);
         else if (category === 'triggers')  moveTrigger(connectionId, id, newParentId, insertBeforeId);
         else if (category === 'timers')    moveTimer(connectionId, id, newParentId, insertBeforeId);
-        else                               moveKeybinding(connectionId, id, newParentId, insertBeforeId);
+        else if (category === 'keys')      moveKeybinding(connectionId, id, newParentId, insertBeforeId);
+        else                               moveButton(connectionId, id, newParentId, insertBeforeId);
 
         // Auto-expand the group we dropped into
         if (intent === 'into') {
@@ -665,7 +822,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                 isGroup: asGroup,
                 parentId,
             });
-        } else {
+        } else if (category === 'keys') {
             id = addKeybinding(connectionId, {
                 name: asGroup ? 'New Group' : 'New Key',
                 key: '',
@@ -676,9 +833,23 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                 isGroup: asGroup,
                 parentId,
             });
+        } else {
+            id = addButton(connectionId, {
+                name: asGroup ? 'New Toolbar' : 'New Button',
+                language: 'lua',
+                code: '',
+                enabled: true,
+                isGroup: asGroup,
+                parentId,
+                orientation: 'horizontal',
+                location: 'top',
+                columns: 0,
+                isPushDown: false,
+                buttonState: false,
+            });
         }
         setSelectedId(id);
-    }, [category, connectionId, addScript, addAlias, addTrigger, addTimer, addKeybinding]);
+    }, [category, connectionId, addScript, addAlias, addTrigger, addTimer, addKeybinding, addButton]);
 
     const handleNew = (asGroup = false) => {
         const parentId = selected?.isGroup
@@ -695,7 +866,8 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         else if (category === 'aliases')   updateAlias(connectionId, id, { enabled: !item.enabled });
         else if (category === 'triggers')  updateTrigger(connectionId, id, { enabled: !item.enabled });
         else if (category === 'timers')    updateTimer(connectionId, id, { enabled: !item.enabled });
-        else                               updateKeybinding(connectionId, id, { enabled: !item.enabled });
+        else if (category === 'keys')      updateKeybinding(connectionId, id, { enabled: !item.enabled });
+        else                               updateButton(connectionId, id, { enabled: !item.enabled });
     };
 
     const handleToggleExpand = (id: string, e: React.MouseEvent) => {
@@ -736,8 +908,33 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         } else if (category === 'timers') {
             const seconds = editHours * 3600 + editMinutes * 60 + editSecs + editMs / 1000;
             updateTimer(connectionId, selectedId, { name: editName, seconds, repeat: editRepeat, language: editLang, code: editCode, command: editTimerCommand || undefined });
-        } else {
+        } else if (category === 'keys') {
             updateKeybinding(connectionId, selectedId, { name: editName, key: editKey, modifiers: editModifiers, language: editLang, code: editCode, command: editKeyCommand || undefined });
+        } else {
+            // buttons
+            if (selected.isGroup) {
+                updateButton(connectionId, selectedId, {
+                    name: editName,
+                    language: editLang,
+                    code: editCode,
+                    location: editToolbarLocation,
+                    orientation: editToolbarOrientation,
+                    columns: editToolbarColumns,
+                    styleSheet: editButtonStyleSheet || undefined,
+                });
+            } else {
+                updateButton(connectionId, selectedId, {
+                    name: editName,
+                    language: editLang,
+                    code: editCode,
+                    command: editButtonCommand || undefined,
+                    isPushDown: editButtonIsPushDown,
+                    commandDown: editButtonIsPushDown ? (editButtonCommandDown || undefined) : undefined,
+                    icon:      editButtonIcon    || undefined,
+                    tooltip:   editButtonTooltip || undefined,
+                    styleSheet: editButtonStyleSheet || undefined,
+                });
+            }
         }
         setDirty(false);
     };
@@ -748,7 +945,8 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         else if (category === 'aliases')   removeAlias(connectionId, selectedId);
         else if (category === 'triggers')  removeTrigger(connectionId, selectedId);
         else if (category === 'timers')    removeTimer(connectionId, selectedId);
-        else                               removeKeybinding(connectionId, selectedId);
+        else if (category === 'keys')      removeKeybinding(connectionId, selectedId);
+        else                               removeButton(connectionId, selectedId);
         setSelectedId(null);
     };
 
@@ -764,7 +962,8 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + 2; });
     };
 
-    const categoryLabel = category !== 'errors' ? CATEGORY_LABELS[category].toLowerCase() : '';
+    const isEditCategory = category !== 'errors' && category !== 'packages';
+    const categoryLabel = isEditCategory ? CATEGORY_LABELS[category as EditCategory].toLowerCase() : '';
     const emptyMsg = items.length === 0
         ? `No ${categoryLabel} yet — click "+ New" to create one`
         : `Select a ${categoryLabel.replace(/s$/, '')} to edit`;
@@ -773,37 +972,53 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
         <div className="script-editor">
             {/* Category nav */}
             <div className="script-editor__nav">
-                {EDIT_CATEGORIES.map(cat => (
-                    <button
-                        key={cat}
-                        className={`script-editor__nav-btn${category === cat ? ' script-editor__nav-btn--active' : ''}`}
-                        onClick={() => setCategory(cat)}
-                    >
-                        {CATEGORY_LABELS[cat]}
-                    </button>
-                ))}
+                {EDIT_CATEGORIES.map(cat => {
+                    const Icon = CATEGORY_ICON[cat];
+                    return (
+                        <button
+                            key={cat}
+                            className={`script-editor__nav-btn script-editor__nav-btn--row${category === cat ? ' script-editor__nav-btn--active' : ''}`}
+                            onClick={() => setCategory(cat)}
+                        >
+                            <Icon size={13} strokeWidth={1.6} className="script-editor__nav-icon" />
+                            <span className="script-editor__nav-label">{CATEGORY_LABELS[cat]}</span>
+                        </button>
+                    );
+                })}
+                <div className="script-editor__nav-sep" />
                 <button
-                    className={`script-editor__nav-btn${category === 'errors' ? ' script-editor__nav-btn--active' : ''}`}
+                    className={`script-editor__nav-btn script-editor__nav-btn--row${category === 'errors' ? ' script-editor__nav-btn--active' : ''}`}
                     onClick={() => setCategory('errors')}
-                    style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                 >
-                    Errors
+                    <AlertCircle size={13} strokeWidth={1.6} className="script-editor__nav-icon" />
+                    <span className="script-editor__nav-label">Errors</span>
                     {unreadErrors > 0 && (
                         <span className="script-editor__error-badge">{unreadErrors > 99 ? '99+' : unreadErrors}</span>
                     )}
                 </button>
-                <button className="script-editor__nav-import" onClick={() => importFileRef.current?.click()} title="Import Mudlet XML package">
-                    Import XML
+                <div className="script-editor__nav-sep" />
+                <button
+                    className={`script-editor__nav-btn script-editor__nav-btn--row${category === 'packages' ? ' script-editor__nav-btn--active' : ''}`}
+                    onClick={() => setCategory('packages')}
+                >
+                    <Package size={13} strokeWidth={1.6} className="script-editor__nav-icon" />
+                    <span className="script-editor__nav-label">Packages</span>
+                    {packages.length > 0 && (
+                        <span className="script-editor__error-badge" style={{ background: '#3a3a3a' }}>{packages.length}</span>
+                    )}
                 </button>
-                <input ref={importFileRef} type="file" accept=".xml" style={{ display: 'none' }} onChange={handleImportFile} />
+                <button className="script-editor__nav-import" onClick={() => importFileRef.current?.click()} title="Import Mudlet package (.mpackage / .zip / .xml)">
+                    Import Package
+                </button>
+                <input ref={importFileRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportFile} />
             </div>
 
-            {/* Item list — hidden on the Errors tab */}
-            {category !== 'errors' && <div className="script-editor__list" style={{ width: listWidth }}>
+            {/* Item list — hidden on the Errors and Packages tabs */}
+            {isEditCategory && <div className="script-editor__list" style={{ width: listWidth }}>
                 <div className="script-editor__list-resize" onMouseDown={handleListResizeStart} />
                 <div className="script-editor__list-header">
                     <Button variant="secondary" size="sm" onClick={() => handleNew(false)}>+ New</Button>
-                    <Button variant="secondary" size="sm" onClick={() => handleNew(true)}>+ Group</Button>
+                    <Button variant="secondary" size="sm" onClick={() => handleNew(true)}>+ {category === 'buttons' ? BUTTON_GROUP_SINGULAR : 'Group'}</Button>
                 </div>
                 {importError && <div className="script-editor__import-error" title={importError}>Import failed: {importError}</div>}
                 <div
@@ -818,6 +1033,8 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                         const isSelected = item.id === selectedId;
                         const isExpanded = expanded.has(item.id);
                         const isOver = dragOver?.id === item.id;
+                        const childCount = item.isGroup ? (childCounts.get(item.id) ?? 0) : 0;
+                        const isEmptyGroup = item.isGroup && childCount === 0;
                         return (
                             <div
                                 key={item.id}
@@ -826,6 +1043,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                                     'script-editor__item',
                                     isSelected ? 'script-editor__item--selected' : '',
                                     item.isGroup ? 'script-editor__item--group' : '',
+                                    isEmptyGroup ? 'script-editor__item--empty-group' : '',
                                     !effective ? 'script-editor__item--inherited-disabled' : '',
                                     item.id === dragId ? 'script-editor__item--dragging' : '',
                                     isOver && dragOver!.intent === 'before' ? 'script-editor__item--drop-before' : '',
@@ -845,9 +1063,9 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                                         className="script-editor__item-expand"
                                         onClick={e => handleToggleExpand(item.id, e)}
                                         tabIndex={-1}
-                                        title={isExpanded ? 'Collapse' : 'Expand'}
+                                        title={isEmptyGroup ? 'Empty group' : (isExpanded ? 'Collapse' : 'Expand')}
                                     >
-                                        <ItemIcon category={category} isGroup={true} isExpanded={isExpanded} />
+                                        <ItemIcon category={category} isGroup={true} isExpanded={isExpanded && !isEmptyGroup} />
                                     </button>
                                 ) : (
                                     <span className="script-editor__item-spacer">
@@ -863,6 +1081,9 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                                 />
                                 <span className="script-editor__item-name">
                                     {item.name}
+                                    {item.isGroup && !isEmptyGroup && (
+                                        <span className="script-editor__item-count">{childCount}</span>
+                                    )}
                                     {'key' in item && (item as KeyNode).key && (
                                         <span className="script-editor__item-key">
                                             {formatKeyCombo((item as KeyNode).key, (item as KeyNode).modifiers)}
@@ -874,6 +1095,73 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                     })}
                 </div>
             </div>}
+
+            {/* Packages view */}
+            {category === 'packages' && (
+                <div className="script-editor__error-log-view">
+                    <div className="script-editor__error-log-header">
+                        <span className="script-editor__error-log-title">
+                            {packages.length === 0 ? 'No packages installed' : `${packages.length} installed`}
+                        </span>
+                        {importError && <span className="script-editor__import-error" title={importError}>Import failed: {importError}</span>}
+                    </div>
+                    <div className="script-editor__error-log-entries">
+                        {packages.length === 0 ? (
+                            <span className="script-editor__log-empty">
+                                Click "Import Package" above to install a Mudlet package (.mpackage / .zip / .xml).
+                            </span>
+                        ) : (
+                            packages.map(pkg => {
+                                const created = pkg.created ? formatPackageDate(pkg.created) : null;
+                                const installed = new Date(pkg.installedAt).toLocaleString();
+                                return (
+                                    <div key={pkg.name} className="script-editor__pkg-card">
+                                        <PackageIcon vfs={vfs} pkg={pkg} />
+                                        <div className="script-editor__pkg-body">
+                                            <div className="script-editor__pkg-title">{pkg.title || pkg.name}</div>
+                                            <div className="script-editor__pkg-byline">
+                                                {pkg.name !== (pkg.title || pkg.name) && <span>{pkg.name}</span>}
+                                                {pkg.version && <><span className="script-editor__pkg-byline-sep">·</span><span>v{pkg.version}</span></>}
+                                                {pkg.author && <><span className="script-editor__pkg-byline-sep">·</span><span>{pkg.author}</span></>}
+                                            </div>
+                                            {pkg.description && <PackageDescription text={pkg.description} />}
+                                            <div className="script-editor__pkg-footer">
+                                                {pkg.sourceFile ?? `${pkg.name}.mpackage`}
+                                                {created && <> · created {created}</>}
+                                                {' · installed '}{installed}
+                                            </div>
+                                        </div>
+                                        <button
+                                            className="script-editor__error-log-clear"
+                                            onClick={async () => {
+                                                const ok = await confirm<boolean>({
+                                                    title: 'Uninstall package?',
+                                                    tone: 'danger',
+                                                    message: (
+                                                        <>
+                                                            Uninstall <strong>{pkg.title || pkg.name}</strong>? All scripts, aliases,
+                                                            triggers, timers and keys it added will be removed, along with its files
+                                                            in <code>/{pkg.name}/</code>.
+                                                        </>
+                                                    ),
+                                                    buttons: [
+                                                        { label: 'Cancel', value: false, variant: 'secondary' },
+                                                        { label: 'Uninstall', value: true, variant: 'danger', autoFocus: true },
+                                                    ],
+                                                    dismissValue: false,
+                                                });
+                                                if (ok) handleUninstall(pkg.name);
+                                            }}
+                                        >
+                                            Uninstall
+                                        </button>
+                                    </div>
+                                );
+                            })
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Errors view */}
             {category === 'errors' && (
@@ -907,7 +1195,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
             )}
 
             {/* Editor pane */}
-            {category !== 'errors' && selected ? (
+            {isEditCategory && selected ? (
                 <div className="script-editor__pane">
                     <div
                         className="script-editor__meta"
@@ -916,7 +1204,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                     >
                         <div className="script-editor__meta-row">
                             {selected.isGroup && (
-                                <span className="script-editor__group-badge">Group</span>
+                                <span className="script-editor__group-badge">{category === 'buttons' ? BUTTON_GROUP_SINGULAR : 'Group'}</span>
                             )}
                             <Input
                                 className="script-editor__name"
@@ -1226,6 +1514,107 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                                 />
                             </div>
                         )}
+                        {category === 'buttons' && selected.isGroup && (
+                            <div className="script-editor__meta-row">
+                                <span className="script-editor__field-label">Location</span>
+                                <select
+                                    className="script-editor__lang-select"
+                                    value={editToolbarLocation}
+                                    onChange={e => { setEditToolbarLocation(e.target.value as ButtonLocation); setDirty(true); }}
+                                >
+                                    {BUTTON_LOCATIONS.map(loc => (
+                                        <option key={loc} value={loc}>{loc[0].toUpperCase() + loc.slice(1)}</option>
+                                    ))}
+                                </select>
+                                <span className="script-editor__field-label">Orientation</span>
+                                <select
+                                    className="script-editor__lang-select"
+                                    value={editToolbarOrientation}
+                                    onChange={e => { setEditToolbarOrientation(e.target.value as ButtonOrientation); setDirty(true); }}
+                                >
+                                    {BUTTON_ORIENTATIONS.map(o => (
+                                        <option key={o} value={o}>{o[0].toUpperCase() + o.slice(1)}</option>
+                                    ))}
+                                </select>
+                                <span className="script-editor__field-label">
+                                    {editToolbarOrientation === 'horizontal' ? 'Rows' : 'Columns'}
+                                </span>
+                                <input
+                                    type="number"
+                                    className="script-editor__time-part"
+                                    value={editToolbarColumns}
+                                    min={0}
+                                    title={editToolbarOrientation === 'horizontal'
+                                        ? '0 = single row; N = wrap into N rows (Mudlet buttonColumn)'
+                                        : '0 = single column; N = wrap into N columns (Mudlet buttonColumn)'}
+                                    onChange={e => {
+                                        const v = parseInt(e.target.value, 10);
+                                        setEditToolbarColumns(isNaN(v) || v < 0 ? 0 : v);
+                                        setDirty(true);
+                                    }}
+                                />
+                            </div>
+                        )}
+                        {category === 'buttons' && !selected.isGroup && (
+                            <>
+                                <div className="script-editor__meta-row">
+                                    <Input
+                                        className="script-editor__pattern"
+                                        value={editButtonCommand}
+                                        onChange={e => { setEditButtonCommand(e.target.value); setDirty(true); }}
+                                        placeholder={editButtonIsPushDown ? 'Command (up — released)' : 'Command to send'}
+                                    />
+                                </div>
+                                {editButtonIsPushDown && (
+                                    <div className="script-editor__meta-row">
+                                        <Input
+                                            className="script-editor__pattern"
+                                            value={editButtonCommandDown}
+                                            onChange={e => { setEditButtonCommandDown(e.target.value); setDirty(true); }}
+                                            placeholder="Command (down — pressed)"
+                                        />
+                                    </div>
+                                )}
+                                <div className="script-editor__meta-row">
+                                    <Input
+                                        className="script-editor__pattern"
+                                        value={editButtonIcon}
+                                        onChange={e => { setEditButtonIcon(e.target.value); setDirty(true); }}
+                                        placeholder="Icon path (relative to profile root)"
+                                    />
+                                </div>
+                                <div className="script-editor__meta-row">
+                                    <Input
+                                        className="script-editor__pattern"
+                                        value={editButtonTooltip}
+                                        onChange={e => { setEditButtonTooltip(e.target.value); setDirty(true); }}
+                                        placeholder="Tooltip"
+                                    />
+                                </div>
+                                <div className="script-editor__meta-row">
+                                    <label className="script-editor__trigger-opt">
+                                        <input
+                                            type="checkbox"
+                                            checked={editButtonIsPushDown}
+                                            onChange={e => { setEditButtonIsPushDown(e.target.checked); setDirty(true); }}
+                                        />
+                                        Two-state (push-down) button
+                                    </label>
+                                </div>
+                            </>
+                        )}
+                        {category === 'buttons' && (
+                            <div className="script-editor__meta-row script-editor__meta-row--col">
+                                <span className="script-editor__field-label">Stylesheet (stored, not yet applied)</span>
+                                <textarea
+                                    className="script-editor__patterns"
+                                    value={editButtonStyleSheet}
+                                    onChange={e => { setEditButtonStyleSheet(e.target.value); setDirty(true); }}
+                                    placeholder="QPushButton { ... }"
+                                    spellCheck={false}
+                                />
+                            </div>
+                        )}
                     </div>
 
                     <div className="script-editor__meta-resize" onMouseDown={handleMetaResizeStart} />
@@ -1268,10 +1657,10 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                     </div>
                 </div>
             ) : (
-                category !== 'errors' && <div className="script-editor__empty">{emptyMsg}</div>
+                isEditCategory && <div className="script-editor__empty">{emptyMsg}</div>
             )}
 
-            {ctxMenu && category !== 'errors' && (
+            {ctxMenu && isEditCategory && (
                 <ContextMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)}>
                     {ctxMenu.targetId !== null && (
                         <>
@@ -1309,7 +1698,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                         }}
                     >
                         <FolderPlus size={13} strokeWidth={1.6} />
-                        Add Group
+                        Add {category === 'buttons' ? BUTTON_GROUP_SINGULAR : 'Group'}
                     </button>
                 </ContextMenu>
             )}

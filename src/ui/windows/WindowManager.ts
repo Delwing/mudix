@@ -34,6 +34,9 @@ export class WindowManager {
     private readonly portalTargets = new Map<string, HTMLDivElement>();
     private readonly activeTabGroups = new Map<string, string>(); // groupId → active panelId
     private readonly mapCallbacks  = new Map<string, (roomId: number) => void>();
+    /** Names of windows created by Lua createMiniConsole — distinguishes them
+     *  from openUserWindow panels for windowType() reporting. */
+    private readonly miniConsoles  = new Set<string>();
     private hashToRoomId: Record<string, number> = {};
     private consoleRegistry: Map<string, Console> | null = null;
     private windowHints: Record<string, WindowOpenOptions> = {};
@@ -158,6 +161,14 @@ export class WindowManager {
         for (const cb of this.mapCallbacks.values()) cb(roomId);
     }
 
+    markAsMiniConsole(id: string): void {
+        if (this.windows.has(id)) this.miniConsoles.add(id);
+    }
+
+    isMiniConsole(id: string): boolean {
+        return this.miniConsoles.has(id);
+    }
+
     setHashMap(map: Record<string, number>): void {
         this.hashToRoomId = map;
     }
@@ -180,8 +191,15 @@ export class WindowManager {
     setSize(id: string, width: number, height: number): void {
         const win = this.windows.get(id);
         if (!win) return;
-        win.width  = Math.max(150, width);
-        win.height = Math.max(80, height);
+        // Miniconsoles bypass the floating-window minimums — the script picks
+        // the exact pixel size, including small/zero dimensions.
+        if (this.miniConsoles.has(id)) {
+            win.width  = Math.max(0, width);
+            win.height = Math.max(0, height);
+        } else {
+            win.width  = Math.max(150, width);
+            win.height = Math.max(80, height);
+        }
         this.notify();
         this.saveHint(id, win);
     }
@@ -506,6 +524,7 @@ export class WindowManager {
         this.lineBuffers.delete(id);
         this.portalTargets.delete(id);
         this.consoleRegistry?.delete(id);
+        this.miniConsoles.delete(id);
         this.onWindowClosed?.(id);
         this.notify();
     }
@@ -519,6 +538,7 @@ export class WindowManager {
             this.consoleRegistry?.delete(id);
         }
         this.windows.clear();
+        this.miniConsoles.clear();
         this.notify();
     }
 

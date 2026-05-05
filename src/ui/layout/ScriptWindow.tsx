@@ -14,6 +14,9 @@ interface ScriptWindowProps {
     height: number;
     zIndex: number;
     manager: WindowManager;
+    /** Miniconsoles render bare: no titlebar, no border, no drag, no resize.
+     *  Position and size are script-controlled. */
+    isMiniConsole?: boolean;
     onFocus:            () => void;
     onMoved:            (x: number, y: number) => void;
     onResized:          (w: number, h: number) => void;
@@ -26,7 +29,7 @@ interface ScriptWindowProps {
 export function ScriptWindow({
     id, title, visible,
     x, y, width, height, zIndex,
-    manager,
+    manager, isMiniConsole,
     onFocus, onMoved, onResized, onDock, onDragStateChange, onTitlebarContextMenu, onHide,
 }: ScriptWindowProps) {
     const windowRef  = useRef<HTMLDivElement>(null);
@@ -181,17 +184,19 @@ export function ScriptWindow({
     return (
         <div
             ref={windowRef}
-            className="script-window"
+            className={`script-window${isMiniConsole ? ' script-window--miniconsole' : ''}`}
             data-window-id={id}
             style={{ left: x, top: y, width, height, zIndex, display: visible ? 'flex' : 'none' }}
             onPointerDown={onFocus}
         >
-            <div className="script-window-titlebar" onPointerDown={handleTitlebarPointerDown} onContextMenu={onTitlebarContextMenu}>
-                <span className="script-window-title">{title}</span>
-                <button className="script-window-btn close" title="Close" onClick={onHide}>×</button>
-            </div>
+            {!isMiniConsole && (
+                <div className="script-window-titlebar" onPointerDown={handleTitlebarPointerDown} onContextMenu={onTitlebarContextMenu}>
+                    <span className="script-window-title">{title}</span>
+                    <button className="script-window-btn close" title="Close" onClick={onHide}>×</button>
+                </div>
+            )}
             <div className="script-window-content" ref={contentRef} />
-            {(['n','s','e','w','ne','nw','se','sw'] as const).map(dir => (
+            {!isMiniConsole && (['n','s','e','w','ne','nw','se','sw'] as const).map(dir => (
                 <div key={dir} className={`script-window-resize-${dir}`} onPointerDown={makeResizeHandler(dir)} />
             ))}
         </div>

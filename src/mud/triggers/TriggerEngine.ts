@@ -1,3 +1,4 @@
+import PCRE from 'pcre2-wasm-universal';
 import type { TriggerNode, TriggerPattern } from '../../storage/schema';
 import { isEffectivelyEnabled } from '../../storage/schema';
 
@@ -8,6 +9,12 @@ type TempFn = (matches: RegExpMatchArray) => void;
 type MatchResult = { captures: string[]; matchedText: string; namedGroups?: Record<string, string> };
 
 type Matcher = (line: string, isPrompt: boolean) => MatchResult | null;
+
+type PcreInstance = InstanceType<typeof PCRE>;
+type PcreMatch = { length: number; [k: number]: { start: number; end: number; match: string } };
+
+/** Kicked off at module load so PCRE is ready by the time anything matches. */
+const pcreReadyPromise = PCRE.init();
 
 type CompiledOrEntry = {
     kind: 'or';
@@ -37,17 +44,39 @@ type AndState = {
 /** Mutable ref so the Lua eval function can be swapped in after compilation. */
 const luaEvalRef: { fn: ((code: string, line: string) => boolean) | null } = { fn: null };
 
-function buildMatcher(p: TriggerPattern): Matcher | null {
+function pcreToMatchResult(m: PcreMatch): MatchResult {
+    const captures: string[] = [];
+    // pcre2-wasm-universal reports `m.length` as ovector pair count, which includes
+    // the full match at index 0 — so capture groups are at 1..length-1, not 1..length.
+    for (let i = 1; i < m.length; i++) {
+        const cap = m[i];
+        // PCRE2 sets ovector to PCRE2_UNSET (start === -1) for unmatched optional
+        // groups; surface those as empty strings to mirror prior JS-RegExp behavior.
+        captures.push(cap && cap.start >= 0 ? cap.match : '');
+    }
+    return { captures, matchedText: m[0].match };
+}
+
+/**
+ * Compile a PCRE pattern. Returns null if compilation fails, with the failure
+ * sticky-cached so we don't retry on every match.
+ */
+function compilePcre(pattern: string): PcreInstance | null {
+    try { return new PCRE(pattern); }
+    catch { return null; }
+}
+
+function buildMatcher(p: TriggerPattern, register: (re: PcreInstance) => void): Matcher | null {
     switch (p.type) {
         case 'regex': {
             if (!p.text) return null;
-            let re: RegExp;
-            try { re = new RegExp(p.text); } catch { return null; }
+            const re = compilePcre(p.text);
+            if (!re) return null;
+            register(re);
             return (line) => {
-                const m = line.match(re);
+                const m = re.match(line) as PcreMatch | null;
                 if (!m) return null;
-                const namedGroups = m.groups ? { ...m.groups } : undefined;
-                return { captures: m.slice(1).map(c => c ?? ''), matchedText: m[0], namedGroups };
+                return pcreToMatchResult(m);
             };
         }
         case 'substring':
@@ -82,6 +111,11 @@ export class TriggerEngine {
     private permCompiled: CompiledEntry[] = [];
     private allById = new Map<string, TriggerNode>();
 
+    // Compiled PCRE instances for the current permCompiled set; destroyed and
+    // rebuilt on each loadPerm. Tracked here (not on individual entries) so the
+    // matcher closures stay simple — they don't need to know about lifecycle.
+    private pcreInstances: PcreInstance[] = [];
+
     // Chain state: maps group-trigger ID → last line number on which chain is open.
     private lineCounter = 0;
     private readonly chainOpenUntil = new Map<string, number>();
@@ -91,6 +125,11 @@ export class TriggerEngine {
 
     // Filter state: chainHeadId → last matched/captured text
     private filterActiveText = new Map<string, string>();
+
+    /** Resolves once PCRE wasm is initialized and patterns can be compiled. */
+    static ready(): Promise<void> {
+        return pcreReadyPromise.then(() => undefined);
+    }
 
     addTemp(pattern: string | RegExp, fn: TempFn): () => void {
         const re = typeof pattern === 'string' ? new RegExp(pattern) : pattern;
@@ -102,6 +141,10 @@ export class TriggerEngine {
     loadPerm(items: TriggerNode[]): void {
         this.allById = new Map(items.map(i => [i.id, i]));
         this.permCompiled = [];
+        // Free previous PCRE instances before rebuilding.
+        for (const re of this.pcreInstances) re.destroy();
+        this.pcreInstances = [];
+        const register = (re: PcreInstance) => { this.pcreInstances.push(re); };
 
         // Collect IDs that will be compiled (for and-state cleanup)
         const compiledIds = new Set<string>();
@@ -120,7 +163,7 @@ export class TriggerEngine {
                         const n = parseInt(p.text, 10);
                         conditions.push({ test: null, spacer: isNaN(n) || n < 1 ? 1 : n });
                     } else {
-                        const test = buildMatcher(p);
+                        const test = buildMatcher(p, register);
                         conditions.push({ test, spacer: 0 });
                     }
                 }
@@ -134,22 +177,22 @@ export class TriggerEngine {
                 let testAll: ((line: string) => MatchResult[]) | null = null;
 
                 for (const pattern of item.patterns) {
-                    const test = buildMatcher(pattern);
+                    const test = buildMatcher(pattern, register);
                     if (test) tests.push(test);
 
                     // multipleMatches only for non-group regex patterns
                     if (!item.isGroup && item.multipleMatches && pattern.type === 'regex' && pattern.text) {
-                        try {
-                            const re = new RegExp(pattern.text, 'g');
+                        const re = compilePcre(pattern.text);
+                        if (re) {
+                            register(re);
                             testAll = (line: string) => {
                                 const results: MatchResult[] = [];
-                                for (const m of line.matchAll(re)) {
-                                    const namedGroups = m.groups ? { ...m.groups } : undefined;
-                                    results.push({ captures: m.slice(1).map(c => c ?? ''), matchedText: m[0], namedGroups });
+                                for (const m of re.matchAll(line) as PcreMatch[]) {
+                                    results.push(pcreToMatchResult(m));
                                 }
                                 return results;
                             };
-                        } catch { /* invalid regex */ }
+                        }
                     }
                 }
 
@@ -268,6 +311,8 @@ export class TriggerEngine {
     destroy(): void {
         this.temp.clear();
         this.permCompiled = [];
+        for (const re of this.pcreInstances) re.destroy();
+        this.pcreInstances = [];
         this.allById.clear();
         this.chainOpenUntil.clear();
         this.lineCounter = 0;

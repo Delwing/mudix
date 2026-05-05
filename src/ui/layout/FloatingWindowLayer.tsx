@@ -20,6 +20,7 @@ export function FloatingWindowLayer({ windows, manager, onDragStateChange, onTit
                     key={w.id}
                     {...w}
                     manager={manager}
+                    isMiniConsole={manager.isMiniConsole(w.id)}
                     onFocus={()           => manager.bringToFront(w.id)}
                     onMoved={(x, y)       => manager.setPosition(w.id, x, y)}
                     onResized={(ww, h)    => manager.setSize(w.id, ww, h)}

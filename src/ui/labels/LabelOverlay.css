@@ -1,0 +1,23 @@
+/* Labels are absolute-positioned overlays on top of their parent panel.
+   The container is pointer-events:none so clicks pass through unless an
+   individual label opts back in (clickThrough=false on the label state). */
+.label-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    /* Stays above panel content but below modals (.resizable-modal is z:40). */
+    z-index: 30;
+    overflow: hidden;
+}
+
+.label {
+    position: absolute;
+    overflow: hidden;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    /* Mudlet's TLabel defaults: white text, Qt::AlignLeft | Qt::AlignVCenter. */
+    color: #fff;
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+}

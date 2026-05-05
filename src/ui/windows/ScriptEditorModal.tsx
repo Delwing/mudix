@@ -4,6 +4,7 @@ import { useAppStore } from '../../storage';
 import { ResizableModal } from '../ResizableModal';
 import type { MudSession } from '../../mud/MudSession';
 import type { ScriptNode } from '../../storage/schema';
+import type { ProfileVFS } from '../../scripting/vfs/ProfileVFS';
 
 const MIN_W = 500;
 const MIN_H = 320;
@@ -13,11 +14,12 @@ const DEFAULT_H = 640;
 interface Props {
     connectionId: string;
     session: MudSession;
+    vfs: ProfileVFS | null;
     onScriptSave?: (script: ScriptNode) => void;
     onClose: () => void;
 }
 
-export function ScriptEditorModal({ connectionId, session, onScriptSave, onClose }: Props) {
+export function ScriptEditorModal({ connectionId, session, vfs, onScriptSave, onClose }: Props) {
     const savedBounds = useAppStore(s => s.connectionScriptEditorBounds[connectionId]);
     const saveBounds  = useAppStore(s => s.saveScriptEditorBounds);
 
@@ -41,6 +43,7 @@ export function ScriptEditorModal({ connectionId, session, onScriptSave, onClose
             <ScriptEditorPanel
                 connectionId={connectionId}
                 session={session}
+                vfs={vfs}
                 onScriptSave={onScriptSave}
                 initialListWidth={savedBounds?.listWidth}
                 initialMetaHeight={savedBounds?.metaHeight}

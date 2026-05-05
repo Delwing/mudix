@@ -6,6 +6,7 @@ import { ContentLayout } from './ui/layout/ContentLayout';
 import { ConnectionScreen } from './ui/ConnectionScreen';
 import { useAppStore, connectionUrl, type MudConnection } from './storage';
 import { useEngines } from './hooks/useEngines';
+import { TriggerEngine } from './mud/triggers/TriggerEngine';
 import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
 import { FileBrowserModal } from './ui/FileBrowserModal';
@@ -28,6 +29,10 @@ export default function App() {
     const commandInputRef = useRef<HTMLInputElement>(null);
     const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
     const deepLinkProfileId = useRef(new URLSearchParams(window.location.search).get('profile'));
+    const theme = useAppStore(s => s.ui.theme);
+    useEffect(() => {
+        document.documentElement.dataset.theme = theme;
+    }, [theme]);
     const connections = useAppStore(s => s.connections);
     const addConnection = useAppStore(s => s.addConnection);
     const updateConnection = useAppStore(s => s.updateConnection);
@@ -117,7 +122,14 @@ export default function App() {
         activeConnection ? (s.connectionTriggers[activeConnection.id] ?? NO_TRIGGERS) : NO_TRIGGERS,
     );
     useEffect(() => {
-        triggerEngineRef.current?.loadPerm(activeTriggers);
+        let cancelled = false;
+        // PCRE pattern compilation is sync once the wasm is initialized; gate the
+        // first load on that so patterns aren't silently dropped at compile time.
+        TriggerEngine.ready().then(() => {
+            if (cancelled) return;
+            triggerEngineRef.current?.loadPerm(activeTriggers);
+        });
+        return () => { cancelled = true; };
     }, [activeTriggers]);
 
     // Reload permanent timers from store into ScriptingEngine whenever they change.
@@ -176,6 +188,13 @@ export default function App() {
         return () => document.removeEventListener('keydown', handleKeyDown);
     }, [sessionStarted]);
 
+    const setProfileQuery = (id: string | null) => {
+        const url = new URL(window.location.href);
+        if (id) url.searchParams.set('profile', id);
+        else url.searchParams.delete('profile');
+        window.history.replaceState(null, '', url.toString());
+    };
+
     const handleConnect = (connection: MudConnection) => {
         // Load hints synchronously BEFORE any renders so they're ready when scripts run.
         // (Child useEffects fire before App's, meaning output.ready could fire before
@@ -186,6 +205,7 @@ export default function App() {
         session.windows.setWindowHints(hints);
         setActiveConnection(connection);
         setSessionStarted(true);
+        setProfileQuery(connection.id);
         connect(connectionUrl(connection));
     };
 
@@ -196,6 +216,7 @@ export default function App() {
         session.windows.setWindowHints(hints);
         setActiveConnection(connection);
         setSessionStarted(true);
+        setProfileQuery(connection.id);
     };
 
     // Auto-connect when the page is loaded with ?profile=<id>
@@ -220,8 +241,11 @@ export default function App() {
     const handleNewConnection = () => {
         disconnect();
         session.windows.clearAll();
+        session.gauges.clearAll();
+        session.labels.clearAll();
         setActiveConnection(null);
         setSessionStarted(false);
+        setProfileQuery(null);
     };
 
     const handleOpenMap = () => {
@@ -239,8 +263,15 @@ export default function App() {
     const handleSend = () => {
         const consumed = engineRef.current?.processInput(command) ?? false;
         if (!consumed) {
-            session.echoCommand(command);
-            send(command, false);
+            // Routes through ScriptingAPI.send so sysDataSendRequest fires and
+            // denyCurrentSend() can suppress the command. Falls back to the bare
+            // session.send before the engine is ready (offline profile, init race).
+            if (engineRef.current) {
+                engineRef.current.sendCommand(command);
+            } else {
+                session.echoCommand(command);
+                send(command, false);
+            }
         }
         commandInputRef.current?.select();
     };
@@ -258,7 +289,7 @@ export default function App() {
         session.windows.onDockExtentsChange = activeConnectionId
             ? (extents) => saveDockExtents(activeConnectionId, extents)
             : undefined;
-        session.windows.onMapOpen = () => engineRef.current?.raiseEvent('mapOpenEvent');
+        session.windows.onMapOpen = () => engineRef.current?.notifyMapOpen();
         return () => {
             session.windows.onWindowHint        = undefined;
             session.windows.onWindowClosed      = undefined;
@@ -310,6 +341,8 @@ export default function App() {
                     stickyLines={DEFAULT_STICKY_LINES}
                     commandInputRef={commandInputRef}
                     contextMenuHandlerRef={windowContextMenuHandlerRef}
+                    scriptingEngineRef={engineRef}
+                    vfs={engineRef.current?.currentVFS ?? null}
                     commandBar={
                         <CommandBar
                             command={command}
@@ -325,6 +358,7 @@ export default function App() {
                 <ScriptEditorModal
                     connectionId={activeConnectionId ?? ''}
                     session={session}
+                    vfs={engineRef.current?.currentVFS ?? null}
                     onScriptSave={handleScriptSave}
                     onClose={() => setScriptsOpen(false)}
                 />

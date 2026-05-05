@@ -15,6 +15,11 @@ export class Console {
     private partial = new AnsiAwareBuffer();
     private cursorIdx = -1; // -1 = always resolve to last line
     private _maxLines = 1000;
+    // Mudlet's TConsole treats `\n` as cursor advance — `moveCursorEnd` followed
+    // by `echo("\n")` advances past the last line without producing a blank row.
+    // Mudix completes the (empty) partial on `\n` and emits a blank message.
+    // Set after moveCursorEnd to consume one leading `\n` as cursor-advance.
+    private consumeLeadingNewline = false;
 
     // ── Format state ──────────────────────────────────────────────────────────
 
@@ -39,6 +44,13 @@ export class Console {
     // ── Output ────────────────────────────────────────────────────────────────
 
     echo(text: string): void {
+        if (this.consumeLeadingNewline) {
+            this.consumeLeadingNewline = false;
+            if (text.startsWith('\n') && this.partial.text.length === 0) {
+                text = text.slice(1);
+                if (text.length === 0) return;
+            }
+        }
         this.partial.appendBuffer(new AnsiAwareBuffer(text, this.format.toSnapshot()));
 
         if (!this.partial.text.includes('\n')) return;
@@ -78,6 +90,7 @@ export class Console {
         this.pending = [];
         this.partial = new AnsiAwareBuffer();
         this.cursorIdx = -1;
+        this.consumeLeadingNewline = false;
     }
 
     // ── Cursor ────────────────────────────────────────────────────────────────
@@ -114,6 +127,12 @@ export class Console {
 
     moveTo(line: number): void {
         this.cursorIdx = Math.max(0, Math.min(line - 1, this.history.length - 1));
+    }
+
+    /** Mark cursor as positioned at the end of existing rendered content, so the
+     *  next leading `\n` is treated as cursor advance rather than a blank line. */
+    markCursorAtEnd(): void {
+        this.consumeLeadingNewline = true;
     }
 
     getLineNumber(): number { return this.cursor + 1; }

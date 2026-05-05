@@ -3,7 +3,7 @@ import type { AliasEngine, AliasNode } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine, TriggerNode } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine, TimerNode } from '../mud/timers/TimerEngine';
 import type { KeyEngine, KeyNode } from '../mud/keybindings/KeyEngine';
-import type { ScriptNode } from '../storage/schema';
+import type { ButtonNode, ScriptNode } from '../storage/schema';
 import { isEffectivelyEnabled } from '../storage/schema';
 import type { RgbColor, FormatStateSnapshot } from '../mud/text/FormatState';
 import { AnsiAwareBuffer } from '../mud/text/FormatState';
@@ -11,6 +11,7 @@ import { ScriptingAPI } from './ScriptingAPI';
 import { LuaRuntime } from './lua/LuaRuntime';
 import type { IScriptingRuntime } from './IScriptingRuntime';
 import { ProfileVFS } from './vfs/ProfileVFS';
+import { MapOpenNotifier } from './MapOpenNotifier';
 
 function hexToRgb(hex: string): RgbColor | null {
     const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
@@ -34,6 +35,7 @@ export class ScriptingEngine {
     private vfs: ProfileVFS | null = null;
     private loadGeneration = 0;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
+    private readonly mapOpen = new MapOpenNotifier(() => this.raiseEvent('mapOpenEvent'));
 
     constructor(
         session: MudSession,
@@ -74,6 +76,11 @@ export class ScriptingEngine {
             this.api.setExpandAlias((text, echo) => {
                 if (!this.processInput(text)) this.api.send(text, echo);
             });
+            this.api.setSendRequestDispatcher((text) => this.runtimes.lua?.dispatchSendRequest(text) ?? false);
+            this.triggerEngine.setLuaEval((code) => {
+                const lua = this.runtimes.lua;
+                return lua ? lua.evalTriggerPattern(code) : false;
+            });
             return rt;
         }).catch(err => {
             const msg = err instanceof Error ? err.message : String(err);
@@ -100,7 +107,7 @@ export class ScriptingEngine {
                     }
                     this.raiseEvent('sysLoadEvent');
                     if (this.api.windows.isVisible('map')) {
-                        this.raiseEvent('mapOpenEvent');
+                        this.mapOpen.notify();
                     }
                 } catch (err) {
                     this.api.printError(`[scripting] script load error: ${err instanceof Error ? err.message : String(err)}`);
@@ -140,6 +147,14 @@ export class ScriptingEngine {
     /** Reload permanent keybindings into the engine. Called when the keybinding list changes. */
     loadPermKeybindings(keybindings: KeyNode[]): void {
         this.keyEngine.loadPerm(keybindings);
+    }
+
+    /**
+     * Send a command from the command bar. Raises sysDataSendRequest, then either
+     * sends (and echoes locally) or aborts when a handler calls denyCurrentSend().
+     */
+    sendCommand(text: string): void {
+        this.api.send(text, true);
     }
 
     /** Run input through aliases. Returns true if an alias matched (caller should not send). */
@@ -182,6 +197,10 @@ export class ScriptingEngine {
         this.emit(event, args);
     }
 
+    notifyMapOpen(): void {
+        this.mapOpen.notify();
+    }
+
     destroy(): void {
         this.loadGeneration++;
         for (const unsub of this.unsubs) unsub();
@@ -191,6 +210,7 @@ export class ScriptingEngine {
         this.triggerEngine.setLuaEval(null);
         this.api.setExecuteScript(null);
         this.api.setExpandAlias(null);
+        this.api.setSendRequestDispatcher(null);
         this.api.destroy();
         const oldVfs = this.vfs;
         this.vfs = null;
@@ -274,6 +294,22 @@ export class ScriptingEngine {
             this.runtimes.lua?.run(binding.code, `key "${binding.name}"`)
                 .catch(err => this.api.printError(`[key "${binding.name}"] ${err instanceof Error ? err.message : String(err)}`));
         }
+    }
+
+    /**
+     * Run a button's command + code. The Lua `code` runs on every click.
+     * For two-state buttons, `nextState=true` (going DOWN) sends `commandDown`,
+     * otherwise (going UP, or single-state click) sends `command`.
+     */
+    executeButton(button: ButtonNode, nextState: boolean): void {
+        const goingDown = button.isPushDown && nextState;
+        const cmd = goingDown ? button.commandDown : button.command;
+        if (cmd) this.api.send(cmd, false);
+        if (button.code && button.language === 'lua') {
+            this.runtimes.lua?.run(button.code, `button "${button.name}"`)
+                .catch(err => this.api.printError(`[button "${button.name}"] ${err instanceof Error ? err.message : String(err)}`));
+        }
+        this.api.flushOutput();
     }
 
     /**

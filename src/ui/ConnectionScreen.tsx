@@ -1,11 +1,7 @@
 import { useState } from 'react';
-import { Button, Input, FormField } from './components';
+import { Button, Input, FormField, useConfirm } from './components';
 import { ProxyInfoModal } from './ProxyInfoModal';
 import { DEFAULT_PROXY_URL, connectionDisplayAddr, type ConnectionMode, type MudConnection } from '../storage';
-
-function profileUrl(id: string): string {
-    return `${window.location.origin}${window.location.pathname}?profile=${id}`;
-}
 
 function buildPreviewUrl(host: string, port: string, proxyUrl: string): string {
     const base = (proxyUrl.trim() || DEFAULT_PROXY_URL).replace(/\/$/, '');
@@ -30,8 +26,8 @@ interface Props {
 }
 
 export function ConnectionScreen({ connections, connecting, connectingId, onConnect, onOpen, onAdd, onUpdate, onDelete, onOpenSettings }: Props) {
+    const confirm = useConfirm();
     const [editingId, setEditingId] = useState<string | null>(null);
-    const [copiedId, setCopiedId] = useState<string | null>(null);
     const [mode, setMode] = useState<ConnectionMode>('mud');
     const [name, setName] = useState('');
     const [host, setHost] = useState('');
@@ -80,13 +76,6 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         return { name: name.trim(), mode: 'websocket', url: url.trim() };
     };
 
-    const handleCopyLink = (c: MudConnection) => {
-        navigator.clipboard.writeText(profileUrl(c.id)).then(() => {
-            setCopiedId(c.id);
-            setTimeout(() => setCopiedId(null), 1500);
-        });
-    };
-
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!canSubmit) return;
@@ -96,6 +85,27 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
             onAdd(buildData());
         }
         resetForm();
+    };
+
+    const handleDelete = async (c: MudConnection) => {
+        const ok = await confirm<boolean>({
+            title: 'Delete profile?',
+            tone: 'danger',
+            message: (
+                <>
+                    Permanently delete <strong>{c.name}</strong>? Its scripts, aliases, triggers and saved layout
+                    will be removed. This cannot be undone.
+                </>
+            ),
+            buttons: [
+                { label: 'Cancel', value: false, variant: 'secondary' },
+                { label: 'Delete', value: true, variant: 'danger', autoFocus: true },
+            ],
+            dismissValue: false,
+        });
+        if (!ok) return;
+        if (editingId === c.id) resetForm();
+        onDelete(c.id);
     };
 
     return (
@@ -135,16 +145,6 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                     <Button
                                         variant="icon"
                                         size="sm"
-                                        onClick={() => handleCopyLink(c)}
-                                        disabled={connecting}
-                                        aria-label="Copy profile link"
-                                        title="Copy profile link"
-                                    >
-                                        {copiedId === c.id ? '✓' : '🔗'}
-                                    </Button>
-                                    <Button
-                                        variant="icon"
-                                        size="sm"
                                         onClick={() => editingId === c.id ? resetForm() : startEdit(c)}
                                         disabled={connecting}
                                         aria-label={editingId === c.id ? 'Cancel edit' : 'Edit connection'}
@@ -155,7 +155,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                     <Button
                                         variant="icon"
                                         size="sm"
-                                        onClick={() => { if (editingId === c.id) resetForm(); onDelete(c.id); }}
+                                        onClick={() => { void handleDelete(c); }}
                                         disabled={connecting}
                                         aria-label="Delete connection"
                                         title="Delete"

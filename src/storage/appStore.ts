@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type UISettings } from './schema';
+import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type ButtonNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type UISettings, type PackageManifest } from './schema';
 import type { MudletImportResult } from '../import/mudletXmlImport';
 import type { WindowOpenOptions } from '../ui/windows/types';
 
@@ -59,15 +59,20 @@ interface AppStore extends AppSchema {
     addKeybinding: (connectionId: string, data: Omit<KeyNode, 'id'>) => string;
     updateKeybinding: (connectionId: string, id: string, patch: Partial<Omit<KeyNode, 'id'>>) => void;
     removeKeybinding: (connectionId: string, id: string) => void;
+    addButton: (connectionId: string, data: Omit<ButtonNode, 'id'>) => string;
+    updateButton: (connectionId: string, id: string, patch: Partial<Omit<ButtonNode, 'id'>>) => void;
+    removeButton: (connectionId: string, id: string) => void;
     moveScript: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     moveAlias: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     moveTrigger: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     moveTimer: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     moveKeybinding: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
+    moveButton: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     groupTriggers: (connectionId: string, targetId: string, draggedId: string) => void;
     saveScriptEditorBounds: (connectionId: string, bounds: ScriptEditorBounds) => void;
     saveModalBounds: (connectionId: string, key: string, bounds: ModalBounds) => void;
-    importMudletNodes: (connectionId: string, data: MudletImportResult) => void;
+    installPackage: (connectionId: string, manifest: PackageManifest, data: MudletImportResult) => void;
+    uninstallPackage: (connectionId: string, packageName: string) => void;
 }
 
 export const useAppStore = create<AppStore>()(
@@ -88,6 +93,7 @@ export const useAppStore = create<AppStore>()(
                 const { [id]: _tr, ...restTriggers } = s.connectionTriggers;
                 const { [id]: _ti, ...restTimers } = s.connectionTimers;
                 const { [id]: _kb, ...restKeybindings } = s.connectionKeybindings;
+                const { [id]: _bt, ...restButtons } = s.connectionButtons;
                 const { [id]: _sb, ...restBounds } = s.connectionScriptEditorBounds;
                 const { [id]: _mb, ...restModalBounds } = s.connectionModalBounds;
                 return {
@@ -99,8 +105,13 @@ export const useAppStore = create<AppStore>()(
                     connectionTriggers: restTriggers,
                     connectionTimers: restTimers,
                     connectionKeybindings: restKeybindings,
+                    connectionButtons: restButtons,
                     connectionScriptEditorBounds: restBounds,
                     connectionModalBounds: restModalBounds,
+                    connectionPackages: ((): Record<string, PackageManifest[]> => {
+                        const { [id]: _pk, ...rest } = s.connectionPackages;
+                        return rest;
+                    })(),
                 };
             }),
             patchUI: patch => set(s => ({ ui: { ...s.ui, ...patch } })),
@@ -260,6 +271,34 @@ export const useAppStore = create<AppStore>()(
                     },
                 };
             }),
+            addButton: (connectionId, data) => {
+                const id = crypto.randomUUID();
+                set(s => ({
+                    connectionButtons: {
+                        ...s.connectionButtons,
+                        [connectionId]: [...(s.connectionButtons[connectionId] ?? []), { ...data, id }],
+                    },
+                }));
+                return id;
+            },
+            updateButton: (connectionId, id, patch) => set(s => ({
+                connectionButtons: {
+                    ...s.connectionButtons,
+                    [connectionId]: (s.connectionButtons[connectionId] ?? []).map(
+                        b => b.id === id ? { ...b, ...patch } : b,
+                    ),
+                },
+            })),
+            removeButton: (connectionId, id) => set(s => {
+                const current = s.connectionButtons[connectionId] ?? [];
+                const toRemove = new Set([id, ...getDescendantIds(id, current)]);
+                return {
+                    connectionButtons: {
+                        ...s.connectionButtons,
+                        [connectionId]: current.filter(b => !toRemove.has(b.id)),
+                    },
+                };
+            }),
             moveScript: (connectionId, id, newParentId, insertBeforeId) => set(s => ({
                 connectionScripts: {
                     ...s.connectionScripts,
@@ -290,6 +329,12 @@ export const useAppStore = create<AppStore>()(
                     [connectionId]: moveInList(s.connectionKeybindings[connectionId] ?? [], id, newParentId, insertBeforeId),
                 },
             })),
+            moveButton: (connectionId, id, newParentId, insertBeforeId) => set(s => ({
+                connectionButtons: {
+                    ...s.connectionButtons,
+                    [connectionId]: moveInList(s.connectionButtons[connectionId] ?? [], id, newParentId, insertBeforeId),
+                },
+            })),
             groupTriggers: (connectionId, targetId, draggedId) => set(s => {
                 const current = s.connectionTriggers[connectionId] ?? [];
                 // Target becomes the group; dragged becomes a child of target.
@@ -316,19 +361,40 @@ export const useAppStore = create<AppStore>()(
                     [connectionId]: { ...(s.connectionModalBounds[connectionId] ?? {}), [key]: bounds },
                 },
             })),
-            importMudletNodes: (connectionId, data) => set(s => ({
-                connectionScripts:     { ...s.connectionScripts,     [connectionId]: [...(s.connectionScripts[connectionId]     ?? []), ...data.scripts]   },
-                connectionAliases:     { ...s.connectionAliases,     [connectionId]: [...(s.connectionAliases[connectionId]     ?? []), ...data.aliases]   },
-                connectionTriggers:    { ...s.connectionTriggers,    [connectionId]: [...(s.connectionTriggers[connectionId]    ?? []), ...data.triggers]  },
-                connectionTimers:      { ...s.connectionTimers,      [connectionId]: [...(s.connectionTimers[connectionId]      ?? []), ...data.timers]    },
-                connectionKeybindings: { ...s.connectionKeybindings, [connectionId]: [...(s.connectionKeybindings[connectionId] ?? []), ...data.keys]      },
-            })),
+            installPackage: (connectionId, manifest, data) => set(s => {
+                // Replace any prior install of the same package name (re-install).
+                const prior = (s.connectionPackages[connectionId] ?? []).filter(p => p.name !== manifest.name);
+                const stripPkg = <T extends { packageName?: string }>(arr: T[]): T[] =>
+                    arr.filter(n => n.packageName !== manifest.name);
+                return {
+                    connectionScripts:     { ...s.connectionScripts,     [connectionId]: [...stripPkg(s.connectionScripts[connectionId]     ?? []), ...data.scripts]  },
+                    connectionAliases:     { ...s.connectionAliases,     [connectionId]: [...stripPkg(s.connectionAliases[connectionId]     ?? []), ...data.aliases]  },
+                    connectionTriggers:    { ...s.connectionTriggers,    [connectionId]: [...stripPkg(s.connectionTriggers[connectionId]    ?? []), ...data.triggers] },
+                    connectionTimers:      { ...s.connectionTimers,      [connectionId]: [...stripPkg(s.connectionTimers[connectionId]      ?? []), ...data.timers]   },
+                    connectionKeybindings: { ...s.connectionKeybindings, [connectionId]: [...stripPkg(s.connectionKeybindings[connectionId] ?? []), ...data.keys]     },
+                    connectionButtons:     { ...s.connectionButtons,     [connectionId]: [...stripPkg(s.connectionButtons[connectionId]     ?? []), ...data.buttons]  },
+                    connectionPackages:    { ...s.connectionPackages,    [connectionId]: [...prior, manifest] },
+                };
+            }),
+            uninstallPackage: (connectionId, packageName) => set(s => {
+                const stripPkg = <T extends { packageName?: string }>(arr: T[]): T[] =>
+                    arr.filter(n => n.packageName !== packageName);
+                return {
+                    connectionScripts:     { ...s.connectionScripts,     [connectionId]: stripPkg(s.connectionScripts[connectionId]     ?? []) },
+                    connectionAliases:     { ...s.connectionAliases,     [connectionId]: stripPkg(s.connectionAliases[connectionId]     ?? []) },
+                    connectionTriggers:    { ...s.connectionTriggers,    [connectionId]: stripPkg(s.connectionTriggers[connectionId]    ?? []) },
+                    connectionTimers:      { ...s.connectionTimers,      [connectionId]: stripPkg(s.connectionTimers[connectionId]      ?? []) },
+                    connectionKeybindings: { ...s.connectionKeybindings, [connectionId]: stripPkg(s.connectionKeybindings[connectionId] ?? []) },
+                    connectionButtons:     { ...s.connectionButtons,     [connectionId]: stripPkg(s.connectionButtons[connectionId]     ?? []) },
+                    connectionPackages:    { ...s.connectionPackages,    [connectionId]: (s.connectionPackages[connectionId] ?? []).filter(p => p.name !== packageName) },
+                };
+            }),
         }),
         {
             name: 'mudix_v1',
-            version: 14,
-            partialize: ({ connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds, connectionModalBounds }) => ({
-                connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionScriptEditorBounds, connectionModalBounds,
+            version: 17,
+            partialize: ({ connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages }) => ({
+                connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages,
             }),
             migrate: (saved, version) => {
                 const s = saved as Partial<AppSchema> & { connections?: any[] };
@@ -381,6 +447,10 @@ export const useAppStore = create<AppStore>()(
                         connectionScriptEditorBounds: s.connectionScriptEditorBounds ?? {},
                         connectionModalBounds: s.connectionModalBounds ?? {},
                     } : {}),
+                    // v17: introduced connectionButtons (Mudlet-style toolbars/buttons).
+                    connectionButtons: (s as Partial<AppSchema>).connectionButtons ?? {},
+                    // v15: introduced connectionPackages (manifest of installed Mudlet packages).
+                    connectionPackages: (s as Partial<AppSchema>).connectionPackages ?? {},
                     connectionTriggers,
                 };
             },

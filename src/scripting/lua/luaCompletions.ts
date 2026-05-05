@@ -57,6 +57,22 @@ const MUDIX_KEYS: Completion[] = [
     fn('remove', '(id)',                       'Remove a temporary keybinding'),
 ];
 
+// ── mudix.gauges ──────────────────────────────────────────────────────────────
+
+const MUDIX_GAUGES: Completion[] = [
+    fn('create',   '(name, opts)',                        'Create a gauge. opts: { parent?, x, y, width, height, text?, r?, g?, b?, orientation? }'),
+    fn('setValue', '(name, current, max, text?)',         'Set gauge fill ratio'),
+    fn('setText',  '(name, html)',                        'Set gauge text (HTML allowed)'),
+    fn('setColor', '(name, r, g, b)',                     'Set gauge fill color'),
+    fn('move',     '(name, x, y)',                        'Move a gauge'),
+    fn('resize',   '(name, width, height)',               'Resize a gauge'),
+    fn('show',     '(name)',                              'Show a hidden gauge'),
+    fn('hide',     '(name)',                              'Hide a gauge'),
+    fn('destroy',  '(name)',                              'Destroy a gauge'),
+    fn('setStyleSheet', '(name, cssFront?, cssBack?, cssText?)', 'Apply CSS to gauge layers'),
+    fn('has',      '(name) → bool',                      'Check if a gauge exists'),
+];
+
 // ── io ────────────────────────────────────────────────────────────────────────
 
 const IO_COMPLETIONS: Completion[] = [
@@ -101,6 +117,7 @@ const MUDIX_TOP: Completion[] = [
     ns('aliases',  'Alias API'),
     ns('triggers', 'Trigger API'),
     ns('keys',     'Keybinding API'),
+    ns('gauges',   'Gauge overlay API'),
 ];
 
 // ── string extensions ─────────────────────────────────────────────────────────
@@ -214,6 +231,7 @@ const MUDLET_GLOBALS: Completion[] = [
     // Output
     fn('send',         '(text)',           'Send a command to the MUD'),
     fn('sendAll',      '(...)',            'Send multiple commands'),
+    fn('denyCurrentSend', '()',            'Inside a sysDataSendRequest handler, cancels the in-flight command'),
     fn('echo',         '([window,] text)', 'Print plain text (optional window name as 1st arg)'),
     fn('cecho',        '([window,] text)', 'Print with Mudlet color tags'),
     fn('decho',        '([window,] text)', 'Print with decimal RGB colors'),
@@ -228,10 +246,14 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('printError',   '(text)',           'Print an error message'),
     // Windows
     fn('openUserWindow',  '(name, restoreLayout?, autoDock?, dockingArea?)', 'Open a user window'),
+    fn('createMiniConsole', '([parent,] name, x, y, w, h) → bool', 'Create a positioned floating text panel; calling again repositions it'),
     fn('clearWindow',     '([name])',      'Clear window contents'),
     fn('setUserWindowTitle', '(name, title)', 'Set user window title'),
-    fn('hideWindow',      '(name)',        'Hide a window'),
-    fn('showWindow',      '(name)',        'Show a window'),
+    fn('hideWindow',      '(name)',        'Hide a userwindow or label'),
+    fn('showWindow',      '(name)',        'Show a userwindow or label'),
+    fn('moveWindow',      '(name, x, y)',  'Move a userwindow or label to a pixel position'),
+    fn('resizeWindow',    '(name, w, h)',  'Resize a userwindow or label'),
+    fn('setBackgroundColor', '(name, r, g, b [, a])', 'Set a label background color (rgba 0..255). Implicitly enables fillBackground.'),
     fn('getMainWindowSize', '() → w, h',   'Browser window inner width and height in pixels'),
     // Cmd line
     fn('appendCmdLine', '(text)',          'Append to command bar'),
@@ -317,6 +339,23 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('getRoomAreaName',      '(areaId) → name',                  'Get an area name'),
     fn('setAreaName',          '(areaId, name)',                    'Rename an area'),
     fn('getAreaRooms',         '(areaId) → {0=id,...}',            'Get all room IDs in an area'),
+    // Gauges
+    fn('createGauge',         '([window,] name, w, h, x, y, text, r, g, b [, orientation])',
+       'Create a gauge overlay. Color may also be a name. Orientation: horizontal (default), vertical, goofy (right→left), batty (top→bottom).'),
+    fn('setGauge',            '(name, current, max [, text])',     'Set gauge fill ratio (current/max) and optional text'),
+    fn('setGaugeText',        '(name, text [, r, g, b])',          'Set gauge text. Color args optional; accepts r,g,b or color name'),
+    fn('moveGauge',           '(name, x, y)',                      'Move a gauge to a new position'),
+    fn('resizeGauge',         '(name, width, height)',             'Resize a gauge'),
+    fn('showGauge',           '(name)',                            'Show a hidden gauge'),
+    fn('hideGauge',           '(name)',                            'Hide a gauge'),
+    fn('destroyGauge',        '(name)',                            'Destroy a gauge'),
+    fn('setGaugeStyleSheet',  '(name, css [, cssBack [, cssText]])', 'Apply CSS to gauge layers (front, back, text)'),
+    // Labels
+    fn('createLabel',         '([window,] name, x, y, w, h, fillBackground [, clickThrough]) → bool',
+       'Create a positioned overlay label on the parent window (default "main"). fillBackground and clickThrough accept 0/1 or true/false. Returns true on success, false if a label with that name already exists.'),
+    fn('deleteLabel',         '(name) → bool',                       'Destroy a label by name. Returns true if the label existed.'),
+    fn('setLabelClickCallback','(name, fn)',
+       'Install a click handler on a label. fn may be a function or a Lua code string (compiled with loadstring). Replacing the callback leaks the prior closure in the registry.'),
     // rex
     ns('rex', 'PCRE-compatible regex module: rex.match(), rex.find(), rex.new()'),
     // Globals / tables
@@ -352,6 +391,7 @@ export const HOVER_MAP = new Map<string, Completion>([
     ...MUDIX_ALIASES .map(c => [`mudix.aliases.${c.label}`,  c] as [string, Completion]),
     ...MUDIX_TRIGGERS.map(c => [`mudix.triggers.${c.label}`, c] as [string, Completion]),
     ...MUDIX_KEYS    .map(c => [`mudix.keys.${c.label}`,     c] as [string, Completion]),
+    ...MUDIX_GAUGES  .map(c => [`mudix.gauges.${c.label}`,   c] as [string, Completion]),
     ...STRING_EXT    .map(c => [`string.${c.label}`,         c] as [string, Completion]),
     ...TABLE_EXT     .map(c => [`table.${c.label}`,          c] as [string, Completion]),
     ...MATH_EXT      .map(c => [`math.${c.label}`,           c] as [string, Completion]),
@@ -368,6 +408,7 @@ const NAMESPACE_MAP: Array<[string, Completion[]]> = [
     ['mudix.aliases.',  MUDIX_ALIASES],
     ['mudix.triggers.', MUDIX_TRIGGERS],
     ['mudix.keys.',     MUDIX_KEYS],
+    ['mudix.gauges.',   MUDIX_GAUGES],
     ['mudix.',          MUDIX_TOP],
     ['string.',         STRING_EXT],
     ['table.',          TABLE_EXT],

@@ -10,7 +10,9 @@ const withRe = <T>(pattern: string, flags: string, fn: (re: InstanceType<typeof 
 
 function extractCaptures(m: MatchResult): (string | false)[] {
     const caps: (string | false)[] = [];
-    for (let i = 1; i <= m.length; i++) {
+    // pcre2-wasm-universal's `m.length` is the ovector pair count, which includes
+    // the full match at index 0 — capture groups live at 1..length-1.
+    for (let i = 1; i < m.length; i++) {
         // PCRE2 sets ovector to PCRE2_UNSET for unmatched optional groups,
         // which the wasm bridge reads as start === -1. The match object still
         // exists (with match === ""), so we must check the offset, not truthiness,

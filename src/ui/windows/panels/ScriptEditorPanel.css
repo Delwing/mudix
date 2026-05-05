@@ -9,7 +9,7 @@
 
 /* ── Category nav ───────────────────────────────────────── */
 .script-editor__nav {
-    width: 76px;
+    width: 122px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -17,6 +17,38 @@
     background: color-mix(in srgb, var(--bg-glass) 80%, transparent);
     padding: 6px 0;
     gap: 1px;
+}
+
+.script-editor__nav-sep {
+    height: 1px;
+    margin: 6px 8px;
+    background: var(--border);
+}
+
+.script-editor__nav-btn.script-editor__nav-btn--row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    line-height: 1;
+}
+
+.script-editor__nav-btn.script-editor__nav-btn--row .script-editor__nav-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.script-editor__nav-icon {
+    flex-shrink: 0;
+    display: block;
+    color: currentColor;
+}
+
+.script-editor__nav-btn.script-editor__nav-btn--row .script-editor__error-badge {
+    flex-shrink: 0;
+    margin-left: 2px;
 }
 
 .script-editor__nav-btn {
@@ -186,6 +218,33 @@
 
 .script-editor__item--group > .script-editor__item-name {
     font-style: italic;
+}
+
+.script-editor__item-count {
+    margin-left: 6px;
+    padding: 0 5px;
+    font-size: 9px;
+    font-style: normal;
+    font-weight: 600;
+    line-height: 14px;
+    border-radius: 7px;
+    color: var(--text-dim);
+    background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+    font-variant-numeric: tabular-nums;
+    vertical-align: 1px;
+}
+
+.script-editor__item--selected .script-editor__item-count {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.script-editor__item--empty-group .script-editor__item-icon--folder {
+    opacity: 0.35;
+}
+
+.script-editor__item--empty-group > .script-editor__item-name {
+    color: var(--text-dim);
 }
 
 .script-editor__item--inherited-disabled {
@@ -415,7 +474,8 @@
     flex-shrink: 0;
     overflow-y: auto;
     border-top: 1px solid var(--border);
-    background: color-mix(in srgb, var(--bg) 80%, #000);
+    background: var(--bg-input);
+    color: var(--text);
     padding: 4px 8px;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
@@ -425,7 +485,6 @@
     font-family: var(--font-mono), monospace;
     font-size: 11px;
     color: var(--text-dim);
-    opacity: 0.5;
 }
 
 .script-editor__log-entry {
@@ -437,7 +496,7 @@
 }
 
 .script-editor__log-entry--error {
-    color: #ff7070;
+    color: var(--danger);
 }
 
 .script-editor__log-entry--info {
@@ -449,16 +508,17 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 15px;
-    height: 15px;
+    height: 13px;
+    min-width: 13px;
     padding: 0 4px;
     background: var(--danger, #e05a5a);
     color: #fff;
     font-size: 9px;
     font-weight: 700;
-    border-radius: 8px;
+    border-radius: 7px;
     line-height: 1;
     flex-shrink: 0;
+    box-sizing: border-box;
 }
 
 /* ── Error log view (Errors tab full content) ─────────────── */
@@ -514,7 +574,8 @@
     flex: 1;
     overflow-y: auto;
     padding: 6px 10px;
-    background: color-mix(in srgb, var(--bg) 80%, #000);
+    background: var(--bg-input);
+    color: var(--text);
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
 }
@@ -532,7 +593,6 @@
 .script-editor__error-log-time {
     flex-shrink: 0;
     color: var(--text-dim);
-    opacity: 0.45;
     user-select: none;
     font-size: 10px;
 }
@@ -544,11 +604,122 @@
 }
 
 .script-editor__error-log-entry--error .script-editor__error-log-text {
-    color: #ff7070;
+    color: var(--danger);
 }
 
 .script-editor__error-log-entry--info .script-editor__error-log-text {
     color: var(--text-dim);
+}
+
+/* ── Packages view ────────────────────────────────────────── */
+.script-editor__pkg-card {
+    display: flex;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    margin-bottom: 8px;
+    align-items: flex-start;
+}
+
+.script-editor__pkg-icon-frame {
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    overflow: hidden;
+}
+
+.script-editor__pkg-icon-img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: -webkit-optimize-contrast;
+}
+
+.script-editor__pkg-icon-fallback {
+    color: var(--text-dim);
+    opacity: 0.6;
+}
+
+.script-editor__pkg-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+}
+
+.script-editor__pkg-title {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 13px;
+}
+
+.script-editor__pkg-byline {
+    color: var(--text-dim);
+    font-size: 11px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.script-editor__pkg-byline-sep {
+    opacity: 0.4;
+}
+
+.script-editor__pkg-desc-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 2px;
+}
+
+.script-editor__pkg-desc {
+    color: var(--text-dim);
+    font-size: 11.5px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.script-editor__pkg-desc--expanded {
+    display: block;
+    overflow: visible;
+}
+
+.script-editor__pkg-desc-toggle {
+    align-self: flex-start;
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent-dim, var(--accent));
+    font-family: var(--font-ui), sans-serif;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.script-editor__pkg-desc-toggle:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+.script-editor__pkg-footer {
+    color: var(--text-dim);
+    font-size: 10.5px;
+    opacity: 0.65;
+    margin-top: 4px;
 }
 
 /* ── Key capture ────────────────────────────────────────── */

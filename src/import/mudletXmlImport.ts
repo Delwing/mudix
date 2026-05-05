@@ -1,4 +1,4 @@
-import type { AliasNode, KeyNode, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../storage/schema';
+import type { AliasNode, ButtonLocation, ButtonNode, ButtonOrientation, KeyNode, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../storage/schema';
 
 // Qt::Key constants → browser KeyboardEvent.code
 const QT_KEY_TO_CODE: Record<number, string> = {
@@ -85,7 +85,24 @@ export interface MudletImportResult {
     triggers: TriggerNode[];
     timers: TimerNode[];
     keys: KeyNode[];
+    buttons: ButtonNode[];
     warnings: string[];
+}
+
+// Mudlet TAction.mLocation: 0=top, 1=bottom, 2=left, 3=right, 4=floating
+const MUDLET_BUTTON_LOCATIONS: ButtonLocation[] = ['top', 'bottom', 'left', 'right', 'floating'];
+// Mudlet TAction.mOrientation: 0=horizontal, 1=vertical
+const MUDLET_BUTTON_ORIENTATIONS: ButtonOrientation[] = ['horizontal', 'vertical'];
+
+export interface ParseOptions {
+    /**
+     * When set, every parsed node is tagged with this packageName, and a
+     * top-level group of the same name is prepended to each non-empty
+     * category as a parent for the imported tree. This mirrors Mudlet's
+     * .mpackage import behaviour: items are organisationally grouped and
+     * cleanly removable by tag.
+     */
+    packageName?: string;
 }
 
 function parseScripts(els: Element[], parentId: string | null, out: ScriptNode[]): void {
@@ -155,6 +172,45 @@ function parseTimers(els: Element[], parentId: string | null, out: TimerNode[]):
     }
 }
 
+function parseButtons(els: Element[], parentId: string | null, out: ButtonNode[]): void {
+    for (const el of els) {
+        const id = crypto.randomUUID();
+        const group = isGroup(el);
+
+        const locIdx = parseInt(getText(el, 'location'));
+        const oriIdx = parseInt(getText(el, 'orientation'));
+
+        // Mudlet stores stylesheet under <css> on Action/ActionGroup nodes.
+        const cssEl = Array.from(el.children).find(c => c.tagName === 'css' || c.tagName === 'stylesheetText');
+        const styleSheet = cssEl?.textContent?.trim() || undefined;
+
+        const node: ButtonNode = {
+            id, parentId, isGroup: group,
+            name: getText(el, 'name'),
+            enabled: isYes(el, 'isActive'),
+            orientation: MUDLET_BUTTON_ORIENTATIONS[oriIdx] ?? 'horizontal',
+            location: MUDLET_BUTTON_LOCATIONS[locIdx] ?? 'top',
+            columns: parseInt(getText(el, 'buttonColumn')) || 0,
+            posX: parseInt(getText(el, 'posX')) || undefined,
+            posY: parseInt(getText(el, 'posY')) || undefined,
+            sizeX: parseInt(getText(el, 'sizeX')) || undefined,
+            sizeY: parseInt(getText(el, 'sizeY')) || undefined,
+            isPushDown: isYes(el, 'isPushButton'),
+            // mButtonState: Mudlet stores 1=up, 2=down.
+            buttonState: parseInt(getText(el, 'mButtonState')) === 2,
+            icon: getText(el, 'icon') || undefined,
+            tooltip: getText(el, 'tooltipText') || undefined,
+            code: getText(el, 'script'),
+            language: 'lua',
+            command:     getText(el, 'commandButtonUp')   || undefined,
+            commandDown: getText(el, 'commandButtonDown') || undefined,
+            styleSheet,
+        };
+        out.push(node);
+        if (group) parseButtons(directChildren(el, 'Action', 'ActionGroup'), id, out);
+    }
+}
+
 function parseKeys(els: Element[], parentId: string | null, out: KeyNode[], warnings: string[]): void {
     for (const el of els) {
         const id = crypto.randomUUID();
@@ -170,7 +226,7 @@ function parseKeys(els: Element[], parentId: string | null, out: KeyNode[], warn
     }
 }
 
-export function parseMudletXml(xml: string): MudletImportResult {
+export function parseMudletXml(xml: string, opts: ParseOptions = {}): MudletImportResult {
     const doc = new DOMParser().parseFromString(xml, 'text/xml');
     const err = doc.getElementsByTagName('parsererror')[0];
     if (err) throw new Error(`XML parse error: ${err.textContent?.split('\n')[0]}`);
@@ -180,11 +236,64 @@ export function parseMudletXml(xml: string): MudletImportResult {
             .flatMap(pkg => Array.from(pkg.children).filter(c => c.tagName === leaf || c.tagName === group));
     }
 
-    const result: MudletImportResult = { scripts: [], aliases: [], triggers: [], timers: [], keys: [], warnings: [] };
+    const result: MudletImportResult = { scripts: [], aliases: [], triggers: [], timers: [], keys: [], buttons: [], warnings: [] };
     parseScripts( pkgChildren('ScriptPackage',  'Script',  'ScriptGroup'),  null, result.scripts);
     parseAliases( pkgChildren('AliasPackage',   'Alias',   'AliasGroup'),   null, result.aliases);
     parseTriggers(pkgChildren('TriggerPackage', 'Trigger', 'TriggerGroup'), null, result.triggers);
     parseTimers(  pkgChildren('TimerPackage',   'Timer',   'TimerGroup'),   null, result.timers);
-    parseKeys(    pkgChildren('KeyPackage',     'Key',     'KeyGroup'),      null, result.keys, result.warnings);
+    parseKeys(    pkgChildren('KeyPackage',     'Key',     'KeyGroup'),     null, result.keys, result.warnings);
+    parseButtons( pkgChildren('ActionPackage',  'Action',  'ActionGroup'),  null, result.buttons);
+
+    if (opts.packageName) {
+        applyPackageTagging(result, opts.packageName);
+    }
     return result;
+}
+
+/**
+ * Wraps each non-empty category in a top-level group named after the package
+ * and tags every node (wrapper included) with `packageName`. This is what makes
+ * the imported items recognisable as a unit at uninstall time.
+ */
+function applyPackageTagging(result: MudletImportResult, packageName: string): void {
+    type AnyNode = ScriptNode | AliasNode | TriggerNode | TimerNode | KeyNode | ButtonNode;
+    const wrap = <T extends AnyNode>(arr: T[], makeGroup: (id: string) => T): T[] => {
+        if (arr.length === 0) return arr;
+        const groupId = crypto.randomUUID();
+        for (const n of arr) {
+            n.packageName = packageName;
+            if (n.parentId === null) n.parentId = groupId;
+        }
+        const wrapper = makeGroup(groupId);
+        wrapper.packageName = packageName;
+        return [wrapper, ...arr];
+    };
+
+    result.scripts = wrap(result.scripts, id => ({
+        id, parentId: null, isGroup: true, name: packageName, enabled: true,
+        code: '', language: 'lua', eventHandlers: [],
+    }));
+    result.aliases = wrap(result.aliases, id => ({
+        id, parentId: null, isGroup: true, name: packageName, enabled: true,
+        pattern: '', command: '', code: '', language: 'lua',
+    }));
+    result.triggers = wrap(result.triggers, id => ({
+        id, parentId: null, isGroup: true, name: packageName, enabled: true,
+        patterns: [], code: '', language: 'lua',
+        fireLength: 0, multipleMatches: false, multiline: false, delta: 0, isFilter: false,
+    }));
+    result.timers = wrap(result.timers, id => ({
+        id, parentId: null, isGroup: true, name: packageName, enabled: true,
+        seconds: 0, code: '', language: 'lua', repeat: false,
+    }));
+    result.keys = wrap(result.keys, id => ({
+        id, parentId: null, isGroup: true, name: packageName, enabled: true,
+        key: '', modifiers: [], code: '', language: 'lua',
+    }));
+    result.buttons = wrap(result.buttons, id => ({
+        id, parentId: null, isGroup: true, name: packageName, enabled: true,
+        orientation: 'horizontal', location: 'top', columns: 0,
+        isPushDown: false, buttonState: false,
+        code: '', language: 'lua',
+    }));
 }

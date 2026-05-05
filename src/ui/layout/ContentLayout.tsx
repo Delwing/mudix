@@ -10,6 +10,9 @@ import { WindowContextMenu } from './WindowContextMenu';
 import { TextPanel } from '../windows/panels/TextPanel';
 import { HtmlPanel } from '../windows/panels/HtmlPanel';
 import { MapPanel } from '../windows/panels/MapPanel';
+import { useButtonStrips } from '../buttons/ButtonsBar';
+import type { ScriptingEngine } from '../../scripting/ScriptingEngine';
+import type { ProfileVFS } from '../../scripting/vfs/ProfileVFS';
 import { DEFAULT_STICKY_LINES } from '../../hooks/useOutput';
 import './ScriptWindow.css';
 
@@ -21,7 +24,12 @@ interface ContentLayoutProps {
     commandInputRef?: React.RefObject<HTMLInputElement>;
     commandBar?: React.ReactNode;
     contextMenuHandlerRef?: React.MutableRefObject<((e: React.MouseEvent) => void) | null>;
+    /** Live ref so button clicks reach the engine even though the ref is set after initial render. */
+    scriptingEngineRef?: React.RefObject<ScriptingEngine | null>;
+    vfs?: ProfileVFS | null;
 }
+
+const NULL_ENGINE_REF: React.RefObject<ScriptingEngine | null> = { current: null };
 
 export function ContentLayout({
     session, manager, connectionId,
@@ -29,6 +37,8 @@ export function ContentLayout({
     commandInputRef,
     commandBar,
     contextMenuHandlerRef,
+    scriptingEngineRef,
+    vfs = null,
 }: ContentLayoutProps) {
     const [windows,     setWindows]     = useState<ScriptWindowRenderData[]>([]);
     const [dockExtents, setDockExtents] = useState<Record<DockSide, number>>({
@@ -80,13 +90,17 @@ export function ContentLayout({
     const showTop    = hasTop    || dragState?.potentialDock === 'top';
     const showBottom = hasBottom || dragState?.potentialDock === 'bottom';
 
+    const buttonStrips = useButtonStrips({ connectionId, engineRef: scriptingEngineRef ?? NULL_ENGINE_REF, vfs });
+
     return (
         <div className="content-layout">
+            {buttonStrips.top}
             {showTop && (
                 <DockArea side="top" windows={windows} extent={dockExtents.top} {...dockAreaProps} />
             )}
 
             <div className="content-middle-row">
+                {buttonStrips.left}
                 {showLeft && (
                     <DockArea side="left" windows={windows} extent={dockExtents.left} {...dockAreaProps} />
                 )}
@@ -98,6 +112,7 @@ export function ContentLayout({
                 {showRight && (
                     <DockArea side="right" windows={windows} extent={dockExtents.right} {...dockAreaProps} />
                 )}
+                {buttonStrips.right}
             </div>
 
             {commandBar}
@@ -105,6 +120,7 @@ export function ContentLayout({
             {showBottom && (
                 <DockArea side="bottom" windows={windows} extent={dockExtents.bottom} {...dockAreaProps} />
             )}
+            {buttonStrips.bottom}
 
             {/* Floating windows live in a position:fixed portal — completely independent of dock layout */}
             <FloatingWindowLayer
@@ -128,8 +144,8 @@ export function ContentLayout({
                 Each panel renders into a stable portal-target div that shells physically move
                 between dock slots and floating frames without ever unmounting the component. */}
             {windows.map(w => createPortal(
-                w.kind === 'text' ? <TextPanel id={w.id} manager={manager} />
-              : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} />
+                w.kind === 'text' ? <TextPanel id={w.id} manager={manager} gauges={session.gauges} labels={session.labels} />
+              : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} gauges={session.gauges} labels={session.labels} />
               : <MapPanel id={w.id} manager={manager} connectionId={connectionId} />,
                 manager.getOrCreatePortalTarget(w.id),
                 w.id,

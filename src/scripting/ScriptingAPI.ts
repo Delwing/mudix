@@ -4,6 +4,8 @@ import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine } from '../mud/timers/TimerEngine';
 import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
+import type { GaugeManager, GaugeCreateOptions, GaugeOrientation } from '../ui/gauges/GaugeManager';
+import type { LabelManager, LabelCreateOptions } from '../ui/labels/LabelManager';
 import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
 import { Console } from '../mud/text/Console';
@@ -53,8 +55,86 @@ class ScriptingWindowsAPI {
         return this.session.windows.isVisible(id);
     }
 
+    isMiniConsole(id: string): boolean {
+        return this.session.windows.isMiniConsole(id);
+    }
+
+    move(id: string, x: number, y: number): void {
+        this.session.windows.setPosition(id, x, y);
+    }
+
+    resize(id: string, width: number, height: number): void {
+        this.session.windows.setSize(id, width, height);
+    }
+
     element(id: string): HTMLElement | null {
         return this.session.windows.getElement(id);
+    }
+}
+
+// ── Gauges ────────────────────────────────────────────────────────────────────
+
+class ScriptingGaugesAPI {
+    constructor(private readonly manager: GaugeManager) {}
+
+    create(name: string, opts: GaugeCreateOptions): void {
+        this.manager.create(name, opts);
+    }
+    setValue(name: string, current: number, max: number, html?: string): void {
+        this.manager.setValue(name, current, max, html);
+    }
+    setText(name: string, html: string): void {
+        this.manager.setText(name, html);
+    }
+    setColor(name: string, r: number, g: number, b: number): void {
+        this.manager.setColor(name, r, g, b);
+    }
+    move(name: string, x: number, y: number): void {
+        this.manager.move(name, x, y);
+    }
+    resize(name: string, width: number, height: number): void {
+        this.manager.resize(name, width, height);
+    }
+    show(name: string): void { this.manager.show(name); }
+    hide(name: string): void { this.manager.hide(name); }
+    destroy(name: string): void { this.manager.destroy(name); }
+    setStyleSheet(name: string, cssFront?: string, cssBack?: string, cssText?: string): void {
+        this.manager.setStyleSheet(name, cssFront, cssBack, cssText);
+    }
+    setParent(name: string, parent: string, x?: number, y?: number): void {
+        this.manager.setParent(name, parent, x, y);
+    }
+    has(name: string): boolean { return this.manager.has(name); }
+}
+
+export type { GaugeOrientation };
+
+// ── Labels ────────────────────────────────────────────────────────────────────
+
+class ScriptingLabelsAPI {
+    constructor(private readonly manager: LabelManager) {}
+
+    create(name: string, opts: LabelCreateOptions): boolean {
+        return this.manager.create(name, opts);
+    }
+    has(name: string): boolean { return this.manager.has(name); }
+    destroy(name: string): boolean { return this.manager.destroy(name); }
+    move(name: string, x: number, y: number): boolean {
+        return this.manager.move(name, x, y);
+    }
+    resize(name: string, width: number, height: number): boolean {
+        return this.manager.resize(name, width, height);
+    }
+    show(name: string): boolean { return this.manager.show(name); }
+    hide(name: string): boolean { return this.manager.hide(name); }
+    setHtml(name: string, html: string): boolean {
+        return this.manager.setHtml(name, html);
+    }
+    setBackgroundColor(name: string, r: number, g: number, b: number, a = 255): boolean {
+        return this.manager.setBackgroundColor(name, r, g, b, a);
+    }
+    setClickCallback(name: string, fn: () => void): boolean {
+        return this.manager.setClickCallback(name, fn);
     }
 }
 
@@ -62,6 +142,8 @@ class ScriptingWindowsAPI {
 
 export class ScriptingAPI {
     readonly windows: ScriptingWindowsAPI;
+    readonly gauges: ScriptingGaugesAPI;
+    readonly labels: ScriptingLabelsAPI;
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
     readonly gmcp: Record<string, unknown> = {};
@@ -87,6 +169,10 @@ export class ScriptingAPI {
     // Callback set by ScriptingEngine to route expandAlias through the full pipeline.
     private expandAliasCallback: ((text: string, echo: boolean) => void) | null = null;
 
+    // Callback set by ScriptingEngine. Raises sysDataSendRequest synchronously
+    // and returns true if a handler called denyCurrentSend().
+    private sendRequestDispatcher: ((text: string) => boolean) | null = null;
+
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
     constructor(
@@ -97,6 +183,8 @@ export class ScriptingAPI {
         keyEngine: KeyEngine,
     ) {
         this.windows = new ScriptingWindowsAPI(session);
+        this.gauges = new ScriptingGaugesAPI(session.gauges);
+        this.labels = new ScriptingLabelsAPI(session.labels);
         this.aliases = aliasEngine;
         this.triggers = triggerEngine;
         this.timers = timerEngine;
@@ -115,7 +203,12 @@ export class ScriptingAPI {
     }
 
     send(text: string, echo = true): void {
+        if (this.sendRequestDispatcher?.(text)) return;
         this.session.send(text, echo);
+    }
+
+    setSendRequestDispatcher(fn: ((text: string) => boolean) | null): void {
+        this.sendRequestDispatcher = fn;
     }
 
     // ── Echo / output ─────────────────────────────────────────────────────────
@@ -433,8 +526,10 @@ export class ScriptingAPI {
     }
 
     moveCursorEnd(windowName?: string): void {
-        const lineNum = this.getLineNumber(windowName) ?? 0;
-        this.getConsole(windowName)?.moveTo(lineNum);
+        const con = this.getConsole(windowName);
+        if (!con) return;
+        con.moveTo(con.getLineCount());
+        con.markCursorAtEnd();
     }
 
     // ── Window / line management ──────────────────────────────────────────────
@@ -445,6 +540,32 @@ export class ScriptingAPI {
         } else {
             this.session.windows.clear(name);
         }
+    }
+
+    /**
+     * Mudlet `createMiniConsole([parent,] name, x, y, width, height)`. Creates
+     * a positioned floating text panel, or repositions it if it already exists
+     * (Mudlet 3.0+ semantics). The optional `parent` userwindow arg is accepted
+     * for compatibility with Geyser but treated as main — nested miniconsoles
+     * aren't supported. Returns true on success.
+     */
+    createMiniConsole(name: string, x: number, y: number, width: number, height: number, _parent?: string): boolean {
+        if (!name) return false;
+        const wm = this.session.windows;
+        if (!wm.has(name)) {
+            wm.open(name, {
+                kind: 'text',
+                title: name,
+                autoDock: false,
+                ignoreHint: true,
+            });
+        } else {
+            wm.show(name);
+        }
+        wm.markAsMiniConsole(name);
+        wm.setPosition(name, Math.round(x), Math.round(y));
+        wm.setSize(name, Math.round(width), Math.round(height));
+        return true;
     }
 
     replace(newText: string, windowName?: string): void {
