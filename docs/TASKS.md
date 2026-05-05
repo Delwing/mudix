@@ -2,3 +2,4 @@
 2. Fix .css warnings
 3. Mobile friendly UI
 4. Drag&drop packages to install
+5. Expose connection errors both from proxy and client to ws
