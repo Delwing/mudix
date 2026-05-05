@@ -84,6 +84,9 @@ export class ScriptingAPI {
     // Callback set by ScriptingEngine so link clicks can execute Lua code.
     private executeScript: ((code: string) => void) | null = null;
 
+    // Callback set by ScriptingEngine to route expandAlias through the full pipeline.
+    private expandAliasCallback: ((text: string, echo: boolean) => void) | null = null;
+
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
     constructor(
@@ -122,57 +125,143 @@ export class ScriptingAPI {
         this.drainMain();
     }
 
-    echoLink(text: string, cmd: string | (() => void), tooltip: string): void {
-        this.mainConsole.format.hyperlink = {
-            onClick: typeof cmd === 'function'
-                ? cmd
-                : () => { this.executeScript?.(cmd); },
+    echoToWindow(win: string, text: string): void {
+        const con = this.outputConsole(win);
+        con.echo(text);
+        this.drainWindowConsole(win, con);
+    }
+
+    echoLink(text: string, cmd: string, tooltip: string, win?: string): void {
+        if (!text) return;  // xEcho emits empty-text calls for colour-only segments
+        const hyperlink: FormatHyperlink = {
+            onClick: () => { this.executeScript?.(cmd); },
             title: tooltip || undefined,
         };
-        this.mainConsole.echo(text);
-        this.mainConsole.format.hyperlink = undefined;
-        this.drainMain();
+        const con = this.outputConsole(win);
+        con.format.hyperlink = hyperlink;
+        con.echo(text);
+        con.format.hyperlink = undefined;
+        if (!win || win === 'main') {
+            this.drainMain();
+        } else {
+            this.drainWindowConsole(win, con);
+        }
+    }
+
+    echoPopup(text: string, cmds: string[], hints: string[], win?: string): void {
+        const onContextMenu = (ev: MouseEvent) => {
+            ev.preventDefault();
+            document.getElementById('mudix-popup-menu')?.remove();
+
+            const menu = document.createElement('div');
+            menu.id = 'mudix-popup-menu';
+            menu.style.cssText = 'position:fixed;z-index:9999;background:#1e1e1e;border:1px solid #444;border-radius:4px;padding:2px 0;box-shadow:0 2px 10px rgba(0,0,0,0.7);min-width:120px;font-family:monospace;font-size:13px';
+            menu.style.left = `${ev.clientX}px`;
+            menu.style.top = `${ev.clientY}px`;
+
+            cmds.forEach((cmd, i) => {
+                const item = document.createElement('div');
+                item.textContent = hints[i] ?? cmd;
+                item.style.cssText = 'padding:5px 14px;cursor:pointer;color:#ddd;white-space:nowrap';
+                item.addEventListener('mouseenter', () => { item.style.background = '#2a4a6e'; });
+                item.addEventListener('mouseleave', () => { item.style.background = ''; });
+                item.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    menu.remove();
+                    this.executeScript?.(cmd);
+                });
+                menu.appendChild(item);
+            });
+
+            document.body.appendChild(menu);
+
+            const dismiss = (e: MouseEvent) => {
+                if (!menu.contains(e.target as Node)) {
+                    menu.remove();
+                    document.removeEventListener('mousedown', dismiss);
+                }
+            };
+            setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
+        };
+
+        const hyperlink: FormatHyperlink = { onContextMenu, title: hints[0] ?? '' };
+        const con = this.outputConsole(win);
+        con.format.hyperlink = hyperlink;
+        con.echo(text);
+        con.format.hyperlink = undefined;
+        if (!win || win === 'main') {
+            this.drainMain();
+        } else {
+            this.drainWindowConsole(win, con);
+        }
     }
 
     setExecuteScript(fn: ((code: string) => void) | null): void {
         this.executeScript = fn;
     }
 
-    // ── Format state (delegated to mainConsole) ───────────────────────────────
+    setExpandAlias(fn: ((text: string, echo: boolean) => void) | null): void {
+        this.expandAliasCallback = fn;
+    }
+
+    expandAlias(text: string, echo: boolean): void {
+        if (this.expandAliasCallback) {
+            this.expandAliasCallback(text, echo);
+        } else {
+            this.send(text, echo);
+        }
+    }
+
+    // ── Format state ──────────────────────────────────────────────────────────
+    // Mirrors Mudlet's TConsole::setFgColor/setBgColor/setDisplayAttributes:
+    // every call applies the format to the active selection (if any) AND sets
+    // the current pen on the resolved console for subsequent echo.
 
     setFgColor(r: number, g: number, b: number, win?: string): void {
-        const con = (win && win !== 'main') ? this.getConsole(win) : this.mainConsole;
-        (con ?? this.mainConsole).setFgColor(r, g, b);
+        if (this.selectionMatches(win)) {
+            this.applyStateToSelection({ foreground: { space: 'rgb', r, g, b } });
+        }
+        this.outputConsole(win).setFgColor(r, g, b);
     }
 
     setBgColor(r: number, g: number, b: number, win?: string): void {
-        const con = (win && win !== 'main') ? this.getConsole(win) : this.mainConsole;
-        (con ?? this.mainConsole).setBgColor(r, g, b);
+        if (this.selectionMatches(win)) {
+            this.applyStateToSelection({ background: { space: 'rgb', r, g, b } });
+        }
+        this.outputConsole(win).setBgColor(r, g, b);
     }
 
-    setBold(v: boolean):          void { this.mainConsole.setBold(v); }
-    setItalic(v: boolean):        void { this.mainConsole.setItalic(v); }
-    setUnderline(v: boolean):     void { this.mainConsole.setUnderline(v); }
-    setStrikethrough(v: boolean): void { this.mainConsole.setStrikethrough(v); }
+    setBold(v: boolean, win?: string): void {
+        if (this.selectionMatches(win)) this.applyStateToSelection({ bold: v });
+        this.outputConsole(win).setBold(v);
+    }
+    setItalic(v: boolean, win?: string): void {
+        if (this.selectionMatches(win)) this.applyStateToSelection({ italic: v });
+        this.outputConsole(win).setItalic(v);
+    }
+    setUnderline(v: boolean, win?: string): void {
+        if (this.selectionMatches(win)) this.applyStateToSelection({ underline: v });
+        this.outputConsole(win).setUnderline(v);
+    }
+    setStrikethrough(v: boolean, win?: string): void {
+        if (this.selectionMatches(win)) this.applyStateToSelection({ strikethrough: v });
+        this.outputConsole(win).setStrikethrough(v);
+    }
 
     // ── Formatting (selection-aware) ──────────────────────────────────────────
 
-    fg(name: string): void {
+    fg(name: string, win?: string): void {
         const state = namedColorToState(name, false);
-        if (!state) return;
-        if (this.selection) { this.applyStateToSelection(state); return; }
-        if (state.foreground?.space === 'rgb') {
-            this.mainConsole.setFgColor(state.foreground.r, state.foreground.g, state.foreground.b);
-        }
+        if (!state || state.foreground?.space !== 'rgb') return;
+        const c = state.foreground;
+        this.setFgColor(c.r, c.g, c.b, win);
     }
 
-    bg(name: string): void {
+    bg(name: string, win?: string): void {
         const state = namedColorToState(name, true);
-        if (!state) return;
-        if (this.selection) { this.applyStateToSelection(state); return; }
-        if (state.background?.space === 'rgb') {
-            this.mainConsole.setBgColor(state.background.r, state.background.g, state.background.b);
-        }
+        if (!state || state.background?.space !== 'rgb') return;
+        const c = state.background;
+        this.setBgColor(c.r, c.g, c.b, win);
     }
 
     resetFormat(windowName?: string): void {
@@ -186,9 +275,7 @@ export class ScriptingAPI {
             }
             return;
         }
-        if (!windowName || windowName === 'main') {
-            this.mainConsole.resetFormat();
-        }
+        this.outputConsole(windowName).resetFormat();
     }
 
     // ── Selection ─────────────────────────────────────────────────────────────
@@ -215,7 +302,8 @@ export class ScriptingAPI {
     }
 
     selectSection(from: number, length: number, windowName?: string): void {
-        this.selection = { windowName, start: from - 1, length };
+        // Mudlet: 0-indexed `from`. See TConsole::selectSection.
+        this.selection = { windowName, start: from, length };
     }
 
     deselect(): void {
@@ -321,10 +409,9 @@ export class ScriptingAPI {
         return this.getConsole(windowName)?.getLines(from, to) ?? [];
     }
 
-    getColumnNumber(windowName?: string): number {
-        if (this.selection && this.selection.windowName === windowName) {
-            return this.selection.start + 1;
-        }
+    getColumnNumber(_windowName?: string): number {
+        // Mudlet returns the user cursor column (mUserCursor.x()), independent of
+        // the active selection. Trigger handlers run with the cursor at column 0.
         return 0;
     }
 
@@ -345,6 +432,11 @@ export class ScriptingAPI {
         this.getConsole(windowName)?.moveTo(y);
     }
 
+    moveCursorEnd(windowName?: string): void {
+        const lineNum = this.getLineNumber(windowName) ?? 0;
+        this.getConsole(windowName)?.moveTo(lineNum);
+    }
+
     // ── Window / line management ──────────────────────────────────────────────
 
     clearWindow(name?: string): void {
@@ -353,6 +445,16 @@ export class ScriptingAPI {
         } else {
             this.session.windows.clear(name);
         }
+    }
+
+    replace(newText: string, windowName?: string): void {
+        if (!this.selection) return;
+        const sel = this.selection;
+        const buf = this.resolveBuffer(windowName ?? sel.windowName);
+        if (!buf) return;
+        buf.replace([sel.start, sel.start + sel.length], newText);
+        this.selection = null;
+        if (!this.lineBuffer) buf.rerender();
     }
 
     deleteLine(windowName?: string): void {
@@ -368,7 +470,7 @@ export class ScriptingAPI {
         this.session.events.emit('script.appendcmd', text);
     }
 
-    setCmdLine(text: string): void {
+    printCmdLine(text: string): void {
         this.session.events.emit('script.setcmd', text);
     }
 
@@ -385,6 +487,14 @@ export class ScriptingAPI {
     get map() { return this.session.windows.mapStore; }
 
     // ── Misc ──────────────────────────────────────────────────────────────────
+
+    getNetworkLatency(): number {
+        return this.session.ping ?? 0;
+    }
+
+    getMainWindowSize(): [number, number] {
+        return [window.innerWidth, window.innerHeight];
+    }
 
     /** Flush any buffered partial lines to the main output and all open windows. Called after each event dispatch. */
     flushOutput(): void {
@@ -427,13 +537,38 @@ export class ScriptingAPI {
         return this.session.consoles.get(name ?? 'main') ?? null;
     }
 
+    /** Returns the Console for a window, creating and registering one on demand. */
+    private outputConsole(win?: string): Console {
+        if (!win || win === 'main') return this.mainConsole;
+        let con = this.session.consoles.get(win);
+        if (!con) {
+            con = new Console();
+            this.session.consoles.set(win, con);
+        }
+        return con;
+    }
+
+    private drainWindowConsole(win: string, con: Console): void {
+        for (const line of con.takeLines()) {
+            this.session.windows.pushBuffer(win, line);
+        }
+    }
+
     private resolveBuffer(windowName: string | undefined): AnsiAwareBuffer | null {
         const isMain = !windowName || windowName === 'main';
         if (this.lineBuffer && isMain) return this.lineBuffer;
         return this.getConsole(windowName)?.getBuffer() ?? null;
     }
 
-    private applyStateToSelection(state: ReturnType<typeof namedColorToState>): void {
+    private selectionMatches(win: string | undefined): boolean {
+        if (!this.selection) return false;
+        const selMain = !this.selection.windowName || this.selection.windowName === 'main';
+        const argMain = !win || win === 'main';
+        if (selMain && argMain) return true;
+        return this.selection.windowName === win;
+    }
+
+    private applyStateToSelection(state: FormatStateSnapshot | null): void {
         if (!this.selection || !state) return;
         const sel = this.selection;
         const buf = this.resolveBuffer(sel.windowName);

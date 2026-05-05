@@ -14,8 +14,10 @@ import {
     existsSync,
     unlinkSync,
     rmSync,
+    type FileSystem,
 } from '@zenfs/core';
-import { IndexedDB } from '@zenfs/dom';
+import { IndexedDB, WebAccess } from '@zenfs/dom';
+import { checkFolderPermission, loadFolderHandle } from './folderHandleStore';
 
 let rootReady: Promise<void> | null = null;
 
@@ -26,25 +28,62 @@ function ensureRoot(): Promise<void> {
     return rootReady;
 }
 
+export type VFSSource = 'folder' | 'idb';
+
+// AsyncMixin exposes sync(), but it isn't on FileSystem's public type.
+type Syncable = FileSystem & { sync?: () => Promise<void> };
+
 export class ProfileVFS {
     readonly profilePath: string;
     private _cwd: string;
+    private _fs: Syncable;
+    private _handle?: FileSystemDirectoryHandle;
+    readonly source: VFSSource;
+    readonly folderName?: string;
 
-    private constructor(readonly connectionId: string) {
+    private constructor(
+        readonly connectionId: string,
+        fs: Syncable,
+        source: VFSSource,
+        handle?: FileSystemDirectoryHandle,
+    ) {
         this.profilePath = `/profiles/${connectionId}`;
         this._cwd = this.profilePath;
+        this._fs = fs;
+        this._handle = handle;
+        this.source = source;
+        this.folderName = handle?.name;
     }
 
     static async mount(connectionId: string): Promise<ProfileVFS> {
         await ensureRoot();
-        const vfs = new ProfileVFS(connectionId);
-        const fs = await resolveMountConfig({ backend: IndexedDB, storeName: `mudix_vfs_${connectionId}` });
-        mount(vfs.profilePath, fs);
-        // Ensure profile root exists inside the mounted FS
-        if (!existsSync(vfs.profilePath)) {
-            mkdirSync(vfs.profilePath, { recursive: true });
+        const profilePath = `/profiles/${connectionId}`;
+
+        // Prefer a linked folder if the user previously picked one and the
+        // browser still grants us readwrite permission without a fresh prompt.
+        // Permission prompts require a user gesture, so on cold start we can
+        // only use the folder when the grant is already 'granted'. Anything
+        // else falls back silently to IDB; the UI surfaces a re-link affordance.
+        const handle = await loadFolderHandle(connectionId).catch(() => null);
+        if (handle) {
+            const perm = await checkFolderPermission(handle);
+            if (perm === 'granted') {
+                try {
+                    const fs = await resolveMountConfig({ backend: WebAccess, handle }) as Syncable;
+                    mount(profilePath, fs);
+                    return new ProfileVFS(connectionId, fs, 'folder', handle);
+                } catch (err) {
+                    console.warn('[ProfileVFS] folder mount failed, falling back to IDB:', err);
+                }
+            }
         }
-        return vfs;
+
+        const fs = await resolveMountConfig({ backend: IndexedDB, storeName: `mudix_vfs_${connectionId}` }) as Syncable;
+        mount(profilePath, fs);
+        if (!existsSync(profilePath)) {
+            mkdirSync(profilePath, { recursive: true });
+        }
+        return new ProfileVFS(connectionId, fs, 'idb');
     }
 
     get cwd(): string { return this._cwd; }
@@ -87,7 +126,6 @@ export class ProfileVFS {
         try {
             rmdirSync(abs);
         } catch {
-            // Fall back to recursive rm if not empty
             rmSync(abs, { recursive: true, force: true });
         }
     }
@@ -116,6 +154,35 @@ export class ProfileVFS {
             this._cwd = abs;
             return null;
         } catch { return 'no such directory'; }
+    }
+
+    /**
+     * Drain queued async writes to the underlying backend. For folder-backed
+     * mounts this writes RAM-cached changes through to disk; for IDB mounts
+     * it persists to IndexedDB. Safe to call on any source.
+     */
+    async flush(): Promise<void> {
+        if (typeof this._fs.sync === 'function') {
+            try { await this._fs.sync(); } catch (err) { console.warn('[ProfileVFS] flush failed:', err); }
+        }
+    }
+
+    /**
+     * Re-walk the linked directory and rebuild the in-memory cache. Use after
+     * external edits (file added/changed in the OS file manager). No-op for
+     * IDB-backed profiles since their state is owned by the browser.
+     *
+     * Any Lua file handles opened before resync become invalid: ZenFS replaces
+     * the underlying FS instance, so subsequent reads on those handles will
+     * error. New `io.open` calls work normally.
+     */
+    async resync(): Promise<void> {
+        if (this.source !== 'folder' || !this._handle) return;
+        await this.flush();
+        try { umount(this.profilePath); } catch { /* not mounted */ }
+        const fs = await resolveMountConfig({ backend: WebAccess, handle: this._handle }) as Syncable;
+        mount(this.profilePath, fs);
+        this._fs = fs;
     }
 
     unmount(): void {

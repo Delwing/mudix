@@ -92,7 +92,7 @@ const MUDIX_TOP: Completion[] = [
     fn('feedTriggers', '(text)',        'Feed text through the trigger pipeline'),
     fn('deleteLine',   '([window])',    'Delete the current trigger line'),
     fn('appendCmdLine','(text)',        'Append text to the command bar'),
-    fn('setCmdLine',   '(text)',        'Set the command bar contents'),
+    fn('printCmdLine', '(text)',        'Set the command bar contents'),
     fn('printerror',   '(text)',        'Print an error message'),
     fn('on',           '(event, fn)',   "Register event handler. Events: 'connect' 'disconnect' 'output' 'gmcp'"),
     fn('off',          '(event, fn)',   'Remove a previously registered event handler'),
@@ -229,12 +229,13 @@ const MUDLET_GLOBALS: Completion[] = [
     // Windows
     fn('openUserWindow',  '(name, restoreLayout?, autoDock?, dockingArea?)', 'Open a user window'),
     fn('clearWindow',     '([name])',      'Clear window contents'),
-    fn('setWindowTitle',  '(name, title)','Set window title'),
+    fn('setUserWindowTitle', '(name, title)', 'Set user window title'),
     fn('hideWindow',      '(name)',        'Hide a window'),
     fn('showWindow',      '(name)',        'Show a window'),
+    fn('getMainWindowSize', '() → w, h',   'Browser window inner width and height in pixels'),
     // Cmd line
     fn('appendCmdLine', '(text)',          'Append to command bar'),
-    fn('setCmdLine',    '(text)',          'Set command bar contents'),
+    fn('printCmdLine',  '(text)',          'Set command bar contents'),
     // Cursor / line inspection
     fn('getCurrentLine',  '([window])',    'Get current trigger line text'),
     fn('getLineNumber',   '([window])',    'Get cursor line number'),

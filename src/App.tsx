@@ -27,6 +27,7 @@ export default function App() {
     const [filesOpen, setFilesOpen] = useState(false);
     const commandInputRef = useRef<HTMLInputElement>(null);
     const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
+    const deepLinkProfileId = useRef(new URLSearchParams(window.location.search).get('profile'));
     const connections = useAppStore(s => s.connections);
     const addConnection = useAppStore(s => s.addConnection);
     const updateConnection = useAppStore(s => s.updateConnection);
@@ -36,7 +37,7 @@ export default function App() {
     const saveWindowHint = useAppStore(s => s.saveWindowHint);
     const saveDockExtents = useAppStore(s => s.saveDockExtents);
 
-    const { aliasEngineRef, triggerEngineRef, engineRef } = useEngines(session, sessionStarted);
+    const { aliasEngineRef, triggerEngineRef, engineRef } = useEngines(session, sessionStarted, activeConnection);
 
     // Reload scripts whenever the store changes for the active connection.
     const activeScripts = useAppStore(s =>
@@ -55,18 +56,17 @@ export default function App() {
         pendingOutputReadyUnsub.current = null;
 
         const connId = activeConnection?.id ?? '';
-        const connName = activeConnection?.name ?? '';
         const snap = lastLoadedSnap.current;
         lastLoadedSnap.current = { scripts: activeScripts, session, connId };
 
         // First load, session change, or connection switch → full reload.
         if (!snap || snap.session !== session || snap.connId !== connId) {
             if (session.outputReady) {
-                engineRef.current?.loadScripts(activeScripts, connId, connName);
+                engineRef.current?.loadScripts(activeScripts);
             } else {
                 pendingOutputReadyUnsub.current = session.events.on('output.ready', () => {
                     pendingOutputReadyUnsub.current = null;
-                    engineRef.current?.loadScripts(activeScripts, connId, connName);
+                    engineRef.current?.loadScripts(activeScripts);
                 }, { once: true });
             }
             return () => {
@@ -149,6 +149,20 @@ export default function App() {
         return () => { unsub1(); unsub2(); };
     }, [session]);
 
+    // Drain disk-backed VFS writes before navigation. Folder-linked profiles
+    // use async write-through; without this, edits made just before close can
+    // be lost. visibilitychange fires more reliably on mobile/PWA than unload.
+    useEffect(() => {
+        const flush = () => { engineRef.current?.currentVFS?.flush(); };
+        const onVis = () => { if (document.visibilityState === 'hidden') flush(); };
+        window.addEventListener('beforeunload', flush);
+        document.addEventListener('visibilitychange', onVis);
+        return () => {
+            window.removeEventListener('beforeunload', flush);
+            document.removeEventListener('visibilitychange', onVis);
+        };
+    }, []);
+
     // Global keydown listener — fires keybindings, but not when focused in a textarea (e.g. script editor).
     useEffect(() => {
         if (!sessionStarted) return;
@@ -183,6 +197,17 @@ export default function App() {
         setActiveConnection(connection);
         setSessionStarted(true);
     };
+
+    // Auto-connect when the page is loaded with ?profile=<id>
+    useEffect(() => {
+        const id = deepLinkProfileId.current;
+        if (!id || sessionStarted) return;
+        const conn = connections.find(c => c.id === id);
+        if (!conn) return;
+        deepLinkProfileId.current = null;
+        handleConnect(conn);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [connections]);
 
     const handleDisconnect = () => {
         disconnect();

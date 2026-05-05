@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { MudSession } from '../mud/MudSession';
+import type { MudConnection } from '../storage';
 import { AliasEngine } from '../mud/aliases/AliasEngine';
 import { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import { TimerEngine } from '../mud/timers/TimerEngine';
@@ -7,7 +8,7 @@ import { KeyEngine } from '../mud/keybindings/KeyEngine';
 import { ScriptingEngine } from '../scripting/ScriptingEngine';
 
 /** Creates and tears down all scripting engines tied to a session lifetime. */
-export function useEngines(session: MudSession, active: boolean) {
+export function useEngines(session: MudSession, active: boolean, connection: MudConnection | null) {
     const aliasEngineRef = useRef<AliasEngine | null>(null);
     const triggerEngineRef = useRef<TriggerEngine | null>(null);
     const timerEngineRef = useRef<TimerEngine | null>(null);
@@ -15,12 +16,12 @@ export function useEngines(session: MudSession, active: boolean) {
     const engineRef = useRef<ScriptingEngine | null>(null);
 
     useEffect(() => {
-        if (!active) return;
+        if (!active || !connection) return;
         const alias = new AliasEngine();
         const trigger = new TriggerEngine();
         const timer = new TimerEngine();
         const key = new KeyEngine();
-        const engine = new ScriptingEngine(session, alias, trigger, timer, key);
+        const engine = new ScriptingEngine(session, alias, trigger, timer, key, connection.id, connection.name);
         aliasEngineRef.current = alias;
         triggerEngineRef.current = trigger;
         timerEngineRef.current = timer;
@@ -38,7 +39,7 @@ export function useEngines(session: MudSession, active: boolean) {
             keyEngineRef.current = null;
             engineRef.current = null;
         };
-    }, [session, active]);
+    }, [session, active, connection]);
 
     return { aliasEngineRef, triggerEngineRef, timerEngineRef, keyEngineRef, engineRef };
 }

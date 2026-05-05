@@ -1,11 +1,20 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { Folder, FolderOpen, FolderPlus, File, RefreshCw, Upload, Trash2, Home } from 'lucide-react';
+import { Folder, FolderOpen, FolderPlus, File, RefreshCw, Upload, Trash2, Home, Link, Unlink } from 'lucide-react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { ResizableModal } from './ResizableModal';
 import { ContextMenu } from './components';
 import { useAppStore } from '../storage';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
+import {
+    isFolderLinkSupported,
+    loadFolderHandle,
+    saveFolderHandle,
+    clearFolderHandle,
+    checkFolderPermission,
+    requestFolderPermission,
+    type FolderPermissionState,
+} from '../scripting/vfs/folderHandleStore';
 
 // ─── VFS Move Helpers ──────────────────────────────────────────────────────
 
@@ -241,12 +250,19 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
     const [rev, setRev] = useState(0);
     const bumpRev = useCallback(() => setRev(r => r + 1), []);
 
-    const refresh = useCallback(() => {
+    const [resyncing, setResyncing] = useState(false);
+    const refresh = useCallback(async () => {
+        if (vfs?.source === 'folder') {
+            setResyncing(true);
+            try { await vfs.resync(); }
+            catch (err) { console.error('[VFS] resync failed:', err); }
+            finally { setResyncing(false); }
+        }
         bumpRev();
         setSelectedFile(null);
         setPreviewContent(null);
         setPreviewError(null);
-    }, [bumpRev]);
+    }, [bumpRev, vfs]);
 
     const tree = useMemo(() => {
         if (!vfs) return [];
@@ -483,6 +499,58 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
         onDropOnDir: handleDropOnDir,
     };
 
+    // ── Folder link state ─────────────────────────────────────────────────
+
+    const linkSupported = isFolderLinkSupported();
+    const [linkedHandle, setLinkedHandle] = useState<FileSystemDirectoryHandle | null>(null);
+    const [linkedPerm, setLinkedPerm] = useState<FolderPermissionState>('prompt');
+    const [linkNotice, setLinkNotice] = useState<string | null>(null);
+
+    const refreshLinkState = useCallback(async () => {
+        if (!connectionId || !linkSupported) {
+            setLinkedHandle(null);
+            return;
+        }
+        const h = await loadFolderHandle(connectionId).catch(() => null);
+        setLinkedHandle(h);
+        setLinkedPerm(h ? await checkFolderPermission(h) : 'prompt');
+    }, [connectionId, linkSupported]);
+
+    useEffect(() => { void refreshLinkState(); }, [refreshLinkState]);
+
+    const handleLinkFolder = useCallback(async () => {
+        if (!linkSupported || !window.showDirectoryPicker) return;
+        let handle: FileSystemDirectoryHandle;
+        try {
+            handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        } catch {
+            return; // user cancelled
+        }
+        const perm = await requestFolderPermission(handle);
+        if (perm !== 'granted') {
+            setLinkNotice(`Permission ${perm}. Folder not linked.`);
+            return;
+        }
+        await saveFolderHandle(connectionId, handle);
+        setLinkedHandle(handle);
+        setLinkedPerm('granted');
+        setLinkNotice(`Linked "${handle.name}". Reconnect to use it.`);
+    }, [connectionId, linkSupported]);
+
+    const handleUnlinkFolder = useCallback(async () => {
+        await clearFolderHandle(connectionId);
+        setLinkedHandle(null);
+        setLinkedPerm('prompt');
+        setLinkNotice('Folder unlinked. Reconnect to revert to local storage.');
+    }, [connectionId]);
+
+    const handleRegrantPermission = useCallback(async () => {
+        if (!linkedHandle) return;
+        const perm = await requestFolderPermission(linkedHandle);
+        setLinkedPerm(perm);
+        if (perm === 'granted') setLinkNotice('Permission granted. Reconnect to mount the folder.');
+    }, [linkedHandle]);
+
     // ── Derived ───────────────────────────────────────────────────────────
 
     const isAtRoot = !vfs || uploadDir === vfs.profilePath;
@@ -533,12 +601,52 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
                         >
                             <Upload size={13} />
                         </button>
-                        <button className="modal-close" title="Refresh" onClick={refresh}>
-                            <RefreshCw size={13} />
+                        {linkSupported && (linkedHandle ? (
+                            <button
+                                className="modal-close"
+                                title={`Unlink folder "${linkedHandle.name}"`}
+                                onClick={handleUnlinkFolder}
+                            >
+                                <Unlink size={13} />
+                            </button>
+                        ) : (
+                            <button
+                                className="modal-close"
+                                title="Link a folder on disk to this profile"
+                                onClick={handleLinkFolder}
+                            >
+                                <Link size={13} />
+                            </button>
+                        ))}
+                        <button
+                            className="modal-close"
+                            title={vfs?.source === 'folder' ? 'Resync from disk' : 'Refresh'}
+                            onClick={refresh}
+                            disabled={resyncing}
+                        >
+                            <RefreshCw size={13} style={resyncing ? { opacity: 0.4 } : undefined} />
                         </button>
                     </>
                 }
             >
+                {(linkedHandle || linkNotice) && (
+                    <div className="vfs-link-banner" style={{ padding: '4px 8px', fontSize: 11, opacity: 0.85, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {linkedHandle && (
+                            <span>
+                                {vfs?.source === 'folder'
+                                    ? `Mounted from folder: ${vfs.folderName ?? linkedHandle.name}`
+                                    : `Linked folder: ${linkedHandle.name} (reconnect to mount)`}
+                            </span>
+                        )}
+                        {linkedHandle && linkedPerm !== 'granted' && vfs?.source !== 'folder' && (
+                            <button className="modal-close" onClick={handleRegrantPermission} title="Re-grant folder permission">
+                                Re-grant access
+                            </button>
+                        )}
+                        {linkNotice && <span style={{ opacity: 0.7 }}>· {linkNotice}</span>}
+                    </div>
+                )}
+
                 {vfs && (
                     <div
                         className={`vfs-path-bar${dropTarget === vfs.profilePath ? ' vfs-drop-target' : ''}`}

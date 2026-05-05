@@ -11,7 +11,12 @@ const withRe = <T>(pattern: string, flags: string, fn: (re: InstanceType<typeof 
 function extractCaptures(m: MatchResult): (string | false)[] {
     const caps: (string | false)[] = [];
     for (let i = 1; i <= m.length; i++) {
-        caps.push(m[i] ? m[i].match : false);
+        // PCRE2 sets ovector to PCRE2_UNSET for unmatched optional groups,
+        // which the wasm bridge reads as start === -1. The match object still
+        // exists (with match === ""), so we must check the offset, not truthiness,
+        // to distinguish "did not match" from "matched empty string".
+        const cap = m[i];
+        caps.push(cap && cap.start >= 0 ? cap.match : false);
     }
     return caps;
 }

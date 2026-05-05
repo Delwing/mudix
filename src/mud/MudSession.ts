@@ -9,6 +9,12 @@ export type { SessionStatus, MudEvents } from './events';
 
 export type MudSessionOptions = Omit<MudClientOptions, 'url'>;
 
+export interface ScriptLogEntry {
+    text: string;
+    level: 'error' | 'info';
+    timestamp: number;
+}
+
 export class MudSession {
     readonly events = new EventBus<MudEvents>();
     readonly windows = new WindowManager();
@@ -21,9 +27,23 @@ export class MudSession {
     private _ping: number | null = null;
     private _outputReady = false;
 
+    /** Bounded script.log buffer so the editor panel can backfill entries that
+     *  arrived before it was first opened (e.g. errors during initial load). */
+    private static readonly SCRIPT_LOG_LIMIT = 500;
+    private _scriptLog: ScriptLogEntry[] = [];
+
     constructor(private readonly options: MudSessionOptions = {}) {
         this.windows.setConsoleRegistry(this.consoles);
+        this.events.on('script.log', (text, level) => {
+            this._scriptLog.push({ text: text ?? '', level: level ?? 'info', timestamp: Date.now() });
+            if (this._scriptLog.length > MudSession.SCRIPT_LOG_LIMIT) {
+                this._scriptLog.splice(0, this._scriptLog.length - MudSession.SCRIPT_LOG_LIMIT);
+            }
+        });
     }
+
+    get scriptLog(): readonly ScriptLogEntry[] { return this._scriptLog; }
+    clearScriptLog(): void { this._scriptLog = []; }
 
     get status(): SessionStatus { return this._status; }
     get ping(): number | null { return this._ping; }

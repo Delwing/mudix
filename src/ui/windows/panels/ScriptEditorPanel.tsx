@@ -207,7 +207,7 @@ const DEFAULT_LUA = `-- Mudlet-compatible Lua script
 -- Windows:
 --   openUserWindow(name)                    open a text panel
 --   clearWindow(name)
---   setWindowTitle(name, title)
+--   setUserWindowTitle(name, title)
 -- GMCP:
 --   gmcp.Module.SubKey                      auto-populated from server packets
 
@@ -332,9 +332,19 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
     const [editEventHandlers, setEditEventHandlers] = useState('');
 
     const [dirty, setDirty] = useState(false);
-    const [logs, setLogs]         = useState<LogEntry[]>([]);
-    const [errorLog, setErrorLog] = useState<LogEntry[]>([]);
-    const [unreadErrors, setUnreadErrors] = useState(0);
+    // Backfill from the session-level buffer so entries that fired before this
+    // panel was first mounted (e.g. errors during initial script load) survive.
+    const [logs, setLogs] = useState<LogEntry[]>(() =>
+        session.scriptLog.map(e => ({ text: e.text, level: e.level, timestamp: new Date(e.timestamp) })),
+    );
+    const [errorLog, setErrorLog] = useState<LogEntry[]>(() =>
+        session.scriptLog
+            .filter(e => e.level === 'error')
+            .map(e => ({ text: e.text, level: e.level, timestamp: new Date(e.timestamp) })),
+    );
+    const [unreadErrors, setUnreadErrors] = useState(() =>
+        session.scriptLog.reduce((n, e) => n + (e.level === 'error' ? 1 : 0), 0),
+    );
 
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; targetId: string | null } | null>(null);
     const logEndRef      = useRef<HTMLDivElement>(null);
@@ -435,8 +445,19 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
     }, [selectedId, category]);
 
     useEffect(() => {
+        // Re-sync from the session buffer in case entries were appended between
+        // the useState initializer and this effect running.
+        setLogs(session.scriptLog.map(e => ({ text: e.text, level: e.level, timestamp: new Date(e.timestamp) })));
+        setErrorLog(session.scriptLog
+            .filter(e => e.level === 'error')
+            .map(e => ({ text: e.text, level: e.level, timestamp: new Date(e.timestamp) })));
+
+        let initialErrors = 0;
+        for (const e of session.scriptLog) if (e.level === 'error') initialErrors++;
+        setUnreadErrors(initialErrors);
+
         return session.events.on('script.log', (text, level) => {
-            const entry: LogEntry = { text, level, timestamp: new Date() };
+            const entry: LogEntry = { text: text ?? '', level: level ?? 'info', timestamp: new Date() };
             setLogs(prev => [...prev, entry]);
             setErrorLog(prev => [...prev, entry]);
             if (level === 'error') setUnreadErrors(prev => prev + 1);
@@ -863,7 +884,7 @@ export function ScriptEditorPanel({ connectionId, session, onScriptSave, initial
                         </span>
                         <button
                             className="script-editor__error-log-clear"
-                            onClick={() => { setErrorLog([]); setUnreadErrors(0); }}
+                            onClick={() => { session.clearScriptLog(); setErrorLog([]); setLogs([]); setUnreadErrors(0); }}
                             disabled={errorLog.length === 0}
                         >
                             Clear

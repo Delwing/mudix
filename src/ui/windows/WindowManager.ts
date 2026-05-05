@@ -1,10 +1,11 @@
 import { type OutputRendererControls } from '../output/OutputRenderer';
 import type { Console } from '../../mud/text/Console';
+import type { AnsiAwareBuffer } from '../../mud/text/FormatState';
 import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
 import { MapStore } from '../../map/MapStore';
 
 interface ScriptWindowData extends ScriptWindowRenderData {
-    pendingText: string[];
+    pendingText: Array<string | AnsiAwareBuffer>;
 }
 
 const TEXT_BUFFER_LIMIT = 5000;
@@ -112,8 +113,26 @@ export class WindowManager {
         this.elements.set(id, element);
         const win = this.windows.get(id);
         if (win?.pendingText.length) {
-            for (const line of win.pendingText) element.insertAdjacentHTML('beforeend', line);
+            for (const line of win.pendingText) {
+                if (typeof line === 'string') element.insertAdjacentHTML('beforeend', line);
+            }
             win.pendingText = [];
+        }
+    }
+
+    pushBuffer(id: string, buffer: AnsiAwareBuffer): void {
+        if (!this.windows.has(id)) this.open(id, { kind: 'text', title: id });
+        const win = this.windows.get(id)!;
+        if (win.kind !== 'text') return;
+        this.flushLine(id);
+        const ctrl = this.controls.get(id);
+        if (ctrl) {
+            ctrl.push(buffer);
+        } else {
+            win.pendingText.push(buffer);
+            if (win.pendingText.length > TEXT_BUFFER_LIMIT) {
+                win.pendingText.splice(0, win.pendingText.length - TEXT_BUFFER_LIMIT);
+            }
         }
     }
 

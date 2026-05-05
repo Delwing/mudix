@@ -1,0 +1,27 @@
+--- The Geyser Layout Manager for Mudlet.
+-- <br/>See also: <a href="https://wiki.mudlet.org/w/Manual:Geyser">Mudlet Manual</a>
+-- @author guy
+-- @module Geyser
+
+-- Load code in following order:
+-- <pre>
+--    Geyser.lua
+--    GeyserGeyser.lua
+--    GeyserUtil.lua
+--    GeyserColor.lua
+--    GeyserSetConstraints.lua
+--    GeyserContainer.lua
+--    GeyserWindow.lua
+--    GeyserLabel.lua
+--    GeyserGauge.lua
+--    GeyserMiniConsole.lua
+--    GeyserMapper.lua
+--    GeyserReposition.lua
+--    GeyserTests.lua
+-- </pre>
+
+-- UNCOMMENT EVERYTHING BELOW THIS LINE FOR VERSIONS PRIOR TO 1.1.0
+--myoldresizer = myoldresizer or handleWindowResizeEvent
+--function handleWindowResizeEvent()
+--	raiseEvent("sysWindowResizeEvent")
+--end

@@ -196,12 +196,28 @@ do
         return _profile_dir()
     end
 
+    -- Make require() find Lua files uploaded to the profile directory.
+    -- "foo.bar" → <profileDir>/foo/bar.lua, loaded via the VFS io layer.
+    table.insert(package.loaders, 2, function(modname)
+        local relpath = modname:gsub("%.", "/") .. ".lua"
+        local fullpath = _profile_dir() .. "/" .. relpath
+        local f = io.open(fullpath, "r")
+        if not f then
+            return "\n\tno file '" .. fullpath .. "' in VFS"
+        end
+        local code = f:read("*a")
+        f:close()
+        local fn, ce = loadstring(code, "@" .. fullpath)
+        if not fn then error(ce) end
+        return fn
+    end)
+
     function dofile(path)
         local f, e = io.open(path, 'r')
         if not f then error(e, 2) end
         local code = f:read('*a')
         f:close()
-        local chunk, ce = load(code, '@' .. path)
+        local chunk, ce = loadstring(code, '@' .. path)
         if not chunk then error(ce, 2) end
         return chunk()
     end
@@ -211,7 +227,7 @@ do
         if not f then return nil, e end
         local code = f:read('*a')
         f:close()
-        return load(code, '@' .. path)
+        return loadstring(code, '@' .. path)
     end
 
     os.remove = function(path)

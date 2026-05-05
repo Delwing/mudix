@@ -3,6 +3,10 @@ import { Button, Input, FormField } from './components';
 import { ProxyInfoModal } from './ProxyInfoModal';
 import { DEFAULT_PROXY_URL, connectionDisplayAddr, type ConnectionMode, type MudConnection } from '../storage';
 
+function profileUrl(id: string): string {
+    return `${window.location.origin}${window.location.pathname}?profile=${id}`;
+}
+
 function buildPreviewUrl(host: string, port: string, proxyUrl: string): string {
     const base = (proxyUrl.trim() || DEFAULT_PROXY_URL).replace(/\/$/, '');
     const p = parseInt(port, 10);
@@ -27,6 +31,7 @@ interface Props {
 
 export function ConnectionScreen({ connections, connecting, connectingId, onConnect, onOpen, onAdd, onUpdate, onDelete, onOpenSettings }: Props) {
     const [editingId, setEditingId] = useState<string | null>(null);
+    const [copiedId, setCopiedId] = useState<string | null>(null);
     const [mode, setMode] = useState<ConnectionMode>('mud');
     const [name, setName] = useState('');
     const [host, setHost] = useState('');
@@ -75,6 +80,13 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         return { name: name.trim(), mode: 'websocket', url: url.trim() };
     };
 
+    const handleCopyLink = (c: MudConnection) => {
+        navigator.clipboard.writeText(profileUrl(c.id)).then(() => {
+            setCopiedId(c.id);
+            setTimeout(() => setCopiedId(null), 1500);
+        });
+    };
+
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!canSubmit) return;
@@ -119,6 +131,16 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                         title="Open profile offline"
                                     >
                                         Open
+                                    </Button>
+                                    <Button
+                                        variant="icon"
+                                        size="sm"
+                                        onClick={() => handleCopyLink(c)}
+                                        disabled={connecting}
+                                        aria-label="Copy profile link"
+                                        title="Copy profile link"
+                                    >
+                                        {copiedId === c.id ? '✓' : '🔗'}
                                     </Button>
                                     <Button
                                         variant="icon"

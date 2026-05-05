@@ -348,7 +348,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `deleteCommandLine(name)` | 🚧 | Remove overlay command line |
 | `setConsoleBufferSize(name, lines)` | 🚧 | Scrollback size limit |
 | `getConsoleBufferSize([window])` | 🚧 | |
-| `getMainWindowSize()` | 🚧 | `window.innerWidth` / `innerHeight` |
+| `getMainWindowSize()` | ✅ | Returns `window.innerWidth, window.innerHeight` |
 | `getUserWindowSize(name)` | 🚧 | `element.getBoundingClientRect()` |
 | `getMainConsoleWidth()` | 🚧 | Character width of main console |
 | `setWindowWrap(name, col)` | 🚧 | Word-wrap column |

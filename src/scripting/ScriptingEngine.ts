@@ -33,7 +33,7 @@ export class ScriptingEngine {
     private promptPending = false;
     private vfs: ProfileVFS | null = null;
     private loadGeneration = 0;
-    private runtimePromise: Promise<IScriptingRuntime> | null = null;
+    private readonly runtimeReady: Promise<IScriptingRuntime>;
 
     constructor(
         session: MudSession,
@@ -41,84 +41,86 @@ export class ScriptingEngine {
         private readonly triggerEngine: TriggerEngine,
         private readonly timerEngine: TimerEngine,
         private readonly keyEngine: KeyEngine,
+        connectionId: string,
+        connectionName = '',
     ) {
         this.api = new ScriptingAPI(session, aliasEngine, triggerEngine, timerEngine, keyEngine);
+        this.api.profileName = connectionName;
         this.bridgeEvents(session);
+        this.runtimeReady = this.initRuntime(connectionId);
+    }
+
+    private initRuntime(connectionId: string): Promise<IScriptingRuntime> {
+        return ProfileVFS.mount(connectionId).then(
+            vfs  => { this.vfs = vfs;   return this.createRuntime(vfs); },
+            err  => {
+                console.error('[ScriptingEngine] VFS mount failed:', err);
+                this.api.printError(`[scripting] VFS mount failed: ${err instanceof Error ? err.message : String(err)}`);
+                return this.createRuntime(null);
+            },
+        );
     }
 
     private createRuntime(vfs: ProfileVFS | null): Promise<IScriptingRuntime> {
-        this.runtimePromise = LuaRuntime.create(this.api, vfs).then(rt => {
+        return LuaRuntime.create(this.api, vfs).then(rt => {
             this.runtimes.lua = rt;
             this.api.setExecuteScript((code) => {
-                this.runtimes.lua?.run(code, 'link')
+                console.log('[executeScript] code:', code, 'lua runtime alive:', !!this.runtimes.lua);
+                const lua = this.runtimes.lua;
+                if (!lua) {
+                    console.warn('[executeScript] no lua runtime — link click has no effect');
+                    return;
+                }
+                lua.run(code, 'link')
                     .then(() => this.api.flushOutput())
                     .catch(err => this.api.printError(`[link] ${err instanceof Error ? err.message : String(err)}`));
             });
+            this.api.setExpandAlias((text, echo) => {
+                if (!this.processInput(text)) this.api.send(text, echo);
+            });
             return rt;
+        }).catch(err => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[ScriptingEngine] Lua runtime init failed:', err);
+            this.api.printError(`[scripting] Lua runtime init failed: ${msg}`);
+            throw err;
         });
-        return this.runtimePromise;
     }
 
-    /** Load (or reload) scripts. On first call, mounts VFS and creates the runtime. */
-    loadScripts(scripts: ScriptNode[], connectionId: string, connectionName = ''): void {
-        this.api.profileName = connectionName;
+    loadScripts(scripts: ScriptNode[]): void {
         const gen = ++this.loadGeneration;
-
-        const doLoad = async (rt: IScriptingRuntime) => {
-            if (gen !== this.loadGeneration) return;
-            try {
-                const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
-                for (const s of enabled) {
-                    if (!s.code) continue;
-                    try {
-                        await rt.load(this.wrapScript(s), s.name);
-                    } catch (err) {
-                        this.api.printError(`[${s.name}] ${err instanceof Error ? err.message : String(err)}`);
+        this.runtimeReady
+            .then(async rt => {
+                if (gen !== this.loadGeneration) return;
+                try {
+                    const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
+                    for (const s of enabled) {
+                        if (!s.code) continue;
+                        try {
+                            await rt.load(this.wrapScript(s), s.name);
+                        } catch (err) {
+                            this.api.printError(`[${s.name}] ${err instanceof Error ? err.message : String(err)}`);
+                        }
                     }
+                    this.raiseEvent('sysLoadEvent');
+                    if (this.api.windows.isVisible('map')) {
+                        this.raiseEvent('mapOpenEvent');
+                    }
+                } catch (err) {
+                    this.api.printError(`[scripting] script load error: ${err instanceof Error ? err.message : String(err)}`);
                 }
-                this.raiseEvent('sysLoadEvent');
-                if (this.api.windows.isVisible('map')) {
-                    this.raiseEvent('mapOpenEvent');
-                }
-            } catch (err) {
-                this.api.printError(`[scripting] script load error: ${err instanceof Error ? err.message : String(err)}`);
-            }
-            this.api.flushOutput();
-        };
-
-        if (!this.runtimePromise) {
-            const startWithVfs = (vfs: ProfileVFS | null) => {
-                if (gen !== this.loadGeneration) { vfs?.unmount(); return; }
-                this.vfs = vfs;
-                this.createRuntime(vfs)
-                    .then(rt => doLoad(rt))
-                    .catch(err => this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`));
-            };
-
-            ProfileVFS.mount(connectionId)
-                .then(vfs => startWithVfs(vfs))
-                .catch(err => {
-                    if (gen !== this.loadGeneration) return;
-                    console.error('[ScriptingEngine] VFS mount failed:', err);
-                    this.api.printError(`[scripting] VFS mount failed: ${err instanceof Error ? err.message : String(err)}`);
-                    startWithVfs(null);
-                });
-        } else {
-            this.runtimePromise
-                .then(rt => { if (gen !== this.loadGeneration) return; return doLoad(rt); })
-                .catch(err => this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`));
-        }
+                this.api.flushOutput();
+            })
+            .catch(err => this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`));
     }
 
     /** Run a single script on the existing runtime without restarting it. */
     async reloadScript(script: ScriptNode): Promise<void> {
         if (script.language !== 'lua' || !script.code) return;
-        if (!this.runtimes.lua && this.runtimePromise) {
-            try { await this.runtimePromise; } catch { return; }
-        }
-        if (!this.runtimes.lua) return;
+        let rt: IScriptingRuntime;
+        try { rt = await this.runtimeReady; } catch { return; }
         try {
-            await this.runtimes.lua.load(this.wrapScript(script), script.name);
+            await rt.load(this.wrapScript(script), script.name);
         } catch (err) {
             this.api.printError(`[${script.name}] ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -158,10 +160,8 @@ export class ScriptingEngine {
             this.api.flushOutput();
             return true;
         }
-        // Lua temp aliases
-        const luaMatched = this.runtimes.lua?.processInput(text) ?? false;
         this.api.flushOutput();
-        return luaMatched;
+        return false;
     }
 
     /** Process a keyboard event. Returns true if a keybinding consumed it. */
@@ -178,10 +178,8 @@ export class ScriptingEngine {
             this.api.flushOutput();
             return true;
         }
-        // Lua temp keybindings
-        const luaMatched = this.runtimes.lua?.processKey(event) ?? false;
-        if (luaMatched) this.api.flushOutput();
-        return luaMatched;
+        this.api.flushOutput();
+        return false;
     }
 
     raiseEvent(event: string, args: unknown[] = []): void {
@@ -194,13 +192,17 @@ export class ScriptingEngine {
         this.unsubs.length = 0;
         this.runtimes.lua?.destroy();
         this.runtimes.lua = null;
-        this.runtimePromise = null;
         this.triggerEngine.setLuaEval(null);
         this.api.setExecuteScript(null);
+        this.api.setExpandAlias(null);
         this.api.destroy();
         const oldVfs = this.vfs;
         this.vfs = null;
-        oldVfs?.unmount();
+        // Drain any pending writes (folder-backed VFS uses async write-through);
+        // the unmount tears down the in-memory cache so stale dirty state would
+        // otherwise be lost. Fire-and-forget — destroy is sync and we don't want
+        // to block teardown on a slow disk write.
+        oldVfs?.flush().finally(() => oldVfs.unmount());
     }
 
     // If the script declares eventHandlers, wrap it so the code runs as a
@@ -295,7 +297,6 @@ export class ScriptingEngine {
             for (const { trigger, captures, matchedText, multimatches, namedGroups } of this.triggerEngine.matchPerm(plain, isPrompt)) {
                 this.executePermTrigger(trigger, [plain, ...captures], matchedText, multimatches, namedGroups);
             }
-            this.runtimes.lua?.processTrigger(plain);
         } finally {
             this.api.clearLineBuffer();
         }
