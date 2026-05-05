@@ -40,17 +40,11 @@ export class LuaRuntime implements IScriptingRuntime {
     ) {
     }
 
-    static async create(api: ScriptingAPI): Promise<LuaRuntime> {
+    static async create(api: ScriptingAPI, vfs: ProfileVFS | null = null): Promise<LuaRuntime> {
         const lua = await Lua.create();
-        const rt = new LuaRuntime(lua, api, null);
+        const rt = new LuaRuntime(lua, api, vfs);
         await rt.setup();
         return rt;
-    }
-
-    async mountVFS(vfs: ProfileVFS): Promise<void> {
-        this.vfs = vfs;
-        this.setupVFS(vfs);
-        await this.exec(VFS_LUA, 'VFS');
     }
 
     private async setup(): Promise<void> {
@@ -300,6 +294,10 @@ end
         await this.exec(STRINGUTILS, 'StringUtils');
         await this.exec(OTHER, 'Other');
         await this.exec(GUIUTILS, 'GUIUtils');
+        if (this.vfs) {
+            this.setupVFS(this.vfs);
+            await this.exec(VFS_LUA, 'VFS');
+        }
     }
 
     // ── VFS bridge ───────────────────────────────────────────────────────────

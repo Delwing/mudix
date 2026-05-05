@@ -44,11 +44,10 @@ export class ScriptingEngine {
     ) {
         this.api = new ScriptingAPI(session, aliasEngine, triggerEngine, timerEngine, keyEngine);
         this.bridgeEvents(session);
-        this.runtimePromise = this.createRuntime();
     }
 
-    private createRuntime(): Promise<IScriptingRuntime> {
-        return LuaRuntime.create(this.api).then(rt => {
+    private createRuntime(vfs: ProfileVFS | null): Promise<IScriptingRuntime> {
+        this.runtimePromise = LuaRuntime.create(this.api, vfs).then(rt => {
             this.runtimes.lua = rt;
             this.api.setExecuteScript((code) => {
                 this.runtimes.lua?.run(code, 'link')
@@ -57,26 +56,17 @@ export class ScriptingEngine {
             });
             return rt;
         });
+        return this.runtimePromise;
     }
 
-    /** Load (or reload) scripts. Remounts VFS when connectionId changes. */
+    /** Load (or reload) scripts. On first call, mounts VFS and creates the runtime. */
     loadScripts(scripts: ScriptNode[], connectionId: string, connectionName = ''): void {
         this.api.profileName = connectionName;
-
         const gen = ++this.loadGeneration;
 
-        const doLoad = async (vfs: ProfileVFS | null) => {
-            if (gen !== this.loadGeneration) return;
-            let rt: IScriptingRuntime;
-            try {
-                rt = await this.runtimePromise!;
-            } catch (err) {
-                this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
-                return;
-            }
+        const doLoad = async (rt: IScriptingRuntime) => {
             if (gen !== this.loadGeneration) return;
             try {
-                if (vfs) await rt.mountVFS(vfs);
                 const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
                 for (const s of enabled) {
                     if (!s.code) continue;
@@ -96,21 +86,28 @@ export class ScriptingEngine {
             this.api.flushOutput();
         };
 
-        if (!connectionId) {
-            void doLoad(null);
-            return;
-        }
+        if (!this.runtimePromise) {
+            const startWithVfs = (vfs: ProfileVFS | null) => {
+                if (gen !== this.loadGeneration) { vfs?.unmount(); return; }
+                this.vfs = vfs;
+                this.createRuntime(vfs)
+                    .then(rt => doLoad(rt))
+                    .catch(err => this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`));
+            };
 
-        ProfileVFS.mount(connectionId).then(vfs => {
-            if (gen !== this.loadGeneration) { vfs.unmount(); return; }
-            this.vfs = vfs;
-            return doLoad(vfs);
-        }).catch(err => {
-            if (gen !== this.loadGeneration) return;
-            console.error('[ScriptingEngine] VFS mount failed:', err);
-            this.api.printError(`[scripting] VFS mount failed: ${err instanceof Error ? err.message : String(err)}`);
-            return doLoad(null);
-        });
+            ProfileVFS.mount(connectionId)
+                .then(vfs => startWithVfs(vfs))
+                .catch(err => {
+                    if (gen !== this.loadGeneration) return;
+                    console.error('[ScriptingEngine] VFS mount failed:', err);
+                    this.api.printError(`[scripting] VFS mount failed: ${err instanceof Error ? err.message : String(err)}`);
+                    startWithVfs(null);
+                });
+        } else {
+            this.runtimePromise
+                .then(rt => { if (gen !== this.loadGeneration) return; return doLoad(rt); })
+                .catch(err => this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`));
+        }
     }
 
     /** Run a single script on the existing runtime without restarting it. */
