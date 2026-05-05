@@ -76,10 +76,16 @@ export class LuaRuntime implements IScriptingRuntime {
                 this.api.setBgColor(Number(winOrR), Number(rOrG), Number(gOrB!));
             }
         });
-        this.lua.global.set('setBold',      (win: string, v: boolean) => this.api.setBold(v, win));
-        this.lua.global.set('setItalics',   (win: string, v: boolean) => this.api.setItalic(v, win));
-        this.lua.global.set('setUnderline', (win: string, v: boolean) => this.api.setUnderline(v, win));
-        this.lua.global.set('setStrikeOut', (win: string, v: boolean) => this.api.setStrikethrough(v, win));
+        // Mudlet overloads these: setBold(v) or setBold(win, v). Disambiguate by first-arg type.
+        const styleSetter = (apply: (v: boolean, win?: string) => void) =>
+            (a: unknown, b?: unknown) => {
+                if (typeof a === 'string') apply(!!b, a);
+                else apply(!!a);
+            };
+        this.lua.global.set('setBold',      styleSetter((v, w) => this.api.setBold(v, w)));
+        this.lua.global.set('setItalics',   styleSetter((v, w) => this.api.setItalic(v, w)));
+        this.lua.global.set('setUnderline', styleSetter((v, w) => this.api.setUnderline(v, w)));
+        this.lua.global.set('setStrikeOut', styleSetter((v, w) => this.api.setStrikethrough(v, w)));
         this.lua.global.set('resetFormat', (_win?: string) => this.api.resetFormat(_win));
         this.lua.global.set('deselect', (_win?: string) => this.api.deselect());
 
