@@ -1041,6 +1041,11 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
     };
 
     const handleTabKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+        if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S' || e.key === 'Enter')) {
+            e.preventDefault();
+            handleSave();
+            return;
+        }
         if (e.key !== 'Tab') return;
         e.preventDefault();
         const ta = e.currentTarget;
@@ -1724,6 +1729,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
                         <LuaEditor
                             value={editCode}
                             onChange={code => { setEditCode(code); setDirty(true); }}
+                            onSave={handleSave}
                             gotoLine={editorGotoLine}
                         />
                     ) : (

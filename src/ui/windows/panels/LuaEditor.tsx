@@ -219,7 +219,7 @@ const luaHover = hoverTooltip((view, pos) => {
 
 // ── Extensions ────────────────────────────────────────────────────────────────
 
-function buildExtensions(onChangeFn: () => void, theme: string) {
+function buildExtensions(onChangeFn: () => void, onSaveFn: () => void, theme: string) {
     return [
         history(),
         lineNumbers(),
@@ -232,7 +232,13 @@ function buildExtensions(onChangeFn: () => void, theme: string) {
         highlightCompartment.of(highlightFor(theme)),
         autocompletion({ override: [luaCompletionSource], activateOnTyping: true }),
         luaHover,
-        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+        keymap.of([
+            { key: 'Mod-s',     preventDefault: true, run: () => { onSaveFn(); return true; } },
+            { key: 'Mod-Enter', preventDefault: true, run: () => { onSaveFn(); return true; } },
+            indentWithTab,
+            ...defaultKeymap,
+            ...historyKeymap,
+        ]),
         EditorView.updateListener.of(update => {
             if (update.docChanged) onChangeFn();
         }),
@@ -245,17 +251,21 @@ function buildExtensions(onChangeFn: () => void, theme: string) {
 interface Props {
     value: string;
     onChange: (value: string) => void;
+    /** Invoked when the user hits Ctrl/Cmd+S or Ctrl/Cmd+Enter inside the editor. */
+    onSave?: () => void;
     /** Jump request from the parent (e.g. error log click). Bump `revision` to
      *  re-trigger a jump even when `line` is unchanged. */
     gotoLine?: { line: number; revision: number } | null;
 }
 
-export function LuaEditor({ value, onChange, gotoLine }: Props) {
+export function LuaEditor({ value, onChange, onSave, gotoLine }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const editorHostRef = useRef<HTMLDivElement>(null);
     const viewRef      = useRef<EditorView | null>(null);
     const onChangeRef  = useRef(onChange);
     onChangeRef.current = onChange;
+    const onSaveRef    = useRef(onSave);
+    onSaveRef.current  = onSave;
     const theme = useAppStore(s => s.ui.theme);
     const themeRef = useRef(theme);
     themeRef.current = theme;
@@ -270,6 +280,8 @@ export function LuaEditor({ value, onChange, gotoLine }: Props) {
                 doc: value,
                 extensions: buildExtensions(() => {
                     onChangeRef.current(viewRef.current!.state.doc.toString());
+                }, () => {
+                    onSaveRef.current?.();
                 }, themeRef.current),
             }),
             parent: editorHostRef.current,
