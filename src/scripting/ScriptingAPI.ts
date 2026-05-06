@@ -1,4 +1,4 @@
-import type { MudSession } from '../mud/MudSession';
+import type { MudSession, ScriptLogSource } from '../mud/MudSession';
 import type { AliasEngine } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine } from '../mud/timers/TimerEngine';
@@ -144,9 +144,10 @@ export class ScriptingAPI {
     // Callback set by ScriptingEngine to route expandAlias through the full pipeline.
     private expandAliasCallback: ((text: string, echo: boolean) => void) | null = null;
 
-    // Callback set by ScriptingEngine. Raises sysDataSendRequest synchronously
-    // and returns true if a handler called denyCurrentSend().
-    private sendRequestDispatcher: ((text: string) => boolean) | null = null;
+    // Callback set by ScriptingEngine. Raises sysDataSendRequest and reports
+    // whether a handler called denyCurrentSend(). Returns a Promise so handlers
+    // can await DB / other async work before deciding.
+    private sendRequestDispatcher: ((text: string) => Promise<boolean>) | null = null;
 
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
@@ -176,12 +177,17 @@ export class ScriptingAPI {
         this.session.disconnect();
     }
 
-    send(text: string, echo = true): void {
-        if (this.sendRequestDispatcher?.(text)) return;
+    async send(text: string, echo = true): Promise<void> {
+        // Awaits sysDataSendRequest handlers so they can deny the send via DB-
+        // gated logic. If no dispatcher is wired (early init), send straight.
+        if (this.sendRequestDispatcher) {
+            const denied = await this.sendRequestDispatcher(text);
+            if (denied) return;
+        }
         this.session.send(text, echo);
     }
 
-    setSendRequestDispatcher(fn: ((text: string) => boolean) | null): void {
+    setSendRequestDispatcher(fn: ((text: string) => Promise<boolean>) | null): void {
         this.sendRequestDispatcher = fn;
     }
 
@@ -275,7 +281,10 @@ export class ScriptingAPI {
         if (this.expandAliasCallback) {
             this.expandAliasCallback(text, echo);
         } else {
-            this.send(text, echo);
+            // Fire-and-forget — Lua's expandAlias is fire-and-forget too. The
+            // sysDataSendRequest handler chain runs on the runtime queue, so
+            // ordering vs. other Lua work is preserved.
+            void this.send(text, echo);
         }
     }
 
@@ -605,8 +614,8 @@ export class ScriptingAPI {
         this.echo(text);
     }
 
-    printError(text: string): void {
-        this.session.events.emit('script.log', text, 'error');
+    printError(text: string, source?: ScriptLogSource): void {
+        this.session.events.emit('script.log', text, 'error', source);
     }
 
     updateGmcp(path: string, value: unknown): void {

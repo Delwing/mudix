@@ -1,4 +1,4 @@
-import {Lua} from 'wasmoon-lua5.1';
+import {Lua, LuaReturn, type LuaThread} from 'wasmoon-lua5.1';
 import type {IScriptingRuntime} from '../IScriptingRuntime';
 import type {ScriptingAPI} from '../ScriptingAPI';
 import type {ProfileVFS} from '../vfs/ProfileVFS';
@@ -8,7 +8,9 @@ import LUAGLOBAL from './LuaGlobal.lua?raw';
 import BRIDGE_LUA from './Bridge.lua?raw';
 import EXEC_LUA from './Exec.lua?raw';
 import LUA_GLOBAL_SETUP from './LuaGlobalSetup.lua?raw';
+import LUASQL_LUA from './Luasql.lua?raw';
 import {setupRex} from './rex';
+import {getSqliteClient} from '../../db/sqliteClient';
 import {QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
 
 // All *.lua files under mudlet-lua/ are served via the VFS at /lua/<relative-path>.
@@ -107,8 +109,14 @@ export class LuaRuntime implements IScriptingRuntime {
         // only needs to satisfy that one bootstrap call.
         this.lua.global.set('registerAnonymousEventHandler', () => 0);
 
+        // raiseEvent returns the emitEvent Promise so the Lua-side wrapper
+        // (Bridge.lua) can __await it — preserving Mudlet-style sync semantics
+        // where raiseEvent returns only after every handler has finished.
+        // The runtime's queue + re-entrancy guard makes this safe even when
+        // the handler chain re-raises (handler A → raiseEvent('B') → handler
+        // B → ...).
         this.lua.global.set('raiseEvent', (event: string, ...args: unknown[]) => {
-            this.emitEvent(event, args);
+            return this.emitEvent(event, args);
         });
 
         this.lua.global.set("windowType", (window: string) => {
@@ -209,12 +217,7 @@ export class LuaRuntime implements IScriptingRuntime {
         // acceptable for now.
         this.lua.global.set('__mudix_setLabelClickCallback', (name: string, cbId: number) => {
             return this.api.labels.setClickCallback(name, () => {
-                try {
-                    this.lua.doStringSync(`__mudix_dispatch_cb(${cbId})`);
-                } catch (e) {
-                    this.api.printError(`[label "${name}"] ${e instanceof Error ? e.message : String(e)}`);
-                }
-                this.api.flushOutput();
+                this.dispatchCb(cbId, `label "${name}"`);
             });
         });
         // setLabelToolTip(name, text [, duration]) — duration arg is accepted for
@@ -346,7 +349,7 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('openWebPage', (url: string) => { window.open(url, '_blank'); });
 
         // ── Send ─────────────────────────────────────────────────────────────
-        this.lua.global.set('send', (text: string, echo?: boolean) => this.api.send(text, echo ?? true));
+        this.lua.global.set('send', (text: string, echo?: boolean) => { void this.api.send(text, echo ?? true); });
         // Cancels the in-flight sysDataSendRequest dispatch. Only meaningful while
         // a sysDataSendRequest handler is on the stack — flag is reset before each send.
         this.lua.global.set('denyCurrentSend', () => { this._denyCurrentSend = true; });
@@ -386,15 +389,17 @@ export class LuaRuntime implements IScriptingRuntime {
         // wasmoon Lua-function proxy back from a JS callback fails inside the
         // WASM bridge ("attempt to call a number value"), so the Lua wrappers
         // installed below stash the function in a Lua-side registry and pass a
-        // numeric callback ID to JS instead. JS dispatches by ID via doStringSync.
-        const dispatchCb = (cbId: number): void => {
-            try {
-                this.lua.doStringSync(`__mudix_dispatch_cb(${cbId})`);
-            } catch (e) {
-                this.api.printError(`[callback] ${e instanceof Error ? e.message : String(e)}`);
-            }
-        };
+        // numeric callback ID to JS instead.
+        //
+        // dispatchCb (a class method now) runs the callback on a fresh worker
+        // thread via the queue so it can await JS Promises (DB calls, etc.).
+        // Engines fire fire-and-forget; the queue keeps handlers serialized.
+        const dispatchCb = (cbId: number, label: string): void => this.dispatchCb(cbId, label);
         const releaseCb = (cbId: number): void => {
+            // unregister_cb only writes to a Lua table (no user code, no Promises)
+            // so doStringSync is safe here. Keeps cleanup synchronous and out of
+            // the queue — a tempTimer that doesn't repeat clears its slot
+            // immediately after firing without waiting for the queue to drain.
             try { this.lua.doStringSync(`__mudix_unregister_cb(${cbId})`); } catch {}
         };
 
@@ -402,9 +407,8 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__mudix_tempTimer', (seconds: number, cbId: number, repeating?: boolean) => {
             const isRepeat = repeating ?? false;
             return this.api.timers.addTemp(seconds, () => {
-                dispatchCb(cbId);
+                dispatchCb(cbId, 'tempTimer');
                 if (!isRepeat) releaseCb(cbId);
-                this.api.flushOutput();
             }, isRepeat);
         });
         this.lua.global.set('killTimer', (id: number) => this.api.timers.killTimer(id));
@@ -414,8 +418,7 @@ export class LuaRuntime implements IScriptingRuntime {
             const id = this.nextTempId++;
             const unsub = this.api.aliases.addTemp(pattern, (m: RegExpMatchArray) => {
                 this.setMatches(Array.from(m));
-                dispatchCb(cbId);
-                this.api.flushOutput();
+                dispatchCb(cbId, 'tempAlias');
             });
             this.tempIds.set(id, () => { unsub(); releaseCb(cbId); });
             return id;
@@ -431,8 +434,7 @@ export class LuaRuntime implements IScriptingRuntime {
             const id = this.nextTempId++;
             const unsub = this.api.triggers.addTemp(pattern, (m: RegExpMatchArray) => {
                 this.setMatches(Array.from(m));
-                dispatchCb(cbId);
-                this.api.flushOutput();
+                dispatchCb(cbId, 'tempTrigger');
             });
             this.tempIds.set(id, () => { unsub(); releaseCb(cbId); });
             return id;
@@ -452,8 +454,7 @@ export class LuaRuntime implements IScriptingRuntime {
             if (modifier & 0x10000000) mods.push('meta');
             const keyStr = typeof key === 'string' ? key : String(key);
             return this.api.keys.addTemp(keyStr, mods, () => {
-                dispatchCb(cbId);
-                this.api.flushOutput();
+                dispatchCb(cbId, 'tempKey');
             });
         });
         this.lua.global.set('killKey', (id: number) => this.api.keys.killKey(id));
@@ -477,7 +478,7 @@ export class LuaRuntime implements IScriptingRuntime {
             this.api.flushOutput();
         });
         this.lua.global.set('sendCmdLine', (text: string) => {
-            this.api.send(text, true);
+            void this.api.send(text, true);
         });
 
         // ── Text manipulation ─────────────────────────────────────────────────
@@ -530,7 +531,129 @@ export class LuaRuntime implements IScriptingRuntime {
         this.setupVFS(this.vfs, builtins);
         await this.exec(VFS_LUA, 'VFS');
         await this.exec(LUA_GLOBAL_SETUP, 'lua-globals-setup');
+        this.setupSqlBridge();
+        await this.exec(LUASQL_LUA, 'Luasql');
         await this.exec(LUAGLOBAL, 'LuaGlobal');
+    }
+
+    // ── luasql.sqlite3 bridge ────────────────────────────────────────────────
+    // JS side of the worker-backed luasql shim. Exposes globals consumed by
+    // Luasql.lua: __sql_open / __sql_exec / __sql_close / __sql_escape.
+    //
+    // VFS round-trip: on open we preload the SAHPool slot with bytes from the
+    // ProfileVFS so the VFS file is the source of truth. After each mutation
+    // (exec returning {kind:'changes'}) we schedule a debounced snapshot back
+    // to the same VFS path. Close flushes any pending snapshot synchronously.
+    //
+    // Row arrays are 1-indexed for Lua: wasmoon's pushTable iterates
+    // Object.keys, so a sparse JS array with index 0 absent and 1..n populated
+    // lands in Lua as a clean 1-indexed sequence.
+    private setupSqlBridge(): void {
+        const sql = getSqliteClient();
+
+        const toLuaArray = <T>(arr: T[]): T[] => {
+            const r: T[] = [];
+            for (let i = 0; i < arr.length; i++) r[i + 1] = arr[i];
+            return r;
+        };
+
+        // Per-connection snapshot scheduling. Path is the VFS-side filename
+        // the user originally connected with — also used as the SAHPool slot
+        // name, so a single string identifies both layers.
+        const SNAPSHOT_DEBOUNCE_MS = 500;
+        const dbPaths = new Map<number, string>();
+        const pendingTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+        const snapshotNow = async (dbId: number): Promise<void> => {
+            const path = dbPaths.get(dbId);
+            if (!path || !this.vfs) return;
+            try {
+                const bytes = await sql.exportFile(dbId);
+                this.vfs.writeBinaryFile(path, bytes);
+            } catch (e) {
+                console.warn('[sql snapshot]', path, e);
+            }
+        };
+
+        const scheduleSnapshot = (dbId: number): void => {
+            if (!this.vfs) return;
+            const prev = pendingTimers.get(dbId);
+            if (prev) clearTimeout(prev);
+            const t = setTimeout(() => {
+                pendingTimers.delete(dbId);
+                void snapshotNow(dbId);
+            }, SNAPSHOT_DEBOUNCE_MS);
+            pendingTimers.set(dbId, t);
+        };
+
+        this.lua.global.set('__sql_open', async (path: unknown): Promise<number> => {
+            const p = String(path);
+            let preload: Uint8Array | undefined;
+            if (this.vfs && this.vfs.exists(p)) {
+                let raw: Uint8Array;
+                try {
+                    raw = this.vfs.readBinaryFile(p);
+                } catch (e) {
+                    throw new Error(`VFS read of '${p}' failed: ${e instanceof Error ? e.message : String(e)}`);
+                }
+                // Normalize to a fresh, byteOffset=0, standalone Uint8Array.
+                // ZenFS may return a Buffer slice; sqlite-wasm's importDb checks
+                // byteLength against the SQLite header and rejects views that
+                // span only part of an underlying ArrayBuffer.
+                const fresh = new Uint8Array(raw.byteLength);
+                fresh.set(raw);
+                if (fresh.byteLength < 512) {
+                    throw new Error(`VFS file '${p}' is ${fresh.byteLength} bytes, too small to be a SQLite database`);
+                }
+                // Quick header sniff — SQLite files start with "SQLite format 3\0".
+                const HDR = 'SQLite format 3\0';
+                let headerOk = true;
+                for (let i = 0; i < HDR.length; i++) {
+                    if (fresh[i] !== HDR.charCodeAt(i)) { headerOk = false; break; }
+                }
+                if (!headerOk) {
+                    throw new Error(`VFS file '${p}' is not a SQLite database (bad header). First bytes: ${Array.from(fresh.subarray(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+                }
+                preload = fresh;
+            }
+            const dbId = await sql.open(p, preload);
+            dbPaths.set(dbId, p);
+            return dbId;
+        });
+
+        this.lua.global.set('__sql_exec', async (dbId: unknown, sqlText: unknown) => {
+            const id = Number(dbId);
+            try {
+                const r = await sql.exec(id, String(sqlText));
+                if (r.kind === 'rows') {
+                    const rows1 = toLuaArray(r.rows.map(row => toLuaArray(row as unknown[])));
+                    const cols1 = toLuaArray(r.columns);
+                    return {kind: 'rows', rows: rows1, columns: cols1};
+                }
+                // Any non-query (INSERT/UPDATE/DELETE/DDL) — schedule a debounced
+                // VFS snapshot. Coalesces a tight db:add loop into one write.
+                scheduleSnapshot(id);
+                return {kind: 'changes', changes: r.changes};
+            } catch (e) {
+                return {kind: 'error', message: e instanceof Error ? e.message : String(e)};
+            }
+        });
+
+        this.lua.global.set('__sql_close', async (dbId: unknown): Promise<boolean> => {
+            const id = Number(dbId);
+            try {
+                const t = pendingTimers.get(id);
+                if (t) { clearTimeout(t); pendingTimers.delete(id); }
+                await snapshotNow(id);
+                await sql.close(id);
+                dbPaths.delete(id);
+                return true;
+            } catch {
+                return false;
+            }
+        });
+
+        this.lua.global.set('__sql_escape', (s: unknown): string => sql.escape(String(s ?? '')));
     }
 
     // ── VFS bridge ───────────────────────────────────────────────────────────
@@ -743,9 +866,20 @@ export class LuaRuntime implements IScriptingRuntime {
         multimatches?: string[][],
         _namedGroups?: Record<string, string>,
     ): Promise<void> {
-        this.currentMatches = matches;
-        this.setMatches(matches, multimatches);
-        await this.exec(code, name);
+        // Enqueue setMatches+execInner as one atomic slot so concurrent
+        // alias/trigger fires don't have one's setMatches stomp another's
+        // before its execInner runs. Save/restore currentMatches for the
+        // re-entrant case (e.g. expandAlias from inside a script).
+        return this.enqueueLua(async () => {
+            const prev = this.currentMatches;
+            this.currentMatches = matches;
+            this.setMatches(matches, multimatches);
+            try {
+                await this.execInner(code, name);
+            } finally {
+                this.currentMatches = prev;
+            }
+        });
     }
 
     // wasmoon's pushTable iterates Object.keys(arr) and uses the keys as
@@ -766,32 +900,186 @@ export class LuaRuntime implements IScriptingRuntime {
     }
 
     private async exec(code: string, name: string): Promise<void> {
-        this.lua.global.set('__exec_code', code);
-        this.lua.global.set('__exec_name', name);
-        this.lua.global.loadString('__exec(__exec_code, __exec_name)', '@exec');
-        await this.lua.global.run();
-        const err = this.lua.global.get('__exec_err') as string | null | undefined;
-        if (err != null) throw new Error(err);
+        // Queued: every entry into Lua serializes through the runtime queue.
+        // Two triggers matching the same line, a timer firing while a script
+        // loads, or any other "concurrent" entry would otherwise race on the
+        // shared lua_State (loadString stacks more frames atop a still-running
+        // chunk's frame). The queue + re-entrancy guard makes serialization
+        // cheap and predictable. Discards the chunk's return value — public
+        // load/run/runWithMatches don't propagate it; execModule has its own
+        // path that does.
+        await this.enqueueLua(() => this.execInner(code, name));
+    }
+
+    // exec() body without the queue wrapping. Used by exec() itself and by
+    // runWithMatches (which needs to set match globals atomically inside its
+    // own queue slot, before execInner runs). Returns whatever the chunk
+    // returned (Lua's first return value), so execModule can capture
+    // require()-style module return values.
+    private async execInner(code: string, name: string): Promise<unknown> {
+        const t = this.lua.global.newThread();
+        try {
+            // The chunk grabs its varargs and forwards them to __exec, returning
+            // __exec's (err, result). Reading from the thread's stack avoids
+            // the global-state race that two concurrent execInner calls would
+            // otherwise have on shared __exec_err / __exec_result globals.
+            t.loadString('return __exec(...)', '@' + name);
+            t.pushValue(code);
+            t.pushValue(name);
+            await this.runThread(t, 2);
+            // After a clean (Ok) finish, __exec's two return values sit on the
+            // thread's stack at indices 1 (err) and 2 (result).
+            const top = t.getTop();
+            const err = top >= 1 ? t.getValue(1) : null;
+            const result = top >= 2 ? t.getValue(2) : undefined;
+            if (err != null) throw new Error(String(err));
+            return result;
+        } finally {
+            try { t.close(); } catch { /* already closed */ }
+        }
+    }
+
+    // Generic resume loop for any LuaThread (main or worker). When the thread
+    // yields a JS Promise, we await it and push the resolved value back onto
+    // the stack so `coroutine.yield(p)` evaluates to the resolved value in
+    // Lua. wasmoon-lua5.1's built-in run() resumes with 0 args, discarding the
+    // result — unusable for our luasql shim and any other Promise-returning
+    // bridge.
+    //
+    // On rejection we push a sentinel table; the Lua-side __await() helper
+    // checks for it and re-raises the error.
+    private async runThread(t: LuaThread, initialArgCount = 0): Promise<void> {
+        let res = t.resume(initialArgCount);
+        while (res.result === LuaReturn.Yield) {
+            if (res.resultCount > 0) {
+                const top = t.getValue(-1);
+                t.pop(res.resultCount);
+                if (top && typeof (top as { then?: unknown }).then === 'function') {
+                    let resolved: unknown = undefined;
+                    let rejected: unknown = undefined;
+                    try {
+                        resolved = await (top as Promise<unknown>);
+                    } catch (e) {
+                        rejected = e instanceof Error ? e.message : String(e);
+                    }
+                    if (rejected !== undefined) {
+                        t.pushValue({__mudix_promise_error: true, message: rejected});
+                    } else {
+                        t.pushValue(resolved);
+                    }
+                    res = t.resume(1);
+                    continue;
+                }
+            }
+            await new Promise<void>(r => setTimeout(r, 0));
+            res = t.resume(0);
+        }
+        t.assertOk(res.result);
+    }
+
+    // Run a chunk on a fresh worker thread. Used for callback dispatch
+    // (events, tempTimer/Alias/Trigger/Key callbacks, label clicks) so the
+    // chunk can yield Promises back to JS without disturbing the main
+    // thread's state. Wrapped in pcall on the Lua side so a runtime error
+    // is captured as a string and surfaced via the resolved error message.
+    private async runChunkOnWorker(chunk: string, label: string): Promise<void> {
+        const t = this.lua.global.newThread();
+        try {
+            // pcall-on-coroutine isn't safe in 5.1 (yield-across-C), so we
+            // wrap the chunk in our own coroutine-step loop — same pattern
+            // as Exec.lua. The wrapper catches errors and stashes them in
+            // __mudix_cb_err so we can surface them after the run.
+            const wrapped =
+                '__mudix_cb_err = nil\n' +
+                'local __cbfn = function() ' + chunk + ' end\n' +
+                'local __co = coroutine.create(__cbfn)\n' +
+                'local __arg = nil\n' +
+                'while true do\n' +
+                '  local ok, val = coroutine.resume(__co, __arg)\n' +
+                '  if not ok then __mudix_cb_err = tostring(val); break end\n' +
+                '  if coroutine.status(__co) == "dead" then break end\n' +
+                '  __arg = coroutine.yield(val)\n' +
+                'end\n';
+            t.loadString(wrapped, '@' + label);
+            await this.runThread(t);
+            const err = this.lua.global.get('__mudix_cb_err') as string | null | undefined;
+            if (err != null) {
+                this.api.printError(`[${label}] ${err}`);
+            }
+        } finally {
+            try { t.close(); } catch { /* already closed */ }
+        }
+    }
+
+    // Per-runtime FIFO queue: every queued Lua entry waits for the previous
+    // to finish, preserving handler-A-before-handler-B ordering even when
+    // handlers await async ops mid-execution.
+    //
+    // Re-entrancy: a handler running inside a queued slot may itself trigger
+    // emitEvent / dispatchCb (e.g. raiseEvent inside an event handler). Queueing
+    // the inner call would deadlock — the outer slot is awaiting the inner,
+    // and the inner is waiting in line behind the outer. inQueueDepth tracks
+    // whether we're already inside a queued execution; if so, the inner runs
+    // directly on a fresh worker thread, bypassing the queue.
+    private luaQueue: Promise<unknown> = Promise.resolve();
+    private inQueueDepth = 0;
+    private enqueueLua<T>(fn: () => Promise<T>): Promise<T> {
+        if (this.inQueueDepth > 0) {
+            this.inQueueDepth++;
+            return fn().finally(() => { this.inQueueDepth--; });
+        }
+        return new Promise<T>((resolve, reject) => {
+            const next = this.luaQueue.then(async () => {
+                this.inQueueDepth++;
+                try {
+                    resolve(await fn());
+                } catch (e) {
+                    reject(e);
+                } finally {
+                    this.inQueueDepth--;
+                }
+            });
+            this.luaQueue = next;
+        });
+    }
+
+    // Fire a registered Lua callback by id (label clicks, tempTimer/Alias/
+    // Trigger/Key). Queued + fresh thread so it can await DB / other Promises.
+    private dispatchCb(cbId: number, label: string): void {
+        void this.enqueueLua(async () => {
+            try {
+                await this.runChunkOnWorker(`__mudix_dispatch_cb(${cbId})`, label);
+            } catch (e) {
+                this.api.printError(`[${label}] ${e instanceof Error ? e.message : String(e)}`);
+            } finally {
+                this.api.flushOutput();
+            }
+        });
     }
 
     private async execModule(code: string, name: string, globalName: string): Promise<void> {
-        await this.exec(code, name);
-        const result = this.lua.global.get('__exec_result');
+        // Capture the chunk's return value (Lua module pattern: `return M`)
+        // directly from execInner instead of a global. The queue wrap is here
+        // rather than via exec() so we can read the inner result.
+        const result = await this.enqueueLua(() => this.execInner(code, name));
         if (result !== undefined && result !== null) this.lua.global.set(globalName, result);
     }
 
-    emitEvent(event: string, args: unknown[]): void {
-        // Calling Lua functions through wasmoon's JS proxy is unreliable
-        // (intermittent "attempt to call a number value" / typed-array errors),
-        // so dispatch via doStringSync instead. Args travel through a global
-        // so we don't have to escape arbitrary values into the Lua source.
-        try {
-            this.lua.global.set('__mudix_evt_args', args);
-            this.lua.global.set('__mudix_evt_name', event);
-            this.lua.doStringSync('__mudix_dispatch_event()');
-        } catch (err) {
-            this.api.printError(`[event "${event}"] ${err instanceof Error ? err.message : String(err)}`);
-        }
+    emitEvent(event: string, args: unknown[]): Promise<void> {
+        // Queued so handlers run in arrival order relative to other Lua work.
+        // Globals are set inside the queued fn — if we set them at call site,
+        // a later queued emit could overwrite them before the prior chunk runs.
+        return this.enqueueLua(async () => {
+            try {
+                this.lua.global.set('__mudix_evt_args', args);
+                this.lua.global.set('__mudix_evt_name', event);
+                await this.runChunkOnWorker('__mudix_dispatch_event()', `event "${event}"`);
+            } catch (err) {
+                this.api.printError(`[event "${event}"] ${err instanceof Error ? err.message : String(err)}`);
+            } finally {
+                this.api.flushOutput();
+            }
+        });
     }
 
     setCurrentLine(line: string, isPrompt: boolean): void {
@@ -799,27 +1087,32 @@ export class LuaRuntime implements IScriptingRuntime {
         this._isPrompt = isPrompt;
     }
 
-    dispatchSendRequest(text: string): boolean {
+    async dispatchSendRequest(text: string): Promise<boolean> {
         this._denyCurrentSend = false;
-        this.emitEvent('sysDataSendRequest', [text]);
+        // Await so handlers (which may call denyCurrentSend) finish before
+        // we read the flag. Goes through the same queue as other dispatches.
+        await this.emitEvent('sysDataSendRequest', [text]);
         return this._denyCurrentSend;
     }
 
     /**
      * Mudlet REGEX_LUA_CODE: the pattern body runs as a Lua function on every
      * incoming line. Side effects (raiseEvent, etc.) always run; the trigger
-     * "matches" only when the body returns a truthy value.
+     * "matches" only when the body returns a truthy value. Async so the body
+     * can await DB calls and other Promise-returning bridges.
      */
-    evalTriggerPattern(code: string): boolean {
-        try {
-            this.lua.global.set('__mudix_pat_code', code);
-            this.lua.doStringSync('__mudix_eval_pattern(__mudix_pat_code)');
-            const result = this.lua.global.get('__mudix_pat_result');
-            return result === true;
-        } catch (e) {
-            this.api.printError(`[lua-pattern] ${e instanceof Error ? e.message : String(e)}`);
-            return false;
-        }
+    evalTriggerPattern(code: string): Promise<boolean> {
+        return this.enqueueLua(async () => {
+            try {
+                this.lua.global.set('__mudix_pat_code', code);
+                await this.runChunkOnWorker('__mudix_eval_pattern(__mudix_pat_code)', 'lua-pattern');
+                const result = this.lua.global.get('__mudix_pat_result');
+                return result === true;
+            } catch (e) {
+                this.api.printError(`[lua-pattern] ${e instanceof Error ? e.message : String(e)}`);
+                return false;
+            }
+        });
     }
 
     destroy(): void {

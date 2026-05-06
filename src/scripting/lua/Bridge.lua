@@ -1,4 +1,51 @@
 matches = {}; multimatches = {}
+
+-- Yield a JS Promise to LuaRuntime.runThread, which awaits it and resumes us
+-- with the resolved value. On rejection the runner pushes a sentinel table;
+-- we re-raise it as a Lua error so it propagates through coroutine.resume.
+-- Used by Luasql, the raiseEvent wrapper, and any future async JS bridge.
+function __await(promise)
+    local result = coroutine.yield(promise)
+    if type(result) == "table" and result.__mudix_promise_error then
+        error(result.message or "promise rejected", 2)
+    end
+    return result
+end
+
+-- Yield-safe pcall. Lua 5.1's pcall/xpcall introduce a C-call boundary that
+-- coroutine.yield cannot cross — fatal for handlers that __await DB calls or
+-- anything else that yields. This wrapper runs `fn(...)` in a sub-coroutine,
+-- forwards every yielded value up to the outer coroutine (so JS sees the
+-- Promise and resumes us with the resolved value), and captures errors via
+-- coroutine.resume's (false, err) return.
+--
+-- Mirrors pcall's contract: returns (true, ...result) on success,
+-- (false, errmsg) on error.
+function __mudix_safecall(fn, ...)
+    local args = {...}
+    local n = select('#', ...)
+    local co = coroutine.create(function() return fn(unpack(args, 1, n)) end)
+    local resume_arg = nil
+    while true do
+        local ok, value = coroutine.resume(co, resume_arg)
+        if not ok then return false, tostring(value) end
+        if coroutine.status(co) == "dead" then return true, value end
+        resume_arg = coroutine.yield(value)
+    end
+end
+
+-- raiseEvent JS callback returns a Promise that resolves once every handler
+-- (including async ones, e.g. DB-backed) has finished. Awaiting it preserves
+-- Mudlet's sync semantics so user code can safely write:
+--   raiseEvent('foo')
+--   -- handlers have all run by here
+do
+    local _raw = raiseEvent
+    function raiseEvent(...)
+        local p = _raw(...)
+        if p ~= nil then __await(p) end
+    end
+end
 -- wasmoon pushes JS arrays 0-indexed in Lua (Object.keys → numeric keys
 -- 0..n-1), so unpack as t[0], t[1], ... not t[1], t[2], ...
 function getRoomCoordinates(id)
@@ -45,7 +92,7 @@ function __mudix_dispatch_event()
         if #args == 0 then for _, v in ipairs(raw) do args[#args + 1] = v end end
     end
     if type(_G[event]) == 'function' then
-        local ok, err = pcall(_G[event], unpack(args))
+        local ok, err = __mudix_safecall(_G[event], unpack(args))
         if not ok and type(showHandlerError) == 'function' then showHandlerError(event, err) end
     end
     if type(dispatchEventToFunctions) == 'function' then
@@ -60,7 +107,7 @@ function __mudix_eval_pattern(code)
     __mudix_pat_result = false
     local fn = loadstring(code)
     if not fn then return end
-    local ok, res = pcall(fn)
+    local ok, res = __mudix_safecall(fn)
     if not ok then return end
     __mudix_pat_result = (res and true) or false
 end

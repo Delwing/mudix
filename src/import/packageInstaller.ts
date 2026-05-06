@@ -73,11 +73,8 @@ export async function installPackageFromFile(file: File, vfs: ProfileVFS): Promi
             const dest = `${pkgDir}/${path}`;
             const parent = dest.substring(0, dest.lastIndexOf('/'));
             if (parent && !vfs.exists(parent)) vfs.mkdir(parent);
-            // ProfileVFS.writeFile takes a string; for binary assets we encode as Latin-1
-            // so each byte maps 1:1 to a code unit, round-tripping losslessly through
-            // ZenFS for any consumer that reads via the same utf8 codec. (External tools
-            // viewing a folder-backed mount will see the file double-encoded.)
-            vfs.writeFile(dest, isTextEntry(path) ? strFromU8(data) : strFromU8(data, true));
+            if (isTextEntry(path)) vfs.writeFile(dest, strFromU8(data));
+            else                   vfs.writeBinaryFile(dest, data);
         }
 
         manifestExtras = readConfigLua(entries);

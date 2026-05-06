@@ -804,6 +804,25 @@
     color: var(--text-dim);
 }
 
+.script-editor__error-log-jump {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    padding: 0 6px;
+    font-size: 11px;
+    line-height: 1.4;
+    cursor: pointer;
+    align-self: center;
+}
+
+.script-editor__error-log-jump:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--hover-bg);
+}
+
 /* ── Packages view ────────────────────────────────────────── */
 .script-editor__pkg-card {
     display: flex;

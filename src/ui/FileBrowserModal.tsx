@@ -6,6 +6,7 @@ import { ResizableModal } from './ResizableModal';
 import { ContextMenu } from './components';
 import { useAppStore } from '../storage';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
+import { getSqliteClient } from '../db/sqliteClient';
 import {
     isFolderLinkSupported,
     loadFolderHandle,
@@ -55,16 +56,26 @@ function moveVFSNode(vfs: ProfileVFS, srcPath: string, destDirPath: string): voi
 
 // ─── Preview Strategy System ───────────────────────────────────────────────
 
-interface FilePreviewStrategy {
-    canPreview: (filename: string) => boolean;
-    Preview: React.FC<{ content: string; filename: string }>;
+interface PreviewProps {
+    content: string;
+    filename: string;
+    path: string;
+    vfs: ProfileVFS;
 }
 
-function PlainTextPreview({ content }: { content: string; filename: string }) {
+interface FilePreviewStrategy {
+    canPreview: (filename: string) => boolean;
+    // Binary strategies skip the text-decode step in handleSelect — the
+    // Preview component is responsible for reading bytes itself.
+    isBinary?: boolean;
+    Preview: React.FC<PreviewProps>;
+}
+
+function PlainTextPreview({ content }: PreviewProps) {
     return <pre className="vfs-preview-text">{content}</pre>;
 }
 
-function JsonPreview({ content }: { content: string; filename: string }) {
+function JsonPreview({ content }: PreviewProps) {
     const formatted = useMemo(() => {
         try { return JSON.stringify(JSON.parse(content), null, 2); }
         catch { return content; }
@@ -72,11 +83,328 @@ function JsonPreview({ content }: { content: string; filename: string }) {
     return <pre className="vfs-preview-text">{formatted}</pre>;
 }
 
+const SQL_PAGE_SIZE = 50;
+
+// SQLite identifier quoting — double-quote, escape embedded ".
+function quoteIdent(s: string): string {
+    return '"' + s.replace(/"/g, '""') + '"';
+}
+
+function renderCell(v: unknown): ReactNode {
+    if (v === null || v === undefined) {
+        return <span className="vfs-sql-null">NULL</span>;
+    }
+    if (v instanceof Uint8Array) {
+        return <span className="vfs-sql-blob">{`<BLOB ${v.byteLength}B>`}</span>;
+    }
+    if (typeof v === 'bigint') return v.toString();
+    const s = String(v);
+    return s.length > 200 ? s.substring(0, 200) + '…' : s;
+}
+
+function SqlitePreview({ path, vfs }: PreviewProps) {
+    const [dbId, setDbId] = useState<number | null>(null);
+    const [tables, setTables] = useState<string[]>([]);
+    const [selectedTable, setSelectedTable] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        let cancelled = false;
+        let openedDbId: number | null = null;
+        const sql = getSqliteClient();
+        setLoading(true);
+        setError(null);
+        setTables([]);
+        setSelectedTable(null);
+        setDbId(null);
+        (async () => {
+            try {
+                const raw = vfs.readBinaryFile(path);
+                // Defensive copy: ZenFS may return a Buffer slice with non-zero
+                // byteOffset, which sqlite-wasm's importDb rejects.
+                const bytes = new Uint8Array(raw.byteLength);
+                bytes.set(raw);
+                if (bytes.byteLength < 100) {
+                    throw new Error(`File is only ${bytes.byteLength} bytes — too small to be a SQLite database`);
+                }
+                // Use a preview-scoped SAHPool slot so we don't clobber any
+                // slot a Lua script may have already opened with the same path.
+                const slot = '/__preview' + (path.startsWith('/') ? path : '/' + path);
+                const id = await sql.open(slot, bytes);
+                openedDbId = id;
+                if (cancelled) { sql.close(id).catch(() => {}); return; }
+                const r = await sql.exec(
+                    id,
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+                );
+                if (cancelled) return;
+                setTables(r.kind === 'rows' ? r.rows.map(row => String(row[0])) : []);
+                setDbId(id);
+            } catch (e) {
+                if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+            if (openedDbId !== null) sql.close(openedDbId).catch(() => {});
+        };
+    }, [path, vfs]);
+
+    if (loading) return <p className="vfs-preview-empty">Reading database…</p>;
+    if (error) {
+        return (
+            <div className="vfs-preview-error">
+                <span className="vfs-preview-error-label">Cannot open database</span>
+                <span>{error}</span>
+            </div>
+        );
+    }
+    if (dbId === null) return null;
+    if (selectedTable) {
+        // key={selectedTable} forces a remount on table change so internal
+        // state (page, total) resets cleanly without a useEffect race.
+        return (
+            <SqliteTableView
+                key={selectedTable}
+                dbId={dbId}
+                table={selectedTable}
+                onBack={() => setSelectedTable(null)}
+            />
+        );
+    }
+    return <SqliteTableList tables={tables} onSelect={setSelectedTable} />;
+}
+
+function SqliteTableList({ tables, onSelect }: { tables: string[]; onSelect: (t: string) => void }) {
+    if (tables.length === 0) return <p className="vfs-preview-empty">No tables.</p>;
+    return (
+        <div className="vfs-sql-list">
+            <div className="vfs-sql-header">
+                {tables.length} table{tables.length === 1 ? '' : 's'}
+            </div>
+            {tables.map(name => (
+                <button
+                    key={name}
+                    type="button"
+                    className="vfs-sql-table-btn"
+                    onClick={() => onSelect(name)}
+                >
+                    {name}
+                </button>
+            ))}
+        </div>
+    );
+}
+
+function SqliteTableView({ dbId, table, onBack }: { dbId: number; table: string; onBack: () => void }) {
+    const [page, setPage] = useState(0);
+    const [rows, setRows] = useState<unknown[][]>([]);
+    const [columns, setColumns] = useState<string[]>([]);
+    const [total, setTotal] = useState<number | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    // Row count — fetch once per (dbId, table).
+    useEffect(() => {
+        let cancelled = false;
+        const sql = getSqliteClient();
+        (async () => {
+            try {
+                const r = await sql.exec(dbId, `SELECT COUNT(*) FROM ${quoteIdent(table)}`);
+                if (cancelled) return;
+                if (r.kind === 'rows' && r.rows.length > 0) {
+                    setTotal(Number(r.rows[0][0]) | 0);
+                }
+            } catch { /* surfaced by the data-fetch effect */ }
+        })();
+        return () => { cancelled = true; };
+    }, [dbId, table]);
+
+    // Page data.
+    useEffect(() => {
+        let cancelled = false;
+        const sql = getSqliteClient();
+        setLoading(true);
+        setError(null);
+        (async () => {
+            try {
+                const offset = page * SQL_PAGE_SIZE;
+                const r = await sql.exec(
+                    dbId,
+                    `SELECT * FROM ${quoteIdent(table)} LIMIT ${SQL_PAGE_SIZE} OFFSET ${offset}`,
+                );
+                if (cancelled) return;
+                if (r.kind === 'rows') {
+                    setRows(r.rows);
+                    setColumns(r.columns);
+                } else {
+                    setRows([]);
+                    setColumns([]);
+                }
+            } catch (e) {
+                if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [dbId, table, page]);
+
+    const totalPages = total !== null ? Math.max(1, Math.ceil(total / SQL_PAGE_SIZE)) : null;
+    const canPrev = page > 0;
+    const canNext = total === null ? rows.length === SQL_PAGE_SIZE : (page + 1) * SQL_PAGE_SIZE < total;
+
+    return (
+        <div className="vfs-sql-view">
+            <div className="vfs-sql-toolbar">
+                <button type="button" className="vfs-sql-back" onClick={onBack}>‹ Tables</button>
+                <span className="vfs-sql-table-name">{table}</span>
+                <span className="vfs-sql-meta">
+                    {total !== null && `${total} row${total === 1 ? '' : 's'}`}
+                </span>
+            </div>
+
+            {error ? (
+                <div className="vfs-preview-error">
+                    <span className="vfs-preview-error-label">Query failed</span>
+                    <span>{error}</span>
+                </div>
+            ) : loading && rows.length === 0 ? (
+                <p className="vfs-preview-empty">Loading…</p>
+            ) : columns.length === 0 ? (
+                <p className="vfs-preview-empty">Empty table.</p>
+            ) : (
+                <div className="vfs-sql-table-wrap">
+                    <table className="vfs-sql-table">
+                        <thead>
+                            <tr>
+                                {columns.map((c, i) => <th key={`${c}-${i}`}>{c}</th>)}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows.map((row, ri) => (
+                                <tr key={ri}>
+                                    {row.map((v, ci) => <td key={ci}>{renderCell(v)}</td>)}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
+            <div className="vfs-sql-pager">
+                <button type="button" disabled={!canPrev || loading} onClick={() => setPage(p => Math.max(0, p - 1))}>
+                    ‹ Prev
+                </button>
+                <span className="vfs-sql-page-info">
+                    Page {page + 1}{totalPages !== null && ` of ${totalPages}`}
+                </span>
+                <button type="button" disabled={!canNext || loading} onClick={() => setPage(p => p + 1)}>
+                    Next ›
+                </button>
+            </div>
+        </div>
+    );
+}
+
+const IMAGE_MIME: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    bmp: 'image/bmp',
+    ico: 'image/x-icon',
+    svg: 'image/svg+xml',
+    avif: 'image/avif',
+};
+
+function getImageMime(filename: string): string | null {
+    const dot = filename.lastIndexOf('.');
+    if (dot < 0) return null;
+    return IMAGE_MIME[filename.substring(dot + 1).toLowerCase()] ?? null;
+}
+
+function ImagePreview({ filename, path, vfs }: PreviewProps) {
+    const [url, setUrl]     = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [dims, setDims]   = useState<{ w: number; h: number } | null>(null);
+    const [size, setSize]   = useState(0);
+
+    useEffect(() => {
+        setUrl(null);
+        setError(null);
+        setDims(null);
+        let objectUrl: string | null = null;
+        try {
+            const raw = vfs.readBinaryFile(path);
+            // Defensive copy: ZenFS may return a Buffer view with a non-zero
+            // byteOffset, which Blob would still accept but copying keeps the
+            // backing buffer independent of any later writes.
+            const bytes = new Uint8Array(raw.byteLength);
+            bytes.set(raw);
+            const mime = getImageMime(filename) ?? 'application/octet-stream';
+            const blob = new Blob([bytes], { type: mime });
+            objectUrl = URL.createObjectURL(blob);
+            setUrl(objectUrl);
+            setSize(bytes.byteLength);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+        return () => {
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+        };
+    }, [path, filename, vfs]);
+
+    if (error) {
+        return (
+            <div className="vfs-preview-error">
+                <span className="vfs-preview-error-label">Cannot read image</span>
+                <span>{error}</span>
+            </div>
+        );
+    }
+    if (!url) return null;
+    return (
+        <div className="vfs-image-preview">
+            <div className="vfs-image-frame">
+                <img
+                    className="vfs-image"
+                    src={url}
+                    alt={filename}
+                    onLoad={e => {
+                        const img = e.currentTarget;
+                        setDims({ w: img.naturalWidth, h: img.naturalHeight });
+                    }}
+                    onError={() => setError('Failed to decode image')}
+                />
+            </div>
+            <div className="vfs-image-meta">
+                {dims && <span>{dims.w} × {dims.h}</span>}
+                <span>{formatSize(size)}</span>
+            </div>
+        </div>
+    );
+}
+
 const plainTextStrategy: FilePreviewStrategy = { canPreview: () => true, Preview: PlainTextPreview };
 const jsonStrategy: FilePreviewStrategy = { canPreview: (n) => n.endsWith('.json'), Preview: JsonPreview };
+const sqliteStrategy: FilePreviewStrategy = {
+    canPreview: (n) => /\.(db|sqlite|sqlite3)$/i.test(n),
+    isBinary: true,
+    Preview: SqlitePreview,
+};
+const imageStrategy: FilePreviewStrategy = {
+    canPreview: (n) => getImageMime(n) !== null,
+    isBinary: true,
+    Preview: ImagePreview,
+};
 
 // Add new strategies here — order matters, first match wins
-const previewStrategies: FilePreviewStrategy[] = [jsonStrategy, plainTextStrategy];
+const previewStrategies: FilePreviewStrategy[] = [sqliteStrategy, imageStrategy, jsonStrategy, plainTextStrategy];
 
 function getPreviewStrategy(filename: string): FilePreviewStrategy {
     return previewStrategies.find(s => s.canPreview(filename)) ?? plainTextStrategy;
@@ -216,7 +544,7 @@ function TreeNode({ node, depth, expanded, selectedPath, uploadDir, onToggle, on
 
 // ─── Preview Panel ─────────────────────────────────────────────────────────
 
-function PreviewPanel({ file, content, error }: { file: VFSNode | null; content: string | null; error: string | null }): ReactNode {
+function PreviewPanel({ file, content, error, vfs }: { file: VFSNode | null; content: string | null; error: string | null; vfs: ProfileVFS | null }): ReactNode {
     if (!file) return <p className="vfs-preview-empty">Select a file to preview</p>;
     if (error) {
         return (
@@ -226,9 +554,10 @@ function PreviewPanel({ file, content, error }: { file: VFSNode | null; content:
             </div>
         );
     }
-    if (content === null) return null;
+    if (!vfs) return null;
     const strategy = getPreviewStrategy(file.name);
-    return <strategy.Preview content={content} filename={file.name} />;
+    if (!strategy.isBinary && content === null) return null;
+    return <strategy.Preview content={content ?? ''} filename={file.name} path={file.path} vfs={vfs} />;
 }
 
 // ─── Modal ─────────────────────────────────────────────────────────────────
@@ -301,6 +630,13 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
     const handleSelect = useCallback((node: VFSNode) => {
         setSelectedFile(node);
         if (!vfs) return;
+        // Binary previews (e.g. SQLite) read the file themselves — don't try
+        // to UTF-8-decode the bytes here.
+        if (getPreviewStrategy(node.name).isBinary) {
+            setPreviewContent(null);
+            setPreviewError(null);
+            return;
+        }
         try {
             setPreviewContent(vfs.readFile(node.path));
             setPreviewError(null);
@@ -354,16 +690,25 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
         if (!vfs || files.length === 0) return;
         const targetDir = uploadDirRef.current || vfs.profilePath;
 
+        // Always read as ArrayBuffer and write as binary. UTF-8 text files
+        // round-trip cleanly because ZenFS stores them as raw bytes; reading
+        // them later via vfs.readFile decodes UTF-8 back to the original
+        // string. Reading as text first would silently corrupt binary files
+        // (SQLite DBs, images, zips) by trying to UTF-8-decode random bytes.
         let pending = files.length;
         for (const file of files) {
             const reader = new FileReader();
             reader.onload = () => {
-                try { vfs.writeFile(`${targetDir}/${file.name}`, reader.result as string); }
-                catch (err) { console.error(`Upload failed for ${file.name}:`, err); }
+                try {
+                    const bytes = new Uint8Array(reader.result as ArrayBuffer);
+                    vfs.writeBinaryFile(`${targetDir}/${file.name}`, bytes);
+                } catch (err) {
+                    console.error(`Upload failed for ${file.name}:`, err);
+                }
                 if (--pending === 0) bumpRev();
             };
             reader.onerror = () => { if (--pending === 0) bumpRev(); };
-            reader.readAsText(file);
+            reader.readAsArrayBuffer(file);
         }
     }, [vfs, bumpRev]);
 
@@ -700,7 +1045,7 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
                         )}
                     </div>
                     <div className="vfs-preview-panel">
-                        <PreviewPanel file={selectedFile} content={previewContent} error={previewError} />
+                        <PreviewPanel file={selectedFile} content={previewContent} error={previewError} vfs={vfs} />
                     </div>
                 </div>
             </ResizableModal>

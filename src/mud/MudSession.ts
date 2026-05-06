@@ -10,10 +10,20 @@ export type { SessionStatus, MudEvents } from './events';
 
 export type MudSessionOptions = Omit<MudClientOptions, 'url'>;
 
+export type ScriptLogSourceKind = 'script' | 'alias' | 'trigger' | 'timer' | 'key' | 'button';
+
+export interface ScriptLogSource {
+    kind: ScriptLogSourceKind;
+    id: string;
+    name: string;
+    line?: number;
+}
+
 export interface ScriptLogEntry {
     text: string;
     level: 'error' | 'info';
     timestamp: number;
+    source?: ScriptLogSource;
 }
 
 export class MudSession {
@@ -36,8 +46,13 @@ export class MudSession {
 
     constructor(private readonly options: MudSessionOptions = {}) {
         this.windows.setConsoleRegistry(this.consoles);
-        this.events.on('script.log', (text, level) => {
-            this._scriptLog.push({ text: text ?? '', level: level ?? 'info', timestamp: Date.now() });
+        this.events.on('script.log', (text, level, source) => {
+            this._scriptLog.push({
+                text: text ?? '',
+                level: level ?? 'info',
+                timestamp: Date.now(),
+                ...(source ? { source } : {}),
+            });
             if (this._scriptLog.length > MudSession.SCRIPT_LOG_LIMIT) {
                 this._scriptLog.splice(0, this._scriptLog.length - MudSession.SCRIPT_LOG_LIMIT);
             }

@@ -245,9 +245,12 @@ function buildExtensions(onChangeFn: () => void, theme: string) {
 interface Props {
     value: string;
     onChange: (value: string) => void;
+    /** Jump request from the parent (e.g. error log click). Bump `revision` to
+     *  re-trigger a jump even when `line` is unchanged. */
+    gotoLine?: { line: number; revision: number } | null;
 }
 
-export function LuaEditor({ value, onChange }: Props) {
+export function LuaEditor({ value, onChange, gotoLine }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const editorHostRef = useRef<HTMLDivElement>(null);
     const viewRef      = useRef<EditorView | null>(null);
@@ -288,10 +291,26 @@ export function LuaEditor({ value, onChange }: Props) {
         });
     }, [theme]);
 
-    // Sync external value changes (script switch, revert, etc.)
+    // Combined value-sync + goto.
+    //
+    // These have to run in one effect because of the cross-script jump flow:
+    // when the user clicks → for an entity that's not currently selected, the
+    // parent updates `selectedId` first; only on the *next* render does its
+    // [selectedId, category] effect run and call setEditCode with the entity's
+    // code. That's a render delay where this editor sees the new `gotoLine`
+    // prop with the OLD (or empty, on fresh mount) `value`. If goto runs in a
+    // separate effect — even deferred via RAF — it lands in the wrong doc and
+    // the subsequent value-sync resets the selection.
+    //
+    // Instead: every render where either `value` or `gotoLine` changes, we sync
+    // the value (if needed), then attempt the goto. We only "consume" the jump
+    // revision once the doc has actually loaded content, so when the right
+    // value finally lands on a later render we re-fire and apply the goto then.
+    const lastConsumedJumpRevisionRef = useRef<number | null>(null);
     useEffect(() => {
         const view = viewRef.current;
         if (!view) return;
+
         const current = view.state.doc.toString();
         if (current !== value) {
             view.dispatch({
@@ -299,7 +318,26 @@ export function LuaEditor({ value, onChange }: Props) {
                 selection: { anchor: 0 },
             });
         }
-    }, [value]);
+
+        if (!gotoLine) return;
+        if (gotoLine.revision === lastConsumedJumpRevisionRef.current) return;
+
+        // Wait for the parent to push real content before consuming. An empty
+        // doc with `gotoLine.line > 1` is the cross-script-mount case described
+        // above — we'll re-fire when value-sync above brings in the new code.
+        const docLen = view.state.doc.length;
+        if (docLen === 0 && gotoLine.line > 1) return;
+
+        const total = view.state.doc.lines;
+        const line = Math.min(Math.max(1, gotoLine.line), total);
+        const lineInfo = view.state.doc.line(line);
+        view.dispatch({
+            selection: { anchor: lineInfo.from },
+            scrollIntoView: true,
+        });
+        view.focus();
+        lastConsumedJumpRevisionRef.current = gotoLine.revision;
+    }, [value, gotoLine]);
 
     const insertAtCursor = (text: string) => {
         const view = viewRef.current;

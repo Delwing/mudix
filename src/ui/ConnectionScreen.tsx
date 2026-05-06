@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Button, Input, FormField, useConfirm } from './components';
 import { ProxyInfoModal } from './ProxyInfoModal';
+import { ProxyWhyModal } from './ProxyWhyModal';
 import { DEFAULT_PROXY_URL, connectionDisplayAddr, type ConnectionMode, type MudConnection } from '../storage';
 
 function buildPreviewUrl(host: string, port: string, proxyUrl: string): string {
@@ -34,6 +35,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     const [port, setPort] = useState('23');
     const [proxyUrl, setProxyUrl] = useState('');
     const [proxyModalOpen, setProxyModalOpen] = useState(false);
+    const [proxyWhyOpen, setProxyWhyOpen] = useState(false);
     const [url, setUrl] = useState('');
 
     const isEditing = editingId !== null;
@@ -234,6 +236,9 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                                 Use default
                                             </button>
                                         )}
+                                        <button type="button" className="proxy-reset-btn" onClick={() => setProxyWhyOpen(true)}>
+                                            Why do I need that?
+                                        </button>
                                         <button type="button" className="proxy-reset-btn" onClick={() => setProxyModalOpen(true)}>
                                             Host your own
                                         </button>
@@ -293,6 +298,12 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
             </div>
         </div>
         {proxyModalOpen && <ProxyInfoModal onClose={() => setProxyModalOpen(false)} />}
+        {proxyWhyOpen && (
+            <ProxyWhyModal
+                onClose={() => setProxyWhyOpen(false)}
+                onHostYourOwn={() => { setProxyWhyOpen(false); setProxyModalOpen(true); }}
+            />
+        )}
         </>
     );
 }

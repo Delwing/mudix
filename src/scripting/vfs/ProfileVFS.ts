@@ -101,10 +101,20 @@ export class ProfileVFS {
         return readFileSync(this.resolvePath(path), 'utf8') as string;
     }
 
+    readBinaryFile(path: string): Uint8Array {
+        return readFileSync(this.resolvePath(path)) as unknown as Uint8Array;
+    }
+
     writeFile(path: string, content: string): void {
         const abs = this.resolvePath(path);
         ensureParentDir(abs);
         writeFileSync(abs, content, 'utf8');
+    }
+
+    writeBinaryFile(path: string, data: Uint8Array): void {
+        const abs = this.resolvePath(path);
+        ensureParentDir(abs);
+        writeFileSync(abs, data);
     }
 
     appendFile(path: string, content: string): void {

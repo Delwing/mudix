@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { AlertCircle, Clock, Folder, FolderOpen, FolderPlus, Keyboard, MousePointerClick, Package, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
 import { Button, Input, ContextMenu, useConfirm } from '../../components';
 import { useAppStore } from '../../../storage';
 import type { AliasNode, ButtonLocation, ButtonNode, ButtonOrientation, KeyNode, PackageManifest, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
 import { isEffectivelyEnabled } from '../../../storage/schema';
-import type { MudSession } from '../../../mud/MudSession';
+import type { MudSession, ScriptLogSource, ScriptLogSourceKind } from '../../../mud/MudSession';
 import type { ProfileVFS } from '../../../scripting/vfs/ProfileVFS';
 import { LuaEditor } from './LuaEditor';
 import { installPackageFromFile, uninstallPackageFiles } from '../../../import/packageInstaller';
@@ -307,7 +307,17 @@ interface LogEntry {
     text: string;
     level: 'error' | 'info';
     timestamp: Date;
+    source?: ScriptLogSource;
 }
+
+const KIND_TO_CATEGORY: Record<ScriptLogSourceKind, EditCategory> = {
+    script:  'scripts',
+    alias:   'aliases',
+    trigger: 'triggers',
+    timer:   'timers',
+    key:     'keys',
+    button:  'buttons',
+};
 
 function formatTime(d: Date): string {
     return d.toTimeString().slice(0, 8);
@@ -461,12 +471,18 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
     // Backfill from the session-level buffer so entries that fired before this
     // panel was first mounted (e.g. errors during initial script load) survive.
     const [logs, setLogs] = useState<LogEntry[]>(() =>
-        session.scriptLog.map(e => ({ text: e.text, level: e.level, timestamp: new Date(e.timestamp) })),
+        session.scriptLog.map(e => ({
+            text: e.text, level: e.level, timestamp: new Date(e.timestamp),
+            ...(e.source ? { source: e.source } : {}),
+        })),
     );
     const [errorLog, setErrorLog] = useState<LogEntry[]>(() =>
         session.scriptLog
             .filter(e => e.level === 'error')
-            .map(e => ({ text: e.text, level: e.level, timestamp: new Date(e.timestamp) })),
+            .map(e => ({
+                text: e.text, level: e.level, timestamp: new Date(e.timestamp),
+                ...(e.source ? { source: e.source } : {}),
+            })),
     );
     const [unreadErrors, setUnreadErrors] = useState(() =>
         session.scriptLog.reduce((n, e) => n + (e.level === 'error' ? 1 : 0), 0),
@@ -475,10 +491,32 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; targetId: string | null } | null>(null);
     const logEndRef      = useRef<HTMLDivElement>(null);
     const errorLogEndRef = useRef<HTMLDivElement>(null);
+    // Bumped on each error-row jump click. Carried into LuaEditor's `gotoLine`
+    // prop and into a useEffect that performs the parent-tree expansion + scroll
+    // — using a revision (rather than only `line`) makes repeated jumps to the
+    // same row work, and decouples the request from the editor lifecycle.
+    const [pendingJump, setPendingJump] = useState<{
+        kind: ScriptLogSourceKind; id: string; line?: number; revision: number;
+    } | null>(null);
 
     const [listWidth, setListWidth]     = useState(() => initialListWidth ?? 180);
     const [metaHeight, setMetaHeight]   = useState<number | null>(() => initialMetaHeight ?? null);
     const metaRef = useRef<HTMLDivElement>(null);
+
+    // Click handler for the "→" button on error log rows. Switches category if
+    // needed (the [category] effect will clear selection; our jump effect below
+    // re-applies it after the swap), expands ancestors so the row is visible,
+    // and — if a line is known — moves the editor cursor to it via LuaEditor's
+    // `gotoLine` prop. Bumping `revision` makes repeat clicks always re-trigger.
+    const jumpRevisionRef = useRef(0);
+    const handleErrorJump = useCallback((source: ScriptLogSource) => {
+        jumpRevisionRef.current += 1;
+        setPendingJump({
+            kind: source.kind, id: source.id,
+            ...(source.line !== undefined ? { line: source.line } : {}),
+            revision: jumpRevisionRef.current,
+        });
+    }, []);
 
     const handleItemContextMenu = useCallback((e: React.MouseEvent, id: string) => {
         e.preventDefault();
@@ -519,6 +557,16 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
     const treeEntries = flattenTree(items, null, expanded);
     const selected = items.find(i => i.id === selectedId) ?? null;
 
+    // Stable identity prevents the LuaEditor's gotoLine effect from re-firing
+    // (yanking the cursor) on every parent re-render — e.g. while the user is
+    // typing in the editor and triggering setEditCode.
+    const editorGotoLine = useMemo(
+        () => (pendingJump && pendingJump.line !== undefined && pendingJump.id === selectedId
+            ? { line: pendingJump.line, revision: pendingJump.revision }
+            : null),
+        [pendingJump, selectedId],
+    );
+
     const childCounts = new Map<string, number>();
     for (const it of items) {
         if (it.parentId) childCounts.set(it.parentId, (childCounts.get(it.parentId) ?? 0) + 1);
@@ -530,6 +578,37 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
         setDirty(false);
         setExpanded(new Set());
     }, [category]);
+
+    // When a jump request comes in (error log click), switch category if needed,
+    // expand all ancestor groups so the entity is visible in the tree, and
+    // select it. Runs after the [category] effect above, so it re-applies the
+    // selection that effect just cleared. Items can be empty during the swap
+    // render — guarding on items.length avoids a no-op selection of a missing id.
+    useEffect(() => {
+        if (!pendingJump) return;
+        const targetCategory = KIND_TO_CATEGORY[pendingJump.kind];
+        if (category !== targetCategory) {
+            setCategory(targetCategory);
+            return;
+        }
+        if (items.length === 0) return;
+        const byId = new Map(items.map(i => [i.id, i]));
+        let cur = byId.get(pendingJump.id);
+        if (!cur) return;
+        const ancestorIds: string[] = [];
+        while (cur?.parentId) {
+            ancestorIds.push(cur.parentId);
+            cur = byId.get(cur.parentId);
+        }
+        if (ancestorIds.length > 0) {
+            setExpanded(prev => {
+                const next = new Set(prev);
+                for (const a of ancestorIds) next.add(a);
+                return next;
+            });
+        }
+        setSelectedId(pendingJump.id);
+    }, [pendingJump, category, items]);
 
     useEffect(() => {
         if (!selected) return;
@@ -592,17 +671,26 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
     useEffect(() => {
         // Re-sync from the session buffer in case entries were appended between
         // the useState initializer and this effect running.
-        setLogs(session.scriptLog.map(e => ({ text: e.text, level: e.level, timestamp: new Date(e.timestamp) })));
+        setLogs(session.scriptLog.map(e => ({
+            text: e.text, level: e.level, timestamp: new Date(e.timestamp),
+            ...(e.source ? { source: e.source } : {}),
+        })));
         setErrorLog(session.scriptLog
             .filter(e => e.level === 'error')
-            .map(e => ({ text: e.text, level: e.level, timestamp: new Date(e.timestamp) })));
+            .map(e => ({
+                text: e.text, level: e.level, timestamp: new Date(e.timestamp),
+                ...(e.source ? { source: e.source } : {}),
+            })));
 
         let initialErrors = 0;
         for (const e of session.scriptLog) if (e.level === 'error') initialErrors++;
         setUnreadErrors(initialErrors);
 
-        return session.events.on('script.log', (text, level) => {
-            const entry: LogEntry = { text: text ?? '', level: level ?? 'info', timestamp: new Date() };
+        return session.events.on('script.log', (text, level, source) => {
+            const entry: LogEntry = {
+                text: text ?? '', level: level ?? 'info', timestamp: new Date(),
+                ...(source ? { source } : {}),
+            };
             setLogs(prev => [...prev, entry]);
             setErrorLog(prev => [...prev, entry]);
             if (level === 'error') setUnreadErrors(prev => prev + 1);
@@ -1188,6 +1276,17 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
                                 <div key={i} className={`script-editor__error-log-entry script-editor__error-log-entry--${entry.level}`}>
                                     <span className="script-editor__error-log-time">{formatTime(entry.timestamp)}</span>
                                     <span className="script-editor__error-log-text">{entry.text}</span>
+                                    {entry.source && (
+                                        <button
+                                            className="script-editor__error-log-jump"
+                                            type="button"
+                                            onClick={() => handleErrorJump(entry.source!)}
+                                            title={`Open ${entry.source.kind} "${entry.source.name}"${entry.source.line !== undefined ? ` at line ${entry.source.line}` : ''}`}
+                                            aria-label={`Open ${entry.source.kind} ${entry.source.name}`}
+                                        >
+                                            →
+                                        </button>
+                                    )}
                                 </div>
                             ))
                         )}
@@ -1625,6 +1724,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
                         <LuaEditor
                             value={editCode}
                             onChange={code => { setEditCode(code); setDirty(true); }}
+                            gotoLine={editorGotoLine}
                         />
                     ) : (
                         <textarea

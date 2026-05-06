@@ -40,4 +40,17 @@ export default defineConfig({
         react(),
         nodePolyfills({ include: ['buffer', 'stream', 'events', 'util'] }),
     ],
+    build: {
+        rollupOptions: {
+            onwarn(warning, defaultHandler) {
+                if (
+                    warning.code === 'COMMONJS_VARIABLE_IN_ESM' &&
+                    warning.id?.includes('pcre2-wasm-universal')
+                ) {
+                    return;
+                }
+                defaultHandler(warning);
+            },
+        },
+    },
 });

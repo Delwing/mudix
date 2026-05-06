@@ -98,6 +98,20 @@ html, body, #root {
     overflow: hidden;
 }
 
+/* ── Global scrollbar styling (themed) ────────────────────────── */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
 /* ── App layout ────────────────────────────────────────────── */
 .app {
     display: flex;
@@ -604,6 +618,62 @@ html, body, #root {
     border-radius: 3px;
     padding: 1px 5px;
     color: var(--text);
+}
+
+.proxy-info-intro code {
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: var(--text);
+}
+
+.proxy-info-intro strong {
+    color: var(--text);
+}
+
+.proxy-why-diagram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+}
+
+.proxy-why-node {
+    padding: 4px 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text);
+    font-weight: 500;
+}
+
+.proxy-why-arrow {
+    color: var(--text-dim);
+    font-size: 11px;
+    font-family: var(--font-mono), monospace;
+}
+
+.proxy-why-inline-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+}
+
+.proxy-why-note {
+    padding-top: 6px;
+    border-top: 1px dashed var(--border);
 }
 
 .proxy-code-block {
@@ -1152,6 +1222,11 @@ html, body, #root {
     max-height: 80vh;
 }
 
+.proxy-why-modal {
+    width: 480px;
+    max-height: 80vh;
+}
+
 .file-browser-modal {
     width: 320px;
     max-height: 75vh;
@@ -1188,6 +1263,8 @@ html, body, #root {
     flex: 1;
     overflow-y: auto;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .vfs-tree {
@@ -1377,6 +1454,226 @@ html, body, #root {
 .vfs-preview-error-label {
     color: #e06c75;
     font-weight: 600;
+}
+
+/* ── Image preview ──────────────────────────────────────────────────────── */
+
+.vfs-image-preview {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px;
+    overflow: auto;
+}
+
+.vfs-image-frame {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    background-color: rgba(0, 0, 0, 0.2);
+    background-image:
+        linear-gradient(45deg, rgba(255, 255, 255, 0.04) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(255, 255, 255, 0.04) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.04) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.04) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.vfs-image {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+    image-rendering: -webkit-optimize-contrast;
+}
+
+.vfs-image-meta {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    font-family: var(--font-mono), monospace;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
+
+/* ── SQLite preview ─────────────────────────────────────────────────────── */
+
+.vfs-sql-list {
+    padding: 8px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.vfs-sql-header {
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 4px 8px 8px;
+    font-family: var(--font-mono), monospace;
+}
+
+.vfs-sql-table-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text);
+    text-align: left;
+    padding: 5px 8px;
+    font-family: var(--font-mono), monospace;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+
+.vfs-sql-table-btn:hover {
+    background: var(--border-hi);
+    border-color: var(--border);
+}
+
+.vfs-sql-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+.vfs-sql-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.vfs-sql-back {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.vfs-sql-back:hover {
+    border-color: var(--accent-dim);
+    color: var(--accent);
+}
+
+.vfs-sql-table-name {
+    font-family: var(--font-mono), monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vfs-sql-meta {
+    font-family: var(--font-mono), monospace;
+    font-size: 10.5px;
+    color: var(--text-dim);
+}
+
+.vfs-sql-table-wrap {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+}
+
+.vfs-sql-table {
+    border-collapse: collapse;
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    width: max-content;
+    min-width: 100%;
+}
+
+.vfs-sql-table th,
+.vfs-sql-table td {
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 4px 8px;
+    text-align: left;
+    vertical-align: top;
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vfs-sql-table th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-input);
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 10.5px;
+    text-transform: lowercase;
+    z-index: 1;
+}
+
+.vfs-sql-table tbody tr:hover {
+    background: var(--border-hi);
+}
+
+.vfs-sql-null {
+    color: var(--text-dim);
+    font-style: italic;
+    opacity: 0.6;
+}
+
+.vfs-sql-blob {
+    color: var(--text-dim);
+}
+
+.vfs-sql-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+}
+
+.vfs-sql-pager button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 10px;
+    font-size: 11px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.vfs-sql-pager button:hover:not(:disabled) {
+    border-color: var(--accent-dim);
+    color: var(--accent);
+}
+
+.vfs-sql-pager button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.vfs-sql-page-info {
+    color: var(--text-dim);
 }
 
 .modal-header {

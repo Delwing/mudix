@@ -1,4 +1,5 @@
 import type { AnsiAwareBuffer } from './text/FormatState';
+import type { ScriptLogSource } from './MudSession';
 
 export type SessionStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -22,7 +23,7 @@ export type MudClientEvents = {
 export type MudEvents = MudClientEvents & {
     'status': [status: SessionStatus];
     'ping': [duration: number | null];
-    'script.log': [text: string, level: 'error' | 'info'];
+    'script.log': [text: string, level: 'error' | 'info', source?: ScriptLogSource];
     'output.ready': void;
     'script.deleteline': void;
     'script.clearwindow': void;

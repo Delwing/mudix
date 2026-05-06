@@ -95,7 +95,7 @@ local packages = {
 
   "DebugTools.lua",
   "DateTime.lua",
-  -- "DB.lua",           -- not yet adapted
+  "DB.lua",
 
   -- Geyser UI framework -- not yet adapted
    "geyser/Geyser.lua",
