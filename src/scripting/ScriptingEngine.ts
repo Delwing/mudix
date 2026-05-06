@@ -395,6 +395,14 @@ export class ScriptingEngine {
                 this.api.updateGmcp(path, value);
                 this.emit('gmcp', [path, value]);
             }),
+            session.events.on('package.installed', (name) => {
+                this.raiseEvent('sysInstall', [name]);
+                this.raiseEvent('sysInstallPackage', [name]);
+            }),
+            session.events.on('package.uninstalled', (name) => {
+                this.raiseEvent('sysUninstall', [name]);
+                this.raiseEvent('sysUninstallPackage', [name]);
+            }),
         );
     }
 }

@@ -277,6 +277,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `sysDataSendRequest` | 🚧 | Before each send — can deny |
 | `sysWindowResizeEvent` | 🚧 | On main window resize |
 | `sysLoadEvent` | 🚧 | Scripts initialized |
+| `sysInstall` / `sysInstallPackage` | ✅ | After package install — arg: package name |
+| `sysUninstall` / `sysUninstallPackage` | ✅ | Before package uninstall — arg: package name |
 | `sysPathChanged` | 🚧 | Virtual FS file change watch |
 | `sysSpeedwalkFinished` | 🚧 | After speedwalk completes |
 | `sysUserWindowCreated` | 🚧 | After overlay element is created |

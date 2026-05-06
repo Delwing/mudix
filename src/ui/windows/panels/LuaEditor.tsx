@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, hoverTooltip, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands';
@@ -8,7 +8,7 @@ import { lua } from '@codemirror/legacy-modes/mode/lua';
 import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
 import { tags as t } from '@lezer/highlight';
 import { useAppStore } from '../../../storage';
-import { luaCompletionSource, HOVER_MAP } from '../../../scripting/lua/luaCompletions';
+import { luaCompletionSource, HOVER_MAP, REFERENCE_GROUPS } from '../../../scripting/lua/luaCompletions';
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 // Chrome (background, gutter, tooltip) themes via CSS vars; the `dark` flag and
@@ -249,6 +249,7 @@ interface Props {
 
 export function LuaEditor({ value, onChange }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
+    const editorHostRef = useRef<HTMLDivElement>(null);
     const viewRef      = useRef<EditorView | null>(null);
     const onChangeRef  = useRef(onChange);
     onChangeRef.current = onChange;
@@ -256,8 +257,10 @@ export function LuaEditor({ value, onChange }: Props) {
     const themeRef = useRef(theme);
     themeRef.current = theme;
 
+    const [refOpen, setRefOpen] = useState(false);
+
     useEffect(() => {
-        if (!containerRef.current) return;
+        if (!editorHostRef.current) return;
 
         const view = new EditorView({
             state: EditorState.create({
@@ -266,7 +269,7 @@ export function LuaEditor({ value, onChange }: Props) {
                     onChangeRef.current(viewRef.current!.state.doc.toString());
                 }, themeRef.current),
             }),
-            parent: containerRef.current,
+            parent: editorHostRef.current,
         });
 
         viewRef.current = view;
@@ -298,5 +301,148 @@ export function LuaEditor({ value, onChange }: Props) {
         }
     }, [value]);
 
-    return <div ref={containerRef} className="lua-editor" />;
+    const insertAtCursor = (text: string) => {
+        const view = viewRef.current;
+        if (!view) return;
+        const { from, to } = view.state.selection.main;
+        view.dispatch({
+            changes: { from, to, insert: text },
+            selection: { anchor: from + text.length },
+        });
+        view.focus();
+    };
+
+    return (
+        <div ref={containerRef} className="lua-editor">
+            <div ref={editorHostRef} className="lua-editor__host" />
+            <button
+                type="button"
+                className="lua-editor__help-btn"
+                onClick={() => setRefOpen(o => !o)}
+                title="Function reference"
+                aria-label="Function reference"
+                aria-expanded={refOpen}
+            >
+                ?
+            </button>
+            {refOpen && (
+                <LuaReferencePanel
+                    onClose={() => setRefOpen(false)}
+                    onInsert={name => { insertAtCursor(name); setRefOpen(false); }}
+                />
+            )}
+        </div>
+    );
+}
+
+// ── Reference panel ───────────────────────────────────────────────────────────
+// Lists every entry from REFERENCE_GROUPS in a searchable, grouped view.
+// Clicking an entry inserts its dotted name at the editor cursor.
+
+interface RefPanelProps {
+    onClose: () => void;
+    onInsert: (insertText: string) => void;
+}
+
+function LuaReferencePanel({ onClose, onInsert }: RefPanelProps) {
+    const [query, setQuery] = useState('');
+    const inputRef = useRef<HTMLInputElement>(null);
+    const panelRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        inputRef.current?.focus();
+    }, []);
+
+    useEffect(() => {
+        const onDown = (e: MouseEvent) => {
+            if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
+        };
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+        // capture so we beat any inner stopPropagation on the editor
+        document.addEventListener('mousedown', onDown, true);
+        document.addEventListener('keydown', onKey);
+        return () => {
+            document.removeEventListener('mousedown', onDown, true);
+            document.removeEventListener('keydown', onKey);
+        };
+    }, [onClose]);
+
+    const groups = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return REFERENCE_GROUPS;
+        return REFERENCE_GROUPS
+            .map(g => ({
+                ...g,
+                entries: g.entries.filter(e => {
+                    const full = (g.prefix + e.label).toLowerCase();
+                    if (full.includes(q)) return true;
+                    if (typeof e.detail === 'string' && e.detail.toLowerCase().includes(q)) return true;
+                    return typeof e.info === 'string' && e.info.toLowerCase().includes(q);
+
+                }),
+            }))
+            .filter(g => g.entries.length > 0);
+    }, [query]);
+
+    const totalCount = useMemo(
+        () => groups.reduce((n, g) => n + g.entries.length, 0),
+        [groups],
+    );
+
+    return (
+        <div className="lua-editor__ref-panel" ref={panelRef} role="dialog" aria-label="Lua function reference">
+            <div className="lua-editor__ref-header">
+                <input
+                    ref={inputRef}
+                    type="text"
+                    className="lua-editor__ref-search"
+                    placeholder="Search functions, signatures, descriptions…"
+                    value={query}
+                    onChange={e => setQuery(e.target.value)}
+                />
+                <span className="lua-editor__ref-count">{totalCount}</span>
+                <button
+                    type="button"
+                    className="lua-editor__ref-close"
+                    onClick={onClose}
+                    title="Close (Esc)"
+                    aria-label="Close"
+                >
+                    ×
+                </button>
+            </div>
+            <div className="lua-editor__ref-body">
+                {groups.length === 0 ? (
+                    <div className="lua-editor__ref-empty">No matches</div>
+                ) : groups.map(group => (
+                    <div key={group.title} className="lua-editor__ref-group">
+                        <div className="lua-editor__ref-group-title">{group.title}</div>
+                        <ul className="lua-editor__ref-list">
+                            {group.entries.map(e => {
+                                const insertText = group.prefix + e.label;
+                                return (
+                                    <li
+                                        key={insertText}
+                                        className="lua-editor__ref-item"
+                                        onClick={() => onInsert(insertText)}
+                                        title={`Insert ${insertText}`}
+                                    >
+                                        <div className="lua-editor__ref-item-head">
+                                            <span className="lua-editor__ref-item-name">{insertText}</span>
+                                            {e.detail && (
+                                                <span className="lua-editor__ref-item-sig">{e.detail}</span>
+                                            )}
+                                        </div>
+                                        {typeof e.info === 'string' && e.info && (
+                                            <div className="lua-editor__ref-item-info">{e.info}</div>
+                                        )}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
 }

@@ -4,7 +4,6 @@ import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine } from '../mud/timers/TimerEngine';
 import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
-import type { GaugeManager, GaugeCreateOptions, GaugeOrientation } from '../ui/gauges/GaugeManager';
 import type { LabelManager, LabelCreateOptions } from '../ui/labels/LabelManager';
 import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
@@ -72,43 +71,6 @@ class ScriptingWindowsAPI {
     }
 }
 
-// ── Gauges ────────────────────────────────────────────────────────────────────
-
-class ScriptingGaugesAPI {
-    constructor(private readonly manager: GaugeManager) {}
-
-    create(name: string, opts: GaugeCreateOptions): void {
-        this.manager.create(name, opts);
-    }
-    setValue(name: string, current: number, max: number, html?: string): void {
-        this.manager.setValue(name, current, max, html);
-    }
-    setText(name: string, html: string): void {
-        this.manager.setText(name, html);
-    }
-    setColor(name: string, r: number, g: number, b: number): void {
-        this.manager.setColor(name, r, g, b);
-    }
-    move(name: string, x: number, y: number): void {
-        this.manager.move(name, x, y);
-    }
-    resize(name: string, width: number, height: number): void {
-        this.manager.resize(name, width, height);
-    }
-    show(name: string): void { this.manager.show(name); }
-    hide(name: string): void { this.manager.hide(name); }
-    destroy(name: string): void { this.manager.destroy(name); }
-    setStyleSheet(name: string, cssFront?: string, cssBack?: string, cssText?: string): void {
-        this.manager.setStyleSheet(name, cssFront, cssBack, cssText);
-    }
-    setParent(name: string, parent: string, x?: number, y?: number): void {
-        this.manager.setParent(name, parent, x, y);
-    }
-    has(name: string): boolean { return this.manager.has(name); }
-}
-
-export type { GaugeOrientation };
-
 // ── Labels ────────────────────────────────────────────────────────────────────
 
 class ScriptingLabelsAPI {
@@ -133,16 +95,29 @@ class ScriptingLabelsAPI {
     setBackgroundColor(name: string, r: number, g: number, b: number, a = 255): boolean {
         return this.manager.setBackgroundColor(name, r, g, b, a);
     }
+    setStyleSheet(name: string, css: string): boolean {
+        return this.manager.setStyleSheet(name, css);
+    }
     setClickCallback(name: string, fn: () => void): boolean {
         return this.manager.setClickCallback(name, fn);
     }
+    setTooltip(name: string, text: string | undefined): boolean {
+        return this.manager.setTooltip(name, text);
+    }
+    setClickThrough(name: string, value: boolean): boolean {
+        return this.manager.setClickThrough(name, value);
+    }
+    setCursor(name: string, cursor: string | undefined): boolean {
+        return this.manager.setCursor(name, cursor);
+    }
+    raise(name: string): boolean { return this.manager.raise(name); }
+    lower(name: string): boolean { return this.manager.lower(name); }
 }
 
 // ── Main API ──────────────────────────────────────────────────────────────────
 
 export class ScriptingAPI {
     readonly windows: ScriptingWindowsAPI;
-    readonly gauges: ScriptingGaugesAPI;
     readonly labels: ScriptingLabelsAPI;
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
@@ -183,7 +158,6 @@ export class ScriptingAPI {
         keyEngine: KeyEngine,
     ) {
         this.windows = new ScriptingWindowsAPI(session);
-        this.gauges = new ScriptingGaugesAPI(session.gauges);
         this.labels = new ScriptingLabelsAPI(session.labels);
         this.aliases = aliasEngine;
         this.triggers = triggerEngine;

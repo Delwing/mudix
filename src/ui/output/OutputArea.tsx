@@ -4,7 +4,6 @@ import type { MudSession } from '../../mud/MudSession';
 import { useStickyOutput, DEFAULT_STICKY_LINES } from '../../hooks/useOutput';
 import { useAppStore } from '../../storage';
 import { StickyOutputPanel } from './StickyOutputPanel';
-import { GaugeOverlay } from '../gauges/GaugeOverlay';
 import { LabelOverlay } from '../labels/LabelOverlay';
 
 interface OutputAreaProps {
@@ -40,7 +39,6 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
                 commandInputRef={commandInputRef}
             />
             <LabelOverlay manager={session.labels} parent="main" />
-            <GaugeOverlay manager={session.gauges} parent="main" />
         </>
     );
 }

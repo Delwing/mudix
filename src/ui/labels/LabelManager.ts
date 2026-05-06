@@ -25,8 +25,16 @@ export interface LabelState {
     html: string;
     /** rgba 0..255 channels; alpha defaults to 255 when set via setBackgroundColor. */
     backgroundColor?: { r: number; g: number; b: number; a: number };
+    /** Qt-style CSS string set via setLabelStyleSheet; parsed at render time. */
+    styleSheet?: string;
     /** Click handler installed by setLabelClickCallback. */
     onClick?: () => void;
+    /** Tooltip text rendered via the title attribute. */
+    tooltip?: string;
+    /** CSS cursor value (e.g. 'pointer', 'crosshair', 'none'). */
+    cursor?: string;
+    /** z-index applied to the label DIV. Higher = on top of other labels. */
+    zIndex?: number;
 }
 
 type Listener = (labels: LabelState[]) => void;
@@ -34,6 +42,10 @@ type Listener = (labels: LabelState[]) => void;
 export class LabelManager {
     private readonly labels = new Map<string, LabelState>();
     private readonly listeners = new Map<string, Set<Listener>>();
+    // Monotonic counters so raise/lowerLabel give predictable ordering across
+    // many calls without ever colliding. Starts mid-range to leave headroom.
+    private nextRaiseZ = 1000;
+    private nextLowerZ = -1;
 
     /** Returns true if a new label was created. Mudlet's createLabel returns
      *  false when a label with the same name already exists. */
@@ -114,10 +126,60 @@ export class LabelManager {
         return true;
     }
 
+    setStyleSheet(name: string, css: string): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.styleSheet = css;
+        this.notify(lbl.parent);
+        return true;
+    }
+
     setClickCallback(name: string, fn: () => void): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
         lbl.onClick = fn;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    setTooltip(name: string, text: string | undefined): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.tooltip = text && text.length > 0 ? text : undefined;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    setClickThrough(name: string, value: boolean): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        if (lbl.clickThrough !== value) {
+            lbl.clickThrough = value;
+            this.notify(lbl.parent);
+        }
+        return true;
+    }
+
+    setCursor(name: string, cursor: string | undefined): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.cursor = cursor;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    raise(name: string): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.zIndex = this.nextRaiseZ++;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    lower(name: string): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.zIndex = this.nextLowerZ--;
         this.notify(lbl.parent);
         return true;
     }

@@ -8,6 +8,24 @@ function uint8ToBase64(bytes) {
     return btoa(binary);
 }
 
+// WebSocket close.reason has a 123-byte limit; trimming defensively.
+function clipReason(text) {
+    const str = String(text ?? '').slice(0, 120);
+    return str.length === 0 ? 'unknown error' : str;
+}
+
+function describeError(err) {
+    if (!err) return 'unknown error';
+    if (err.message) return err.message;
+    return String(err);
+}
+
+function safeClose(server, code, reason) {
+    if (server.readyState === WebSocket.OPEN) {
+        try { server.close(code, clipReason(reason)); } catch { /* ignore */ }
+    }
+}
+
 export default {
     async fetch(request) {
         const url = new URL(request.url);
@@ -36,7 +54,23 @@ export default {
         server.accept();
 
         let tcpClosed = false;
-        const tcpSocket = connect({ hostname: host, port });
+        let tcpSocket;
+        try {
+            tcpSocket = connect({ hostname: host, port });
+        } catch (err) {
+            // Synchronous failure (e.g. invalid hostname format) — surface and bail.
+            safeClose(server, 1011, `Proxy: ${describeError(err)}`);
+            return new Response(null, { status: 101, webSocket: client });
+        }
+
+        // The TCP `opened` promise rejects on connect failures (DNS, refused,
+        // network unreachable). Without this, those errors used to be swallowed
+        // and the client would only see a generic 1006 close.
+        tcpSocket.opened.catch((err) => {
+            tcpClosed = true;
+            safeClose(server, 1011, `Proxy: connect to ${host}:${port} failed: ${describeError(err)}`);
+        });
+
         const writer = tcpSocket.writable.getWriter();
 
         // TCP → WebSocket
@@ -50,13 +84,12 @@ export default {
                         server.send(uint8ToBase64(value));
                     }
                 }
-            } catch {
-                // TCP error or closed
-            } finally {
+                // Clean EOF — TCP peer closed the connection normally.
                 tcpClosed = true;
-                if (server.readyState === WebSocket.OPEN) {
-                    server.close(1000, 'TCP connection closed');
-                }
+                safeClose(server, 1000, 'TCP connection closed');
+            } catch (err) {
+                tcpClosed = true;
+                safeClose(server, 1011, `Proxy: TCP read error: ${describeError(err)}`);
             }
         })();
 
@@ -66,8 +99,9 @@ export default {
             try {
                 const bytes = Uint8Array.from(atob(event.data), c => c.charCodeAt(0));
                 await writer.write(bytes);
-            } catch {
-                // ignore malformed frames
+            } catch (err) {
+                tcpClosed = true;
+                safeClose(server, 1011, `Proxy: TCP write error: ${describeError(err)}`);
             }
         });
 

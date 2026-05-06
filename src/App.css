@@ -167,6 +167,82 @@ html, body, #root {
     font-variant-numeric: tabular-nums;
 }
 
+/* ── Toolbar action group + hamburger ──────────────────────── */
+.toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.toolbar-hamburger {
+    position: relative;
+    display: none;          /* desktop: inline buttons; mobile media query flips this */
+    margin-left: auto;
+}
+
+.toolbar-hamburger-btn {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+    width: 36px;
+    height: 36px;
+    background: var(--bg-glass);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: inset 0 1px 0 var(--border-hi);
+    cursor: pointer;
+    padding: 0;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.toolbar-hamburger-btn:hover,
+.toolbar-hamburger-btn[aria-expanded="true"] {
+    border-color: var(--accent-dim);
+    box-shadow: inset 0 1px 0 var(--border-hi), 0 0 8px var(--accent-glow);
+}
+
+.toolbar-hamburger-btn span {
+    display: block;
+    width: 16px;
+    height: 1.5px;
+    background: var(--text);
+    border-radius: 1px;
+    transition: background 0.15s;
+}
+
+.toolbar-hamburger-btn:hover span,
+.toolbar-hamburger-btn[aria-expanded="true"] span {
+    background: var(--accent);
+}
+
+.toolbar-hamburger-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-float);
+    min-width: 180px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 100;
+}
+
+.toolbar-hamburger-menu .btn {
+    width: 100%;
+    height: 36px;
+    justify-content: flex-start;
+    padding: 0 12px;
+    font-size: 13px;
+}
+
 /* ── Main content area ──────────────────────────────────────── */
 .app-content {
     flex: 1;
@@ -655,6 +731,13 @@ html, body, #root {
 
 .output-msg-content span {
     padding: 2px 0;
+}
+
+/* Connection / proxy errors surfaced via session.events.emit('message', …, 'error'). */
+.output-msg.error .output-msg-content,
+.output-msg.error .output-msg-content span {
+    color: var(--danger);
+    font-weight: 600;
 }
 
 /* Timestamps */
@@ -1431,3 +1514,95 @@ html, body, #root {
 .ansi-slow-blink  { animation: ansi-slow-blink  1s step-end infinite; }
 .ansi-rapid-blink { animation: ansi-rapid-blink 0.3s step-end infinite; }
 .ansi-dim         { animation: ansi-dim-anim var(--dim-duration, 1000ms) var(--dim-easing, ease-in-out) forwards; }
+
+/* ── Mobile (≤ 600px) ───────────────────────────────────────
+   Phone-friendly layer: collapses the desktop docking UX into a
+   single-pane output + command bar. Gauges/labels live inside docked
+   panels and disappear with them; revisit if those become essential
+   on mobile.
+*/
+@media (max-width: 600px) {
+    /* Toolbar drops non-essentials and collapses actions into a hamburger. */
+    .toolbar {
+        padding: 6px 10px;
+    }
+    .toolbar-connection-name,
+    .ping {
+        display: none;
+    }
+    .toolbar-actions {
+        display: none;
+    }
+    .toolbar-hamburger {
+        display: block;
+    }
+
+    /* Hide dock areas, floating windows, and side button strips —
+       not enough horizontal room and touch-drag docking is unworkable. */
+    .dock-area,
+    .floating-window-root,
+    .mudix-toolbar-strip--left,
+    .mudix-toolbar-strip--right {
+        display: none !important;
+    }
+
+    /* Modals fill the screen; backdrop drag/resize handles disabled. */
+    .modal,
+    .settings-modal,
+    .proxy-info-modal,
+    .file-browser-modal {
+        top: 0;
+        left: 0;
+        transform: none;
+        width: 100vw !important;
+        max-width: 100vw;
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+
+    /* ResizableModal sets left/top/width/height inline — !important wins. */
+    .resizable-modal {
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        min-width: 0;
+        border-radius: 0;
+    }
+    .resizable-modal__header { cursor: default; }
+    .resizable-modal__resize { display: none; }
+    .script-editor-modal {
+        min-width: 0;
+        min-height: 0;
+    }
+
+    /* Command bar: 16px input font prevents iOS Safari focus-zoom;
+       taller hit targets for touch. */
+    .command-bar {
+        padding: 6px 8px;
+    }
+    .command-input.input {
+        font-size: 16px;
+        height: 36px;
+    }
+    .command-bar .btn {
+        height: 36px;
+    }
+
+    /* File browser: stack tree above preview instead of side-by-side. */
+    .vfs-split {
+        flex-direction: column;
+    }
+    .vfs-tree-panel {
+        width: 100%;
+        max-height: 50%;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+
+    /* Connection screen: tighten spacing, drop side padding. */
+    .connection-screen {
+        padding: 16px 10px;
+    }
+}

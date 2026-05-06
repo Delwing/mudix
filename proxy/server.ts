@@ -11,6 +11,17 @@ const server = http.createServer((_req, res) => {
 
 const wss = new WebSocketServer({ server });
 
+// WebSocket close.reason is capped at 123 bytes by the spec; trim defensively.
+function clipReason(text: string): string {
+    return text.length > 120 ? text.slice(0, 120) : text;
+}
+
+function safeClose(ws: WebSocket, code: number, reason: string): void {
+    if (ws.readyState === WebSocket.OPEN) {
+        try { ws.close(code, clipReason(reason)); } catch { /* ignore */ }
+    }
+}
+
 wss.on('connection', (ws, req) => {
     const reqUrl = req.url ?? '/';
     const params = new URL(reqUrl, 'http://localhost').searchParams;
@@ -30,8 +41,10 @@ wss.on('connection', (ws, req) => {
     console.log(`[proxy] Connecting to ${host}:${port}`);
 
     const tcp = net.connect(port, host);
+    let tcpConnected = false;
 
     tcp.on('connect', () => {
+        tcpConnected = true;
         console.log(`[proxy] Connected to ${host}:${port}`);
     });
 
@@ -41,18 +54,16 @@ wss.on('connection', (ws, req) => {
         }
     });
 
-    tcp.on('error', (err) => {
-        console.error(`[proxy] TCP error: ${err.message}`);
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.close(1011, err.message);
-        }
+    tcp.on('error', (err: NodeJS.ErrnoException) => {
+        console.error(`[proxy] TCP error for ${host}:${port}: ${err.message}`);
+        const phase = tcpConnected ? 'TCP error' : `connect to ${host}:${port} failed`;
+        const reason = err.code ? `Proxy: ${phase}: ${err.code}` : `Proxy: ${phase}: ${err.message}`;
+        safeClose(ws, 1011, reason);
     });
 
     tcp.on('close', () => {
         console.log(`[proxy] TCP closed for ${host}:${port}`);
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.close(1000, 'TCP connection closed');
-        }
+        safeClose(ws, 1000, 'TCP connection closed');
     });
 
     ws.on('message', (data) => {
@@ -60,7 +71,10 @@ wss.on('connection', (ws, req) => {
         try {
             tcp.write(Buffer.from(data.toString(), 'base64'));
         } catch (err) {
-            console.error('[proxy] Failed to forward message:', err);
+            const message = err instanceof Error ? err.message : String(err);
+            console.error('[proxy] Failed to forward message:', message);
+            safeClose(ws, 1011, `Proxy: TCP write error: ${message}`);
+            tcp.destroy();
         }
     });
 

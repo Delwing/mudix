@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type React from 'react';
 import type { LabelManager, LabelState } from './LabelManager';
+import { cssTextToStyle } from './qtCss';
 import './LabelOverlay.css';
 
 interface LabelOverlayProps {
@@ -26,7 +27,8 @@ function Label({ l }: { l: LabelState }) {
         left: l.x, top: l.y,
         width: l.width, height: l.height,
         pointerEvents: l.clickThrough ? 'none' : 'auto',
-        cursor: l.onClick ? 'pointer' : undefined,
+        cursor: l.cursor ?? (l.onClick ? 'pointer' : undefined),
+        zIndex: l.zIndex,
     };
     if (l.fillBackground) {
         const bg = l.backgroundColor;
@@ -38,11 +40,15 @@ function Label({ l }: { l: LabelState }) {
             ? `rgba(${bg.r},${bg.g},${bg.b},${bg.a / 255})`
             : '#fff';
     }
+    // Stylesheet wins over computed background when both are set, matching
+    // Mudlet (where setLabelStyleSheet replaces the QLabel's full QSS block).
+    if (l.styleSheet) Object.assign(style, cssTextToStyle(l.styleSheet));
 
     return (
         <div
             className="label"
             style={style}
+            title={l.tooltip}
             onClick={l.onClick}
             dangerouslySetInnerHTML={{ __html: l.html }}
         />

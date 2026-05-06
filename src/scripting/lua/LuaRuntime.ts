@@ -5,7 +5,11 @@ import type {ProfileVFS} from '../vfs/ProfileVFS';
 import UTF8 from './utf8.lua?raw';
 import VFS_LUA from './VFS.lua?raw';
 import LUAGLOBAL from './LuaGlobal.lua?raw';
+import BRIDGE_LUA from './Bridge.lua?raw';
+import EXEC_LUA from './Exec.lua?raw';
+import LUA_GLOBAL_SETUP from './LuaGlobalSetup.lua?raw';
 import {setupRex} from './rex';
+import {QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
 
 // All *.lua files under mudlet-lua/ are served via the VFS at /lua/<relative-path>.
 // Adding a new file to the directory tree automatically makes it available to dofile().
@@ -174,69 +178,35 @@ export class LuaRuntime implements IScriptingRuntime {
             );
         });
 
-        // ── Gauges ───────────────────────────────────────────────────────────
-        // Mudlet's createGauge has a few overload conventions handled by Lua wrappers
-        // installed below (after LuaGlobal so they shadow GUIUtils.lua). The JS
-        // primitives here take normalized arguments only.
-        this.lua.global.set('__mudix_createGauge', (
-            window: string, name: string,
-            width: number, height: number, x: number, y: number,
-            text: string | null, r: number, g: number, b: number,
-            orientation: string,
-        ) => {
-            this.api.gauges.create(name, {
-                parent: window === 'main' ? 'main' : window,
-                x: Number(x), y: Number(y),
-                width: Number(width), height: Number(height),
-                text: text == null ? '' : String(text),
-                r: Number(r), g: Number(g), b: Number(b),
-                orientation: (orientation || 'horizontal') as 'horizontal' | 'vertical' | 'goofy' | 'batty',
-            });
-        });
-        this.lua.global.set('__mudix_setGauge', (name: string, current: number, max: number, text: string | null) => {
-            this.api.gauges.setValue(name, Number(current), Number(max), text == null ? undefined : String(text));
-        });
-        this.lua.global.set('__mudix_setGaugeText', (name: string, html: string | null) => {
-            this.api.gauges.setText(name, html == null ? '' : String(html));
-        });
-        this.lua.global.set('__mudix_moveGauge', (name: string, x: number, y: number) => {
-            this.api.gauges.move(name, Number(x), Number(y));
-        });
-        this.lua.global.set('__mudix_resizeGauge', (name: string, w: number, h: number) => {
-            this.api.gauges.resize(name, Number(w), Number(h));
-        });
-        this.lua.global.set('__mudix_showGauge',   (name: string) => this.api.gauges.show(name));
-        this.lua.global.set('__mudix_hideGauge',   (name: string) => this.api.gauges.hide(name));
-        this.lua.global.set('__mudix_destroyGauge',(name: string) => this.api.gauges.destroy(name));
-        this.lua.global.set('__mudix_setGaugeStyleSheet', (name: string, css: string, cssBack?: string, cssText?: string) => {
-            this.api.gauges.setStyleSheet(name, css, cssBack, cssText);
-        });
-        this.lua.global.set('__mudix_setGaugeColor', (name: string, r: number, g: number, b: number) => {
-            this.api.gauges.setColor(name, Number(r), Number(g), Number(b));
-        });
-
         // ── Labels ────────────────────────────────────────────────────────────
-        // Mudlet's createLabel has an optional leading windowName arg. The Lua
-        // wrapper installed below disambiguates and normalizes 0/1-or-bool flags
-        // before calling this primitive.
-        this.lua.global.set('__mudix_createLabel', (
-            window: string, name: string,
-            x: number, y: number, w: number, h: number,
-            fillBackground: boolean, clickThrough: boolean,
-        ) => {
+        // createLabel([window,] name, x, y, w, h, fillBackground [, clickThrough]).
+        // Mudlet detects the optional window arg by counting; we use the second-
+        // arg type because (string,string) ⇒ window form and (string,number) ⇒
+        // no window. fillBackground/clickThrough accept booleans or 0/1.
+        this.lua.global.set('createLabel', (...args: unknown[]) => {
+            const hasWindow = typeof args[0] === 'string' && typeof args[1] === 'string';
+            const window = hasWindow ? (args[0] as string) : 'main';
+            const i = hasWindow ? 1 : 0;
+            const name = args[i] as string;
             return this.api.labels.create(name, {
                 parent: window === 'main' ? 'main' : window,
-                x: Number(x), y: Number(y),
-                width: Number(w), height: Number(h),
-                fillBackground: !!fillBackground,
-                clickThrough: !!clickThrough,
+                x: Number(args[i + 1]), y: Number(args[i + 2]),
+                width: Number(args[i + 3]), height: Number(args[i + 4]),
+                fillBackground: !!args[i + 5],
+                clickThrough: !!args[i + 6],
             });
         });
         this.lua.global.set('deleteLabel', (name: string) => this.api.labels.destroy(name));
+        // setLabelStyleSheet(name, css) — Qt-style CSS string, applied to the
+        // label DIV. Used by Mudlet's setGaugeStyleSheet via the _back/_front/_text
+        // labels.
+        this.lua.global.set('setLabelStyleSheet', (name: string, css: string) => {
+            this.api.labels.setStyleSheet(name, css == null ? '' : String(css));
+        });
         // setLabelClickCallback(name, fn). The fn is registered via the Lua-side
-        // cb registry; JS only sees a numeric ID. Click handler invokes the
-        // callback through doStringSync. Replacing the callback leaks the prior
-        // cb id in the Lua registry — bounded and acceptable for now.
+        // cb registry (Bridge.lua wrapper); JS only sees a numeric ID. Replacing
+        // the callback leaks the prior cb id in the Lua registry — bounded and
+        // acceptable for now.
         this.lua.global.set('__mudix_setLabelClickCallback', (name: string, cbId: number) => {
             return this.api.labels.setClickCallback(name, () => {
                 try {
@@ -246,6 +216,49 @@ export class LuaRuntime implements IScriptingRuntime {
                 }
                 this.api.flushOutput();
             });
+        });
+        // setLabelToolTip(name, text [, duration]) — duration arg is accepted for
+        // Mudlet compatibility but ignored: the title attribute has no per-tooltip
+        // duration. resetLabelToolTip clears it.
+        this.lua.global.set('setLabelToolTip', (name: unknown, text?: unknown, _duration?: unknown) => {
+            if (typeof name !== 'string') return;
+            this.api.labels.setTooltip(name, text == null ? undefined : String(text));
+        });
+        this.lua.global.set('resetLabelToolTip', (name: unknown) => {
+            if (typeof name !== 'string') return;
+            this.api.labels.setTooltip(name, undefined);
+        });
+        // Runtime clickthrough toggle. Flips pointer-events live; the click
+        // handler set via setLabelClickCallback stays installed either way.
+        this.lua.global.set('enableClickthrough', (name: unknown) => {
+            if (typeof name === 'string') this.api.labels.setClickThrough(name, true);
+        });
+        this.lua.global.set('disableClickthrough', (name: unknown) => {
+            if (typeof name === 'string') this.api.labels.setClickThrough(name, false);
+        });
+        // Z-order. Each call bumps the label past every other label raised so
+        // far (or below every other lowered label). No Mudlet-side global
+        // ordering — labels not raised/lowered float at z-index auto.
+        this.lua.global.set('raiseLabel', (name: unknown) => {
+            if (typeof name === 'string') this.api.labels.raise(name);
+        });
+        this.lua.global.set('lowerLabel', (name: unknown) => {
+            if (typeof name === 'string') this.api.labels.lower(name);
+        });
+        // setLabelCursor(name, shapeInt). The Mudlet GUIUtils.lua wrapper
+        // converts string shape names → ints via mudlet.cursor before calling
+        // here, so we only handle the integer case. shape -1 ('Reset') clears.
+        this.lua.global.set('setLabelCursor', (name: unknown, shape: unknown) => {
+            if (typeof name !== 'string') return;
+            const n = Number(shape);
+            if (n === -1 || Number.isNaN(n)) {
+                this.api.labels.setCursor(name, undefined);
+                return;
+            }
+            this.api.labels.setCursor(name, QT_CURSOR_TO_CSS[n] ?? 'default');
+        });
+        this.lua.global.set('resetLabelCursor', (name: unknown) => {
+            if (typeof name === 'string') this.api.labels.setCursor(name, undefined);
         });
 
         // ── Map view ──────────────────────────────────────────────────────────
@@ -498,181 +511,10 @@ export class LuaRuntime implements IScriptingRuntime {
         // TODO: implement remainingTime — requires TimerEngine to track scheduled fire times
         this.lua.global.set('remainingTime', (_id: unknown) => -1);
 
-        await this.lua.doString(`
-matches = {}; multimatches = {}
--- wasmoon pushes JS arrays 0-indexed in Lua (Object.keys → numeric keys
--- 0..n-1), so unpack as t[0], t[1], ... not t[1], t[2], ...
-function getRoomCoordinates(id)
-    local t = __getRoomCoordinates(id)
-    if t then return t[0], t[1], t[2] end
-    return false
-end
-
-function getMainWindowSize()
-    local t = __getMainWindowSize()
-    return t[0], t[1]
-end
-
--- Callback registry: stores Lua functions handed to tempTimer/Alias/Trigger/Key
--- so JS only ever sees a numeric ID. JS invokes __mudix_dispatch_cb(id) via
--- doStringSync, sidestepping wasmoon's broken Lua-function-from-JS proxy.
-__mudix_cb = {}
-__mudix_cb_next = 0
-function __mudix_register_cb(fn)
-    __mudix_cb_next = __mudix_cb_next + 1
-    __mudix_cb[__mudix_cb_next] = fn
-    return __mudix_cb_next
-end
-function __mudix_unregister_cb(id) __mudix_cb[id] = nil end
-function __mudix_dispatch_cb(id)
-    local fn = __mudix_cb[id]
-    if fn then return fn() end
-end
-
--- JS event bridge. emitEvent() sets __mudix_evt_name + __mudix_evt_args
--- (a JS array, so its keys are 0-indexed) and runs this dispatcher.
-function __mudix_dispatch_event()
-    local event = __mudix_evt_name
-    local raw = __mudix_evt_args
-    -- JS arrays push as Lua tables keyed 0..n-1; rebuild as a 1-indexed sequence.
-    local args = {}
-    if type(raw) == 'table' then
-        local i = 0
-        while raw[i] ~= nil do
-            args[#args + 1] = raw[i]
-            i = i + 1
-        end
-        -- Fall back to ipairs in case wasmoon ever pushes 1-indexed.
-        if #args == 0 then for _, v in ipairs(raw) do args[#args + 1] = v end end
-    end
-    if type(_G[event]) == 'function' then
-        local ok, err = pcall(_G[event], unpack(args))
-        if not ok and type(showHandlerError) == 'function' then showHandlerError(event, err) end
-    end
-    if type(dispatchEventToFunctions) == 'function' then
-        dispatchEventToFunctions(event, unpack(args))
-    end
-end
-
--- Mudlet REGEX_LUA_CODE pattern evaluator: run the body as a Lua chunk on
--- every line. Side effects (raiseEvent, etc.) always execute; the trigger
--- "matches" only when the body's return value is truthy.
-function __mudix_eval_pattern(code)
-    __mudix_pat_result = false
-    local fn = loadstring(code)
-    if not fn then return end
-    local ok, res = pcall(fn)
-    if not ok then return end
-    __mudix_pat_result = (res and true) or false
-end
-
--- Mudlet accepts either a function or a Lua code string for temp* callbacks;
--- compile strings to functions so handlers run in a fresh chunk.
-function __mudix_to_fn(v, who, argN)
-    if type(v) == 'function' then return v end
-    if type(v) == 'string' then
-        local fn, err = loadstring(v)
-        if not fn then
-            error(who .. ": failed to compile code string: " .. tostring(err))
-        end
-        return fn
-    end
-    error(who .. ": bad argument #" .. argN .. " (function or string expected, got " .. type(v) .. ")")
-end
-
-do
-    local _raw = __mudix_tempTimer
-    function tempTimer(seconds, fn, repeating)
-        return _raw(seconds, __mudix_register_cb(__mudix_to_fn(fn, "tempTimer", 2)), repeating or false)
-    end
-end
-
-do
-    local _raw = __mudix_tempAlias
-    function tempAlias(pattern, fn)
-        return _raw(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempAlias", 2)))
-    end
-end
-
-do
-    local _raw = __mudix_tempTrigger
-    function tempTrigger(pattern, fn)
-        return _raw(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempTrigger", 2)))
-    end
-end
-
-do
-    local _raw = __mudix_tempKey
-    function tempKey(modifier, key, fn)
-        return _raw(modifier, key, __mudix_register_cb(__mudix_to_fn(fn, "tempKey", 3)))
-    end
-end
-
--- echoLink: convert Lua function cmd → stored ref + string command.
-do
-    local _fns = {}
-    local _id  = 0
-    local _raw = echoLink
-    function __mudix_call_link(id) _fns[id]() end
-    echoLink = function(...)
-        local args = {...}
-        local n = #args
-        local ci = (n >= 4 and type(args[4]) == 'string') and 3 or 2
-        if type(args[ci]) == 'function' then
-            _id = _id + 1
-            local id = _id
-            _fns[id] = args[ci]
-            args[ci] = '__mudix_call_link(' .. id .. ')'
-        end
-        return _raw(unpack(args))
-    end
-end
-
--- echoPopup: xEcho passes cmds/hints as Lua tables.  wasmoon's JS proxy
--- for LuaTable doesn't support reliable numeric-key iteration from JS, so
--- flatten the tables to \x01-delimited strings here in Lua (where ipairs
--- is trivial) and let the JS binding split them.
-do
-    local _raw = echoPopup
-    local SEP = '\\1'
-    echoPopup = function(win, v, cmds, hints, fmt)
-        if not v or v == '' then return end
-        local cs, hs = {}, {}
-        if type(cmds) == 'table' then
-            for _, c in ipairs(cmds) do cs[#cs+1] = tostring(c) end
-        end
-        if type(hints) == 'table' then
-            for _, h in ipairs(hints) do hs[#hs+1] = tostring(h) end
-        end
-        return _raw(win, v, table.concat(cs, SEP), table.concat(hs, SEP), fmt)
-    end
-end
-`);
+        await this.lua.doString(BRIDGE_LUA);
         await setupRex(this.lua);
 
-        // Wrap all user-code execution in xpcall so Lua errors are caught before
-        // they reach wasmoon's coroutine top-level. An uncaught error kills the
-        // wasmoon thread; subsequent run() calls then fail with "cannot resume
-        // non-suspended coroutine" instead of the original error.
-        await this.lua.doString(`
-            function __exec(code, name)
-                __exec_err = nil
-                __exec_result = nil
-                local fn, compile_err = loadstring(code, "@" .. name)
-                if not fn then
-                    __exec_err = compile_err
-                    return
-                end
-                local ok, r = xpcall(fn, function(e)
-                    return debug.traceback(e, 2)
-                end)
-                if ok then
-                    __exec_result = r
-                else
-                    __exec_err = r
-                end
-            end
-        `);
+        await this.lua.doString(EXEC_LUA);
 
         await this.execModule(UTF8, 'utf8', 'utf8');
 
@@ -687,146 +529,8 @@ end
         );
         this.setupVFS(this.vfs, builtins);
         await this.exec(VFS_LUA, 'VFS');
-        await this.exec(`
-luaGlobalPath = "/lua"
-mudlet = {}
-toNativeSeparators = function(p) return p end
-`, 'lua-globals-setup');
+        await this.exec(LUA_GLOBAL_SETUP, 'lua-globals-setup');
         await this.exec(LUAGLOBAL, 'LuaGlobal');
-
-        // Override GUIUtils.lua's gauge functions (which depend on createLabel /
-        // setBackgroundColor primitives we don't implement) with thin wrappers
-        // around the JS-backed GaugeManager. Same Mudlet calling conventions.
-        await this.exec(`
-gaugesTable = gaugesTable or {}
-
-local function _resolveGaugeColor(r, g, b, orient)
-    if type(r) == "string" then
-        orient = g
-        local c = color_table and color_table[r]
-        if c then r, g, b = c[1], c[2], c[3]
-        else      r, g, b = 128, 128, 128 end
-    elseif r == nil then
-        orient = orient or g
-        r, g, b = 128, 128, 128
-    end
-    return r, g, b, orient
-end
-
-local function _ensureGauge(fn, name)
-    if not gaugesTable[name] then
-        error(fn .. ": no such gauge: " .. tostring(name))
-    end
-end
-
-function createGauge(window, name, width, height, x, y, text, r, g, b, orient)
-    -- windowname is optional; if (name) is a number, the user omitted it.
-    if type(name) == "number" then
-        orient, b, g, r, text, y, x, height, width, name, window =
-            b, g, r, text, y, x, height, width, name, window, nil
-    end
-    window = window or "main"
-    text = text or ""
-    r, g, b, orient = _resolveGaugeColor(r, g, b, orient)
-    orient = orient or "horizontal"
-    assert(type(width)  == "number", "createGauge: width must be a number")
-    assert(type(height) == "number", "createGauge: height must be a number")
-    assert(type(x)      == "number", "createGauge: x must be a number")
-    assert(type(y)      == "number", "createGauge: y must be a number")
-    gaugesTable[name] = {
-        window = window, x = x, y = y, width = width, height = height,
-        r = r, g = g, b = b, text = text, orientation = orient, value = 1,
-    }
-    __mudix_createGauge(window, name, width, height, x, y, text, r, g, b, orient)
-end
-
-function setGauge(name, current, max, text)
-    _ensureGauge("setGauge", name)
-    gaugesTable[name].value = (current or 0) / (max == 0 and 1 or max)
-    __mudix_setGauge(name, current, max, nil)
-    if text ~= nil then setGaugeText(name, text) end
-end
-
-function setGaugeText(name, text, r, g, b)
-    _ensureGauge("setGaugeText", name)
-    text = text or ""
-    local hex
-    if type(r) == "string" and g == nil then
-        local c = color_table and color_table[r]
-        if c then hex = string.format("#%02X%02X%02X", c[1], c[2], c[3]) end
-    elseif type(r) == "number" then
-        hex = string.format("#%02X%02X%02X", r, g or 0, b or 0)
-    elseif r == nil and text ~= "" then
-        hex = "#000000"
-    end
-    local html = text
-    if hex and text ~= "" then
-        html = '<span style="color:' .. hex .. '">' .. text .. '</span>'
-    end
-    gaugesTable[name].text = html
-    __mudix_setGaugeText(name, html)
-end
-
-function moveGauge(name, x, y)
-    _ensureGauge("moveGauge", name)
-    gaugesTable[name].x, gaugesTable[name].y = x, y
-    __mudix_moveGauge(name, x, y)
-end
-
-function resizeGauge(name, w, h)
-    _ensureGauge("resizeGauge", name)
-    gaugesTable[name].width, gaugesTable[name].height = w, h
-    __mudix_resizeGauge(name, w, h)
-end
-
-function showGauge(name)    __mudix_showGauge(name) end
-function hideGauge(name)    __mudix_hideGauge(name) end
-function destroyGauge(name) gaugesTable[name] = nil; __mudix_destroyGauge(name) end
-
-function setGaugeStyleSheet(name, css, cssback, csstext)
-    _ensureGauge("setGaugeStyleSheet", name)
-    __mudix_setGaugeStyleSheet(name, css or "", cssback or css or "", csstext or "")
-end
-
--- createLabel([windowName,] name, x, y, w, h, fillBackground [, clickThrough])
--- The windowName arg is optional. Mudlet detects it by counting args; we use
--- the second-arg type because string,string⇒window-form and string,number⇒no-window.
--- fillBackground/clickThrough accept either booleans or 0/1.
-function createLabel(...)
-    local args = {...}
-    local window
-    if type(args[1]) == "string" and type(args[2]) == "string" then
-        window = table.remove(args, 1)
-    else
-        window = "main"
-    end
-    local name           = args[1]
-    local x              = args[2]
-    local y              = args[3]
-    local w              = args[4]
-    local h              = args[5]
-    local fillBackground = args[6]
-    local clickThrough   = args[7]
-    assert(type(name) == "string", "createLabel: name must be a string")
-    assert(type(x)    == "number", "createLabel: Xpos must be a number")
-    assert(type(y)    == "number", "createLabel: Ypos must be a number")
-    assert(type(w)    == "number", "createLabel: width must be a number")
-    assert(type(h)    == "number", "createLabel: height must be a number")
-    if type(fillBackground) == "number" then fillBackground = fillBackground ~= 0 end
-    if type(clickThrough)   == "number" then clickThrough   = clickThrough   ~= 0 end
-    return __mudix_createLabel(window, name, x, y, w, h, fillBackground and true or false, clickThrough and true or false)
-end
-
--- setLabelClickCallback(name, fnOrCode) — Mudlet also accepts trailing args,
--- but we don't pass them through yet. Strings compile as Lua chunks (matches
--- the temp* family).
-do
-    local _raw = __mudix_setLabelClickCallback
-    function setLabelClickCallback(name, fn)
-        return _raw(name, __mudix_register_cb(__mudix_to_fn(fn, "setLabelClickCallback", 2)))
-    end
-end
-`, 'gauge-overrides');
     }
 
     // ── VFS bridge ───────────────────────────────────────────────────────────

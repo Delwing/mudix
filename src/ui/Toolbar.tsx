@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Button } from './components';
 import type { SessionStatus } from '../mud/events';
 
@@ -16,6 +17,36 @@ interface ToolbarProps {
 }
 
 export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenFiles, onOpenSettings, onContextMenu }: ToolbarProps) {
+    const [menuOpen, setMenuOpen] = useState(false);
+    const hamburgerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!menuOpen) return;
+        const onDocPointer = (e: PointerEvent) => {
+            if (!hamburgerRef.current?.contains(e.target as Node)) setMenuOpen(false);
+        };
+        document.addEventListener('pointerdown', onDocPointer);
+        return () => document.removeEventListener('pointerdown', onDocPointer);
+    }, [menuOpen]);
+
+    const fire = (cb: () => void) => () => { setMenuOpen(false); cb(); };
+
+    const actions = (
+        <>
+            <Button variant="ghost" onClick={fire(onOpenScripts)}>Scripts</Button>
+            <Button variant="ghost" onClick={fire(onOpenFiles)}>Files</Button>
+            <Button variant="ghost" onClick={fire(onOpenMap)}>Map</Button>
+            <Button variant="ghost" onClick={fire(onOpenSettings)}>Settings</Button>
+            {status === 'disconnected'
+                ? <>
+                    <Button variant="ghost" onClick={fire(onReconnect)}>Reconnect</Button>
+                    <Button variant="ghost" onClick={fire(onNewConnection)}>Close Profile</Button>
+                  </>
+                : <Button variant="ghost" onClick={fire(onDisconnect)}>Disconnect</Button>
+            }
+        </>
+    );
+
     return (
         <div className="toolbar" onContextMenu={onContextMenu}>
             <span className="brand">mudix</span>
@@ -28,17 +59,24 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
             {ping !== null && (
                 <span className="ping">{Math.round(ping)} ms</span>
             )}
-            <Button variant="ghost" onClick={onOpenScripts}>Scripts</Button>
-            <Button variant="ghost" onClick={onOpenFiles}>Files</Button>
-            <Button variant="ghost" onClick={onOpenMap}>Map</Button>
-            <Button variant="ghost" onClick={onOpenSettings}>Settings</Button>
-            {status === 'disconnected'
-                ? <>
-                    <Button variant="ghost" onClick={onReconnect}>Reconnect</Button>
-                    <Button variant="ghost" onClick={onNewConnection}>Close Profile</Button>
-                  </>
-                : <Button variant="ghost" onClick={onDisconnect}>Disconnect</Button>
-            }
+            <div className="toolbar-actions">{actions}</div>
+            <div className="toolbar-hamburger" ref={hamburgerRef}>
+                <button
+                    type="button"
+                    className="toolbar-hamburger-btn"
+                    onClick={() => setMenuOpen(v => !v)}
+                    aria-label="Menu"
+                    aria-expanded={menuOpen}
+                    aria-haspopup="menu"
+                >
+                    <span /><span /><span />
+                </button>
+                {menuOpen && (
+                    <div className="toolbar-hamburger-menu" role="menu">
+                        {actions}
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

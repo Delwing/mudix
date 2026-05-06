@@ -1,6 +1,5 @@
 import { EventBus } from '../core/EventBus';
 import { WindowManager } from '../ui/windows/WindowManager';
-import { GaugeManager } from '../ui/gauges/GaugeManager';
 import { LabelManager } from '../ui/labels/LabelManager';
 import { MudClient, type MudClientOptions } from './connection/MudClient';
 import { PingTracker } from './connection/PingTracker';
@@ -20,7 +19,6 @@ export interface ScriptLogEntry {
 export class MudSession {
     readonly events = new EventBus<MudEvents>();
     readonly windows = new WindowManager();
-    readonly gauges = new GaugeManager();
     readonly labels = new LabelManager();
     /** Per-window Console instances. 'main' registered by ScriptingAPI; named windows by WindowManager. */
     readonly consoles = new Map<string, Console>();
@@ -78,6 +76,7 @@ export class MudSession {
             this.events.on('client.connect', () => this.setStatus('connected')),
             this.events.on('client.disconnect', () => { this.setStatus('disconnected'); this.setPing(null); }),
             this.events.on('error', () => this.setStatus('disconnected')),
+            this.events.on('client.error', (message) => this.reportConnectionError(message)),
         ];
 
         this.setStatus('connecting');
@@ -117,5 +116,11 @@ export class MudSession {
     private setPing(duration: number | null): void {
         this._ping = duration;
         this.events.emit('ping', duration);
+    }
+
+    private reportConnectionError(message: string): void {
+        const text = `[connection error] ${message}`;
+        this.events.emit('message', text, 'error', Date.now());
+        this.events.emit('script.log', text, 'error');
     }
 }

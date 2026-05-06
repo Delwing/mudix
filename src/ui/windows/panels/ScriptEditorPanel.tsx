@@ -385,6 +385,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
         try {
             const { manifest, data } = await installPackageFromFile(file, vfs);
             installPackage(connectionId, manifest, data);
+            session.events.emit('package.installed', manifest.name);
             const total = data.scripts.length + data.aliases.length + data.triggers.length + data.timers.length + data.keys.length;
             setImportError(null);
             const now = new Date();
@@ -397,9 +398,10 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
         } catch (err) {
             setImportError(err instanceof Error ? err.message : String(err));
         }
-    }, [connectionId, installPackage, vfs]);
+    }, [connectionId, installPackage, session, vfs]);
 
     const handleUninstall = useCallback(async (packageName: string) => {
+        session.events.emit('package.uninstalled', packageName);
         uninstallPackage(connectionId, packageName);
         if (vfs) {
             try { await uninstallPackageFiles(packageName, vfs); }
@@ -407,7 +409,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
         }
         const now = new Date();
         setLogs(prev => [...prev, { text: `Uninstalled package "${packageName}"`, level: 'info', timestamp: now }]);
-    }, [connectionId, uninstallPackage, vfs]);
+    }, [connectionId, session, uninstallPackage, vfs]);
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
 

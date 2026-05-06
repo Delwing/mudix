@@ -241,7 +241,6 @@ export default function App() {
     const handleNewConnection = () => {
         disconnect();
         session.windows.clearAll();
-        session.gauges.clearAll();
         session.labels.clearAll();
         setActiveConnection(null);
         setSessionStarted(false);

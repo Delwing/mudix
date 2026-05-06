@@ -36,6 +36,9 @@ export class MudClient {
     private readonly url: string;
     /** Buffers the start of a subnegotiation that arrived without its closing IAC SE. */
     private pendingSubneg = "";
+    /** True once the WebSocket handshake has completed; used to differentiate
+     *  "failed to connect" from "connection lost mid-session" in close events. */
+    private opened = false;
 
     commandEcho: boolean;
 
@@ -127,18 +130,25 @@ export class MudClient {
 
             this.socket.onclose = (event: CloseEvent) => {
                 this.eventBus.emit('close', event);
+                if (isAbnormalClose(event)) {
+                    this.eventBus.emit('client.error', formatCloseError(event, this.opened));
+                }
                 this.eventBus.emit('client.disconnect');
+                this.opened = false;
                 this.mccpHandler.reset();
                 this.echoHandler.reset();
                 this.pendingSubneg = "";
             };
 
             this.socket.onopen = (event: Event) => {
+                this.opened = true;
                 this.eventBus.emit('open', event);
                 this.eventBus.emit('client.connect');
             };
         } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
             this.eventBus.emit('error', error);
+            this.eventBus.emit('client.error', `Failed to open WebSocket: ${message}`);
         }
     }
 
@@ -257,6 +267,29 @@ export class MudClient {
         this.messageBuffer = [];
         this.eventBus.emit('flushLines', groups);
     }
+}
+
+/**
+ * 1000 = normal closure, 1005 = no status received (treat as normal when wasClean).
+ * Anything else, or `wasClean=false`, is something the user should know about.
+ */
+function isAbnormalClose(event: CloseEvent): boolean {
+    if (!event.wasClean) return true;
+    return event.code !== 1000 && event.code !== 1005;
+
+}
+
+function formatCloseError(event: CloseEvent, wasOpened: boolean): string {
+    const reason = event.reason?.trim();
+    if (reason) return reason;
+    if (event.code === 1006) {
+        return wasOpened
+            ? 'Connection lost (no close frame received from server)'
+            : 'Failed to connect (proxy unreachable, blocked, or refused the connection)';
+    }
+    return wasOpened
+        ? `Connection closed (code ${event.code})`
+        : `Failed to connect (code ${event.code})`;
 }
 
 /**

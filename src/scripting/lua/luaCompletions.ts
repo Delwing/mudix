@@ -57,22 +57,6 @@ const MUDIX_KEYS: Completion[] = [
     fn('remove', '(id)',                       'Remove a temporary keybinding'),
 ];
 
-// ── mudix.gauges ──────────────────────────────────────────────────────────────
-
-const MUDIX_GAUGES: Completion[] = [
-    fn('create',   '(name, opts)',                        'Create a gauge. opts: { parent?, x, y, width, height, text?, r?, g?, b?, orientation? }'),
-    fn('setValue', '(name, current, max, text?)',         'Set gauge fill ratio'),
-    fn('setText',  '(name, html)',                        'Set gauge text (HTML allowed)'),
-    fn('setColor', '(name, r, g, b)',                     'Set gauge fill color'),
-    fn('move',     '(name, x, y)',                        'Move a gauge'),
-    fn('resize',   '(name, width, height)',               'Resize a gauge'),
-    fn('show',     '(name)',                              'Show a hidden gauge'),
-    fn('hide',     '(name)',                              'Hide a gauge'),
-    fn('destroy',  '(name)',                              'Destroy a gauge'),
-    fn('setStyleSheet', '(name, cssFront?, cssBack?, cssText?)', 'Apply CSS to gauge layers'),
-    fn('has',      '(name) → bool',                      'Check if a gauge exists'),
-];
-
 // ── io ────────────────────────────────────────────────────────────────────────
 
 const IO_COMPLETIONS: Completion[] = [
@@ -117,7 +101,6 @@ const MUDIX_TOP: Completion[] = [
     ns('aliases',  'Alias API'),
     ns('triggers', 'Trigger API'),
     ns('keys',     'Keybinding API'),
-    ns('gauges',   'Gauge overlay API'),
 ];
 
 // ── string extensions ─────────────────────────────────────────────────────────
@@ -354,8 +337,17 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('createLabel',         '([window,] name, x, y, w, h, fillBackground [, clickThrough]) → bool',
        'Create a positioned overlay label on the parent window (default "main"). fillBackground and clickThrough accept 0/1 or true/false. Returns true on success, false if a label with that name already exists.'),
     fn('deleteLabel',         '(name) → bool',                       'Destroy a label by name. Returns true if the label existed.'),
+    fn('setLabelStyleSheet',  '(name, css)',                         'Apply a Qt-style CSS string to a label. Background-color/border/font-size/etc. translate; Qt-specific selectors are dropped.'),
     fn('setLabelClickCallback','(name, fn)',
        'Install a click handler on a label. fn may be a function or a Lua code string (compiled with loadstring). Replacing the callback leaks the prior closure in the registry.'),
+    fn('setLabelToolTip',     '(name, text [, duration])',           'Set a tooltip on a label. duration is accepted for Mudlet compatibility but ignored (HTML title attribute has no per-tooltip duration).'),
+    fn('resetLabelToolTip',   '(name)',                              'Clear a label tooltip.'),
+    fn('enableClickthrough',  '(name)',                              'Make a label pass mouse events through to whatever is underneath.'),
+    fn('disableClickthrough', '(name)',                              'Re-enable mouse interception on a label.'),
+    fn('raiseLabel',          '(name)',                              'Raise a label above all other labels (z-index).'),
+    fn('lowerLabel',          '(name)',                              'Lower a label below all other labels (z-index).'),
+    fn('setLabelCursor',      '(name, shape)',                       'Set the mouse cursor over a label. shape is a Qt::CursorShape int (or string name; see mudlet.cursor). -1 resets.'),
+    fn('resetLabelCursor',    '(name)',                              'Restore the default cursor on a label.'),
     // rex
     ns('rex', 'PCRE-compatible regex module: rex.match(), rex.find(), rex.new()'),
     // Globals / tables
@@ -364,7 +356,6 @@ const MUDLET_GLOBALS: Completion[] = [
     variable('line',         'Current trigger line text'),
     variable('multimatches', 'Multiline trigger captures'),
     variable('color_table',  'Mudlet color table: { colorName = {r, g, b} }'),
-    ns('mudix', 'mudix namespace — scripting API'),
 ];
 
 // ── Global completions (everything available at top level) ────────────────────
@@ -373,6 +364,26 @@ const GLOBAL_COMPLETIONS: Completion[] = [
     ...LUA_KEYWORDS,
     ...LUA_GLOBALS,
     ...MUDLET_GLOBALS,
+];
+
+// ── Reference groups (for the "?" reference panel) ────────────────────────────
+// These map dotted prefixes onto the underlying completion arrays so the
+// reference UI stays in sync with autocomplete without duplicating data.
+
+export interface ReferenceGroup {
+    title:   string;        // e.g. "mudix.windows", "string", "globals"
+    prefix:  string;        // dotted prefix prepended when inserting (e.g. "mudix.windows.")
+    entries: Completion[];
+}
+
+export const REFERENCE_GROUPS: ReferenceGroup[] = [
+    { title: 'Mudlet globals',  prefix: '',                entries: MUDLET_GLOBALS },
+    { title: 'Lua globals',     prefix: '',                entries: LUA_GLOBALS    },
+    { title: 'string',          prefix: 'string.',         entries: STRING_EXT     },
+    { title: 'table',           prefix: 'table.',          entries: TABLE_EXT      },
+    { title: 'math',            prefix: 'math.',           entries: MATH_EXT       },
+    { title: 'io',              prefix: 'io.',             entries: IO_COMPLETIONS },
+    { title: 'lfs',             prefix: 'lfs.',            entries: LFS_COMPLETIONS },
 ];
 
 // ── Hover lookup map: full dotted name → completion entry ────────────────────
@@ -385,13 +396,6 @@ export const HOVER_MAP = new Map<string, Completion>([
     // Namespaced symbols
     ...IO_COMPLETIONS .map(c => [`io.${c.label}`,             c] as [string, Completion]),
     ...LFS_COMPLETIONS.map(c => [`lfs.${c.label}`,            c] as [string, Completion]),
-    ...MUDIX_TOP     .map(c => [`mudix.${c.label}`,          c] as [string, Completion]),
-    ...MUDIX_WINDOWS .map(c => [`mudix.windows.${c.label}`,  c] as [string, Completion]),
-    ...MUDIX_TIMERS  .map(c => [`mudix.timers.${c.label}`,   c] as [string, Completion]),
-    ...MUDIX_ALIASES .map(c => [`mudix.aliases.${c.label}`,  c] as [string, Completion]),
-    ...MUDIX_TRIGGERS.map(c => [`mudix.triggers.${c.label}`, c] as [string, Completion]),
-    ...MUDIX_KEYS    .map(c => [`mudix.keys.${c.label}`,     c] as [string, Completion]),
-    ...MUDIX_GAUGES  .map(c => [`mudix.gauges.${c.label}`,   c] as [string, Completion]),
     ...STRING_EXT    .map(c => [`string.${c.label}`,         c] as [string, Completion]),
     ...TABLE_EXT     .map(c => [`table.${c.label}`,          c] as [string, Completion]),
     ...MATH_EXT      .map(c => [`math.${c.label}`,           c] as [string, Completion]),
@@ -401,18 +405,11 @@ export const HOVER_MAP = new Map<string, Completion>([
 // Order matters: more specific prefixes must come first.
 
 const NAMESPACE_MAP: Array<[string, Completion[]]> = [
-    ['io.',   IO_COMPLETIONS],
-    ['lfs.',  LFS_COMPLETIONS],
-    ['mudix.windows.',  MUDIX_WINDOWS],
-    ['mudix.timers.',   MUDIX_TIMERS],
-    ['mudix.aliases.',  MUDIX_ALIASES],
-    ['mudix.triggers.', MUDIX_TRIGGERS],
-    ['mudix.keys.',     MUDIX_KEYS],
-    ['mudix.gauges.',   MUDIX_GAUGES],
-    ['mudix.',          MUDIX_TOP],
-    ['string.',         STRING_EXT],
-    ['table.',          TABLE_EXT],
-    ['math.',           MATH_EXT],
+    ['io.',     IO_COMPLETIONS],
+    ['lfs.',    LFS_COMPLETIONS],
+    ['string.', STRING_EXT],
+    ['table.',  TABLE_EXT],
+    ['math.',   MATH_EXT],
 ];
 
 // ── Completion source ─────────────────────────────────────────────────────────

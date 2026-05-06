@@ -8,6 +8,7 @@ export type MudClientEvents = {
     'error': [error: unknown];
     'client.connect': void;
     'client.disconnect': void;
+    'client.error': [message: string];
     'gmcp.negotiated': void;
     'socket.incoming': [data: string];
     'socket.outgoing': [data: string];
@@ -30,4 +31,6 @@ export type MudEvents = MudClientEvents & {
     'prompt': void;
     'script.movecursorup': void;
     'script.movecursordown': void;
+    'package.installed': [name: string];
+    'package.uninstalled': [name: string];
 };
