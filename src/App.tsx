@@ -13,6 +13,7 @@ import { FileBrowserModal } from './ui/FileBrowserModal';
 import type { ScriptNode } from './storage/schema';
 import { isEffectivelyEnabled } from './storage/schema';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
+import { applyOutputFont } from './utils/fontLoader';
 
 // Stable fallback so the Zustand selector always returns the same reference
 // when there are no scripts — avoids an infinite re-render loop.
@@ -33,6 +34,7 @@ export default function App() {
     useEffect(() => {
         document.documentElement.dataset.theme = theme;
     }, [theme]);
+    const outputFont = useAppStore(s => s.ui.outputFont);
     const connections = useAppStore(s => s.connections);
     const addConnection = useAppStore(s => s.addConnection);
     const updateConnection = useAppStore(s => s.updateConnection);
@@ -43,6 +45,13 @@ export default function App() {
     const saveDockExtents = useAppStore(s => s.saveDockExtents);
 
     const { aliasEngineRef, triggerEngineRef, engineRef } = useEngines(session, sessionStarted, activeConnection);
+
+    // Apply the persisted output font on mount and on every change. Re-running
+    // when the active connection changes lets VFS-stored fonts re-register
+    // against the newly mounted profile's VFS.
+    useEffect(() => {
+        void applyOutputFont(outputFont, engineRef.current?.currentVFS ?? null);
+    }, [outputFont, activeConnection, engineRef]);
 
     // Reload scripts whenever the store changes for the active connection.
     const activeScripts = useAppStore(s =>
@@ -311,7 +320,12 @@ export default function App() {
                     onDelete={removeConnection}
                     onOpenSettings={handleOpenSettings}
                 />
-                {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+                {settingsOpen && (
+                <SettingsModal
+                    onClose={() => setSettingsOpen(false)}
+                    vfs={engineRef.current?.currentVFS ?? null}
+                />
+            )}
             </div>
         );
     }
@@ -331,7 +345,12 @@ export default function App() {
                 onOpenSettings={handleOpenSettings}
                 onContextMenu={e => windowContextMenuHandlerRef.current?.(e)}
             />
-            {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+            {settingsOpen && (
+                <SettingsModal
+                    onClose={() => setSettingsOpen(false)}
+                    vfs={engineRef.current?.currentVFS ?? null}
+                />
+            )}
             <div className="app-content">
                 <ContentLayout
                     session={session}

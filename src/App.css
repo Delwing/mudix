@@ -771,6 +771,7 @@ html, body, #root {
     padding: 6px 10px 4px;
     background: var(--console-bg);
     color: var(--console-text);
+    font-family: var(--font-output, var(--font-mono)), monospace;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
 }
@@ -834,6 +835,7 @@ html, body, #root {
     right: 6px; /* leave scrollbar track visible */
     background: var(--console-bg);
     color: var(--console-text);
+    font-family: var(--font-output, var(--font-mono)), monospace;
     overflow: hidden;
     z-index: 2;
 }
@@ -1213,7 +1215,7 @@ html, body, #root {
 }
 
 .settings-modal {
-    width: 400px;
+    width: min(640px, 92vw);
     max-height: 80vh;
 }
 
@@ -1743,6 +1745,14 @@ html, body, #root {
     display: flex;
     align-items: center;
     gap: 12px;
+}
+
+.settings-row--top {
+    align-items: flex-start;
+}
+
+.settings-row--top .settings-label {
+    padding-top: 6px;
 }
 
 .settings-label {

@@ -4,3 +4,4 @@ export { FormField, CheckField } from './FormField';
 export { ContextMenu } from './ContextMenu';
 export { ConfirmDialog, ConfirmProvider, useConfirm } from './ConfirmDialog';
 export type { ConfirmButton, ConfirmOptions } from './ConfirmDialog';
+export { FontPicker } from './FontPicker';

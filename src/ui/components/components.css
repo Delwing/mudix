@@ -246,3 +246,159 @@
     -webkit-backdrop-filter: blur(12px);
     flex-shrink: 0;
 }
+
+/* ── FontPicker ─────────────────────────────────────────────── */
+.font-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.font-picker__current {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.font-picker__current strong {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.font-picker__kind {
+    color: var(--text-dim);
+    font-style: normal;
+    font-size: 11px;
+}
+
+.font-picker__muted {
+    color: var(--text-dim);
+}
+
+.font-picker__tabs {
+    display: flex;
+    gap: 2px;
+    border-bottom: 1px solid var(--border);
+}
+
+.font-picker__tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 10px;
+    color: var(--text-dim);
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.font-picker__tab:hover {
+    color: var(--text);
+}
+
+.font-picker__tab--active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.font-picker__body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.font-picker__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.font-picker__name {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.font-picker__hint {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin: 0;
+    line-height: 1.5;
+}
+
+.font-picker__hint code {
+    font-family: var(--font-mono), monospace;
+    font-size: 10.5px;
+    background: var(--bg-input);
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+.font-picker__validity {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 11px;
+    margin: 0;
+}
+
+.font-picker__validity--ok  { color: var(--accent); }
+.font-picker__validity--bad { color: var(--danger); }
+
+.font-picker__list {
+    max-height: 180px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    display: flex;
+    flex-direction: column;
+}
+
+.font-picker__item {
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 6px 10px;
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+}
+
+.font-picker__item:last-child { border-bottom: none; }
+
+.font-picker__item:hover {
+    background: var(--bg-glass);
+    color: var(--accent);
+}
+
+.font-picker__item--selected {
+    background: var(--accent-focus);
+    color: var(--accent);
+}
+
+.font-picker__empty {
+    padding: 10px;
+    text-align: center;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin: 0;
+}
+
+.font-picker__preview {
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text);
+    background: var(--bg-input);
+}

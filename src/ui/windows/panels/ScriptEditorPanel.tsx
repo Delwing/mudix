@@ -695,7 +695,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
             setErrorLog(prev => [...prev, entry]);
             if (level === 'error') setUnreadErrors(prev => prev + 1);
         });
-    }, [session]);
+    }, [session, connectionId]);
 
     // Clear unread badge when visiting the Errors tab
     useEffect(() => {
@@ -1409,101 +1409,102 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
                                     />
                                 </div>
 
-                                {/* Matching section */}
-                                <div className="script-editor__trigger-card">
-                                    <span className="script-editor__trigger-card-label">Matching</span>
-                                    <div className="script-editor__trigger-card-row">
-                                        <label className="script-editor__trigger-opt">
-                                            <input
-                                                type="checkbox"
-                                                checked={editMultipleMatches}
-                                                onChange={e => { setEditMultipleMatches(e.target.checked); setDirty(true); }}
-                                            />
-                                            Multiple matches
-                                        </label>
-                                        <label className="script-editor__trigger-opt script-editor__trigger-opt--fire">
-                                            Fire length
-                                            <input
-                                                type="number"
-                                                className="script-editor__fire-length"
-                                                value={editFireLength}
-                                                min={0}
-                                                title="0 = only the current line; N = also open for N more lines"
-                                                onChange={e => {
-                                                    const v = parseInt(e.target.value, 10);
-                                                    setEditFireLength(isNaN(v) || v < 0 ? 0 : v);
-                                                    setDirty(true);
-                                                }}
-                                            />
-                                        </label>
-                                    </div>
-                                    <div className="script-editor__trigger-card-row">
-                                        <label className="script-editor__trigger-opt">
-                                            <input
-                                                type="checkbox"
-                                                checked={editMultiline}
-                                                onChange={e => { setEditMultiline(e.target.checked); setDirty(true); }}
-                                            />
-                                            AND (multiline)
-                                        </label>
-                                        {editMultiline && (
+                                {/* Matching & Highlight sections (side by side when space allows) */}
+                                <div className="script-editor__trigger-cards-row">
+                                    {/* Matching section */}
+                                    <div className="script-editor__trigger-card">
+                                        <span className="script-editor__trigger-card-label">Matching</span>
+                                        <div className="script-editor__trigger-card-row">
+                                            <label className="script-editor__trigger-opt">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editMultipleMatches}
+                                                    onChange={e => { setEditMultipleMatches(e.target.checked); setDirty(true); }}
+                                                />
+                                                Multiple matches
+                                            </label>
                                             <label className="script-editor__trigger-opt script-editor__trigger-opt--fire">
-                                                Delta
+                                                Fire length
                                                 <input
                                                     type="number"
                                                     className="script-editor__fire-length"
-                                                    value={editDelta}
+                                                    value={editFireLength}
                                                     min={0}
-                                                    title="0 = unlimited; N = max lines between first and last match"
+                                                    title="0 = only the current line; N = also open for N more lines"
                                                     onChange={e => {
                                                         const v = parseInt(e.target.value, 10);
-                                                        setEditDelta(isNaN(v) || v < 0 ? 0 : v);
+                                                        setEditFireLength(isNaN(v) || v < 0 ? 0 : v);
                                                         setDirty(true);
                                                     }}
                                                 />
-                                                lines
                                             </label>
-                                        )}
+                                        </div>
+                                        <div className="script-editor__trigger-card-row">
+                                            <label className="script-editor__trigger-opt">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editMultiline}
+                                                    onChange={e => { setEditMultiline(e.target.checked); setDirty(true); }}
+                                                />
+                                                AND (multiline)
+                                            </label>
+                                            {editMultiline && (
+                                                <label className="script-editor__trigger-opt script-editor__trigger-opt--fire">
+                                                    Delta
+                                                    <input
+                                                        type="number"
+                                                        className="script-editor__fire-length"
+                                                        value={editDelta}
+                                                        min={0}
+                                                        title="0 = unlimited; N = max lines between first and last match"
+                                                        onChange={e => {
+                                                            const v = parseInt(e.target.value, 10);
+                                                            setEditDelta(isNaN(v) || v < 0 ? 0 : v);
+                                                            setDirty(true);
+                                                        }}
+                                                    />
+                                                    lines
+                                                </label>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
 
-                                {/* Highlight section */}
-                                <div className="script-editor__trigger-card">
-                                    <span className="script-editor__trigger-card-label">Highlight</span>
-                                    <div className="script-editor__trigger-card-row">
-                                        <label className="script-editor__trigger-opt">
-                                            <input
-                                                type="checkbox"
-                                                checked={!!editHighlightFg}
-                                                onChange={e => { setEditHighlightFg(e.target.checked ? '#ff0000' : ''); setDirty(true); }}
-                                            />
-                                            FG
-                                        </label>
-                                        {editHighlightFg && (
+                                    {/* Highlight section */}
+                                    <div className="script-editor__trigger-card">
+                                        <span className="script-editor__trigger-card-label">Highlight</span>
+                                        <div className="script-editor__trigger-card-row">
+                                            <label className="script-editor__trigger-opt">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!editHighlightFg}
+                                                    onChange={e => { setEditHighlightFg(e.target.checked ? '#ff0000' : ''); setDirty(true); }}
+                                                />
+                                                FG
+                                            </label>
                                             <input
                                                 type="color"
                                                 className="script-editor__color-pick"
-                                                value={editHighlightFg}
+                                                value={editHighlightFg || '#ff0000'}
+                                                disabled={!editHighlightFg}
                                                 onChange={e => { setEditHighlightFg(e.target.value); setDirty(true); }}
                                             />
-                                        )}
-                                        <div className="script-editor__trigger-card-divider" />
-                                        <label className="script-editor__trigger-opt">
-                                            <input
-                                                type="checkbox"
-                                                checked={!!editHighlightBg}
-                                                onChange={e => { setEditHighlightBg(e.target.checked ? '#000080' : ''); setDirty(true); }}
-                                            />
-                                            BG
-                                        </label>
-                                        {editHighlightBg && (
+                                            <div className="script-editor__trigger-card-divider" />
+                                            <label className="script-editor__trigger-opt">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!editHighlightBg}
+                                                    onChange={e => { setEditHighlightBg(e.target.checked ? '#000080' : ''); setDirty(true); }}
+                                                />
+                                                BG
+                                            </label>
                                             <input
                                                 type="color"
                                                 className="script-editor__color-pick"
-                                                value={editHighlightBg}
+                                                value={editHighlightBg || '#000080'}
+                                                disabled={!editHighlightBg}
                                                 onChange={e => { setEditHighlightBg(e.target.value); setDirty(true); }}
                                             />
-                                        )}
+                                        </div>
                                     </div>
                                 </div>
 

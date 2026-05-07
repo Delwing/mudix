@@ -18,12 +18,25 @@ export interface MudConnection {
 
 export type Theme = 'dark' | 'light' | 'amber' | 'sky';
 
+/**
+ * Where the output font came from. `system` is the default — a name typed by
+ * the user or chosen from `navigator.fonts.query()`; nothing is registered.
+ * `url` injects a `<link rel="stylesheet">` into <head> (e.g. Google Fonts).
+ * `vfs` reads font bytes from the active profile's VFS and registers them via
+ * the FontFace API. URL/VFS sources need to be re-applied on every page load.
+ */
+export type OutputFontSource =
+    | { kind: 'system'; family: string }
+    | { kind: 'url'; family: string; url: string }
+    | { kind: 'vfs'; family: string; path: string };
+
 export interface UISettings {
     showTimestamps: boolean;
     fontSize: number;
     stickyLines: number;
     outputBackground: string;
     theme: Theme;
+    outputFont?: OutputFontSource;
 }
 
 // ── Tree node base ────────────────────────────────────────────────────────────

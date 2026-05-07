@@ -1168,6 +1168,12 @@
 }
 
 /* ── Trigger card sections ────────────────────────────────── */
+.script-editor__trigger-cards-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
 .script-editor__trigger-card {
     display: flex;
     flex-direction: column;
@@ -1177,6 +1183,8 @@
     background: color-mix(in srgb, var(--bg-surface) 35%, transparent);
     border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
     border-radius: var(--radius);
+    flex: 1 1 auto;
+    min-width: 200px;
 }
 
 .script-editor__trigger-card-label {
@@ -1194,9 +1202,9 @@
 .script-editor__trigger-card-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 8px;
     min-height: 20px;
+    flex-wrap: wrap;
 }
 
 .script-editor__trigger-card-divider {
@@ -1209,13 +1217,14 @@
 .script-editor__trigger-opt {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     font-family: var(--font-ui), sans-serif;
     font-size: 11px;
     color: var(--text-dim);
     cursor: pointer;
     white-space: nowrap;
     user-select: none;
+    flex-shrink: 0;
 }
 
 .script-editor__trigger-opt input[type="checkbox"] {
@@ -1250,7 +1259,7 @@
 
 /* ── Trigger color pickers ────────────────────────────────── */
 .script-editor__color-pick {
-    width: 28px;
+    width: 24px;
     height: 20px;
     padding: 0;
     border: 1px solid var(--border);
@@ -1268,5 +1277,10 @@
 .script-editor__color-pick::-webkit-color-swatch {
     border: none;
     border-radius: 2px;
+}
+
+.script-editor__color-pick:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 

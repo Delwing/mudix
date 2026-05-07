@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type React from 'react';
-import { useAppStore, type Theme } from '../storage';
-import { Button, Input } from './components';
+import { useAppStore, type Theme, type OutputFontSource } from '../storage';
+import { Button, Input, FontPicker } from './components';
+import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
 const DEFAULT_BG = '#090909';
 
@@ -18,12 +19,18 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
 
 interface SettingsModalProps {
     onClose: () => void;
+    vfs?: ProfileVFS | null;
 }
 
-export function SettingsModal({ onClose }: SettingsModalProps) {
+export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
     const outputBackground = useAppStore(s => s.ui.outputBackground);
     const theme = useAppStore(s => s.ui.theme);
+    const outputFont = useAppStore(s => s.ui.outputFont);
     const patchUI = useAppStore(s => s.patchUI);
+
+    const handleFontChange = (next: OutputFontSource | undefined) => {
+        patchUI({ outputFont: next });
+    };
 
     const [text, setText] = useState(outputBackground);
     const [pickerColor, setPickerColor] = useState(
@@ -99,6 +106,10 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                                 />
                                 <Button variant="ghost" size="sm" onClick={handleReset}>Reset</Button>
                             </div>
+                        </div>
+                        <div className="settings-row settings-row--top">
+                            <label className="settings-label">Font</label>
+                            <FontPicker value={outputFont} onChange={handleFontChange} vfs={vfs} />
                         </div>
                     </section>
                 </div>

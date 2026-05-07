@@ -1,0 +1,405 @@
+import { useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
+import type { ProfileVFS } from '../../scripting/vfs/ProfileVFS';
+import type { OutputFontSource } from '../../storage';
+import { Button } from './Button';
+import { Input } from './Input';
+import {
+    isFontAvailable,
+    queryLocalFonts,
+    isLocalFontApiSupported,
+    loadFontFromUrl,
+    loadFontFromVfs,
+    type LocalFontEntry,
+} from '../../utils/fontLoader';
+
+const FONTS_DIR = 'fonts';
+const FONT_FILE_RE = /\.(ttf|otf|woff2?|ttc)$/i;
+
+type Tab = 'name' | 'system' | 'url' | 'vfs';
+
+interface FontPickerProps {
+    value: OutputFontSource | undefined;
+    onChange: (next: OutputFontSource | undefined) => void;
+    vfs: ProfileVFS | null;
+}
+
+function initialTab(value: OutputFontSource | undefined): Tab {
+    if (value?.kind === 'url') return 'url';
+    if (value?.kind === 'vfs') return 'vfs';
+    return 'name';
+}
+
+export function FontPicker({ value, onChange, vfs }: FontPickerProps) {
+    const [tab, setTab] = useState<Tab>(() => initialTab(value));
+
+    return (
+        <div className="font-picker">
+            <div className="font-picker__current">
+                {value
+                    ? <span>Active: <strong>{value.family}</strong> <em className="font-picker__kind">({value.kind})</em></span>
+                    : <span className="font-picker__muted">No font set — using default monospace.</span>}
+                {value && (
+                    <Button variant="ghost" size="sm" onClick={() => onChange(undefined)}>Reset</Button>
+                )}
+            </div>
+            <div className="font-picker__tabs">
+                {(['name', 'system', 'url', 'vfs'] as const).map(t => (
+                    <button
+                        key={t}
+                        type="button"
+                        className={`font-picker__tab${tab === t ? ' font-picker__tab--active' : ''}`}
+                        onClick={() => setTab(t)}
+                    >
+                        {t === 'name' ? 'By name' : t === 'system' ? 'Installed' : t === 'url' ? 'From URL' : 'From file'}
+                    </button>
+                ))}
+            </div>
+            <div className="font-picker__body">
+                {tab === 'name'   && <NameTab   value={value} onChange={onChange} />}
+                {tab === 'system' && <SystemTab value={value} onChange={onChange} />}
+                {tab === 'url'    && <UrlTab    value={value} onChange={onChange} />}
+                {tab === 'vfs'    && <VfsTab    value={value} onChange={onChange} vfs={vfs} />}
+            </div>
+            {value?.family && <FontPreview family={value.family} />}
+        </div>
+    );
+}
+
+// ── By name ──────────────────────────────────────────────────────────────────
+
+interface SubProps {
+    value: OutputFontSource | undefined;
+    onChange: (next: OutputFontSource | undefined) => void;
+}
+
+function NameTab({ value, onChange }: SubProps) {
+    const [name, setName] = useState(value?.kind === 'system' ? value.family : '');
+    const trimmed = name.trim();
+    const valid = useMemo(() => (trimmed ? isFontAvailable(trimmed) : null), [trimmed]);
+
+    return (
+        <div className="font-picker__name">
+            <div className="font-picker__row">
+                <Input
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="e.g. Cascadia Code"
+                    spellCheck={false}
+                />
+                <Button
+                    onClick={() => onChange({ kind: 'system', family: trimmed })}
+                    disabled={!trimmed}
+                >
+                    Apply
+                </Button>
+            </div>
+            {trimmed && (
+                <p className={`font-picker__validity${valid ? ' font-picker__validity--ok' : ' font-picker__validity--bad'}`}>
+                    {valid ? '✓ Detected on this system.' : '✗ Not detected — applying anyway will fall back to monospace.'}
+                </p>
+            )}
+        </div>
+    );
+}
+
+// ── Installed (Local Font Access) ────────────────────────────────────────────
+
+function SystemTab({ value, onChange }: SubProps) {
+    const supported = isLocalFontApiSupported();
+    const [families, setFamilies] = useState<string[] | null>(null);
+    const [filter, setFilter] = useState('');
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+
+    const handleQuery = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const list = await queryLocalFonts();
+            const set = new Set<string>();
+            for (const f of list as LocalFontEntry[]) set.add(f.family);
+            setFamilies([...set].sort((a, b) => a.localeCompare(b)));
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    if (!supported) {
+        return (
+            <p className="font-picker__hint">
+                Your browser doesn't support the Local Font Access API (Chromium-only).
+                Use one of the other tabs to pick a font.
+            </p>
+        );
+    }
+
+    if (!families) {
+        return (
+            <div className="font-picker__name">
+                <p className="font-picker__hint">
+                    Click below to grant permission and list installed fonts.
+                </p>
+                <Button onClick={handleQuery} disabled={loading}>
+                    {loading ? 'Querying…' : 'List installed fonts'}
+                </Button>
+                {error && <p className="font-picker__validity font-picker__validity--bad">{error}</p>}
+            </div>
+        );
+    }
+
+    const filtered = filter
+        ? families.filter(f => f.toLowerCase().includes(filter.toLowerCase()))
+        : families;
+
+    return (
+        <>
+            <div className="font-picker__row">
+                <Input
+                    value={filter}
+                    onChange={e => setFilter(e.target.value)}
+                    placeholder={`Filter ${families.length} families…`}
+                    spellCheck={false}
+                />
+                <Button variant="ghost" size="sm" onClick={handleQuery} disabled={loading}>Refresh</Button>
+            </div>
+            <div className="font-picker__list">
+                {filtered.length === 0 && <p className="font-picker__empty">No matches.</p>}
+                {filtered.map(family => (
+                    <button
+                        key={family}
+                        type="button"
+                        className={`font-picker__item${value?.family === family ? ' font-picker__item--selected' : ''}`}
+                        style={{ fontFamily: `"${family}", monospace` }}
+                        onClick={() => onChange({ kind: 'system', family })}
+                    >
+                        {family}
+                    </button>
+                ))}
+            </div>
+        </>
+    );
+}
+
+// ── From URL (Google Fonts etc.) ─────────────────────────────────────────────
+
+function guessFamilyFromUrl(url: string): string {
+    try {
+        const u = new URL(url);
+        const fam = u.searchParams.get('family');
+        if (!fam) return '';
+        // Google Fonts: "Fira+Code:wght@400;700" → "Fira Code"
+        return fam.split(':')[0].replace(/\+/g, ' ');
+    } catch {
+        return '';
+    }
+}
+
+function UrlTab({ value, onChange }: SubProps) {
+    const [url, setUrl] = useState(value?.kind === 'url' ? value.url : '');
+    const [family, setFamily] = useState(value?.kind === 'url' ? value.family : '');
+    const [familyTouched, setFamilyTouched] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
+    // Auto-fill family from URL if user hasn't typed one.
+    useEffect(() => {
+        if (familyTouched || !url.trim()) return;
+        const guess = guessFamilyFromUrl(url.trim());
+        if (guess) setFamily(guess);
+    }, [url, familyTouched]);
+
+    const handleApply = async () => {
+        const f = family.trim();
+        const u = url.trim();
+        if (!f || !u) return;
+        setLoading(true);
+        setStatus(null);
+        try {
+            await loadFontFromUrl(f, u);
+            const ok = isFontAvailable(f);
+            onChange({ kind: 'url', family: f, url: u });
+            setStatus(ok
+                ? { ok: true,  msg: '✓ Loaded.' }
+                : { ok: false, msg: 'Stylesheet linked, but family not detected — check name spelling and CORS.' });
+        } catch (e) {
+            setStatus({ ok: false, msg: e instanceof Error ? e.message : String(e) });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="font-picker__name">
+            <p className="font-picker__hint">
+                Paste a CSS URL (e.g. <code>https://fonts.googleapis.com/css2?family=Fira+Code</code>).
+                The family field auto-fills from Google Fonts URLs.
+            </p>
+            <Input
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+                placeholder="Stylesheet URL"
+                spellCheck={false}
+            />
+            <Input
+                value={family}
+                onChange={e => { setFamily(e.target.value); setFamilyTouched(true); }}
+                placeholder="Font family name (must match @font-face)"
+                spellCheck={false}
+            />
+            <div className="font-picker__row">
+                <Button onClick={handleApply} disabled={loading || !family.trim() || !url.trim()}>
+                    {loading ? 'Loading…' : 'Load & apply'}
+                </Button>
+            </div>
+            {status && (
+                <p className={`font-picker__validity${status.ok ? ' font-picker__validity--ok' : ' font-picker__validity--bad'}`}>
+                    {status.msg}
+                </p>
+            )}
+        </div>
+    );
+}
+
+// ── From VFS file ────────────────────────────────────────────────────────────
+
+interface VfsTabProps extends SubProps {
+    vfs: ProfileVFS | null;
+}
+
+function listFontFiles(vfs: ProfileVFS): string[] {
+    const dir = `${vfs.profilePath}/${FONTS_DIR}`;
+    if (!vfs.exists(dir)) return [];
+    try {
+        return vfs.readdir(dir).filter(name => FONT_FILE_RE.test(name)).sort();
+    } catch {
+        return [];
+    }
+}
+
+function VfsTab({ value, onChange, vfs }: VfsTabProps) {
+    const [files, setFiles] = useState<string[]>(() => (vfs ? listFontFiles(vfs) : []));
+    const [selected, setSelected] = useState(value?.kind === 'vfs' ? value.path : '');
+    const [family, setFamily] = useState(value?.kind === 'vfs' ? value.family : '');
+    const [familyTouched, setFamilyTouched] = useState(false);
+    const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+    const [loading, setLoading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        setFiles(vfs ? listFontFiles(vfs) : []);
+    }, [vfs]);
+
+    // Auto-fill family from filename if user hasn't typed one.
+    useEffect(() => {
+        if (familyTouched || !selected) return;
+        const base = selected.substring(selected.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+        if (base) setFamily(base);
+    }, [selected, familyTouched]);
+
+    if (!vfs) {
+        return <p className="font-picker__hint">No profile mounted — connect first to use VFS-stored fonts.</p>;
+    }
+
+    const dir = `${vfs.profilePath}/${FONTS_DIR}`;
+
+    const handleUpload = (e: ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                if (!vfs.exists(dir)) vfs.mkdir(dir);
+                const path = `${dir}/${file.name}`;
+                vfs.writeBinaryFile(path, new Uint8Array(reader.result as ArrayBuffer));
+                setFiles(listFontFiles(vfs));
+                setSelected(path);
+            } catch (err) {
+                setStatus({ ok: false, msg: err instanceof Error ? err.message : String(err) });
+            }
+        };
+        reader.onerror = () => setStatus({ ok: false, msg: 'Failed to read file.' });
+        reader.readAsArrayBuffer(file);
+    };
+
+    const handleApply = async () => {
+        const f = family.trim();
+        if (!f || !selected) return;
+        setLoading(true);
+        setStatus(null);
+        try {
+            await loadFontFromVfs(f, selected, vfs);
+            onChange({ kind: 'vfs', family: f, path: selected });
+            setStatus({ ok: true, msg: '✓ Loaded.' });
+        } catch (e) {
+            setStatus({ ok: false, msg: e instanceof Error ? e.message : String(e) });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="font-picker__name">
+            <p className="font-picker__hint">
+                Font files live under <code>{FONTS_DIR}/</code> in your profile (.ttf/.otf/.woff/.woff2).
+            </p>
+            <div className="font-picker__row">
+                <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()}>
+                    Upload font…
+                </Button>
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".ttf,.otf,.woff,.woff2,.ttc"
+                    style={{ display: 'none' }}
+                    onChange={handleUpload}
+                />
+            </div>
+            <div className="font-picker__list">
+                {files.length === 0 && <p className="font-picker__empty">No font files in {FONTS_DIR}/</p>}
+                {files.map(name => {
+                    const path = `${dir}/${name}`;
+                    return (
+                        <button
+                            key={name}
+                            type="button"
+                            className={`font-picker__item${selected === path ? ' font-picker__item--selected' : ''}`}
+                            onClick={() => setSelected(path)}
+                        >
+                            {name}
+                        </button>
+                    );
+                })}
+            </div>
+            <Input
+                value={family}
+                onChange={e => { setFamily(e.target.value); setFamilyTouched(true); }}
+                placeholder="Family name to register as"
+                spellCheck={false}
+            />
+            <div className="font-picker__row">
+                <Button onClick={handleApply} disabled={loading || !selected || !family.trim()}>
+                    {loading ? 'Loading…' : 'Apply'}
+                </Button>
+            </div>
+            {status && (
+                <p className={`font-picker__validity${status.ok ? ' font-picker__validity--ok' : ' font-picker__validity--bad'}`}>
+                    {status.msg}
+                </p>
+            )}
+        </div>
+    );
+}
+
+// ── Preview ──────────────────────────────────────────────────────────────────
+
+function FontPreview({ family }: { family: string }) {
+    return (
+        <div className="font-picker__preview" style={{ fontFamily: `"${family}", monospace` }}>
+            <div>The quick brown fox jumps over the lazy dog.</div>
+            <div>0123456789  !@#$%^&amp;*()  iIlL10 oO0</div>
+        </div>
+    );
+}
