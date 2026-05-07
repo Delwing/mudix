@@ -12,6 +12,7 @@ import LUASQL_LUA from './Luasql.lua?raw';
 import {setupRex} from './rex';
 import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
 import {QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
+import {HttpService} from '../http/HttpService';
 
 // All *.lua files under mudlet-lua/ are served via the VFS at /lua/<relative-path>.
 // Adding a new file to the directory tree automatically makes it available to dofile().
@@ -29,6 +30,20 @@ const DOCKMAP: Record<string, string> = {
     main: 'main',
 }
 
+// Mudlet's HTTP APIs accept Lua header tables of the shape
+// `{["Header-Name"] = "value"}`. wasmoon converts string-keyed Lua tables to
+// plain JS objects on the way in, so Object.entries gives us the pairs we
+// need for `fetch({ headers })`. Numeric/boolean values are stringified.
+function luaTableToHeaders(h: unknown): Record<string, string> | undefined {
+    if (!h || typeof h !== 'object') return undefined;
+    const out: Record<string, string> = {};
+    for (const k of Object.keys(h as Record<string, unknown>)) {
+        const v = (h as Record<string, unknown>)[k];
+        if (v != null) out[k] = String(v);
+    }
+    return Object.keys(out).length ? out : undefined;
+}
+
 
 export class LuaRuntime implements IScriptingRuntime {
 
@@ -38,6 +53,8 @@ export class LuaRuntime implements IScriptingRuntime {
     private _isPrompt = false;
     private currentMatches: string[] = [];
     private _denyCurrentSend = false;
+    private destroyed = false;
+    private http!: HttpService;
 
     private constructor(
         private readonly lua: Lua,
@@ -492,6 +509,50 @@ export class LuaRuntime implements IScriptingRuntime {
         // ── Network ───────────────────────────────────────────────────────────
         this.lua.global.set('getNetworkLatency', () => this.api.getNetworkLatency() / 1000);
 
+        // ── HTTP / downloads ──────────────────────────────────────────────────
+        // Mudlet's HTTP API is fire-and-forget. The service runs each request
+        // in the background and reports completion via sysXxxHttpDone /
+        // sysDownloadDone events; we route those through emitEvent so they
+        // dispatch to user handlers the same as gmcp/connect/etc. Late-arriving
+        // emits after destroy() are no-ops thanks to the `destroyed` guard.
+        this.http = new HttpService(
+            (event, args) => this.emitEvent(event, args),
+            () => this.vfs,
+        );
+        this.lua.global.set('downloadFile', (saveTo: unknown, url: unknown) => {
+            this.http.downloadFile(String(saveTo ?? ''), String(url ?? ''));
+        });
+        this.lua.global.set('getHTTP', (url: unknown, headers?: unknown) => {
+            this.http.getHTTP(String(url ?? ''), luaTableToHeaders(headers));
+        });
+        this.lua.global.set('postHTTP', (data: unknown, url: unknown, headers?: unknown, file?: unknown) => {
+            this.http.postHTTP(
+                data == null ? null : String(data),
+                String(url ?? ''),
+                luaTableToHeaders(headers),
+                file == null ? undefined : String(file),
+            );
+        });
+        this.lua.global.set('putHTTP', (data: unknown, url: unknown, headers?: unknown, file?: unknown) => {
+            this.http.putHTTP(
+                data == null ? null : String(data),
+                String(url ?? ''),
+                luaTableToHeaders(headers),
+                file == null ? undefined : String(file),
+            );
+        });
+        this.lua.global.set('deleteHTTP', (url: unknown, headers?: unknown) => {
+            this.http.deleteHTTP(String(url ?? ''), luaTableToHeaders(headers));
+        });
+        this.lua.global.set('customHTTP', (method: unknown, data: unknown, url: unknown, headers?: unknown) => {
+            this.http.customHTTP(
+                String(method ?? ''),
+                data == null ? null : String(data),
+                String(url ?? ''),
+                luaTableToHeaders(headers),
+            );
+        });
+
         // ── Window geometry ───────────────────────────────────────────────────
         // Returns [w, h] from JS; a Lua wrapper below unpacks it to two values.
         this.lua.global.set('__getMainWindowSize', () => this.api.getMainWindowSize());
@@ -945,6 +1006,10 @@ export class LuaRuntime implements IScriptingRuntime {
     }
 
     emitEvent(event: string, args: unknown[]): void {
+        // HTTP callbacks fire from background fetches and may resolve after the
+        // owning ScriptingEngine tore us down; emitting on a closed lua_State
+        // throws a confusing wasm error. Drop the event silently in that case.
+        if (this.destroyed) return;
         this.lua.global.set('__mudix_evt_args', args);
         this.lua.global.set('__mudix_evt_name', event);
         this.runChunk('__mudix_dispatch_event()', `event "${event}"`);
@@ -974,6 +1039,7 @@ export class LuaRuntime implements IScriptingRuntime {
     }
 
     destroy(): void {
+        this.destroyed = true;
         this.lua.global.close();
     }
 }
