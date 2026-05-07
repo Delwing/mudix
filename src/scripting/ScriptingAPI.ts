@@ -149,6 +149,12 @@ export class ScriptingAPI {
     // can await DB / other async work before deciding.
     private sendRequestDispatcher: ((text: string) => Promise<boolean>) | null = null;
 
+    // Callback set by ScriptingEngine. Enqueues a synthetic flushLines batch
+    // onto the engine's flushQueue and resolves once trigger processing
+    // (including any DB awaits inside handlers) finishes — so feedTriggers can
+    // preserve Mudlet sync semantics for Lua callers.
+    private feedDispatcher: ((groups: { text: string; type: string }[]) => Promise<void>) | null = null;
+
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
     constructor(
@@ -189,6 +195,10 @@ export class ScriptingAPI {
 
     setSendRequestDispatcher(fn: ((text: string) => Promise<boolean>) | null): void {
         this.sendRequestDispatcher = fn;
+    }
+
+    setFeedDispatcher(fn: ((groups: { text: string; type: string }[]) => Promise<void>) | null): void {
+        this.feedDispatcher = fn;
     }
 
     // ── Echo / output ─────────────────────────────────────────────────────────
@@ -437,10 +447,17 @@ export class ScriptingAPI {
 
     /**
      * Feed `text` through the trigger pipeline as if it arrived from the MUD.
-     * ScriptingEngine's flushLines handler takes care of both rendering (via
-     * 'message') and trigger processing, so we only emit flushLines here.
+     * Returns a Promise that resolves once triggers (including any DB awaits
+     * inside handlers) have run — Lua's Bridge.lua wrapper __awaits this so
+     * `feedTriggers(line)` keeps Mudlet's sync semantics for callers.
+     *
+     * The complete-lines branch goes through ScriptingEngine.enqueueFeedBatch
+     * so it serializes onto the same queue as network-driven flushLines,
+     * preserving line ordering and ANSI carry continuity. The remainder is
+     * rendered after the batch resolves to avoid colliding with the batch's
+     * deferred-echo flush (which inspects/clears mainConsole's partial).
      */
-    feedTriggers(text: string): void {
+    async feedTriggers(text: string): Promise<void> {
         const lines = text.split('\n');
         const remainder = lines[lines.length - 1];
         const completeLines = lines.slice(0, -1);
@@ -453,9 +470,16 @@ export class ScriptingAPI {
             return;
         }
 
-        // Complete lines present — clear console so trigger echo accumulates fresh.
+        // Wipe any stray partial left by direct echo() calls so trigger echo
+        // accumulates fresh during batch processing.
         this.mainConsole.clear();
-        this.session.events.emit('flushLines', [{ text: completeLines.join('\n'), type: 'mud' }]);
+
+        if (this.feedDispatcher) {
+            await this.feedDispatcher([{ text: completeLines.join('\n'), type: 'mud' }]);
+        } else {
+            // Engine not wired yet (early init): fall back to fire-and-forget emit.
+            this.session.events.emit('flushLines', [{ text: completeLines.join('\n'), type: 'mud' }]);
+        }
 
         if (remainder) {
             this.mainConsole.echo(remainder);

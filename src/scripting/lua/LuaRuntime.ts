@@ -317,6 +317,8 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('fg',          (name: string)  => this.api.fg(name));
         this.lua.global.set('bg',          (name: string)  => this.api.bg(name));
         this.lua.global.set('insertText',  (text: string)  => this.api.insertText(text));
+        // Returns a Promise so Bridge.lua's wrapper can __await it — keeps
+        // Mudlet sync semantics now that the trigger pipeline is async.
         this.lua.global.set('feedTriggers',(text: string)  => this.api.feedTriggers(text));
         this.lua.global.set('deleteLine',  (win?: string)  => this.api.deleteLine(win));
         this.lua.global.set('printError',  (text: string)  => this.api.printError(text));

@@ -67,7 +67,7 @@ export class ScriptingEngine {
     private flushQueue: Promise<unknown> = Promise.resolve();
 
     constructor(
-        session: MudSession,
+        private readonly session: MudSession,
         private readonly aliasEngine: AliasEngine,
         private readonly triggerEngine: TriggerEngine,
         private readonly timerEngine: TimerEngine,
@@ -107,6 +107,7 @@ export class ScriptingEngine {
             });
             this.api.setSendRequestDispatcher(async (text) =>
                 (await this.runtimes.lua?.dispatchSendRequest(text)) ?? false);
+            this.api.setFeedDispatcher((groups) => this.enqueueFeedBatch(groups));
             this.triggerEngine.setLuaEval(async (code) => {
                 const lua = this.runtimes.lua;
                 return lua ? await lua.evalTriggerPattern(code) : false;
@@ -359,6 +360,66 @@ export class ScriptingEngine {
     }
 
     /**
+     * Run a flushLines batch end-to-end: triggers, rendering, then deferred-echo
+     * flush. Shared between the network-driven flushLines listener and the
+     * scripting `feedTriggers` API so both paths preserve identical semantics
+     * (line ordering, ANSI carry, trigger-echo placement).
+     */
+    private async processFlushBatch(groups: { text: string; type: string }[]): Promise<void> {
+        const session = this.session;
+        for (const { text, type } of groups) {
+            try {
+                const lines = text.split('\n');
+                if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+
+                let carryState: FormatStateSnapshot | undefined;
+
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    const plain = line.replace(ANSI_RE, '');
+                    const isPrompt = this.promptPending && i === lines.length - 1;
+                    if (isPrompt) this.promptPending = false;
+
+                    const buffer = new AnsiAwareBuffer(line, carryState);
+                    carryState = buffer.trailingState();
+
+                    if (plain.length > 0) {
+                        await this.processLineTriggers(plain, buffer, isPrompt);
+                        this.emit('output', [line, type]);
+                    }
+
+                    const shouldRender =
+                        !buffer.deleted &&
+                        (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
+                    if (shouldRender) {
+                        session.events.emit('message', buffer, type, Date.now());
+                    }
+                }
+            } finally {
+                // Flush trigger echoes after the group renders so they never
+                // interleave with the batch. `finally` guarantees isDeferringEcho
+                // is reset even if processing throws.
+                this.api.flushDeferredEcho();
+            }
+        }
+    }
+
+    /**
+     * Used by ScriptingAPI.feedTriggers — chains a synthetic batch onto the
+     * same queue as network-driven flushLines so order is preserved, and
+     * returns the tail Promise so Lua's __await can block until trigger
+     * processing (including DB awaits inside handlers) finishes.
+     */
+    enqueueFeedBatch(groups: { text: string; type: string }[]): Promise<void> {
+        const tail = this.flushQueue.then(() => this.processFlushBatch(groups));
+        // Swallow the rejection on the queue copy so a failing feed doesn't
+        // poison subsequent batches; the unwrapped `tail` still rejects so the
+        // feed caller (and Lua __await) sees the error.
+        this.flushQueue = tail.catch(() => undefined);
+        return tail;
+    }
+
+    /**
      * Run all triggers against `plain` (the original ANSI-stripped text).
      * Trigger handlers that call selectString/fg/bg/deleteLine modify `buffer`
      * in-place. The buffer is NOT rendered here — the caller renders it after
@@ -367,9 +428,9 @@ export class ScriptingEngine {
      * echo/cecho output from trigger handlers is deferred (via ScriptingAPI)
      * and flushed after all lines in the batch are rendered.
      *
-     * Async because Lua-pattern triggers may await DB calls. The flushLines
-     * handler awaits this so lines remain in arrival order even when a pattern
-     * yields mid-evaluation.
+     * Async because Lua-pattern triggers may await DB calls. processFlushBatch
+     * awaits this so lines remain in arrival order even when a pattern yields
+     * mid-evaluation.
      */
     private async processLineTriggers(plain: string, buffer: AnsiAwareBuffer, isPrompt = false): Promise<void> {
         this.api.setLineBuffer(buffer);
@@ -403,52 +464,10 @@ export class ScriptingEngine {
                 // triggers may await DB), so chained .then() ensures batch N+1
                 // doesn't start before batch N finishes — preserving line order
                 // and ANSI carry state continuity.
-                this.flushQueue = this.flushQueue.then(async () => {
-                    for (const { text, type } of groups) {
-                        try {
-                            const lines = text.split('\n');
-                            if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-
-                            let carryState: FormatStateSnapshot | undefined;
-
-                            for (let i = 0; i < lines.length; i++) {
-                                const line = lines[i];
-                                const plain = line.replace(ANSI_RE, '');
-                                const isPrompt = this.promptPending && i === lines.length - 1;
-                                if (isPrompt) this.promptPending = false;
-
-                                // Build the buffer before triggers so handlers can colour it.
-                                // Pass carry state so ANSI colour set on line N continues into line N+1.
-                                const buffer = new AnsiAwareBuffer(line, carryState);
-                                carryState = buffer.trailingState();
-
-                                // 1. Run triggers first — they may colour or delete the buffer.
-                                if (plain.length > 0) {
-                                    await this.processLineTriggers(plain, buffer, isPrompt);
-                                    this.emit('output', [line, type]);
-                                }
-
-                                // 2. Render the (possibly modified) buffer, unless a trigger
-                                //    deleted it or it should be filtered.
-                                const shouldRender =
-                                    !buffer.deleted &&
-                                    (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
-                                if (shouldRender) {
-                                    session.events.emit('message', buffer, type, Date.now());
-                                }
-                            }
-                        } finally {
-                            // 3. After all lines in the group are rendered, flush any echo
-                            //    output that trigger handlers produced. This ensures trigger
-                            //    echo always appears after the batch, never interleaved with it.
-                            //    The finally block guarantees this runs even if processing throws,
-                            //    preventing isDeferringEcho from getting permanently stuck.
-                            this.api.flushDeferredEcho();
-                        }
-                    }
-                }).catch(err => {
-                    this.api.printError(`[scripting] line flush failed: ${err instanceof Error ? err.message : String(err)}`);
-                });
+                this.flushQueue = this.flushQueue.then(() => this.processFlushBatch(groups))
+                    .catch(err => {
+                        this.api.printError(`[scripting] line flush failed: ${err instanceof Error ? err.message : String(err)}`);
+                    });
             }),
             session.events.on('client.connect', () => this.emit('connect', [])),
             session.events.on('client.disconnect', () => this.emit('disconnect', [])),

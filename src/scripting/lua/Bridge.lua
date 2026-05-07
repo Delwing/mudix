@@ -46,6 +46,18 @@ do
         if p ~= nil then __await(p) end
     end
 end
+
+-- feedTriggers JS binding returns a Promise that resolves once the trigger
+-- pipeline (and any DB awaits inside handlers) has finished. __await it so
+-- user code that calls feedTriggers(line) blocks until processing completes,
+-- matching Mudlet's sync semantics.
+do
+    local _raw = feedTriggers
+    function feedTriggers(text)
+        local p = _raw(text)
+        if p ~= nil then __await(p) end
+    end
+end
 -- wasmoon pushes JS arrays 0-indexed in Lua (Object.keys → numeric keys
 -- 0..n-1), so unpack as t[0], t[1], ... not t[1], t[2], ...
 function getRoomCoordinates(id)
