@@ -110,7 +110,6 @@ function SqlitePreview({ path, vfs }: PreviewProps) {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        let cancelled = false;
         let openedDbId: number | null = null;
         const sql = getSqliteClient();
         setLoading(true);
@@ -118,38 +117,32 @@ function SqlitePreview({ path, vfs }: PreviewProps) {
         setTables([]);
         setSelectedTable(null);
         setDbId(null);
-        (async () => {
-            try {
-                const raw = vfs.readBinaryFile(path);
-                // Defensive copy: ZenFS may return a Buffer slice with non-zero
-                // byteOffset, which sqlite-wasm's importDb rejects.
-                const bytes = new Uint8Array(raw.byteLength);
-                bytes.set(raw);
-                if (bytes.byteLength < 100) {
-                    throw new Error(`File is only ${bytes.byteLength} bytes — too small to be a SQLite database`);
-                }
-                // Use a preview-scoped SAHPool slot so we don't clobber any
-                // slot a Lua script may have already opened with the same path.
-                const slot = '/__preview' + (path.startsWith('/') ? path : '/' + path);
-                const id = await sql.open(slot, bytes);
-                openedDbId = id;
-                if (cancelled) { sql.close(id).catch(() => {}); return; }
-                const r = await sql.exec(
-                    id,
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-                );
-                if (cancelled) return;
-                setTables(r.kind === 'rows' ? r.rows.map(row => String(row[0])) : []);
-                setDbId(id);
-            } catch (e) {
-                if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-            } finally {
-                if (!cancelled) setLoading(false);
+        try {
+            const raw = vfs.readBinaryFile(path);
+            // Defensive copy: ZenFS may return a Buffer slice with non-zero
+            // byteOffset, which sqlite-wasm's deserialize rejects.
+            const bytes = new Uint8Array(raw.byteLength);
+            bytes.set(raw);
+            if (bytes.byteLength < 100) {
+                throw new Error(`File is only ${bytes.byteLength} bytes — too small to be a SQLite database`);
             }
-        })();
+            const id = sql.open(path, bytes);
+            openedDbId = id;
+            const r = sql.exec(
+                id,
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            );
+            setTables(r.kind === 'rows' ? r.rows.map(row => String(row[0])) : []);
+            setDbId(id);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setLoading(false);
+        }
         return () => {
-            cancelled = true;
-            if (openedDbId !== null) sql.close(openedDbId).catch(() => {});
+            if (openedDbId !== null) {
+                try { sql.close(openedDbId); } catch { /* already closed */ }
+            }
         };
     }, [path, vfs]);
 
@@ -209,48 +202,38 @@ function SqliteTableView({ dbId, table, onBack }: { dbId: number; table: string;
 
     // Row count — fetch once per (dbId, table).
     useEffect(() => {
-        let cancelled = false;
         const sql = getSqliteClient();
-        (async () => {
-            try {
-                const r = await sql.exec(dbId, `SELECT COUNT(*) FROM ${quoteIdent(table)}`);
-                if (cancelled) return;
-                if (r.kind === 'rows' && r.rows.length > 0) {
-                    setTotal(Number(r.rows[0][0]) | 0);
-                }
-            } catch { /* surfaced by the data-fetch effect */ }
-        })();
-        return () => { cancelled = true; };
+        try {
+            const r = sql.exec(dbId, `SELECT COUNT(*) FROM ${quoteIdent(table)}`);
+            if (r.kind === 'rows' && r.rows.length > 0) {
+                setTotal(Number(r.rows[0][0]) | 0);
+            }
+        } catch { /* surfaced by the data-fetch effect */ }
     }, [dbId, table]);
 
     // Page data.
     useEffect(() => {
-        let cancelled = false;
         const sql = getSqliteClient();
         setLoading(true);
         setError(null);
-        (async () => {
-            try {
-                const offset = page * SQL_PAGE_SIZE;
-                const r = await sql.exec(
-                    dbId,
-                    `SELECT * FROM ${quoteIdent(table)} LIMIT ${SQL_PAGE_SIZE} OFFSET ${offset}`,
-                );
-                if (cancelled) return;
-                if (r.kind === 'rows') {
-                    setRows(r.rows);
-                    setColumns(r.columns);
-                } else {
-                    setRows([]);
-                    setColumns([]);
-                }
-            } catch (e) {
-                if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-            } finally {
-                if (!cancelled) setLoading(false);
+        try {
+            const offset = page * SQL_PAGE_SIZE;
+            const r = sql.exec(
+                dbId,
+                `SELECT * FROM ${quoteIdent(table)} LIMIT ${SQL_PAGE_SIZE} OFFSET ${offset}`,
+            );
+            if (r.kind === 'rows') {
+                setRows(r.rows);
+                setColumns(r.columns);
+            } else {
+                setRows([]);
+                setColumns([]);
             }
-        })();
-        return () => { cancelled = true; };
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setLoading(false);
+        }
     }, [dbId, table, page]);
 
     const totalPages = total !== null ? Math.max(1, Math.ceil(total / SQL_PAGE_SIZE)) : null;

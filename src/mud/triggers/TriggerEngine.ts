@@ -8,13 +8,7 @@ type TempFn = (matches: RegExpMatchArray) => void;
 
 type MatchResult = { captures: string[]; matchedText: string; namedGroups?: Record<string, string> };
 
-// Matchers may be async because Lua-pattern triggers run user Lua that can
-// `_await` JS Promises (DB calls, etc.). Sync-result matchers (regex, substring,
-// startOfLine, exactMatch, prompt) return MatchResult|null directly; only the
-// luaFunction matcher returns a Promise. matchPerm awaits each test, so the
-// caller always observes a Promise<...>.
-type SyncMatcherResult = MatchResult | null;
-type Matcher = (line: string, isPrompt: boolean) => SyncMatcherResult | Promise<SyncMatcherResult>;
+type Matcher = (line: string, isPrompt: boolean) => MatchResult | null;
 
 type PcreInstance = InstanceType<typeof PCRE>;
 type PcreMatch = { length: number; [k: number]: { start: number; end: number; match: string } };
@@ -48,7 +42,7 @@ type AndState = {
 };
 
 /** Mutable ref so the Lua eval function can be swapped in after compilation. */
-const luaEvalRef: { fn: ((code: string, line: string) => Promise<boolean>) | null } = { fn: null };
+const luaEvalRef: { fn: ((code: string, line: string) => boolean) | null } = { fn: null };
 
 function pcreToMatchResult(m: PcreMatch): MatchResult {
     const captures: string[] = [];
@@ -97,14 +91,10 @@ function buildMatcher(p: TriggerPattern, register: (re: PcreInstance) => void): 
         case 'prompt':
             return (_line, isPrompt) => isPrompt ? { captures: [], matchedText: '' } : null;
         case 'luaFunction': {
-            // Async because user Lua can _await DB calls etc. matchPerm awaits
-            // every test result, so this resolves to a SyncMatcherResult before
-            // the trigger fires.
             const code = p.text;
-            return async (line) => {
+            return (line) => {
                 if (!luaEvalRef.fn) return null;
-                const result = await luaEvalRef.fn(code, line);
-                return result ? { captures: [], matchedText: line } : null;
+                return luaEvalRef.fn(code, line) ? { captures: [], matchedText: line } : null;
             };
         }
         case 'colorTrigger':
@@ -231,13 +221,13 @@ export class TriggerEngine {
 
     // ── Perm triggers (persisted, visible in UI) ──────────────────────────────
 
-    async matchPerm(line: string, isPrompt = false): Promise<{
+    matchPerm(line: string, isPrompt = false): {
         trigger: TriggerNode;
         captures: string[];
         matchedText: string;
         multimatches?: string[][];
         namedGroups?: Record<string, string>;
-    }[]> {
+    }[] {
         const currentLine = this.lineCounter++;
         const seen = new Set<string>();
         const results: {
@@ -261,7 +251,7 @@ export class TriggerEngine {
                 const orEntry = entry as CompiledOrEntry;
                 let result: MatchResult | null = null;
                 for (const test of orEntry.tests) {
-                    result = await test(effectiveLine, isPrompt);
+                    result = test(effectiveLine, isPrompt);
                     if (result !== null) break;
                 }
                 if (result !== null) {
@@ -281,7 +271,7 @@ export class TriggerEngine {
                     }
                 }
             } else if (entry.kind === 'and') {
-                const r = await this.processAndTrigger(entry, effectiveLine, isPrompt, currentLine);
+                const r = this.processAndTrigger(entry, effectiveLine, isPrompt, currentLine);
                 if (r) results.push(r);
             } else {
                 // OR entry (non-group)
@@ -293,7 +283,7 @@ export class TriggerEngine {
                     if (seen.has(item.id)) continue;
                     let result: MatchResult | null = null;
                     for (const test of entry.tests) {
-                        result = await test(effectiveLine, isPrompt);
+                        result = test(effectiveLine, isPrompt);
                         if (result !== null) break;
                     }
                     if (result !== null) {
@@ -312,7 +302,7 @@ export class TriggerEngine {
         return results;
     }
 
-    setLuaEval(fn: ((code: string, line: string) => Promise<boolean>) | null): void {
+    setLuaEval(fn: ((code: string, line: string) => boolean) | null): void {
         luaEvalRef.fn = fn;
     }
 
@@ -330,18 +320,18 @@ export class TriggerEngine {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private async processAndTrigger(
+    private processAndTrigger(
         entry: CompiledAndEntry,
         effectiveLine: string,
         isPrompt: boolean,
         currentLine: number,
-    ): Promise<{
+    ): {
         trigger: TriggerNode;
         captures: string[];
         matchedText: string;
         multimatches?: string[][];
         namedGroups?: Record<string, string>;
-    } | null> {
+    } | null {
         const { item, conditions } = entry;
         const delta = item.delta ?? 0;
         let state = this.andStates.get(item.id);
@@ -357,7 +347,7 @@ export class TriggerEngine {
             const cond0 = conditions[0];
             if (!cond0 || cond0.spacer > 0) return null; // can't start on a spacer
             if (!cond0.test) return null;
-            const result = await cond0.test(effectiveLine, isPrompt);
+            const result = cond0.test(effectiveLine, isPrompt);
             if (!result) return null;
             state = {
                 nextIdx: 1,
@@ -388,7 +378,7 @@ export class TriggerEngine {
                 continue;
             }
 
-            const result = await cond.test(effectiveLine, isPrompt);
+            const result = cond.test(effectiveLine, isPrompt);
             if (!result) break; // didn't match this line
 
             state.captures.push(result.captures);

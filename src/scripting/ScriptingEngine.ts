@@ -61,10 +61,6 @@ export class ScriptingEngine {
     private loadGeneration = 0;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
     private readonly mapOpen = new MapOpenNotifier(() => this.raiseEvent('mapOpenEvent'));
-    // Serializes flushLines batches now that processLineTriggers is async.
-    // Each batch chains onto the previous so line ordering is preserved when
-    // a Lua-pattern trigger awaits a DB call mid-evaluation.
-    private flushQueue: Promise<unknown> = Promise.resolve();
 
     constructor(
         private readonly session: MudSession,
@@ -98,19 +94,22 @@ export class ScriptingEngine {
             this.api.setExecuteScript((code) => {
                 const lua = this.runtimes.lua;
                 if (!lua) return;
-                lua.run(code, 'link')
-                    .then(() => this.api.flushOutput())
-                    .catch(err => this.api.printError(`[link] ${err instanceof Error ? err.message : String(err)}`));
+                try {
+                    lua.run(code, 'link');
+                } catch (err) {
+                    this.api.printError(`[link] ${err instanceof Error ? err.message : String(err)}`);
+                }
+                this.api.flushOutput();
             });
             this.api.setExpandAlias((text, echo) => {
-                if (!this.processInput(text)) void this.api.send(text, echo);
+                if (!this.processInput(text)) this.api.send(text, echo);
             });
-            this.api.setSendRequestDispatcher(async (text) =>
-                (await this.runtimes.lua?.dispatchSendRequest(text)) ?? false);
-            this.api.setFeedDispatcher((groups) => this.enqueueFeedBatch(groups));
-            this.triggerEngine.setLuaEval(async (code) => {
+            this.api.setSendRequestDispatcher((text) =>
+                this.runtimes.lua?.dispatchSendRequest(text) ?? false);
+            this.api.setFeedDispatcher((groups) => this.processFlushBatch(groups));
+            this.triggerEngine.setLuaEval((code) => {
                 const lua = this.runtimes.lua;
-                return lua ? await lua.evalTriggerPattern(code) : false;
+                return lua ? lua.evalTriggerPattern(code) : false;
             });
             return rt;
         }).catch(err => {
@@ -124,14 +123,14 @@ export class ScriptingEngine {
     loadScripts(scripts: ScriptNode[]): void {
         const gen = ++this.loadGeneration;
         this.runtimeReady
-            .then(async rt => {
+            .then(rt => {
                 if (gen !== this.loadGeneration) return;
                 try {
                     const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
                     for (const s of enabled) {
                         if (!s.code) continue;
                         try {
-                            await rt.load(this.wrapScript(s), s.name);
+                            rt.load(this.wrapScript(s), s.name);
                         } catch (err) {
                             this.reportEntityError('script', s.id, s.name, err);
                         }
@@ -154,7 +153,7 @@ export class ScriptingEngine {
         let rt: IScriptingRuntime;
         try { rt = await this.runtimeReady; } catch { return; }
         try {
-            await rt.load(this.wrapScript(script), script.name);
+            rt.load(this.wrapScript(script), script.name);
         } catch (err) {
             this.reportEntityError('script', script.id, script.name, err);
         }
@@ -166,10 +165,13 @@ export class ScriptingEngine {
     /** Start all enabled permanent timers. Called when the timer list changes. */
     loadPermTimers(timers: TimerNode[]): void {
         this.timerEngine.loadPerm(timers, (timer) => {
-            if (timer.command) void this.api.send(timer.command, false);
+            if (timer.command) this.api.send(timer.command, false);
             if (timer.code && timer.language === 'lua') {
-                this.runtimes.lua?.run(timer.code, `timer "${timer.name}"`)
-                    .catch(err => this.reportEntityError('timer', timer.id, timer.name, err));
+                try {
+                    this.runtimes.lua?.run(timer.code, `timer "${timer.name}"`);
+                } catch (err) {
+                    this.reportEntityError('timer', timer.id, timer.name, err);
+                }
             }
             this.api.flushOutput();
         });
@@ -185,7 +187,7 @@ export class ScriptingEngine {
      * sends (and echoes locally) or aborts when a handler calls denyCurrentSend().
      */
     sendCommand(text: string): void {
-        void this.api.send(text, true);
+        this.api.send(text, true);
     }
 
     /** Run input through aliases. Returns true if an alias matched (caller should not send). */
@@ -285,11 +287,14 @@ export class ScriptingEngine {
                 const idx = Number(d);
                 return idx === 0 ? matches[0] : (matches[idx] ?? '');
             });
-            void this.api.send(cmd);
+            this.api.send(cmd);
         }
         if (alias.code && alias.language === 'lua') {
-            this.runtimes.lua?.runWithMatches(alias.code, alias.name, matches)
-                .catch(err => this.reportEntityError('alias', alias.id, alias.name, err));
+            try {
+                this.runtimes.lua?.runWithMatches(alias.code, alias.name, matches);
+            } catch (err) {
+                this.reportEntityError('alias', alias.id, alias.name, err);
+            }
         }
     }
 
@@ -306,7 +311,7 @@ export class ScriptingEngine {
                 const idx = Number(d);
                 return idx === 0 ? matches[0] : (matches[idx] ?? '');
             });
-            void this.api.send(cmd, false);
+            this.api.send(cmd, false);
         }
 
         // Built-in highlight
@@ -330,16 +335,22 @@ export class ScriptingEngine {
 
         // User code
         if (trigger.code && trigger.language === 'lua') {
-            this.runtimes.lua?.runWithMatches(trigger.code, trigger.name, matches, multimatches, namedGroups)
-                .catch(err => this.reportEntityError('trigger', trigger.id, trigger.name, err));
+            try {
+                this.runtimes.lua?.runWithMatches(trigger.code, trigger.name, matches, multimatches, namedGroups);
+            } catch (err) {
+                this.reportEntityError('trigger', trigger.id, trigger.name, err);
+            }
         }
     }
 
     private executePermKeybinding(binding: KeyNode): void {
-        if (binding.command) void this.api.send(binding.command, false);
+        if (binding.command) this.api.send(binding.command, false);
         if (binding.code && binding.language === 'lua') {
-            this.runtimes.lua?.run(binding.code, `key "${binding.name}"`)
-                .catch(err => this.reportEntityError('key', binding.id, binding.name, err));
+            try {
+                this.runtimes.lua?.run(binding.code, `key "${binding.name}"`);
+            } catch (err) {
+                this.reportEntityError('key', binding.id, binding.name, err);
+            }
         }
     }
 
@@ -351,10 +362,13 @@ export class ScriptingEngine {
     executeButton(button: ButtonNode, nextState: boolean): void {
         const goingDown = button.isPushDown && nextState;
         const cmd = goingDown ? button.commandDown : button.command;
-        if (cmd) void this.api.send(cmd, false);
+        if (cmd) this.api.send(cmd, false);
         if (button.code && button.language === 'lua') {
-            this.runtimes.lua?.run(button.code, `button "${button.name}"`)
-                .catch(err => this.reportEntityError('button', button.id, button.name, err));
+            try {
+                this.runtimes.lua?.run(button.code, `button "${button.name}"`);
+            } catch (err) {
+                this.reportEntityError('button', button.id, button.name, err);
+            }
         }
         this.api.flushOutput();
     }
@@ -365,7 +379,7 @@ export class ScriptingEngine {
      * scripting `feedTriggers` API so both paths preserve identical semantics
      * (line ordering, ANSI carry, trigger-echo placement).
      */
-    private async processFlushBatch(groups: { text: string; type: string }[]): Promise<void> {
+    private processFlushBatch(groups: { text: string; type: string }[]): void {
         const session = this.session;
         for (const { text, type } of groups) {
             try {
@@ -384,7 +398,7 @@ export class ScriptingEngine {
                     carryState = buffer.trailingState();
 
                     if (plain.length > 0) {
-                        await this.processLineTriggers(plain, buffer, isPrompt);
+                        this.processLineTriggers(plain, buffer, isPrompt);
                         this.emit('output', [line, type]);
                     }
 
@@ -405,21 +419,6 @@ export class ScriptingEngine {
     }
 
     /**
-     * Used by ScriptingAPI.feedTriggers — chains a synthetic batch onto the
-     * same queue as network-driven flushLines so order is preserved, and
-     * returns the tail Promise so Lua's __await can block until trigger
-     * processing (including DB awaits inside handlers) finishes.
-     */
-    enqueueFeedBatch(groups: { text: string; type: string }[]): Promise<void> {
-        const tail = this.flushQueue.then(() => this.processFlushBatch(groups));
-        // Swallow the rejection on the queue copy so a failing feed doesn't
-        // poison subsequent batches; the unwrapped `tail` still rejects so the
-        // feed caller (and Lua __await) sees the error.
-        this.flushQueue = tail.catch(() => undefined);
-        return tail;
-    }
-
-    /**
      * Run all triggers against `plain` (the original ANSI-stripped text).
      * Trigger handlers that call selectString/fg/bg/deleteLine modify `buffer`
      * in-place. The buffer is NOT rendered here — the caller renders it after
@@ -427,17 +426,13 @@ export class ScriptingEngine {
      *
      * echo/cecho output from trigger handlers is deferred (via ScriptingAPI)
      * and flushed after all lines in the batch are rendered.
-     *
-     * Async because Lua-pattern triggers may await DB calls. processFlushBatch
-     * awaits this so lines remain in arrival order even when a pattern yields
-     * mid-evaluation.
      */
-    private async processLineTriggers(plain: string, buffer: AnsiAwareBuffer, isPrompt = false): Promise<void> {
+    private processLineTriggers(plain: string, buffer: AnsiAwareBuffer, isPrompt = false): void {
         this.api.setLineBuffer(buffer);
         try {
             this.runtimes.lua?.setCurrentLine(plain, isPrompt);
             this.triggerEngine.processTemp(plain);
-            const matches = await this.triggerEngine.matchPerm(plain, isPrompt);
+            const matches = this.triggerEngine.matchPerm(plain, isPrompt);
             for (const { trigger, captures, matchedText, multimatches, namedGroups } of matches) {
                 this.executePermTrigger(trigger, [plain, ...captures], matchedText, multimatches, namedGroups);
             }
@@ -447,11 +442,11 @@ export class ScriptingEngine {
     }
 
     private emit(event: string, args: unknown[]): void {
-        // emitEvent is async (handlers may await DB calls, etc.). Fire-and-forget;
-        // the runtime's queue serializes handlers so ordering is preserved relative
-        // to other queued Lua work. The runtime flushes its own output on completion.
-        void this.runtimes.lua?.emitEvent(event, args).catch(err =>
-            this.api.printError(`[event "${event}"] ${err instanceof Error ? err.message : String(err)}`));
+        try {
+            this.runtimes.lua?.emitEvent(event, args);
+        } catch (err) {
+            this.api.printError(`[event "${event}"] ${err instanceof Error ? err.message : String(err)}`);
+        }
     }
 
     private bridgeEvents(session: MudSession): void {
@@ -460,14 +455,11 @@ export class ScriptingEngine {
                 this.promptPending = true;
             }),
             session.events.on('flushLines', (groups) => {
-                // Serialize batch processing: trigger eval is now async (Lua-pattern
-                // triggers may await DB), so chained .then() ensures batch N+1
-                // doesn't start before batch N finishes — preserving line order
-                // and ANSI carry state continuity.
-                this.flushQueue = this.flushQueue.then(() => this.processFlushBatch(groups))
-                    .catch(err => {
-                        this.api.printError(`[scripting] line flush failed: ${err instanceof Error ? err.message : String(err)}`);
-                    });
+                try {
+                    this.processFlushBatch(groups);
+                } catch (err) {
+                    this.api.printError(`[scripting] line flush failed: ${err instanceof Error ? err.message : String(err)}`);
+                }
             }),
             session.events.on('client.connect', () => this.emit('connect', [])),
             session.events.on('client.disconnect', () => this.emit('disconnect', [])),
