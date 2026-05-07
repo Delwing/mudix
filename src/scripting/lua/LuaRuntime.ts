@@ -62,12 +62,17 @@ export class LuaRuntime implements IScriptingRuntime {
         private readonly lua: Lua,
         private readonly api: ScriptingAPI,
         private vfs: ProfileVFS | null = null,
+        private readonly proxyUrlGetter: () => string | undefined = () => undefined,
     ) {
     }
 
-    static async create(api: ScriptingAPI, vfs: ProfileVFS | null = null): Promise<LuaRuntime> {
+    static async create(
+        api: ScriptingAPI,
+        vfs: ProfileVFS | null = null,
+        proxyUrlGetter: () => string | undefined = () => undefined,
+    ): Promise<LuaRuntime> {
         const lua = await Lua.create();
-        const rt = new LuaRuntime(lua, api, vfs);
+        const rt = new LuaRuntime(lua, api, vfs, proxyUrlGetter);
         await rt.setup();
         return rt;
     }
@@ -520,6 +525,7 @@ export class LuaRuntime implements IScriptingRuntime {
         this.http = new HttpService(
             (event, args) => this.emitEvent(event, args),
             () => this.vfs,
+            this.proxyUrlGetter,
         );
         this.lua.global.set('downloadFile', (saveTo: unknown, url: unknown) => {
             this.http.downloadFile(String(saveTo ?? ''), String(url ?? ''));

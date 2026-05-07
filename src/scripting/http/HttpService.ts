@@ -20,6 +20,7 @@ import type { ProfileVFS } from '../vfs/ProfileVFS';
 
 type EmitFn = (event: string, args: unknown[]) => void;
 type VFSGetter = () => ProfileVFS | null;
+type ProxyUrlGetter = () => string | undefined;
 
 // A 1KB/sec download still emits ~10 progress events per second at 100ms;
 // a 10MB/sec stream coalesces into the same cadence rather than firing
@@ -27,9 +28,16 @@ type VFSGetter = () => ProfileVFS | null;
 const PROGRESS_THROTTLE_MS = 100;
 
 export class HttpService {
+    // Origins where a direct fetch failed (almost always CORS — there's no way
+    // to distinguish CORS from network errors in a browser, both surface as
+    // TypeError). Once an origin lands in here we go straight through the
+    // proxy without paying for a doomed direct attempt every call.
+    private readonly proxiedOrigins = new Set<string>();
+
     constructor(
         private readonly emit: EmitFn,
         private readonly vfsGetter: VFSGetter,
+        private readonly proxyUrlGetter: ProxyUrlGetter = () => undefined,
     ) {}
 
     downloadFile(saveTo: string, url: string): void {
@@ -74,7 +82,7 @@ export class HttpService {
     }
 
     private async runDownload(saveTo: string, url: string): Promise<void> {
-        const res = await fetch(url);
+        const res = await this.fetchWithFallback(url, {});
         if (!res.ok) {
             this.emit('sysDownloadError', [`HTTP ${res.status} ${res.statusText}`, saveTo, url]);
             return;
@@ -156,7 +164,7 @@ export class HttpService {
         extraErrorArgs: unknown[] = [],
     ): Promise<void> {
         try {
-            const res = await fetch(url, { method, body, headers });
+            const res = await this.fetchWithFallback(url, { method, body, headers });
             const text = await res.text();
             if (!res.ok) {
                 this.emit(errorEvent, [`HTTP ${res.status} ${res.statusText}`, url, ...extraErrorArgs]);
@@ -166,6 +174,50 @@ export class HttpService {
         } catch (err) {
             this.emit(errorEvent, [errorMessage(err), url, ...extraErrorArgs]);
         }
+    }
+
+    // Try the direct fetch first; on failure (almost always CORS), retry
+    // through the configured proxy and remember the origin so future calls
+    // skip the doomed direct attempt. Throws if both attempts fail, or if
+    // the direct attempt fails and no proxy is configured.
+    private async fetchWithFallback(target: string, init: RequestInit): Promise<Response> {
+        const proxyUrl = normalizeProxyBase(this.proxyUrlGetter());
+        const origin = parseOrigin(target);
+
+        if (proxyUrl && origin && this.proxiedOrigins.has(origin)) {
+            return fetch(buildProxyUrl(proxyUrl, target), init);
+        }
+
+        try {
+            return await fetch(target, init);
+        } catch (err) {
+            if (!proxyUrl) throw err;
+            if (origin) this.proxiedOrigins.add(origin);
+            return fetch(buildProxyUrl(proxyUrl, target), init);
+        }
+    }
+}
+
+// The proxy URL setting holds a WebSocket scheme (ws://wss://) since the
+// MUD-tunnel use case is what users configure it for. The same Cloudflare
+// Worker hostname answers HTTP traffic, so swap the scheme for HTTP forwards.
+function normalizeProxyBase(raw: string | undefined): string | undefined {
+    const trimmed = raw?.trim().replace(/\/$/, '');
+    if (!trimmed) return undefined;
+    if (trimmed.startsWith('wss://')) return 'https://' + trimmed.slice(6);
+    if (trimmed.startsWith('ws://')) return 'http://' + trimmed.slice(5);
+    return trimmed;
+}
+
+function buildProxyUrl(base: string, target: string): string {
+    return `${base}/?url=${encodeURIComponent(target)}`;
+}
+
+function parseOrigin(url: string): string | null {
+    try {
+        return new URL(url).origin;
+    } catch {
+        return null;
     }
 }
 

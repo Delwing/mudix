@@ -79,6 +79,7 @@ export class ScriptingEngine {
         private readonly keyEngine: KeyEngine,
         connectionId: string,
         connectionName = '',
+        private readonly proxyUrlGetter: () => string | undefined = () => undefined,
     ) {
         this.api = new ScriptingAPI(session, aliasEngine, triggerEngine, timerEngine, keyEngine);
         this.api.profileName = connectionName;
@@ -227,7 +228,7 @@ export class ScriptingEngine {
     }
 
     private createRuntime(vfs: ProfileVFS | null): Promise<IScriptingRuntime> {
-        return LuaRuntime.create(this.api, vfs).then(rt => {
+        return LuaRuntime.create(this.api, vfs, this.proxyUrlGetter).then(rt => {
             this.runtimes.lua = rt;
             this.api.setExecuteScript((code) => {
                 const lua = this.runtimes.lua;
@@ -262,11 +263,15 @@ export class ScriptingEngine {
      * Tear down a script's event-handler registrations. Used when a script is
      * removed or transitions enabled→disabled so its handlers stop firing
      * before the next full runtime reload.
+     *
+     * Runs synchronously once the runtime is up so the store-subscription
+     * pipeline (script removed → handlers gone) completes inside the same
+     * tick as the store mutation. See attachToStore for the rationale.
      */
-    async unloadScript(scriptId: string): Promise<void> {
-        let rt: IScriptingRuntime;
-        try { rt = await this.runtimeReady; } catch { return; }
-        rt.killScriptHandlers(scriptId);
+    unloadScript(scriptId: string): void {
+        const rt = this.runtimes.lua;
+        if (rt) { rt.killScriptHandlers(scriptId); return; }
+        this.runtimeReady.then(rt => rt.killScriptHandlers(scriptId)).catch(() => {});
     }
 
     /**
@@ -290,11 +295,25 @@ export class ScriptingEngine {
         this.raiseEvent('sysUninstallPackage', [packageName]);
     }
 
-    /** Run a single script on the existing runtime without restarting it. */
-    async reloadScript(script: ScriptNode): Promise<void> {
+    /**
+     * Run a single script on the existing runtime without restarting it.
+     *
+     * Runs synchronously when the runtime is already up. That sync path is
+     * load-bearing: notifyPackageInstalled raises sysInstallPackage right
+     * after applyScriptsFromStore returns, and the package's own event
+     * handlers (and the function `_G[scriptName]` they dispatch to) must be
+     * defined by then. An `await` here — even on an already-resolved promise
+     * — would defer the load to a microtask and the event would fire against
+     * an empty handler set.
+     */
+    reloadScript(script: ScriptNode): void {
         if (script.language !== 'lua' || !script.code) return;
-        let rt: IScriptingRuntime;
-        try { rt = await this.runtimeReady; } catch { return; }
+        const rt = this.runtimes.lua;
+        if (rt) { this.runScriptLoad(rt, script); return; }
+        this.runtimeReady.then(rt => this.runScriptLoad(rt, script)).catch(() => {});
+    }
+
+    private runScriptLoad(rt: IScriptingRuntime, script: ScriptNode): void {
         try {
             rt.load(this.wrapScript(script), script.name);
         } catch (err) {

@@ -25,7 +25,8 @@ export function ProxyInfoModal({ onClose }: Props) {
                 </div>
                 <div className="modal-body proxy-info-body">
                     <p className="proxy-info-intro">
-                        Deploy a free Cloudflare Worker that bridges WebSocket connections to MUD servers.
+                        Deploy a free Cloudflare Worker that bridges WebSocket connections to MUD servers
+                        and forwards HTTP requests around CORS restrictions.
                         Don't have an account? <a className="proxy-info-link" href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noreferrer">Register at Cloudflare</a> — it's free.
                     </p>
                     <ol className="proxy-info-steps">

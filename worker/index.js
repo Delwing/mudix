@@ -1,5 +1,20 @@
 import { connect } from 'cloudflare:sockets';
 
+const CORS_HEADERS = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': '*',
+    'Access-Control-Max-Age': '86400',
+};
+
+// Hop-by-hop headers and a few that the browser auto-sets on cross-origin
+// requests but the upstream server should not see (Origin/Referer leak the
+// app URL; Cookie carries the user's session for *our* origin, never theirs).
+const STRIPPED_REQUEST_HEADERS = new Set([
+    'host', 'origin', 'referer', 'cookie', 'connection',
+    'keep-alive', 'transfer-encoding', 'upgrade',
+]);
+
 function uint8ToBase64(bytes) {
     let binary = '';
     for (let i = 0; i < bytes.byteLength; i++) {
@@ -26,12 +41,60 @@ function safeClose(server, code, reason) {
     }
 }
 
+function withCors(headers) {
+    const h = new Headers(headers);
+    for (const [k, v] of Object.entries(CORS_HEADERS)) h.set(k, v);
+    return h;
+}
+
+async function forwardHttp(request, target) {
+    let targetUrl;
+    try {
+        targetUrl = new URL(target);
+    } catch {
+        return new Response('Invalid target URL', { status: 400, headers: CORS_HEADERS });
+    }
+    if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+        return new Response('Only http(s) targets are supported', { status: 400, headers: CORS_HEADERS });
+    }
+
+    const fwdHeaders = new Headers();
+    for (const [k, v] of request.headers.entries()) {
+        if (!STRIPPED_REQUEST_HEADERS.has(k.toLowerCase())) fwdHeaders.set(k, v);
+    }
+
+    const init = { method: request.method, headers: fwdHeaders, redirect: 'follow' };
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+        init.body = request.body;
+    }
+
+    let upstream;
+    try {
+        upstream = await fetch(targetUrl.toString(), init);
+    } catch (err) {
+        return new Response(`Proxy fetch failed: ${describeError(err)}`, { status: 502, headers: CORS_HEADERS });
+    }
+
+    return new Response(upstream.body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: withCors(upstream.headers),
+    });
+}
+
 export default {
     async fetch(request) {
         const url = new URL(request.url);
 
         const upgradeHeader = request.headers.get('Upgrade');
-        if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+        const isWebSocket = upgradeHeader && upgradeHeader.toLowerCase() === 'websocket';
+
+        if (!isWebSocket) {
+            if (request.method === 'OPTIONS') {
+                return new Response(null, { status: 204, headers: CORS_HEADERS });
+            }
+            const target = url.searchParams.get('url');
+            if (target) return forwardHttp(request, target);
             return new Response('MUD Telnet-to-WebSocket proxy (Cloudflare Worker)\n', {
                 status: 200,
                 headers: { 'Content-Type': 'text/plain' },

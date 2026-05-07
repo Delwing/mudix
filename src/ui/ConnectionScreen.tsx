@@ -75,7 +75,12 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                 proxyUrl: proxyUrl.trim() || undefined,
             };
         }
-        return { name: name.trim(), mode: 'websocket', url: url.trim() };
+        return {
+            name: name.trim(),
+            mode: 'websocket',
+            url: url.trim(),
+            proxyUrl: proxyUrl.trim() || undefined,
+        };
     };
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -204,69 +209,28 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                     </FormField>
 
                     {mode === 'mud' ? (
-                        <>
-                            <div className="connection-host-row">
-                                <FormField label="Host" htmlFor="cs-host">
-                                    <Input
-                                        id="cs-host"
-                                        value={host}
-                                        onChange={e => setHost(e.target.value)}
-                                        placeholder="mud.example.com"
-                                        spellCheck={false}
-                                        noAutofill
-                                    />
-                                </FormField>
-                                <FormField label="Port" htmlFor="cs-port">
-                                    <Input
-                                        id="cs-port"
-                                        value={port}
-                                        onChange={e => setPort(e.target.value)}
-                                        placeholder="23"
-                                        spellCheck={false}
-                                        noAutofill
-                                    />
-                                </FormField>
-                            </div>
-                            <div className="field">
-                                <div className="proxy-label-row">
-                                    <label className="field__label" htmlFor="cs-proxy">Proxy URL</label>
-                                    <div className="proxy-label-actions">
-                                        {proxyUrl && (
-                                            <button type="button" className="proxy-reset-btn" onClick={() => setProxyUrl('')}>
-                                                Use default
-                                            </button>
-                                        )}
-                                        <button type="button" className="proxy-reset-btn" onClick={() => setProxyWhyOpen(true)}>
-                                            Why do I need that?
-                                        </button>
-                                        <button type="button" className="proxy-reset-btn" onClick={() => setProxyModalOpen(true)}>
-                                            Host your own
-                                        </button>
-                                    </div>
-                                </div>
+                        <div className="connection-host-row">
+                            <FormField label="Host" htmlFor="cs-host">
                                 <Input
-                                    id="cs-proxy"
-                                    value={proxyUrl}
-                                    onChange={e => setProxyUrl(e.target.value)}
-                                    placeholder={DEFAULT_PROXY_URL || 'wss://mudix-proxy.yourname.workers.dev'}
+                                    id="cs-host"
+                                    value={host}
+                                    onChange={e => setHost(e.target.value)}
+                                    placeholder="mud.example.com"
                                     spellCheck={false}
                                     noAutofill
                                 />
-                                <span className="proxy-hint">
-                                    {proxyUrl
-                                        ? 'Custom proxy'
-                                        : DEFAULT_PROXY_URL
-                                            ? `Default: ${DEFAULT_PROXY_URL}`
-                                            : 'No default proxy configured'}
-                                </span>
-                            </div>
-                            {host.trim() && (
-                                <div className="proxy-url-preview">
-                                    <span className="proxy-url-preview-label">Connects via</span>
-                                    <code className="proxy-url-preview-url">{buildPreviewUrl(host, port, proxyUrl)}</code>
-                                </div>
-                            )}
-                        </>
+                            </FormField>
+                            <FormField label="Port" htmlFor="cs-port">
+                                <Input
+                                    id="cs-port"
+                                    value={port}
+                                    onChange={e => setPort(e.target.value)}
+                                    placeholder="23"
+                                    spellCheck={false}
+                                    noAutofill
+                                />
+                            </FormField>
+                        </div>
                     ) : (
                         <FormField label="URL" htmlFor="cs-url">
                             <Input
@@ -278,6 +242,49 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                 noAutofill
                             />
                         </FormField>
+                    )}
+
+                    <div className="field">
+                        <div className="proxy-label-row">
+                            <label className="field__label" htmlFor="cs-proxy">Proxy URL</label>
+                            <div className="proxy-label-actions">
+                                {proxyUrl && (
+                                    <button type="button" className="proxy-reset-btn" onClick={() => setProxyUrl('')}>
+                                        Use default
+                                    </button>
+                                )}
+                                <button type="button" className="proxy-reset-btn" onClick={() => setProxyWhyOpen(true)}>
+                                    Why do I need that?
+                                </button>
+                                <button type="button" className="proxy-reset-btn" onClick={() => setProxyModalOpen(true)}>
+                                    Host your own
+                                </button>
+                            </div>
+                        </div>
+                        <Input
+                            id="cs-proxy"
+                            value={proxyUrl}
+                            onChange={e => setProxyUrl(e.target.value)}
+                            placeholder={DEFAULT_PROXY_URL || 'wss://mudix-proxy.yourname.workers.dev'}
+                            spellCheck={false}
+                            noAutofill
+                        />
+                        <span className="proxy-hint">
+                            {mode === 'websocket'
+                                ? 'Used for HTTP requests blocked by CORS'
+                                : proxyUrl
+                                    ? 'Custom proxy'
+                                    : DEFAULT_PROXY_URL
+                                        ? `Default: ${DEFAULT_PROXY_URL}`
+                                        : 'No default proxy configured'}
+                        </span>
+                    </div>
+
+                    {mode === 'mud' && host.trim() && (
+                        <div className="proxy-url-preview">
+                            <span className="proxy-url-preview-label">Connects via</span>
+                            <code className="proxy-url-preview-url">{buildPreviewUrl(host, port, proxyUrl)}</code>
+                        </div>
                     )}
 
                     <div className="connection-form-actions">
