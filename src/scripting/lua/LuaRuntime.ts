@@ -889,8 +889,15 @@ export class LuaRuntime implements IScriptingRuntime {
     // mid-execution (e.g. a trigger handler calling expandAlias). The chunk
     // returns __exec's (err, result) tuple via the thread's stack, so we read
     // it from there instead of a global to avoid races with re-entrant exec.
+    //
+    // newThread() pushes a thread object onto the global stack; we have to
+    // pop it via global.remove(threadIndex) in finally or the slot leaks and
+    // the lua_State stack eventually overflows. close() alone is a JS-side
+    // marker only — it does not pop.
     private execInner(code: string, name: string): unknown {
-        const t = this.lua.global.newThread();
+        const g = this.lua.global;
+        const t = g.newThread();
+        const threadIndex = g.getTop();
         try {
             t.loadString('return __exec(...)', '@' + name);
             t.pushValue(code);
@@ -903,7 +910,7 @@ export class LuaRuntime implements IScriptingRuntime {
             if (err != null) throw new Error(String(err));
             return result;
         } finally {
-            try { t.close(); } catch { /* already closed */ }
+            g.remove(threadIndex);
         }
     }
 
@@ -911,7 +918,9 @@ export class LuaRuntime implements IScriptingRuntime {
     // The chunk's own pcall captures Lua errors; runtime/wasm errors surface
     // as a thrown JS exception that we route to the error console.
     private runChunk(chunk: string, label: string): void {
-        const t = this.lua.global.newThread();
+        const g = this.lua.global;
+        const t = g.newThread();
+        const threadIndex = g.getTop();
         try {
             t.loadString(chunk, '@' + label);
             const res = t.resume(0);
@@ -919,7 +928,7 @@ export class LuaRuntime implements IScriptingRuntime {
         } catch (e) {
             this.api.printError(`[${label}] ${e instanceof Error ? e.message : String(e)}`);
         } finally {
-            try { t.close(); } catch { /* already closed */ }
+            g.remove(threadIndex);
         }
     }
 
