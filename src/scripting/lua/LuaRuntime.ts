@@ -9,7 +9,9 @@ import BRIDGE_LUA from './Bridge.lua?raw';
 import EXEC_LUA from './Exec.lua?raw';
 import LUA_GLOBAL_SETUP from './LuaGlobalSetup.lua?raw';
 import LUASQL_LUA from './Luasql.lua?raw';
+import YAJL_LUA from './Yajl.lua?raw';
 import {setupRex} from './rex';
+import {setupYajl} from './yajl';
 import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
 import {QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
 import {HttpService} from '../http/HttpService';
@@ -584,6 +586,8 @@ export class LuaRuntime implements IScriptingRuntime {
         await sqliteReady;
         this.setupSqlBridge();
         this.exec(LUASQL_LUA, 'Luasql');
+        setupYajl(this.lua);
+        this.exec(YAJL_LUA, 'Yajl');
         this.exec(LUAGLOBAL, 'LuaGlobal');
     }
 
@@ -1025,6 +1029,12 @@ export class LuaRuntime implements IScriptingRuntime {
         this._denyCurrentSend = false;
         this.emitEvent('sysDataSendRequest', [text]);
         return this._denyCurrentSend;
+    }
+
+    killScriptHandlers(scriptId: string): void {
+        if (this.destroyed) return;
+        this.lua.global.set('__mudix_kill_sid', scriptId);
+        this.runChunk('__mudix_kill_script_handlers(__mudix_kill_sid)', 'kill-script-handlers');
     }
 
     /**

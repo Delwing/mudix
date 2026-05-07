@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMudSession } from './hooks/useMudSession';
 import { Toolbar } from './ui/Toolbar';
 import { CommandBar } from './ui/CommandBar';
@@ -6,18 +6,11 @@ import { ContentLayout } from './ui/layout/ContentLayout';
 import { ConnectionScreen } from './ui/ConnectionScreen';
 import { useAppStore, connectionUrl, type MudConnection } from './storage';
 import { useEngines } from './hooks/useEngines';
-import { TriggerEngine } from './mud/triggers/TriggerEngine';
 import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
 import { FileBrowserModal } from './ui/FileBrowserModal';
-import type { ScriptNode } from './storage/schema';
-import { isEffectivelyEnabled } from './storage/schema';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont } from './utils/fontLoader';
-
-// Stable fallback so the Zustand selector always returns the same reference
-// when there are no scripts — avoids an infinite re-render loop.
-const NO_SCRIPTS: ScriptNode[] = [];
 
 export default function App() {
     const { session, status, ping, passwordMode, connect, disconnect, send } = useMudSession();
@@ -44,7 +37,7 @@ export default function App() {
     const saveWindowHint = useAppStore(s => s.saveWindowHint);
     const saveDockExtents = useAppStore(s => s.saveDockExtents);
 
-    const { aliasEngineRef, triggerEngineRef, engineRef } = useEngines(session, sessionStarted, activeConnection);
+    const { engineRef } = useEngines(session, sessionStarted, activeConnection);
 
     // Apply the persisted output font on mount and on every change. Re-running
     // when the active connection changes lets VFS-stored fonts re-register
@@ -53,111 +46,13 @@ export default function App() {
         void applyOutputFont(outputFont, engineRef.current?.currentVFS ?? null);
     }, [outputFont, activeConnection, engineRef]);
 
-    // Reload scripts whenever the store changes for the active connection.
-    const activeScripts = useAppStore(s =>
-        activeConnection ? (s.connectionScripts[activeConnection.id] ?? NO_SCRIPTS) : NO_SCRIPTS,
-    );
-    // Set when handleScriptSave pre-emptively reloads a single script so the
-    // subsequent store update doesn't double-reload it via the diff below.
-    const pendingHotReload = useRef<string | null>(null);
-    const lastLoadedSnap = useRef<{ scripts: ScriptNode[]; session: typeof session; connId: string } | null>(null);
-    const pendingOutputReadyUnsub = useRef<(() => void) | null>(null);
-    useEffect(() => {
-        const hotId = pendingHotReload.current;
-        pendingHotReload.current = null;
+    // Script loading lives in ScriptingEngine itself — it subscribes to
+    // appStore.connectionScripts and applies diffs synchronously. See
+    // ScriptingEngine.attachToStore for the rationale.
 
-        pendingOutputReadyUnsub.current?.();
-        pendingOutputReadyUnsub.current = null;
-
-        const connId = activeConnection?.id ?? '';
-        const snap = lastLoadedSnap.current;
-        lastLoadedSnap.current = { scripts: activeScripts, session, connId };
-
-        // First load, session change, or connection switch → full reload.
-        if (!snap || snap.session !== session || snap.connId !== connId) {
-            if (session.outputReady) {
-                engineRef.current?.loadScripts(activeScripts);
-            } else {
-                pendingOutputReadyUnsub.current = session.events.on('output.ready', () => {
-                    pendingOutputReadyUnsub.current = null;
-                    engineRef.current?.loadScripts(activeScripts);
-                }, { once: true });
-            }
-            return () => {
-                pendingOutputReadyUnsub.current?.();
-                pendingOutputReadyUnsub.current = null;
-            };
-        }
-
-        // Incremental diff: run only newly-enabled scripts or those whose code/
-        // handlers changed. Deleted or disabled scripts leave dirty Lua state that
-        // persists until the next full reload (connection switch / reconnect).
-        const prevEnabled = new Map(
-            snap.scripts
-                .filter(s => s.language === 'lua' && isEffectivelyEnabled(s, snap.scripts))
-                .map(s => [s.id, s]),
-        );
-
-        for (const s of activeScripts) {
-            if (s.language !== 'lua' || !isEffectivelyEnabled(s, activeScripts)) continue;
-            if (s.id === hotId) continue; // Already reloaded by handleScriptSave.
-            const was = prevEnabled.get(s.id);
-            if (!was) {
-                engineRef.current?.reloadScript(s); // Newly enabled or created.
-            } else if (was.code !== s.code || was.eventHandlers.join('\n') !== s.eventHandlers.join('\n')) {
-                engineRef.current?.reloadScript(s); // Code or event-handler binding changed.
-            }
-            // Metadata-only changes (name, parentId, ordering) → no reload.
-        }
-    }, [activeScripts, session, activeConnection]);
-
-    const handleScriptSave = useCallback((script: ScriptNode) => {
-        pendingHotReload.current = script.id;
-        engineRef.current?.reloadScript(script);
-    }, []);
-
-    // Reload permanent aliases from store into AliasEngine whenever they change.
-    const NO_ALIASES = useRef<never[]>([]).current;
-    const activeAliases = useAppStore(s =>
-        activeConnection ? (s.connectionAliases[activeConnection.id] ?? NO_ALIASES) : NO_ALIASES,
-    );
-    useEffect(() => {
-        aliasEngineRef.current?.loadPerm(activeAliases);
-    }, [activeAliases]);
-
-    // Reload permanent triggers from store into TriggerEngine whenever they change.
-    const NO_TRIGGERS = useRef<never[]>([]).current;
-    const activeTriggers = useAppStore(s =>
-        activeConnection ? (s.connectionTriggers[activeConnection.id] ?? NO_TRIGGERS) : NO_TRIGGERS,
-    );
-    useEffect(() => {
-        let cancelled = false;
-        // PCRE pattern compilation is sync once the wasm is initialized; gate the
-        // first load on that so patterns aren't silently dropped at compile time.
-        TriggerEngine.ready().then(() => {
-            if (cancelled) return;
-            triggerEngineRef.current?.loadPerm(activeTriggers);
-        });
-        return () => { cancelled = true; };
-    }, [activeTriggers]);
-
-    // Reload permanent timers from store into ScriptingEngine whenever they change.
-    const NO_TIMERS = useRef<never[]>([]).current;
-    const activeTimers = useAppStore(s =>
-        activeConnection ? (s.connectionTimers[activeConnection.id] ?? NO_TIMERS) : NO_TIMERS,
-    );
-    useEffect(() => {
-        engineRef.current?.loadPermTimers(activeTimers);
-    }, [activeTimers]);
-
-    // Reload permanent keybindings from store into ScriptingEngine whenever they change.
-    const NO_KEYBINDINGS = useRef<never[]>([]).current;
-    const activeKeybindings = useAppStore(s =>
-        activeConnection ? (s.connectionKeybindings[activeConnection.id] ?? NO_KEYBINDINGS) : NO_KEYBINDINGS,
-    );
-    useEffect(() => {
-        engineRef.current?.loadPermKeybindings(activeKeybindings);
-    }, [activeKeybindings]);
+    // Aliases, triggers, timers, and keybindings are all loaded into their
+    // engines via ScriptingEngine.attachToStore — see the comment there for
+    // why the engine owns the store-to-runtime mapping.
 
     // Script-driven command bar manipulation.
     useEffect(() => {
@@ -377,7 +272,7 @@ export default function App() {
                     connectionId={activeConnectionId ?? ''}
                     session={session}
                     vfs={engineRef.current?.currentVFS ?? null}
-                    onScriptSave={handleScriptSave}
+                    scriptingEngineRef={engineRef}
                     onClose={() => setScriptsOpen(false)}
                 />
             )}

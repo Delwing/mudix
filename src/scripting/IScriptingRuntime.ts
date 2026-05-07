@@ -17,4 +17,10 @@ export interface IScriptingRuntime {
      * denyCurrentSend().
      */
     dispatchSendRequest(text: string): boolean;
+    /**
+     * Kill every event handler registered by `wrapScript` for the given
+     * script id. Called when a script is removed or disabled so its handlers
+     * stop firing without waiting for a full runtime reload.
+     */
+    killScriptHandlers(scriptId: string): void;
 }

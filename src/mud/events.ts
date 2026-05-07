@@ -32,6 +32,4 @@ export type MudEvents = MudClientEvents & {
     'prompt': void;
     'script.movecursorup': void;
     'script.movecursordown': void;
-    'package.installed': [name: string];
-    'package.uninstalled': [name: string];
 };

@@ -7,12 +7,12 @@ import { TimerEngine } from '../mud/timers/TimerEngine';
 import { KeyEngine } from '../mud/keybindings/KeyEngine';
 import { ScriptingEngine } from '../scripting/ScriptingEngine';
 
-/** Creates and tears down all scripting engines tied to a session lifetime. */
+/**
+ * Creates and tears down all scripting engines tied to a session lifetime.
+ * Only ScriptingEngine is exposed — it owns the alias/trigger/timer/key
+ * engines internally and subscribes to the appStore to keep them in sync.
+ */
 export function useEngines(session: MudSession, active: boolean, connection: MudConnection | null) {
-    const aliasEngineRef = useRef<AliasEngine | null>(null);
-    const triggerEngineRef = useRef<TriggerEngine | null>(null);
-    const timerEngineRef = useRef<TimerEngine | null>(null);
-    const keyEngineRef = useRef<KeyEngine | null>(null);
     const engineRef = useRef<ScriptingEngine | null>(null);
 
     useEffect(() => {
@@ -22,10 +22,6 @@ export function useEngines(session: MudSession, active: boolean, connection: Mud
         const timer = new TimerEngine();
         const key = new KeyEngine();
         const engine = new ScriptingEngine(session, alias, trigger, timer, key, connection.id, connection.name);
-        aliasEngineRef.current = alias;
-        triggerEngineRef.current = trigger;
-        timerEngineRef.current = timer;
-        keyEngineRef.current = key;
         engineRef.current = engine;
         return () => {
             engine.destroy();
@@ -33,13 +29,9 @@ export function useEngines(session: MudSession, active: boolean, connection: Mud
             trigger.destroy();
             timer.destroy();
             key.destroy();
-            aliasEngineRef.current = null;
-            triggerEngineRef.current = null;
-            timerEngineRef.current = null;
-            keyEngineRef.current = null;
             engineRef.current = null;
         };
     }, [session, active, connection]);
 
-    return { aliasEngineRef, triggerEngineRef, timerEngineRef, keyEngineRef, engineRef };
+    return { engineRef };
 }

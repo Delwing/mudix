@@ -3,8 +3,8 @@ import { ScriptEditorPanel } from './panels/ScriptEditorPanel';
 import { useAppStore } from '../../storage';
 import { ResizableModal } from '../ResizableModal';
 import type { MudSession } from '../../mud/MudSession';
-import type { ScriptNode } from '../../storage/schema';
 import type { ProfileVFS } from '../../scripting/vfs/ProfileVFS';
+import type { ScriptingEngine } from '../../scripting/ScriptingEngine';
 
 const MIN_W = 500;
 const MIN_H = 320;
@@ -15,11 +15,11 @@ interface Props {
     connectionId: string;
     session: MudSession;
     vfs: ProfileVFS | null;
-    onScriptSave?: (script: ScriptNode) => void;
+    scriptingEngineRef?: React.RefObject<ScriptingEngine | null>;
     onClose: () => void;
 }
 
-export function ScriptEditorModal({ connectionId, session, vfs, onScriptSave, onClose }: Props) {
+export function ScriptEditorModal({ connectionId, session, vfs, scriptingEngineRef, onClose }: Props) {
     const savedBounds = useAppStore(s => s.connectionScriptEditorBounds[connectionId]);
     const saveBounds  = useAppStore(s => s.saveScriptEditorBounds);
 
@@ -44,7 +44,7 @@ export function ScriptEditorModal({ connectionId, session, vfs, onScriptSave, on
                 connectionId={connectionId}
                 session={session}
                 vfs={vfs}
-                onScriptSave={onScriptSave}
+                scriptingEngineRef={scriptingEngineRef}
                 initialListWidth={savedBounds?.listWidth}
                 initialMetaHeight={savedBounds?.metaHeight}
                 onSplitsChange={(listWidth, metaHeight) => {

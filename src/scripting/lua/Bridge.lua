@@ -54,6 +54,22 @@ function __mudix_dispatch_event()
     end
 end
 
+-- Per-script event-handler registry. wrapScript (in ScriptingEngine.ts) emits
+-- code that calls __mudix_kill_script_handlers before re-registering, so
+-- saving a script doesn't accumulate duplicate handlers. JS calls the same
+-- helper on disable/remove via LuaRuntime.killScriptHandlers.
+__mudix_script_handlers = __mudix_script_handlers or {}
+function __mudix_kill_script_handlers(sid)
+    local ids = __mudix_script_handlers[sid]
+    if not ids then return end
+    for i = 1, #ids do
+        if type(killAnonymousEventHandler) == 'function' then
+            pcall(killAnonymousEventHandler, ids[i])
+        end
+    end
+    __mudix_script_handlers[sid] = nil
+end
+
 -- Mudlet REGEX_LUA_CODE pattern evaluator: run the body as a Lua chunk on
 -- every line. Side effects (raiseEvent, etc.) always execute; the trigger
 -- "matches" only when the body's return value is truthy.

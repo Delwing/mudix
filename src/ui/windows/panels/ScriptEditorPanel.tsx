@@ -6,6 +6,7 @@ import type { AliasNode, ButtonLocation, ButtonNode, ButtonOrientation, KeyNode,
 import { isEffectivelyEnabled } from '../../../storage/schema';
 import type { MudSession, ScriptLogSource, ScriptLogSourceKind } from '../../../mud/MudSession';
 import type { ProfileVFS } from '../../../scripting/vfs/ProfileVFS';
+import type { ScriptingEngine } from '../../../scripting/ScriptingEngine';
 import { LuaEditor } from './LuaEditor';
 import { installPackageFromFile, uninstallPackageFiles } from '../../../import/packageInstaller';
 import { strToU8 } from 'fflate';
@@ -334,13 +335,13 @@ interface ScriptEditorPanelProps {
     connectionId: string;
     session: MudSession;
     vfs: ProfileVFS | null;
-    onScriptSave?: (script: ScriptNode) => void;
+    scriptingEngineRef?: React.RefObject<ScriptingEngine | null>;
     initialListWidth?: number;
     initialMetaHeight?: number;
     onSplitsChange?: (listWidth: number, metaHeight: number | null) => void;
 }
 
-export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, initialListWidth, initialMetaHeight, onSplitsChange }: ScriptEditorPanelProps) {
+export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineRef, initialListWidth, initialMetaHeight, onSplitsChange }: ScriptEditorPanelProps) {
     const confirm = useConfirm();
     const [category, setCategory] = useState<Category>('scripts');
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -394,8 +395,12 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
         }
         try {
             const { manifest, data } = await installPackageFromFile(file, vfs);
+            // installPackage commits the new scripts to the store; the
+            // engine's store subscription synchronously loads them into Lua
+            // before this call returns. By the time notifyPackageInstalled
+            // raises sysInstallPackage, all handlers are already registered.
             installPackage(connectionId, manifest, data);
-            session.events.emit('package.installed', manifest.name);
+            scriptingEngineRef?.current?.notifyPackageInstalled(manifest.name);
             const total = data.scripts.length + data.aliases.length + data.triggers.length + data.timers.length + data.keys.length;
             setImportError(null);
             const now = new Date();
@@ -408,10 +413,13 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
         } catch (err) {
             setImportError(err instanceof Error ? err.message : String(err));
         }
-    }, [connectionId, installPackage, session, vfs]);
+    }, [connectionId, installPackage, scriptingEngineRef, vfs]);
 
     const handleUninstall = useCallback(async (packageName: string) => {
-        session.events.emit('package.uninstalled', packageName);
+        // Raise sysUninstall/sysUninstallPackage before removing the
+        // package's items from the store so the package's own handlers can
+        // still run during cleanup.
+        scriptingEngineRef?.current?.notifyPackageUninstalled(packageName);
         uninstallPackage(connectionId, packageName);
         if (vfs) {
             try { await uninstallPackageFiles(packageName, vfs); }
@@ -419,7 +427,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
         }
         const now = new Date();
         setLogs(prev => [...prev, { text: `Uninstalled package "${packageName}"`, level: 'info', timestamp: now }]);
-    }, [connectionId, session, uninstallPackage, vfs]);
+    }, [connectionId, scriptingEngineRef, uninstallPackage, vfs]);
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -975,7 +983,6 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
         if (category === 'scripts') {
             const handlers = editEventHandlers.split('\n').map(s => s.trim()).filter(Boolean);
             updateScript(connectionId, selectedId, { name: editName, language: editLang, code: editCode, eventHandlers: handlers });
-            onScriptSave?.({ ...(selected as ScriptNode), name: editName, language: editLang, code: editCode, eventHandlers: handlers });
         } else if (category === 'aliases') {
             updateAlias(connectionId, selectedId, { name: editName, pattern: editPattern, command: editCommand, language: editLang, code: editCode });
         } else if (category === 'triggers') {
@@ -1528,7 +1535,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, onScriptSave, in
                         )}
                         {category === 'scripts' && (
                             <div className="script-editor__meta-row script-editor__meta-row--col">
-                                <span className="script-editor__field-label">Event handlers (one event name per line)</span>
+                                <span className="script-editor__field-label">Event handlers (one per line — fires the global function named after this script)</span>
                                 <textarea
                                     className="script-editor__patterns"
                                     value={editEventHandlers}

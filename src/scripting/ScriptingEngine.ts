@@ -1,17 +1,18 @@
-import type { MudSession, ScriptLogSource, ScriptLogSourceKind } from '../mud/MudSession';
-import type { AliasEngine, AliasNode } from '../mud/aliases/AliasEngine';
-import type { TriggerEngine, TriggerNode } from '../mud/triggers/TriggerEngine';
-import type { TimerEngine, TimerNode } from '../mud/timers/TimerEngine';
-import type { KeyEngine, KeyNode } from '../mud/keybindings/KeyEngine';
-import type { ButtonNode, ScriptNode } from '../storage/schema';
-import { isEffectivelyEnabled } from '../storage/schema';
-import type { RgbColor, FormatStateSnapshot } from '../mud/text/FormatState';
-import { AnsiAwareBuffer } from '../mud/text/FormatState';
-import { ScriptingAPI } from './ScriptingAPI';
-import { LuaRuntime } from './lua/LuaRuntime';
-import type { IScriptingRuntime } from './IScriptingRuntime';
-import { ProfileVFS } from './vfs/ProfileVFS';
-import { MapOpenNotifier } from './MapOpenNotifier';
+import type {MudSession, ScriptLogSource, ScriptLogSourceKind} from '../mud/MudSession';
+import type {AliasEngine, AliasNode} from '../mud/aliases/AliasEngine';
+import {TriggerEngine, type TriggerNode} from '../mud/triggers/TriggerEngine';
+import type {TimerEngine} from '../mud/timers/TimerEngine';
+import type {KeyEngine, KeyNode} from '../mud/keybindings/KeyEngine';
+import type {ButtonNode, ScriptNode} from '../storage/schema';
+import {isEffectivelyEnabled} from '../storage/schema';
+import {useAppStore} from '../storage';
+import type {FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
+import {AnsiAwareBuffer} from '../mud/text/FormatState';
+import {ScriptingAPI} from './ScriptingAPI';
+import {LuaRuntime} from './lua/LuaRuntime';
+import type {IScriptingRuntime} from './IScriptingRuntime';
+import {ProfileVFS} from './vfs/ProfileVFS';
+import {MapOpenNotifier} from './MapOpenNotifier';
 
 function hexToRgb(hex: string): RgbColor | null {
     const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
@@ -58,9 +59,17 @@ export class ScriptingEngine {
     private readonly api: ScriptingAPI;
     private promptPending = false;
     private vfs: ProfileVFS | null = null;
-    private loadGeneration = 0;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
     private readonly mapOpen = new MapOpenNotifier(() => this.raiseEvent('mapOpenEvent'));
+    private readonly connectionId: string;
+    private storeUnsub: (() => void) | null = null;
+    // Triggers can't apply until the PCRE wasm has initialized — we hold
+    // off the first apply (and any subsequent store updates for triggers)
+    // until TriggerEngine.ready() resolves.
+    private triggersReady = false;
+    // Last seen script list for the active connection. Used to diff against
+    // the next store update so we know which scripts to load/unload.
+    private prevScripts: ScriptNode[] = [];
 
     constructor(
         private readonly session: MudSession,
@@ -73,8 +82,137 @@ export class ScriptingEngine {
     ) {
         this.api = new ScriptingAPI(session, aliasEngine, triggerEngine, timerEngine, keyEngine);
         this.api.profileName = connectionName;
+        this.connectionId = connectionId;
         this.bridgeEvents(session);
         this.runtimeReady = this.initRuntime(connectionId);
+        this.attachToStore(session);
+    }
+
+    /**
+     * Subscribe to the appStore and apply diffs synchronously on every
+     * mutation. Zustand fires subscribers synchronously inside `set()`, so a
+     * UI action like `installPackage(...)` immediately propagates into the
+     * Lua runtime — handlers register before the caller's next line runs.
+     * That guarantee is what lets `notifyPackageInstalled` raise its event
+     * right after the store update without a React commit in between.
+     *
+     * Covers all five entity types — scripts, aliases, triggers, timers,
+     * keybindings — so the engine is the single owner of the
+     * store-to-runtime mapping. The UI just dispatches store actions.
+     *
+     * The first apply is gated on `output.ready` because some scripts open
+     * windows on load and the dock system needs to be wired up first.
+     * Triggers additionally wait for the PCRE wasm via TriggerEngine.ready()
+     * — patterns won't compile before that.
+     */
+    private attachToStore(session: MudSession): void {
+        const start = () => {
+            console.info('[engine][attachToStore] start (output.ready cleared)', { connectionId: this.connectionId });
+            this.applyScriptsFromStore();
+            this.applyAliasesFromStore();
+            this.applyTimersFromStore();
+            this.applyKeybindingsFromStore();
+            // sysLoadEvent fires once after the initial script load.
+            // Map-open notification keeps map-aware scripts in sync if the
+            // map is already visible at connection time.
+            this.raiseEvent('sysLoadEvent');
+            if (this.api.windows.isVisible('map')) this.mapOpen.notify();
+            this.api.flushOutput();
+
+            // Triggers need PCRE wasm; until that resolves, skip apply on
+            // the initial pass and on subsequent store updates. Once ready,
+            // apply whatever the store says now.
+            void TriggerEngine.ready().then(() => {
+                console.info('[engine][attachToStore] triggers wasm ready', { connectionId: this.connectionId });
+                this.triggersReady = true;
+                this.applyTriggersFromStore();
+            });
+
+            this.storeUnsub = useAppStore.subscribe((state, prevState) => {
+                const id = this.connectionId;
+                if (state.connectionScripts[id]      !== prevState.connectionScripts[id])      this.applyScriptsFromStore();
+                if (state.connectionAliases[id]      !== prevState.connectionAliases[id])      this.applyAliasesFromStore();
+                if (state.connectionTimers[id]       !== prevState.connectionTimers[id])       this.applyTimersFromStore();
+                if (state.connectionKeybindings[id]  !== prevState.connectionKeybindings[id])  this.applyKeybindingsFromStore();
+                if (this.triggersReady && state.connectionTriggers[id] !== prevState.connectionTriggers[id]) {
+                    this.applyTriggersFromStore();
+                }
+            });
+        };
+        if (session.outputReady) {
+            console.info('[engine][attachToStore] output already ready, starting now', { connectionId: this.connectionId });
+            start();
+        } else {
+            console.info('[engine][attachToStore] waiting for output.ready', { connectionId: this.connectionId });
+            this.unsubs.push(session.events.on('output.ready', start, { once: true }));
+        }
+    }
+
+    private applyAliasesFromStore(): void {
+        const aliases = useAppStore.getState().connectionAliases[this.connectionId] ?? [];
+        console.info('[engine][apply] aliases', { connectionId: this.connectionId, count: aliases.length });
+        this.aliasEngine.loadPerm(aliases);
+    }
+
+    private applyTriggersFromStore(): void {
+        const triggers = useAppStore.getState().connectionTriggers[this.connectionId] ?? [];
+        console.info('[engine][apply] triggers', { connectionId: this.connectionId, count: triggers.length });
+        this.triggerEngine.loadPerm(triggers);
+    }
+
+    private applyTimersFromStore(): void {
+        const timers = useAppStore.getState().connectionTimers[this.connectionId] ?? [];
+        console.info('[engine][apply] timers', { connectionId: this.connectionId, count: timers.length });
+        this.timerEngine.loadPerm(timers, (timer) => {
+            if (timer.command) this.api.send(timer.command, false);
+            if (timer.code && timer.language === 'lua') {
+                try {
+                    this.runtimes.lua?.run(timer.code, `timer "${timer.name}"`);
+                } catch (err) {
+                    this.reportEntityError('timer', timer.id, timer.name, err);
+                }
+            }
+            this.api.flushOutput();
+        });
+    }
+
+    private applyKeybindingsFromStore(): void {
+        const keys = useAppStore.getState().connectionKeybindings[this.connectionId] ?? [];
+        console.info('[engine][apply] keybindings', { connectionId: this.connectionId, count: keys.length });
+        this.keyEngine.loadPerm(keys);
+    }
+
+    private applyScriptsFromStore(): void {
+        const next = useAppStore.getState().connectionScripts[this.connectionId] ?? [];
+        const prev = this.prevScripts;
+        this.prevScripts = next;
+        if (prev === next) return;
+
+        const prevEnabled = new Map(
+            prev.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, prev))
+                .map(s => [s.id, s] as const),
+        );
+        const nextEnabledIds = new Set(
+            next.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, next))
+                .map(s => s.id),
+        );
+        console.info('[engine][apply] scripts', {
+            connectionId: this.connectionId,
+            total: next.length,
+            enabled: nextEnabledIds.size,
+        });
+
+        for (const id of prevEnabled.keys()) {
+            if (!nextEnabledIds.has(id)) this.unloadScript(id);
+        }
+        for (const s of next) {
+            if (s.language !== 'lua' || !isEffectivelyEnabled(s, next)) continue;
+            const was = prevEnabled.get(s.id);
+            const handlersChanged = !!was && was.eventHandlers.join('\n') !== s.eventHandlers.join('\n');
+            if (!was || was.code !== s.code || handlersChanged) {
+                this.reloadScript(s);
+            }
+        }
     }
 
     private initRuntime(connectionId: string): Promise<IScriptingRuntime> {
@@ -120,31 +258,36 @@ export class ScriptingEngine {
         });
     }
 
-    loadScripts(scripts: ScriptNode[]): void {
-        const gen = ++this.loadGeneration;
-        this.runtimeReady
-            .then(rt => {
-                if (gen !== this.loadGeneration) return;
-                try {
-                    const enabled = scripts.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, scripts));
-                    for (const s of enabled) {
-                        if (!s.code) continue;
-                        try {
-                            rt.load(this.wrapScript(s), s.name);
-                        } catch (err) {
-                            this.reportEntityError('script', s.id, s.name, err);
-                        }
-                    }
-                    this.raiseEvent('sysLoadEvent');
-                    if (this.api.windows.isVisible('map')) {
-                        this.mapOpen.notify();
-                    }
-                } catch (err) {
-                    this.api.printError(`[scripting] script load error: ${err instanceof Error ? err.message : String(err)}`);
-                }
-                this.api.flushOutput();
-            })
-            .catch(err => this.api.printError(`[scripting] Lua runtime failed to initialize: ${err instanceof Error ? err.message : String(err)}`));
+    /**
+     * Tear down a script's event-handler registrations. Used when a script is
+     * removed or transitions enabled→disabled so its handlers stop firing
+     * before the next full runtime reload.
+     */
+    async unloadScript(scriptId: string): Promise<void> {
+        let rt: IScriptingRuntime;
+        try { rt = await this.runtimeReady; } catch { return; }
+        rt.killScriptHandlers(scriptId);
+    }
+
+    /**
+     * Raise sysInstall / sysInstallPackage. The caller is expected to have
+     * just committed the package's items to the appStore — our subscription
+     * loads the new scripts synchronously inside that commit, so by the time
+     * this method runs the package's event handlers are already registered.
+     */
+    notifyPackageInstalled(packageName: string): void {
+        this.raiseEvent('sysInstall', [packageName]);
+        this.raiseEvent('sysInstallPackage', [packageName]);
+    }
+
+    /**
+     * Raise sysUninstall / sysUninstallPackage. Call this BEFORE removing the
+     * package's items from the store so the package's own handlers (and the
+     * scripts they live in) are still loaded when the event fires.
+     */
+    notifyPackageUninstalled(packageName: string): void {
+        this.raiseEvent('sysUninstall', [packageName]);
+        this.raiseEvent('sysUninstallPackage', [packageName]);
     }
 
     /** Run a single script on the existing runtime without restarting it. */
@@ -161,26 +304,6 @@ export class ScriptingEngine {
     }
 
     get currentVFS(): ProfileVFS | null { return this.vfs; }
-
-    /** Start all enabled permanent timers. Called when the timer list changes. */
-    loadPermTimers(timers: TimerNode[]): void {
-        this.timerEngine.loadPerm(timers, (timer) => {
-            if (timer.command) this.api.send(timer.command, false);
-            if (timer.code && timer.language === 'lua') {
-                try {
-                    this.runtimes.lua?.run(timer.code, `timer "${timer.name}"`);
-                } catch (err) {
-                    this.reportEntityError('timer', timer.id, timer.name, err);
-                }
-            }
-            this.api.flushOutput();
-        });
-    }
-
-    /** Reload permanent keybindings into the engine. Called when the keybinding list changes. */
-    loadPermKeybindings(keybindings: KeyNode[]): void {
-        this.keyEngine.loadPerm(keybindings);
-    }
 
     /**
      * Send a command from the command bar. Raises sysDataSendRequest, then either
@@ -235,7 +358,8 @@ export class ScriptingEngine {
     }
 
     destroy(): void {
-        this.loadGeneration++;
+        this.storeUnsub?.();
+        this.storeUnsub = null;
         for (const unsub of this.unsubs) unsub();
         this.unsubs.length = 0;
         this.runtimes.lua?.destroy();
@@ -270,15 +394,34 @@ export class ScriptingEngine {
         this.api.printError(`[${formatErrorPrefix(kind, name)}] ${msg}`, source);
     }
 
-    // If the script declares eventHandlers, wrap it so the code runs as a
-    // handler function rather than at load time (mirrors Mudlet TScript).
+    // Mudlet TScript semantics: the body runs at load time (defining e.g.
+    // `function MyScript(event, ...) ... end` as a global), and each event
+    // handler fires by looking up the global named after the script and
+    // calling it. We dispatch via _G[name] (not a direct function reference)
+    // so re-saving the script picks up the new function, and so missing/
+    // mistyped function names silently no-op like Mudlet.
+    //
+    // The wrapper also kills any previously-registered handlers for this
+    // script (Bridge.lua's __mudix_script_handlers tracks IDs by script id)
+    // so re-saving doesn't accumulate duplicate registrations.
     private wrapScript(script: ScriptNode): string {
         if (script.eventHandlers.length === 0) return script.code;
-        const safeId = script.id.replace(/-/g, '_');
+        const sidLiteral = JSON.stringify(script.id);
+        const nameLiteral = JSON.stringify(script.name);
         const registrations = script.eventHandlers
-            .map(e => `registerAnonymousEventHandler(${JSON.stringify(e)}, __handler_${safeId})`)
+            .map(e =>
+                `__mudix_script_handlers[${sidLiteral}][#__mudix_script_handlers[${sidLiteral}]+1] = ` +
+                `registerAnonymousEventHandler(${JSON.stringify(e)}, function(...) ` +
+                `local __fn = _G[${nameLiteral}]; ` +
+                `if type(__fn) == 'function' then return __fn(...) end ` +
+                `end)`)
             .join('\n');
-        return `local __handler_${safeId} = function(event, ...)\n${script.code}\nend\n${registrations}`;
+        return [
+            `__mudix_kill_script_handlers(${sidLiteral})`,
+            `__mudix_script_handlers[${sidLiteral}] = {}`,
+            script.code,
+            registrations,
+        ].join('\n');
     }
 
     private executePermAlias(alias: AliasNode, matches: string[]): void {
@@ -380,7 +523,6 @@ export class ScriptingEngine {
      * (line ordering, ANSI carry, trigger-echo placement).
      */
     private processFlushBatch(groups: { text: string; type: string }[]): void {
-        const session = this.session;
         for (const { text, type } of groups) {
             try {
                 const lines = text.split('\n');
@@ -406,7 +548,7 @@ export class ScriptingEngine {
                         !buffer.deleted &&
                         (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
                     if (shouldRender) {
-                        session.events.emit('message', buffer, type, Date.now());
+                        this.session.events.emit('message', buffer, type, Date.now());
                     }
                 }
             } finally {
@@ -468,14 +610,10 @@ export class ScriptingEngine {
                 this.api.updateGmcp(path, value);
                 this.emit('gmcp', [path, value]);
             }),
-            session.events.on('package.installed', (name) => {
-                this.raiseEvent('sysInstall', [name]);
-                this.raiseEvent('sysInstallPackage', [name]);
-            }),
-            session.events.on('package.uninstalled', (name) => {
-                this.raiseEvent('sysUninstall', [name]);
-                this.raiseEvent('sysUninstallPackage', [name]);
-            }),
+            // Package install/uninstall events are dispatched by callers via
+            // notifyPackageInstalled / notifyPackageUninstalled (not the
+            // session event bus) so we can sequence the script-load before
+            // sysInstallPackage fires. See those methods for rationale.
         );
     }
 }
