@@ -1,4 +1,4 @@
-import {Lua, LuaReturn, type LuaThread} from 'wasmoon-lua5.1';
+import {Lua, LuaReturn, LUA_REGISTRYINDEX, type LuaThread} from 'wasmoon-lua5.1';
 import type {IScriptingRuntime} from '../IScriptingRuntime';
 import type {ScriptingAPI} from '../ScriptingAPI';
 import type {ProfileVFS} from '../vfs/ProfileVFS';
@@ -919,8 +919,7 @@ export class LuaRuntime implements IScriptingRuntime {
     // returned (Lua's first return value), so execModule can capture
     // require()-style module return values.
     private async execInner(code: string, name: string): Promise<unknown> {
-        const t = this.lua.global.newThread();
-        try {
+        return this.withWorkerThread(async (t) => {
             // The chunk grabs its varargs and forwards them to __exec, returning
             // __exec's (err, result). Reading from the thread's stack avoids
             // the global-state race that two concurrent execInner calls would
@@ -936,7 +935,25 @@ export class LuaRuntime implements IScriptingRuntime {
             const result = top >= 2 ? t.getValue(2) : undefined;
             if (err != null) throw new Error(String(err));
             return result;
+        });
+    }
+
+    // Spawn a coroutine via newThread() but anchor it in the Lua registry
+    // (luaL_ref pops the thread from global's stack and stores it under a ref
+    // number). LuaThread.close() in wasmoon-lua5.1 doesn't pop or release the
+    // thread — without this anchoring, every dispatch permanently grows
+    // global's stack, eventually triggering "memory access out of bounds" once
+    // lua_newthread can no longer grow the stack. Re-entrant dispatch
+    // (handler → feedTriggers __await → output/gmcp event → handler …) makes
+    // it bite within seconds.
+    private async withWorkerThread<T>(fn: (t: LuaThread) => Promise<T>): Promise<T> {
+        const t = this.lua.global.newThread();
+        const parentAddr = this.lua.global.address;
+        const ref = this.lua.luaApi.luaL_ref(parentAddr, LUA_REGISTRYINDEX);
+        try {
+            return await fn(t);
         } finally {
+            this.lua.luaApi.luaL_unref(parentAddr, LUA_REGISTRYINDEX, ref);
             try { t.close(); } catch { /* already closed */ }
         }
     }
@@ -951,6 +968,17 @@ export class LuaRuntime implements IScriptingRuntime {
     // On rejection we push a sentinel table; the Lua-side __await() helper
     // checks for it and re-raises the error.
     private async runThread(t: LuaThread, initialArgCount = 0): Promise<void> {
+        // Defer the first resume to a microtask so we never recurse into
+        // lua_resume while another lua_resume is still on the WASM stack.
+        // Re-entrant dispatch (a Lua handler calling raiseEvent / feedTriggers /
+        // anything that goes through enqueueLua's re-entrancy bypass) lands the
+        // synchronous prefix newThread → loadString → t.resume here, all inside
+        // the C→JS bridge frame of the outer thread's lua_resume. Emscripten's
+        // setjmp/longjmp can't survive nested resumes and corrupts WASM memory
+        // ("memory access out of bounds"). Awaiting Promise.resolve() pushes
+        // the resume to a microtask, which V8 only runs after the outer
+        // lua_resume returns to JS.
+        await Promise.resolve();
         let res = t.resume(initialArgCount);
         while (res.result === LuaReturn.Yield) {
             if (res.resultCount > 0) {
@@ -985,8 +1013,7 @@ export class LuaRuntime implements IScriptingRuntime {
     // thread's state. Wrapped in pcall on the Lua side so a runtime error
     // is captured as a string and surfaced via the resolved error message.
     private async runChunkOnWorker(chunk: string, label: string): Promise<void> {
-        const t = this.lua.global.newThread();
-        try {
+        await this.withWorkerThread(async (t) => {
             // pcall-on-coroutine isn't safe in 5.1 (yield-across-C), so we
             // wrap the chunk in our own coroutine-step loop — same pattern
             // as Exec.lua. The wrapper catches errors and stashes them in
@@ -1008,9 +1035,7 @@ export class LuaRuntime implements IScriptingRuntime {
             if (err != null) {
                 this.api.printError(`[${label}] ${err}`);
             }
-        } finally {
-            try { t.close(); } catch { /* already closed */ }
-        }
+        });
     }
 
     // Per-runtime FIFO queue: every queued Lua entry waits for the previous
