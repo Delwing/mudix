@@ -9,6 +9,7 @@ do
     local _err         = __vfs_err__
     local _profile_dir = __vfs_profile_dir__
     local _os_remove   = __vfs_os_remove__
+    local _os_rename   = __vfs_os_rename__
     local _chdir       = __vfs_lfs_chdir__
     local _currentdir  = __vfs_lfs_currentdir__
     local _mkdir       = __vfs_lfs_mkdir__
@@ -25,6 +26,7 @@ do
     __vfs_err__            = nil
     __vfs_profile_dir__    = nil
     __vfs_os_remove__      = nil
+    __vfs_os_rename__      = nil
     __vfs_lfs_chdir__      = nil
     __vfs_lfs_currentdir__ = nil
     __vfs_lfs_mkdir__      = nil
@@ -196,20 +198,33 @@ do
         return _profile_dir()
     end
 
-    -- Make require() find Lua files uploaded to the profile directory.
-    -- "foo.bar" → <profileDir>/foo/bar.lua, loaded via the VFS io layer.
+    -- Seed package.path with the profile directory so vanilla require() works,
+    -- and so user scripts can prepend extra patterns (Mudlet idiom):
+    --   package.path = getMudletHomeDir() .. "/foo/?.lua;" .. package.path
+    package.path = string.format(
+        "%s/?.lua;%s/?/init.lua;%s",
+        _profile_dir(), _profile_dir(), package.path or ""
+    )
+
+    -- VFS-backed require loader: walk package.path patterns and try each one
+    -- through io.open (which is wired to the VFS above). Mirrors Lua's default
+    -- loader semantics so package.path edits behave the way Mudlet packages expect.
     table.insert(package.loaders, 2, function(modname)
-        local relpath = modname:gsub("%.", "/") .. ".lua"
-        local fullpath = _profile_dir() .. "/" .. relpath
-        local f = io.open(fullpath, "r")
-        if not f then
-            return "\n\tno file '" .. fullpath .. "' in VFS"
+        local base = modname:gsub("%.", "/")
+        local errs = ""
+        for pattern in string.gmatch(package.path, "[^;]+") do
+            local fullpath = pattern:gsub("%?", base)
+            local f = io.open(fullpath, "r")
+            if f then
+                local code = f:read("*a")
+                f:close()
+                local fn, ce = loadstring(code, "@" .. fullpath)
+                if not fn then error(ce) end
+                return fn
+            end
+            errs = errs .. "\n\tno file '" .. fullpath .. "' in VFS"
         end
-        local code = f:read("*a")
-        f:close()
-        local fn, ce = loadstring(code, "@" .. fullpath)
-        if not fn then error(ce) end
-        return fn
+        return errs
     end)
 
     function dofile(path)
@@ -232,6 +247,13 @@ do
 
     os.remove = function(path)
         if not _os_remove(tostring(path)) then
+            return nil, _err()
+        end
+        return true
+    end
+
+    os.rename = function(old, new)
+        if not _os_rename(tostring(old), tostring(new)) then
             return nil, _err()
         end
         return true

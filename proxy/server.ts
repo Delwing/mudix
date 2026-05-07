@@ -74,8 +74,19 @@ async function forwardHttp(req: http.IncomingMessage, res: http.ServerResponse, 
         return;
     }
 
+    // Strip CORS headers (we set our own) and any header that describes the
+    // *transport* of the upstream body. Node's fetch auto-decodes gzip/br/
+    // deflate responses, so forwarding the upstream Content-Encoding makes
+    // the browser try to decompress already-decompressed bytes — silently
+    // mangling binary downloads. Content-Length / Transfer-Encoding similarly
+    // describe the on-wire shape, not the bytes we re-emit chunked below.
     const outHeaders: Record<string, string> = {};
-    upstream.headers.forEach((v, k) => { outHeaders[k] = v; });
+    upstream.headers.forEach((v, k) => {
+        const lk = k.toLowerCase();
+        if (lk.startsWith('access-control-')) return;
+        if (lk === 'content-encoding' || lk === 'content-length' || lk === 'transfer-encoding') return;
+        outHeaders[k] = v;
+    });
     Object.assign(outHeaders, CORS_HEADERS);
     res.writeHead(upstream.status, outHeaders);
 

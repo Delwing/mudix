@@ -1,6 +1,7 @@
 import { EventBus } from '../core/EventBus';
 import { WindowManager } from '../ui/windows/WindowManager';
 import { LabelManager } from '../ui/labels/LabelManager';
+import { CmdLineMenuRegistry } from '../ui/CmdLineMenuRegistry';
 import { MudClient, type MudClientOptions } from './connection/MudClient';
 import { PingTracker } from './connection/PingTracker';
 import { type MudClientEvents, type MudEvents, type SessionStatus } from './events';
@@ -30,6 +31,7 @@ export class MudSession {
     readonly events = new EventBus<MudEvents>();
     readonly windows = new WindowManager();
     readonly labels = new LabelManager();
+    readonly cmdLineMenu = new CmdLineMenuRegistry();
     /** Per-window Console instances. 'main' registered by ScriptingAPI; named windows by WindowManager. */
     readonly consoles = new Map<string, Console>();
     private client: MudClient | null = null;
@@ -112,6 +114,10 @@ export class MudSession {
         if (echo) this.echoCommand(text);
         if (!this.client) return;
         this.client.send(text);
+    }
+
+    sendGmcpRaw(message: string): void {
+        this.client?.sendGmcpRaw(message);
     }
 
     private teardownClient(): void {

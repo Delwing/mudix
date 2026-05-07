@@ -62,7 +62,10 @@ export default function App() {
         const unsub2 = session.events.on('script.setcmd', (text: string) => {
             setCommand(text);
         });
-        return () => { unsub1(); unsub2(); };
+        const unsub3 = session.events.on('script.clearcmd', () => {
+            setCommand('');
+        });
+        return () => { unsub1(); unsub2(); unsub3(); };
     }, [session]);
 
     // Drain disk-backed VFS writes before navigation. Folder-linked profiles
@@ -106,6 +109,7 @@ export default function App() {
         const hints   = connectionWindowHints[connection.id] ?? {};
         const extents = connectionDockExtents[connection.id];
         if (extents) session.windows.setDockExtentsFromStorage(extents);
+        session.windows.setConnectionId(connection.id);
         session.windows.setWindowHints(hints);
         setActiveConnection(connection);
         setSessionStarted(true);
@@ -117,6 +121,7 @@ export default function App() {
         const hints   = connectionWindowHints[connection.id] ?? {};
         const extents = connectionDockExtents[connection.id];
         if (extents) session.windows.setDockExtentsFromStorage(extents);
+        session.windows.setConnectionId(connection.id);
         session.windows.setWindowHints(hints);
         setActiveConnection(connection);
         setSessionStarted(true);
@@ -145,6 +150,7 @@ export default function App() {
     const handleNewConnection = () => {
         disconnect();
         session.windows.clearAll();
+        session.windows.setConnectionId('');
         session.labels.clearAll();
         setActiveConnection(null);
         setSessionStarted(false);
@@ -263,6 +269,7 @@ export default function App() {
                             passwordMode={passwordMode}
                             commandInputRef={commandInputRef}
                             onSubmit={handleSend}
+                            cmdLineMenu={session.cmdLineMenu}
                         />
                     }
                 />

@@ -6,6 +6,7 @@ import {
     createTelnetOptionParser,
     EchoHandler,
     encodeGmcp,
+    encodeGmcpRaw,
     GMCP_DO,
     GMCP_WILL,
     MccpHandler,
@@ -203,6 +204,18 @@ export class MudClient {
         }
         try {
             this.socket.send(btoa(encodeGmcp(path, payload)));
+        } catch (error) {
+            console.error('Error sending GMCP message:', error);
+            this.eventBus.emit('error', error);
+        }
+    }
+
+    sendGmcpRaw(message: string): void {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        try {
+            this.socket.send(btoa(encodeGmcpRaw(message)));
         } catch (error) {
             console.error('Error sending GMCP message:', error);
             this.eventBus.emit('error', error);

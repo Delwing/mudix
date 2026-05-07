@@ -8,6 +8,29 @@ import type { LabelManager, LabelCreateOptions } from '../ui/labels/LabelManager
 import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
 import { Console } from '../mud/text/Console';
+import { useAppStore } from '../storage';
+
+/**
+ * Returns how many monospace characters fit horizontally inside `el`. Used by
+ * getColumnCount when the script hasn't pinned a wrap width with setWindowWrap.
+ * The probe is hidden and removed before this returns, so it never appears in
+ * the output. Returns 0 if the element is missing or has zero width (e.g. not
+ * yet mounted, in a hidden tab).
+ */
+function measureColumnCapacity(el: HTMLElement | null): number {
+    if (!el) return 0;
+    const probe = document.createElement('span');
+    probe.textContent = '0'.repeat(100);
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:inherit;letter-spacing:inherit;';
+    el.appendChild(probe);
+    const charWidth = probe.getBoundingClientRect().width / 100;
+    probe.remove();
+    if (charWidth <= 0) return 0;
+    const cs = getComputedStyle(el);
+    const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    const width = Math.max(0, el.clientWidth - pad);
+    return Math.floor(width / charWidth);
+}
 
 // ── Windows ───────────────────────────────────────────────────────────────────
 
@@ -66,6 +89,30 @@ class ScriptingWindowsAPI {
         this.session.windows.setSize(id, width, height);
     }
 
+    setFontSize(id: string, size: number): boolean {
+        return this.session.windows.setFontSize(id, size);
+    }
+
+    getFontSize(id: string): number | null {
+        return this.session.windows.getFontSize(id);
+    }
+
+    setFont(id: string, family: string): boolean {
+        return this.session.windows.setFont(id, family);
+    }
+
+    getFont(id: string): string | null {
+        return this.session.windows.getFont(id);
+    }
+
+    setBackgroundColor(id: string, r: number, g: number, b: number, a = 255): boolean {
+        return this.session.windows.setBackgroundColor(id, r, g, b, a);
+    }
+
+    getBackgroundColor(id: string): { r: number; g: number; b: number; a: number } | null {
+        return this.session.windows.getBackgroundColor(id);
+    }
+
     element(id: string): HTMLElement | null {
         return this.session.windows.getElement(id);
     }
@@ -74,7 +121,10 @@ class ScriptingWindowsAPI {
 // ── Labels ────────────────────────────────────────────────────────────────────
 
 class ScriptingLabelsAPI {
-    constructor(private readonly manager: LabelManager) {}
+    constructor(
+        private readonly manager: LabelManager,
+        private readonly cssRewriter: () => ((css: string) => string) | null,
+    ) {}
 
     create(name: string, opts: LabelCreateOptions): boolean {
         return this.manager.create(name, opts);
@@ -95,8 +145,12 @@ class ScriptingLabelsAPI {
     setBackgroundColor(name: string, r: number, g: number, b: number, a = 255): boolean {
         return this.manager.setBackgroundColor(name, r, g, b, a);
     }
+    getBackgroundColor(name: string): { r: number; g: number; b: number; a: number } | null {
+        return this.manager.getBackgroundColor(name);
+    }
     setStyleSheet(name: string, css: string): boolean {
-        return this.manager.setStyleSheet(name, css);
+        const rewrite = this.cssRewriter();
+        return this.manager.setStyleSheet(name, rewrite ? rewrite(css) : css);
     }
     setClickCallback(name: string, fn: () => void): boolean {
         return this.manager.setClickCallback(name, fn);
@@ -153,6 +207,20 @@ export class ScriptingAPI {
     // shares ordering semantics.
     private feedDispatcher: ((groups: { text: string; type: string }[]) => void) | null = null;
 
+    // Callbacks set by ScriptingEngine. Wire installPackage / uninstallPackage
+    // through to the engine so the package's items reach the appStore (and
+    // thus the runtime) and sysInstall* / sysUninstall* events fire in order.
+    private packageInstaller: ((path: string) => boolean) | null = null;
+    private packageUninstaller: ((name: string) => boolean) | null = null;
+    private packagesGetter: (() => string[]) | null = null;
+    private cssRewriter: ((css: string) => string) | null = null;
+    private scriptToggler: ((name: string, enabled: boolean) => boolean) | null = null;
+    private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
+    private timerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
+    private existsCallback: ((name: string, type: string) => number) | null = null;
+    private permScriptCallback: ((name: string, parent: string, code: string) => string | number) | null = null;
+    private setScriptCallback: ((name: string, code: string, pos: number) => true | -1) | null = null;
+
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
     constructor(
@@ -163,7 +231,7 @@ export class ScriptingAPI {
         keyEngine: KeyEngine,
     ) {
         this.windows = new ScriptingWindowsAPI(session);
-        this.labels = new ScriptingLabelsAPI(session.labels);
+        this.labels = new ScriptingLabelsAPI(session.labels, () => this.cssRewriter);
         this.aliases = aliasEngine;
         this.triggers = triggerEngine;
         this.timers = timerEngine;
@@ -188,12 +256,104 @@ export class ScriptingAPI {
         this.session.send(text, echo);
     }
 
+    sendGmcp(message: string): void {
+        this.session.sendGmcpRaw(message);
+    }
+
     setSendRequestDispatcher(fn: ((text: string) => boolean) | null): void {
         this.sendRequestDispatcher = fn;
     }
 
     setFeedDispatcher(fn: ((groups: { text: string; type: string }[]) => void) | null): void {
         this.feedDispatcher = fn;
+    }
+
+    setPackageInstaller(fn: ((path: string) => boolean) | null): void {
+        this.packageInstaller = fn;
+    }
+
+    setPackageUninstaller(fn: ((name: string) => boolean) | null): void {
+        this.packageUninstaller = fn;
+    }
+
+    setPackagesGetter(fn: (() => string[]) | null): void {
+        this.packagesGetter = fn;
+    }
+
+    getPackages(): string[] {
+        return this.packagesGetter?.() ?? [];
+    }
+
+    setScriptToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
+        this.scriptToggler = fn;
+    }
+
+    setTriggerToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
+        this.triggerToggler = fn;
+    }
+
+    setTimerToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
+        this.timerToggler = fn;
+    }
+
+    setExistsCallback(fn: ((name: string, type: string) => number) | null): void {
+        this.existsCallback = fn;
+    }
+
+    setPermScriptCallback(fn: ((name: string, parent: string, code: string) => string | number) | null): void {
+        this.permScriptCallback = fn;
+    }
+
+    setSetScriptCallback(fn: ((name: string, code: string, pos: number) => true | -1) | null): void {
+        this.setScriptCallback = fn;
+    }
+
+    setCssRewriter(fn: ((css: string) => string) | null): void {
+        this.cssRewriter = fn;
+    }
+
+    installPackage(path: string): boolean {
+        return this.packageInstaller?.(path) ?? false;
+    }
+
+    uninstallPackage(name: string): boolean {
+        return this.packageUninstaller?.(name) ?? false;
+    }
+
+    enableScript(name: string): boolean {
+        return this.scriptToggler?.(name, true) ?? false;
+    }
+
+    disableScript(name: string): boolean {
+        return this.scriptToggler?.(name, false) ?? false;
+    }
+
+    enableTrigger(name: string): boolean {
+        return this.triggerToggler?.(name, true) ?? false;
+    }
+
+    disableTrigger(name: string): boolean {
+        return this.triggerToggler?.(name, false) ?? false;
+    }
+
+    enableTimer(name: string): boolean {
+        return this.timerToggler?.(name, true) ?? false;
+    }
+
+    disableTimer(name: string): boolean {
+        return this.timerToggler?.(name, false) ?? false;
+    }
+
+    exists(name: string, type: string): number {
+        return this.existsCallback?.(name, type) ?? 0;
+    }
+
+    permScript(name: string, parent: string, code: string): string | number {
+        return this.permScriptCallback?.(name, parent, code) ?? -1;
+    }
+
+    setScript(name: string, code: string, pos: number): true | -1 {
+        return this.setScriptCallback?.(name, code, pos) ?? -1;
     }
 
     // ── Echo / output ─────────────────────────────────────────────────────────
@@ -491,6 +651,10 @@ export class ScriptingAPI {
         return this.getConsole(windowName)?.getLineCount() ?? 0;
     }
 
+    getLastLineNumber(windowName?: string): number {
+        return this.getConsole(windowName)?.getLineCount() ?? 0;
+    }
+
     getLines(from: number, to: number, windowName?: string): string[] {
         return this.getConsole(windowName)?.getLines(from, to) ?? [];
     }
@@ -499,6 +663,41 @@ export class ScriptingAPI {
         // Mudlet returns the user cursor column (mUserCursor.x()), independent of
         // the active selection. Trigger handlers run with the cursor at column 0.
         return 0;
+    }
+
+    /**
+     * Mudlet getColumnCount. Returns the wrap width (in characters) configured
+     * via setWindowWrap; if none is set, measures the rendered output element
+     * and returns how many monospace characters fit horizontally. Returns 0
+     * when the window doesn't exist or hasn't been mounted yet.
+     */
+    getColumnCount(windowName?: string): number {
+        const isMain = !windowName || windowName === 'main';
+        const wrap = isMain
+            ? useAppStore.getState().ui.outputWrapAt
+            : this.session.windows.getWrap(windowName!);
+        if (wrap && wrap > 0) return wrap;
+
+        const el = isMain
+            ? this.session.windows.getElement('main')
+            : this.session.windows.getElement(windowName!);
+        return measureColumnCapacity(el);
+    }
+
+    /**
+     * Mudlet setWindowWrap(name, charsPerLine). Sets the visual wrap width
+     * (in monospace columns) for the named window or "main". 0 clears the
+     * setting. Returns false when the named window does not exist; main always
+     * succeeds (persisted via ui.outputWrapAt).
+     */
+    setWindowWrap(name: string, wrapAt: number): boolean {
+        if (!Number.isFinite(wrapAt)) return false;
+        const v = Math.max(0, Math.round(wrapAt));
+        if (!name || name === 'main') {
+            useAppStore.getState().patchUI({ outputWrapAt: v > 0 ? v : undefined });
+            return true;
+        }
+        return this.session.windows.setWrap(name, v);
     }
 
     insertText(text: string): void {
@@ -588,6 +787,10 @@ export class ScriptingAPI {
         this.session.events.emit('script.setcmd', text);
     }
 
+    clearCmdLine(): void {
+        this.session.events.emit('script.clearcmd');
+    }
+
     centerView(roomId: number): void {
         this.session.windows.centerView(roomId);
     }
@@ -600,6 +803,25 @@ export class ScriptingAPI {
 
     get map() { return this.session.windows.mapStore; }
 
+    get cmdLineMenu() { return this.session.cmdLineMenu; }
+
+    /**
+     * Mudlet `loadMap([location])`. Persists the bytes (when given) to the
+     * connection's binary-map IndexedDB slot and re-renders any open MapPanel.
+     * The Lua binding in LuaRuntime reads the VFS path before calling here so
+     * this method only deals in already-decoded bytes. Returns true unless the
+     * panel reported a parse failure for the given buffer.
+     */
+    loadMap(buf?: Uint8Array): boolean {
+        if (!buf) return this.session.windows.loadMap();
+        // Copy into a fresh standalone ArrayBuffer — the source may be a slice
+        // of a larger buffer (e.g. a Node Buffer view onto a pool) or a
+        // SharedArrayBuffer-backed view, both of which the binary reader chokes on.
+        const out = new ArrayBuffer(buf.byteLength);
+        new Uint8Array(out).set(buf);
+        return this.session.windows.loadMap(out);
+    }
+
     // ── Misc ──────────────────────────────────────────────────────────────────
 
     getNetworkLatency(): number {
@@ -607,7 +829,181 @@ export class ScriptingAPI {
     }
 
     getMainWindowSize(): [number, number] {
+        // Reports the full viewport (the coordinate space labels live in), not
+        // the console area. Borders carve insets out of this rectangle without
+        // shrinking it — matches Mudlet so scripts that place labels with
+        // `y = h - labelHeight` after setBorderBottom land in the carved zone.
+        const el = this.session.windows.getMainViewportElement()
+                ?? this.session.windows.getElement('main');
+        if (el) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width > 0 || rect.height > 0) return [rect.width, rect.height];
+        }
         return [window.innerWidth, window.innerHeight];
+    }
+
+    /**
+     * Mudlet getUserWindowSize(name). Returns the rendered [width, height] of a
+     * userwindow / miniconsole in pixels. Reports the live element box when the
+     * panel is mounted (so docked panels reflect their actual on-screen size),
+     * otherwise falls back to the stored window hint. Returns [0, 0] when the
+     * window doesn't exist.
+     */
+    getUserWindowSize(name: string): [number, number] {
+        const size = name ? this.session.windows.getSize(name) : null;
+        if (!size) return [0, 0];
+        return [size.width, size.height];
+    }
+
+    /**
+     * Mudlet setFontSize. Without `win` (or "main"), persists ui.fontSize so the
+     * main output picks it up. With a window name, sets the per-window output
+     * font size on WindowManager (saved into the window's hint).
+     */
+    setFontSize(size: number, win?: string): boolean {
+        if (!Number.isFinite(size) || size < 1 || size > 99) return false;
+        const rounded = Math.round(size);
+        if (!win || win === 'main') {
+            useAppStore.getState().patchUI({ fontSize: rounded });
+            return true;
+        }
+        return this.session.windows.setFontSize(win, rounded);
+    }
+
+    /**
+     * Mudlet getFontSize. Returns the configured font size in pixels for the
+     * main window (when no name passed) or for a specific window. Returns null
+     * if a named window doesn't exist or has no override.
+     */
+    getFontSize(win?: string): number | null {
+        if (!win || win === 'main') return useAppStore.getState().ui.fontSize;
+        if (!this.session.windows.has(win)) return null;
+        return this.session.windows.getFontSize(win) ?? useAppStore.getState().ui.fontSize;
+    }
+
+    /**
+     * Mudlet setBackgroundColor. With no name (or "main") sets the main window
+     * background; otherwise dispatches to the matching label or userwindow/
+     * miniconsole. Channels are 0..255; alpha defaults to 255.
+     */
+    setBackgroundColor(name: string | undefined, r: number, g: number, b: number, a = 255): boolean {
+        if (!name || name === 'main') {
+            useAppStore.getState().patchUI({ outputBackgroundColor: { r, g, b, a } });
+            return true;
+        }
+        if (this.session.labels.has(name)) {
+            return this.session.labels.setBackgroundColor(name, r, g, b, a);
+        }
+        return this.session.windows.setBackgroundColor(name, r, g, b, a);
+    }
+
+    /**
+     * Mudlet getBackgroundColor. Without a name (or "main") returns the main
+     * window background; otherwise looks up the named window/miniconsole. Labels
+     * fall through here too — their fill color is reported. Returns null when
+     * the name doesn't resolve to anything; callers (Lua wrapper) translate that
+     * to a 4-tuple of zeros.
+     */
+    getBackgroundColor(name?: string): { r: number; g: number; b: number; a: number } | null {
+        if (!name || name === 'main') {
+            return useAppStore.getState().ui.outputBackgroundColor ?? null;
+        }
+        if (this.session.labels.has(name)) {
+            return this.session.labels.getBackgroundColor(name);
+        }
+        return this.session.windows.getBackgroundColor(name);
+    }
+
+    // ── Borders ───────────────────────────────────────────────────────────────
+    // Mudlet setBorderTop/Bottom/Left/Right carve pixel insets out of the main
+    // window so labels can sit in the freed space. Sizes are clamped to >= 0
+    // and rounded; non-finite input is rejected. Reads/writes ui.outputBorders.
+
+    setBorderTop(size: number): void { this.patchBorders('top', size); }
+    setBorderBottom(size: number): void { this.patchBorders('bottom', size); }
+    setBorderLeft(size: number): void { this.patchBorders('left', size); }
+    setBorderRight(size: number): void { this.patchBorders('right', size); }
+
+    /**
+     * Mudlet setBorderSizes. One arg sets all four sides; four args use CSS
+     * top/right/bottom/left ordering. Anything else is a no-op.
+     */
+    setBorderSizes(top?: number, right?: number, bottom?: number, left?: number): void {
+        if (right === undefined && bottom === undefined && left === undefined) {
+            const v = this.normalizeBorder(top);
+            if (v == null) return;
+            useAppStore.getState().patchUI({ outputBorders: { top: v, right: v, bottom: v, left: v } });
+            return;
+        }
+        const t = this.normalizeBorder(top);
+        const r = this.normalizeBorder(right);
+        const b = this.normalizeBorder(bottom);
+        const l = this.normalizeBorder(left);
+        if (t == null || r == null || b == null || l == null) return;
+        useAppStore.getState().patchUI({ outputBorders: { top: t, right: r, bottom: b, left: l } });
+    }
+
+    getBorderTop(): number { return useAppStore.getState().ui.outputBorders?.top ?? 0; }
+    getBorderBottom(): number { return useAppStore.getState().ui.outputBorders?.bottom ?? 0; }
+    getBorderLeft(): number { return useAppStore.getState().ui.outputBorders?.left ?? 0; }
+    getBorderRight(): number { return useAppStore.getState().ui.outputBorders?.right ?? 0; }
+
+    getBorderSizes(): { top: number; right: number; bottom: number; left: number } {
+        return useAppStore.getState().ui.outputBorders ?? { top: 0, right: 0, bottom: 0, left: 0 };
+    }
+
+    /** Mudlet setBorderColor. Channels are 0..255; alpha defaults to 255. */
+    setBorderColor(r: number, g: number, b: number, a = 255): void {
+        useAppStore.getState().patchUI({ outputBorderColor: { r, g, b, a } });
+    }
+
+    /** Mudlet resetBorderColor — clears the override so the border tracks the page background again. */
+    resetBorderColor(): void {
+        useAppStore.getState().patchUI({ outputBorderColor: undefined });
+    }
+
+    private patchBorders(side: 'top' | 'right' | 'bottom' | 'left', size: number): void {
+        const v = this.normalizeBorder(size);
+        if (v == null) return;
+        const cur = useAppStore.getState().ui.outputBorders ?? { top: 0, right: 0, bottom: 0, left: 0 };
+        useAppStore.getState().patchUI({ outputBorders: { ...cur, [side]: v } });
+    }
+
+    private normalizeBorder(n: unknown): number | null {
+        const num = Number(n);
+        if (!Number.isFinite(num)) return null;
+        return Math.max(0, Math.round(num));
+    }
+
+    /**
+     * Mudlet setFont. Without `win` (or "main"), updates ui.outputFont so the
+     * App-level applyOutputFont effect re-applies the --font-output CSS variable.
+     * With a window name, sets the per-window override on WindowManager.
+     * Empty `family` clears the override (main → unset, window → inherit).
+     */
+    setFont(family: string, win?: string): boolean {
+        const fam = (family ?? '').trim();
+        if (!win || win === 'main') {
+            const next = fam ? { kind: 'system' as const, family: fam } : undefined;
+            useAppStore.getState().patchUI({ outputFont: next });
+            return true;
+        }
+        return this.session.windows.setFont(win, fam);
+    }
+
+    /**
+     * Mudlet getFont. Returns the configured font family for the main window
+     * (or empty string if none set) or for a specific window. Returns null if
+     * the named window doesn't exist.
+     */
+    getFont(win?: string): string | null {
+        if (!win || win === 'main') {
+            return useAppStore.getState().ui.outputFont?.family ?? '';
+        }
+        if (!this.session.windows.has(win)) return null;
+        const own = this.session.windows.getFont(win);
+        if (own != null) return own;
+        return useAppStore.getState().ui.outputFont?.family ?? '';
     }
 
     /** Flush any buffered partial lines to the main output and all open windows. Called after each event dispatch. */

@@ -16,13 +16,16 @@ interface StickyOutputPanelProps {
     onToggleTimestamps?: () => void;
     commandInputRef?: React.RefObject<HTMLInputElement>;
     className?: string;
+    fontSize?: number;
+    fontFamily?: string;
+    wrapAt?: number;
 }
 
 export function StickyOutputPanel({
     outputRef, sentinelRef, stickyAreaRef,
     isSplitView, scrollToBottom,
     background, showTimestamps, onToggleTimestamps,
-    commandInputRef, className,
+    commandInputRef, className, fontSize, fontFamily, wrapAt,
 }: StickyOutputPanelProps) {
     const [stickyHeight, setStickyHeight] = useState(DEFAULT_STICKY_HEIGHT);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -91,12 +94,19 @@ export function StickyOutputPanel({
 
     const containerClass = ['output-container', className].filter(Boolean).join(' ');
 
+    const wrapStyle: React.CSSProperties | undefined = (background || fontSize || fontFamily || (wrapAt && wrapAt > 0)) ? {
+        ...(background ? { background } : {}),
+        ...(fontSize ? { fontSize: `${fontSize}px` } : {}),
+        ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),
+        ...(wrapAt && wrapAt > 0 ? { ['--wrap-cols' as string]: `${wrapAt}ch` } : {}),
+    } : undefined;
+
     return (
         <div className={containerClass} onClick={handleClick}>
             <div
                 className="output-wrapper"
                 ref={outputRef}
-                style={background ? { background } : undefined}
+                style={wrapStyle}
                 onContextMenu={handleContextMenu}
             >
                 <div ref={sentinelRef} style={{ height: 0 }} />
@@ -113,7 +123,13 @@ export function StickyOutputPanel({
             <div
                 className={`output-sticky${isSplitView ? ' output-sticky--active' : ''}`}
                 ref={stickyOuterRef}
-                style={{ height: stickyHeight, ...(background ? { background } : {}) }}
+                style={{
+                    height: stickyHeight,
+                    ...(background ? { background } : {}),
+                    ...(fontSize ? { fontSize: `${fontSize}px` } : {}),
+                    ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),
+                    ...(wrapAt && wrapAt > 0 ? { ['--wrap-cols' as string]: `${wrapAt}ch` } : {}),
+                }}
             >
                 <div className="output-sticky-content" ref={stickyAreaRef} />
             </div>

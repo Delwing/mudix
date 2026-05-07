@@ -4,7 +4,7 @@ import { isEffectivelyEnabled } from '../../storage/schema';
 
 export type { TriggerNode };
 
-type TempFn = (matches: RegExpMatchArray) => void;
+type TempFn = (matches: string[]) => void;
 
 type MatchResult = { captures: string[]; matchedText: string; namedGroups?: Record<string, string> };
 
@@ -104,7 +104,7 @@ function buildMatcher(p: TriggerPattern, register: (re: PcreInstance) => void): 
 }
 
 export class TriggerEngine {
-    private readonly temp = new Map<number, { pattern: RegExp; fn: TempFn }>();
+    private readonly temp = new Map<number, { re: PcreInstance; fn: TempFn }>();
     private nextId = 1;
     private permCompiled: CompiledEntry[] = [];
     private allById = new Map<string, TriggerNode>();
@@ -129,11 +129,24 @@ export class TriggerEngine {
         return pcreReadyPromise.then(() => undefined);
     }
 
-    addTemp(pattern: string | RegExp, fn: TempFn): () => void {
-        const re = typeof pattern === 'string' ? new RegExp(pattern) : pattern;
+    /**
+     * Register a temp trigger. The pattern is compiled with PCRE so it matches
+     * the same syntax as permanent triggers. Invalid patterns return a no-op
+     * disposer so the caller doesn't need to special-case compile failures.
+     * The `fn` callback receives `[fullMatch, capture1, capture2, ...]` —
+     * unmatched optional groups surface as empty strings.
+     */
+    addTemp(pattern: string, fn: TempFn): () => void {
+        const re = compilePcre(pattern);
+        if (!re) return () => {};
         const id = this.nextId++;
-        this.temp.set(id, { pattern: re, fn });
-        return () => { this.temp.delete(id); };
+        this.temp.set(id, { re, fn });
+        return () => {
+            const entry = this.temp.get(id);
+            if (!entry) return;
+            entry.re.destroy();
+            this.temp.delete(id);
+        };
     }
 
     loadPerm(items: TriggerNode[]): void {
@@ -213,9 +226,11 @@ export class TriggerEngine {
     // ── Temp triggers (session-scoped, created by scripts) ────────────────────
 
     processTemp(line: string): void {
-        for (const { pattern, fn } of this.temp.values()) {
-            const m = line.match(pattern);
-            if (m) fn(m);
+        for (const { re, fn } of this.temp.values()) {
+            const m = re.match(line) as PcreMatch | null;
+            if (!m) continue;
+            const result = pcreToMatchResult(m);
+            fn([result.matchedText, ...result.captures]);
         }
     }
 
@@ -307,6 +322,7 @@ export class TriggerEngine {
     }
 
     destroy(): void {
+        for (const { re } of this.temp.values()) re.destroy();
         this.temp.clear();
         this.permCompiled = [];
         for (const re of this.pcreInstances) re.destroy();

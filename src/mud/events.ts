@@ -29,6 +29,7 @@ export type MudEvents = MudClientEvents & {
     'script.clearwindow': void;
     'script.appendcmd': [text: string];
     'script.setcmd': [text: string];
+    'script.clearcmd': void;
     'prompt': void;
     'script.movecursorup': void;
     'script.movecursordown': void;

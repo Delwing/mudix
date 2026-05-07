@@ -59,6 +59,13 @@ export const encodeGmcp = (path: string, payload: unknown): string => {
     return `${GMCP_IAC}${GMCP_SB}${String.fromCharCode(GMCP_COMMAND_CODE)}${path} ${data}${GMCP_IAC}${GMCP_SE}`;
 };
 
+/** Encode a GMCP frame from a single pre-formatted body (e.g. `"Module.Sub args"`).
+ *  Matches Mudlet's `sendGMCP` semantics — the caller controls the exact bytes
+ *  between IAC SB GMCP and IAC SE. */
+export const encodeGmcpRaw = (message: string): string => {
+    return `${GMCP_IAC}${GMCP_SB}${String.fromCharCode(GMCP_COMMAND_CODE)}${message}${GMCP_IAC}${GMCP_SE}`;
+};
+
 export interface GmcpStreamOptions {
     onEnvelope: (payload: GmcpEnvelope) => void;
     /** Called for gmcp_msgs subnegotiations (base64-encoded text with a type field). */

@@ -32,7 +32,8 @@ function isTextEntry(path: string): boolean {
 }
 
 /**
- * Install a Mudlet package from a File the user picked.
+ * Install a Mudlet package from in-memory bytes. Synchronous — the caller is
+ * expected to flush the VFS afterwards (or let the next idle flush handle it).
  *
  * - .mpackage / .zip : unzip into <profilePath>/<packageName>/, find the XML inside, parse.
  * - .xml             : write the file into <profilePath>/<packageName>/<filename>, parse.
@@ -42,9 +43,8 @@ function isTextEntry(path: string): boolean {
  * which wraps each category in a top-level group and tags every node with the
  * package name, making uninstall a tag-based cascade.
  */
-export async function installPackageFromFile(file: File, vfs: ProfileVFS): Promise<InstallResult> {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    const packageName = packageNameFromFile(file.name);
+export function installPackageFromBytes(filename: string, buf: Uint8Array, vfs: ProfileVFS): InstallResult {
+    const packageName = packageNameFromFile(filename);
     const pkgDir = `${vfs.profilePath}/${packageName}`;
 
     // Wipe any previous install of the same package (re-install is a clean slate).
@@ -59,7 +59,7 @@ export async function installPackageFromFile(file: File, vfs: ProfileVFS): Promi
         const entries = unzipSync(buf);
         // Pick the first .xml at any depth — Mudlet places it at the root of the archive.
         const xmlEntry = Object.keys(entries).find(isXmlEntry);
-        if (!xmlEntry) throw new Error(`No XML file found inside ${file.name}`);
+        if (!xmlEntry) throw new Error(`No XML file found inside ${filename}`);
         xmlContent = strFromU8(entries[xmlEntry]);
         xmlRelPath = xmlEntry;
 
@@ -81,8 +81,8 @@ export async function installPackageFromFile(file: File, vfs: ProfileVFS): Promi
     } else {
         // Plain XML — treat as a single-file package.
         xmlContent = strFromU8(buf);
-        xmlRelPath = file.name;
-        vfs.writeFile(`${pkgDir}/${file.name}`, xmlContent);
+        xmlRelPath = filename;
+        vfs.writeFile(`${pkgDir}/${filename}`, xmlContent);
     }
 
     const data = parseMudletXml(xmlContent, { packageName });
@@ -91,12 +91,19 @@ export async function installPackageFromFile(file: File, vfs: ProfileVFS): Promi
         name: packageName,
         ...manifestExtras,
         xmlPath: xmlRelPath,
-        sourceFile: file.name,
+        sourceFile: filename,
         installedAt: new Date().toISOString(),
     };
 
-    await vfs.flush();
     return { manifest, data };
+}
+
+/** Async wrapper that reads from a File and flushes the VFS to disk on success. */
+export async function installPackageFromFile(file: File, vfs: ProfileVFS): Promise<InstallResult> {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const result = installPackageFromBytes(file.name, buf, vfs);
+    await vfs.flush();
+    return result;
 }
 
 /**

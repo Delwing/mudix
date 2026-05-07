@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MapReader, MapRenderer, createSettings } from 'mudlet-map-renderer';
+import type { RoomContextMenuEventDetail } from 'mudlet-map-renderer';
 import { readMapFromBuffer, readerExport } from 'mudlet-map-binary-reader';
 import { Buffer } from 'buffer';
 import { saveMap, loadMap } from '../../../storage/mapStorage';
 import type { WindowManager } from '../WindowManager';
+import type { MapEventEntry } from '../../../map/MapStore';
 
 type MapStatus = 'loading' | 'empty' | 'ready' | 'error';
 
@@ -34,6 +36,12 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [storeInitialized, setStoreInitialized] = useState(() => manager.mapStore.isInitialized());
+    const [contextMenu, setContextMenu] = useState<{
+        x: number;
+        y: number;
+        roomId: number;
+        items: MapEventEntry[];
+    } | null>(null);
 
     const initRenderer = useCallback((
         mapData: AnyArea[],
@@ -58,6 +66,20 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         renderer.centerOnResize = false;
         rendererRef.current = renderer;
 
+        renderer.backend.events.on('roomcontextmenu', (detail: RoomContextMenuEventDetail) => {
+            const items = manager.mapStore.getMapEvents();
+            if (items.length === 0) return;
+            // Renderer emits container-relative coords; the menu uses position:fixed,
+            // so add the container's viewport offset to land on the clicked room.
+            const rect = containerRef.current?.getBoundingClientRect();
+            setContextMenu({
+                x: (rect?.left ?? 0) + detail.position.x,
+                y: (rect?.top ?? 0) + detail.position.y,
+                roomId: detail.roomId,
+                items,
+            });
+        });
+
         if (areaList.length > 0) {
             // Restore previous area/level if still available, otherwise pick first.
             const restoredArea = keepAreaId != null && areaList.some(a => a.id === keepAreaId)
@@ -76,22 +98,24 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         }
 
         setStatus('ready');
-    }, []);
+    }, [manager]);
 
-    const loadFromBuffer = useCallback(async (buf: ArrayBuffer) => {
+    const loadFromBuffer = useCallback((buf: ArrayBuffer): boolean => {
         try {
             const mudletMap = readMapFromBuffer(Buffer.from(buf));
             const { mapData, colors } = readerExport(mudletMap);
             manager.setHashMap(mudletMap.mpRoomDbHashToRoomId ?? {});
             initRenderer(mapData as AnyArea[], colors);
+            return true;
         } catch (e) {
             setErrorMsg(e instanceof Error ? e.message : String(e));
             setStatus('error');
+            return false;
         }
-    }, [initRenderer]);
+    }, [initRenderer, manager]);
 
-    // Load from IndexedDB on mount
-    useEffect(() => {
+    const reloadFromStorage = useCallback(() => {
+        setStatus('loading');
         loadMap(connectionId).then(buf => {
             if (buf) {
                 loadFromBuffer(buf);
@@ -100,6 +124,23 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             }
         }).catch(() => setStatus('empty'));
     }, [connectionId, loadFromBuffer]);
+
+    // Load from IndexedDB on mount
+    useEffect(() => {
+        reloadFromStorage();
+    }, [reloadFromStorage]);
+
+    // Wire up the scripting `loadMap()` entry point. With a buffer the parse
+    // runs synchronously so Lua's `loadMap(path)` reflects parse failure; with
+    // no buffer we re-fetch from IndexedDB asynchronously and return true.
+    useEffect(() => {
+        manager.registerMapLoadCallback((buf?: ArrayBuffer) => {
+            if (buf) return loadFromBuffer(buf);
+            reloadFromStorage();
+            return true;
+        });
+        return () => manager.unregisterMapLoadCallback();
+    }, [manager, loadFromBuffer, reloadFromStorage]);
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -120,6 +161,24 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         document.addEventListener('mousedown', onDown);
         return () => document.removeEventListener('mousedown', onDown);
     }, [menuOpen]);
+
+    // Close map context menu on outside click or scroll/resize
+    useEffect(() => {
+        if (!contextMenu) return;
+        const onDown = (e: MouseEvent) => {
+            const root = document.getElementById('mudix-map-context-menu');
+            if (root && !root.contains(e.target as Node)) setContextMenu(null);
+        };
+        const onClose = () => setContextMenu(null);
+        document.addEventListener('mousedown', onDown);
+        window.addEventListener('resize', onClose);
+        window.addEventListener('blur', onClose);
+        return () => {
+            document.removeEventListener('mousedown', onDown);
+            window.removeEventListener('resize', onClose);
+            window.removeEventListener('blur', onClose);
+        };
+    }, [contextMenu]);
 
     // Divs don't fire "resize" natively; the renderer needs it to update canvas size.
     // After the canvas resizes, scale zoom proportionally to preserve visible world bounds
@@ -217,12 +276,12 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         try {
             const buf = await file.arrayBuffer();
             await saveMap(connectionId, buf);
-            await loadFromBuffer(buf);
+            loadFromBuffer(buf);
         } catch (err) {
             setErrorMsg(err instanceof Error ? err.message : String(err));
             setStatus('error');
         }
-    }, [loadFromBuffer]);
+    }, [connectionId, loadFromBuffer]);
 
     const selectArea = useCallback((id: number) => {
         const areaLevels = readerRef.current?.getArea(id).getZLevels().sort((a, b) => a - b) ?? [0];
@@ -347,6 +406,100 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                         Try another file
                         <input type="file" accept=".dat" onChange={handleFileChange} hidden />
                     </label>
+                </div>
+            )}
+            {contextMenu && (
+                <MapContextMenu
+                    x={contextMenu.x}
+                    y={contextMenu.y}
+                    roomId={contextMenu.roomId}
+                    items={contextMenu.items}
+                    onClose={() => setContextMenu(null)}
+                    onSelect={(uniqueName) => {
+                        manager.mapStore.dispatchMapEvent(uniqueName, contextMenu.roomId);
+                        setContextMenu(null);
+                    }}
+                />
+            )}
+        </div>
+    );
+}
+
+// Right-click menu for the map. Items with `parent` referencing another item's
+// uniqueName nest as submenus that open on hover. Clicking a leaf dispatches
+// the registered Lua event via mapStore.dispatchMapEvent.
+interface MapContextMenuProps {
+    x: number;
+    y: number;
+    roomId: number;
+    items: MapEventEntry[];
+    onSelect: (uniqueName: string) => void;
+    onClose: () => void;
+}
+
+function MapContextMenu({ x, y, items, onSelect }: MapContextMenuProps) {
+    const childrenByParent = new Map<string | null, MapEventEntry[]>();
+    for (const item of items) {
+        const key = item.parent ?? null;
+        const arr = childrenByParent.get(key) ?? [];
+        arr.push(item);
+        childrenByParent.set(key, arr);
+    }
+    const topLevel = childrenByParent.get(null) ?? [];
+    if (topLevel.length === 0) return null;
+
+    return (
+        <div
+            id="mudix-map-context-menu"
+            className="map-context-menu"
+            style={{ left: x, top: y }}
+            onContextMenu={(e) => e.preventDefault()}
+        >
+            {topLevel.map(item => (
+                <MapContextMenuItem
+                    key={item.uniqueName}
+                    item={item}
+                    childrenByParent={childrenByParent}
+                    onSelect={onSelect}
+                />
+            ))}
+        </div>
+    );
+}
+
+interface MapContextMenuItemProps {
+    item: MapEventEntry;
+    childrenByParent: Map<string | null, MapEventEntry[]>;
+    onSelect: (uniqueName: string) => void;
+}
+
+function MapContextMenuItem({ item, childrenByParent, onSelect }: MapContextMenuItemProps) {
+    const [submenuOpen, setSubmenuOpen] = useState(false);
+    const children = childrenByParent.get(item.uniqueName) ?? [];
+    const hasChildren = children.length > 0;
+
+    return (
+        <div
+            className="map-context-menu-item"
+            onMouseEnter={() => hasChildren && setSubmenuOpen(true)}
+            onMouseLeave={() => hasChildren && setSubmenuOpen(false)}
+            onMouseDown={(e) => {
+                e.stopPropagation();
+                onSelect(item.uniqueName);
+            }}
+        >
+            <span className="map-context-menu-label">{item.displayName}</span>
+            {hasChildren && <span className="map-context-menu-arrow">▶</span>}
+            {hasChildren && submenuOpen && (
+                <div className="map-context-menu map-context-menu--submenu">
+                    {children.map(child => (
+                        <MapContextMenuItem
+                            key={child.uniqueName}
+                            item={child}
+                            childrenByParent={childrenByParent}
+                            onSelect={onSelect}
+                        />
+                    ))}
                 </div>
             )}
         </div>

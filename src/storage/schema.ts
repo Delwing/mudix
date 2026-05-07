@@ -37,6 +37,14 @@ export interface UISettings {
     outputBackground: string;
     theme: Theme;
     outputFont?: OutputFontSource;
+    /** Mudlet setWindowWrap("main", N). 0/undefined disables character-based wrap. */
+    outputWrapAt?: number;
+    /** Mudlet setBackgroundColor for the main window. rgba 0..255. Takes precedence over outputBackground when set. */
+    outputBackgroundColor?: { r: number; g: number; b: number; a: number };
+    /** Mudlet setBorderTop/Bottom/Left/Right. Pixel insets carved from the main window for label placement; 0 / undefined = no border. */
+    outputBorders?: { top: number; right: number; bottom: number; left: number };
+    /** Mudlet setBorderColor — fill color for the carved border area. rgba 0..255; undefined = inherit page background. */
+    outputBorderColor?: { r: number; g: number; b: number; a: number };
 }
 
 // ── Tree node base ────────────────────────────────────────────────────────────

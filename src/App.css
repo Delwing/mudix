@@ -756,6 +756,19 @@ html, body, #root {
 
 
 /* ── OutputView container ──────────────────────────────────── */
+/* Wrapper that applies Mudlet setBorderTop/Bottom/Left/Right as padding so
+   the console shrinks; the LabelOverlay sibling spans the full main-viewport,
+   letting labels occupy the carved border zone. The flex column lets the
+   StickyOutputPanel's .output-container stretch to fill the inner box. */
+.output-area-content {
+    position: absolute;
+    inset: 0;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+.output-area-content > .output-container { flex: 1; min-height: 0; }
+
 .output-container {
     position: relative;
     height: 100%;
@@ -798,6 +811,7 @@ html, body, #root {
     flex: 1;
     min-width: 0;
     padding: 2px 0;
+    max-width: var(--wrap-cols, none);
 }
 
 .output-msg-content span {
@@ -1143,6 +1157,49 @@ html, body, #root {
 .map-hamburger-item:hover {
     background: var(--bg-surface);
     color: var(--text);
+}
+
+.map-context-menu {
+    position: fixed;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-float);
+    min-width: 160px;
+    padding: 4px 0;
+    z-index: 1000;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+}
+
+.map-context-menu--submenu {
+    position: absolute;
+    left: 100%;
+    top: -5px;
+    margin-left: 2px;
+}
+
+.map-context-menu-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px;
+    color: var(--text-dim);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.1s, color 0.1s;
+}
+
+.map-context-menu-item:hover {
+    background: var(--bg-surface);
+    color: var(--text);
+}
+
+.map-context-menu-arrow {
+    margin-left: 12px;
+    font-size: 10px;
+    opacity: 0.7;
 }
 
 .map-overlay {

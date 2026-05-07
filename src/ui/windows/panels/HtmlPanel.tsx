@@ -8,9 +8,10 @@ interface HtmlPanelProps {
     id: string;
     manager: WindowManager;
     labels?: LabelManager;
+    backgroundColor?: { r: number; g: number; b: number; a: number };
 }
 
-export function HtmlPanel({ id, manager, labels }: HtmlPanelProps) {
+export function HtmlPanel({ id, manager, labels, backgroundColor }: HtmlPanelProps) {
     const ref = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -19,9 +20,13 @@ export function HtmlPanel({ id, manager, labels }: HtmlPanelProps) {
         return () => manager.unregister(id);
     }, [manager, id]);
 
+    const innerStyle: React.CSSProperties = backgroundColor
+        ? { ...INNER_STYLE, background: `rgba(${backgroundColor.r}, ${backgroundColor.g}, ${backgroundColor.b}, ${backgroundColor.a / 255})` }
+        : INNER_STYLE;
+
     return (
         <div style={WRAPPER_STYLE}>
-            <div ref={ref} className="window-html-panel" style={INNER_STYLE} />
+            <div ref={ref} className="window-html-panel" style={innerStyle} />
             {labels && <LabelOverlay manager={labels} parent={id} />}
         </div>
     );

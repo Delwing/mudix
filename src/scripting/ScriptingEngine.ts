@@ -12,7 +12,10 @@ import {ScriptingAPI} from './ScriptingAPI';
 import {LuaRuntime} from './lua/LuaRuntime';
 import type {IScriptingRuntime} from './IScriptingRuntime';
 import {ProfileVFS} from './vfs/ProfileVFS';
+import {registerVfs, unregisterVfs} from './vfs/vfsBridge';
+import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
+import {installPackageFromBytes, uninstallPackageFiles} from '../import/packageInstaller';
 
 function hexToRgb(hex: string): RgbColor | null {
     const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
@@ -85,6 +88,9 @@ export class ScriptingEngine {
         this.api.profileName = connectionName;
         this.connectionId = connectionId;
         this.bridgeEvents(session);
+        // Let WindowManager raise system events (e.g. sysUserWindowResizeEvent)
+        // through the same path as everything else.
+        session.windows.onRaiseEvent = (event, args) => this.raiseEvent(event, args);
         this.runtimeReady = this.initRuntime(connectionId);
         this.attachToStore(session);
     }
@@ -108,7 +114,6 @@ export class ScriptingEngine {
      */
     private attachToStore(session: MudSession): void {
         const start = () => {
-            console.info('[engine][attachToStore] start (output.ready cleared)', { connectionId: this.connectionId });
             this.applyScriptsFromStore();
             this.applyAliasesFromStore();
             this.applyTimersFromStore();
@@ -124,7 +129,6 @@ export class ScriptingEngine {
             // the initial pass and on subsequent store updates. Once ready,
             // apply whatever the store says now.
             void TriggerEngine.ready().then(() => {
-                console.info('[engine][attachToStore] triggers wasm ready', { connectionId: this.connectionId });
                 this.triggersReady = true;
                 this.applyTriggersFromStore();
             });
@@ -141,29 +145,24 @@ export class ScriptingEngine {
             });
         };
         if (session.outputReady) {
-            console.info('[engine][attachToStore] output already ready, starting now', { connectionId: this.connectionId });
             start();
         } else {
-            console.info('[engine][attachToStore] waiting for output.ready', { connectionId: this.connectionId });
             this.unsubs.push(session.events.on('output.ready', start, { once: true }));
         }
     }
 
     private applyAliasesFromStore(): void {
         const aliases = useAppStore.getState().connectionAliases[this.connectionId] ?? [];
-        console.info('[engine][apply] aliases', { connectionId: this.connectionId, count: aliases.length });
         this.aliasEngine.loadPerm(aliases);
     }
 
     private applyTriggersFromStore(): void {
         const triggers = useAppStore.getState().connectionTriggers[this.connectionId] ?? [];
-        console.info('[engine][apply] triggers', { connectionId: this.connectionId, count: triggers.length });
         this.triggerEngine.loadPerm(triggers);
     }
 
     private applyTimersFromStore(): void {
         const timers = useAppStore.getState().connectionTimers[this.connectionId] ?? [];
-        console.info('[engine][apply] timers', { connectionId: this.connectionId, count: timers.length });
         this.timerEngine.loadPerm(timers, (timer) => {
             if (timer.command) this.api.send(timer.command, false);
             if (timer.code && timer.language === 'lua') {
@@ -179,7 +178,6 @@ export class ScriptingEngine {
 
     private applyKeybindingsFromStore(): void {
         const keys = useAppStore.getState().connectionKeybindings[this.connectionId] ?? [];
-        console.info('[engine][apply] keybindings', { connectionId: this.connectionId, count: keys.length });
         this.keyEngine.loadPerm(keys);
     }
 
@@ -197,12 +195,6 @@ export class ScriptingEngine {
             next.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, next))
                 .map(s => s.id),
         );
-        console.info('[engine][apply] scripts', {
-            connectionId: this.connectionId,
-            total: next.length,
-            enabled: nextEnabledIds.size,
-        });
-
         for (const id of prevEnabled.keys()) {
             if (!nextEnabledIds.has(id)) this.unloadScript(id);
         }
@@ -218,7 +210,11 @@ export class ScriptingEngine {
 
     private initRuntime(connectionId: string): Promise<IScriptingRuntime> {
         return ProfileVFS.mount(connectionId).then(
-            vfs  => { this.vfs = vfs;   return this.createRuntime(vfs); },
+            vfs  => {
+                this.vfs = vfs;
+                registerVfs(connectionId, vfs);
+                return this.createRuntime(vfs);
+            },
             err  => {
                 console.error('[ScriptingEngine] VFS mount failed:', err);
                 this.api.printError(`[scripting] VFS mount failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -246,6 +242,21 @@ export class ScriptingEngine {
             this.api.setSendRequestDispatcher((text) =>
                 this.runtimes.lua?.dispatchSendRequest(text) ?? false);
             this.api.setFeedDispatcher((groups) => this.processFlushBatch(groups));
+            this.api.setPackageInstaller((path) => this.installPackageFromVfsPath(path));
+            this.api.setPackageUninstaller((name) => this.uninstallPackageByName(name));
+            this.api.setPackagesGetter(() =>
+                (useAppStore.getState().connectionPackages[this.connectionId] ?? []).map(p => p.name));
+            this.api.setScriptToggler((name, enabled) => this.toggleScriptByName(name, enabled));
+            this.api.setTriggerToggler((name, enabled) => this.toggleTriggerByName(name, enabled));
+            this.api.setTimerToggler((name, enabled) => this.toggleTimerByName(name, enabled));
+            this.api.setExistsCallback((name, type) => this.existsByName(name, type));
+            this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
+            this.api.setSetScriptCallback((name, code, pos) => this.setScriptByName(name, code, pos));
+            this.api.setCssRewriter((css) => {
+                const v = this.vfs;
+                if (!v) return css;
+                return rewriteVfsUrlsInCss(css, this.connectionId, v);
+            });
             this.triggerEngine.setLuaEval((code) => {
                 const lua = this.runtimes.lua;
                 return lua ? lua.evalTriggerPattern(code) : false;
@@ -293,6 +304,175 @@ export class ScriptingEngine {
     notifyPackageUninstalled(packageName: string): void {
         this.raiseEvent('sysUninstall', [packageName]);
         this.raiseEvent('sysUninstallPackage', [packageName]);
+    }
+
+    /**
+     * Install a package from a path inside the VFS. Reads the bytes synchronously,
+     * commits to the store (which loads scripts into Lua synchronously via the
+     * store subscription), then raises sysInstallPackage. The disk flush happens
+     * in the background. Returns false on any failure (file missing, parse error,
+     * etc.) and prints a script-log error.
+     */
+    installPackageFromVfsPath(path: string): boolean {
+        const vfs = this.vfs;
+        if (!vfs) {
+            this.api.printError(`[installPackage] no profile VFS available`);
+            return false;
+        }
+        if (!vfs.exists(path)) {
+            this.api.printError(`[installPackage] file not found: ${path}`);
+            return false;
+        }
+        try {
+            const buf = vfs.readBinaryFile(path);
+            const filename = path.split('/').pop() || path;
+            const { manifest, data } = installPackageFromBytes(filename, buf, vfs);
+            useAppStore.getState().installPackage(this.connectionId, manifest, data);
+            this.notifyPackageInstalled(manifest.name);
+            void vfs.flush();
+            return true;
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.api.printError(`[installPackage] ${msg}`);
+            return false;
+        }
+    }
+
+    /**
+     * Uninstall a previously installed package by name. Raises sysUninstallPackage
+     * before the store removal so the package's own handlers can still run.
+     * Removes the on-disk package directory in the background.
+     */
+    uninstallPackageByName(packageName: string): boolean {
+        const installed = useAppStore.getState().connectionPackages[this.connectionId] ?? [];
+        if (!installed.some(p => p.name === packageName)) {
+            this.api.printError(`[uninstallPackage] package not installed: ${packageName}`);
+            return false;
+        }
+        this.notifyPackageUninstalled(packageName);
+        useAppStore.getState().uninstallPackage(this.connectionId, packageName);
+        if (this.vfs) {
+            const vfs = this.vfs;
+            void uninstallPackageFiles(packageName, vfs).catch(err => {
+                console.warn('[ScriptingEngine] failed to remove package files:', err);
+            });
+        }
+        return true;
+    }
+
+    /**
+     * Toggle a script's enabled flag by name (Mudlet enableScript/disableScript).
+     * The store subscription picks up the change synchronously and either loads
+     * or unloads handlers in the runtime.
+     */
+    toggleScriptByName(name: string, enabled: boolean): boolean {
+        const store = useAppStore.getState();
+        const scripts = store.connectionScripts[this.connectionId] ?? [];
+        const target = scripts.find(s => s.name === name);
+        if (!target) return false;
+        if (target.enabled === enabled) return true;
+        store.updateScript(this.connectionId, target.id, { enabled });
+        return true;
+    }
+
+    /**
+     * Toggle triggers' enabled flag by name (Mudlet enableTrigger/disableTrigger).
+     * Mudlet matches every trigger or group sharing the name, so we do the same:
+     * toggling a group cascades to children via isEffectivelyEnabled. The store
+     * subscription rebuilds the compiled trigger set on the next tick.
+     */
+    toggleTriggerByName(name: string, enabled: boolean): boolean {
+        const store = useAppStore.getState();
+        const triggers = store.connectionTriggers[this.connectionId] ?? [];
+        const targets = triggers.filter(t => t.name === name);
+        if (targets.length === 0) return false;
+        for (const t of targets) {
+            if (t.enabled !== enabled) store.updateTrigger(this.connectionId, t.id, { enabled });
+        }
+        return true;
+    }
+
+    /**
+     * Toggle timers' enabled flag by name (Mudlet enableTimer/disableTimer).
+     * Mirrors toggleTriggerByName: every timer or group sharing the name is
+     * affected, and the store subscription rebuilds the active timer set.
+     */
+    toggleTimerByName(name: string, enabled: boolean): boolean {
+        const store = useAppStore.getState();
+        const timers = store.connectionTimers[this.connectionId] ?? [];
+        const targets = timers.filter(t => t.name === name);
+        if (targets.length === 0) return false;
+        for (const t of targets) {
+            if (t.enabled !== enabled) store.updateTimer(this.connectionId, t.id, { enabled });
+        }
+        return true;
+    }
+
+    /**
+     * Mudlet `exists(name, type)`. Returns the number of items with the given
+     * name in the named collection. Type aliases follow Mudlet: "key" and
+     * "keybind" both target keybindings. Unknown types return 0.
+     */
+    existsByName(name: string, type: string): number {
+        const store = useAppStore.getState();
+        const id = this.connectionId;
+        switch (type) {
+            case 'alias':   return (store.connectionAliases[id]      ?? []).filter(i => i.name === name).length;
+            case 'trigger': return (store.connectionTriggers[id]     ?? []).filter(i => i.name === name).length;
+            case 'timer':   return (store.connectionTimers[id]       ?? []).filter(i => i.name === name).length;
+            case 'key':
+            case 'keybind': return (store.connectionKeybindings[id]  ?? []).filter(i => i.name === name).length;
+            case 'button':  return (store.connectionButtons[id]      ?? []).filter(i => i.name === name).length;
+            case 'script':  return (store.connectionScripts[id]      ?? []).filter(i => i.name === name).length;
+            default:        return 0;
+        }
+    }
+
+    /**
+     * Mudlet `permScript(name, parent, luaCode)`. Creates a saved Lua script
+     * named `name` under the script group `parent` (empty = root). Returns the
+     * new script's id on success, -1 if `parent` is given but no script group
+     * with that name exists. The store subscription loads the script's
+     * handlers synchronously inside the addScript commit.
+     */
+    createPermScript(name: string, parent: string, code: string): string | number {
+        if (!name) return -1;
+        const store = useAppStore.getState();
+        const scripts = store.connectionScripts[this.connectionId] ?? [];
+        let parentId: string | null = null;
+        if (parent && parent.length > 0) {
+            const group = scripts.find(s => s.isGroup && s.name === parent);
+            if (!group) return -1;
+            parentId = group.id;
+        }
+        return store.addScript(this.connectionId, {
+            name,
+            enabled: true,
+            isGroup: false,
+            parentId,
+            code,
+            language: 'lua',
+            eventHandlers: [],
+        });
+    }
+
+    /**
+     * Mudlet `setScript(name, luaCode[, pos])`. Replaces the source of the
+     * `pos`-th script (1-indexed; default 1) named `name`. Updating via the
+     * store re-runs the script load through the regular subscription pipeline,
+     * so handlers re-register cleanly. Returns true on success, -1 if no such
+     * script exists.
+     */
+    setScriptByName(name: string, code: string, pos: number): true | -1 {
+        if (!name) return -1;
+        const store = useAppStore.getState();
+        const scripts = store.connectionScripts[this.connectionId] ?? [];
+        const matches = scripts.filter(s => s.name === name);
+        const index = Math.max(1, Math.floor(pos)) - 1;
+        const target = matches[index];
+        if (!target) return -1;
+        store.updateScript(this.connectionId, target.id, { code });
+        return true;
     }
 
     /**
@@ -381,15 +561,18 @@ export class ScriptingEngine {
         this.storeUnsub = null;
         for (const unsub of this.unsubs) unsub();
         this.unsubs.length = 0;
+        this.session.windows.onRaiseEvent = undefined;
         this.runtimes.lua?.destroy();
         this.runtimes.lua = null;
         this.triggerEngine.setLuaEval(null);
         this.api.setExecuteScript(null);
         this.api.setExpandAlias(null);
         this.api.setSendRequestDispatcher(null);
+        this.api.setCssRewriter(null);
         this.api.destroy();
         const oldVfs = this.vfs;
         this.vfs = null;
+        unregisterVfs(this.connectionId);
         // Drain any pending writes (folder-backed VFS uses async write-through);
         // the unmount tears down the in-memory cache so stale dirty state would
         // otherwise be lost. Fire-and-forget — destroy is sync and we don't want

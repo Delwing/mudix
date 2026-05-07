@@ -126,6 +126,10 @@ export class LabelManager {
         return true;
     }
 
+    getBackgroundColor(name: string): { r: number; g: number; b: number; a: number } | null {
+        return this.labels.get(name)?.backgroundColor ?? null;
+    }
+
     setStyleSheet(name: string, css: string): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;

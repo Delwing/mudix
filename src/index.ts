@@ -23,6 +23,7 @@ export {
     stripTelnetSequences,
     createGmcpStream,
     encodeGmcp,
+    encodeGmcpRaw,
 } from "./mud/protocol/gmcp";
 export type { GmcpEnvelope, TelnetOptionHandler, GmcpStreamOptions } from "./mud/protocol/gmcp";
 

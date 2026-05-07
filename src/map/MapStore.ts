@@ -1,4 +1,4 @@
-import type { MudletRoom, MudletArea, MudletMap, MudletFont } from 'mudlet-map-binary-reader';
+import type { MudletRoom, MudletArea, MudletMap, MudletFont, MudletColor } from 'mudlet-map-binary-reader';
 import { readerExport } from 'mudlet-map-binary-reader';
 
 export type MapRendererData = ReturnType<typeof readerExport>;
@@ -43,6 +43,19 @@ function makeArea(): MudletArea {
     };
 }
 
+export interface MapEventEntry {
+    /** Stable id used by removeMapEvent and as a parent reference. */
+    uniqueName: string;
+    /** Event name passed to raiseEvent on click. */
+    eventName: string;
+    /** uniqueName of a parent entry that this is nested under, or null for top-level. */
+    parent: string | null;
+    /** Label rendered in the context menu. Defaults to uniqueName when unspecified. */
+    displayName: string;
+    /** Extra arguments passed to raiseEvent after the right-clicked roomId. */
+    args: unknown[];
+}
+
 export class MapStore {
     private rooms = new Map<number, MudletRoom>();
     private areas = new Map<number, MudletArea>();
@@ -52,6 +65,11 @@ export class MapStore {
     private nextAreaId = 1;
     private subscribers = new Set<() => void>();
     private notifyPending = false;
+    private mapEvents = new Map<string, MapEventEntry>();
+    private customEnvColors = new Map<number, MudletColor>();
+    // Set by LuaRuntime so dispatchMapEvent can fire raiseEvent into the runtime.
+    // Cleared on runtime teardown to avoid firing into a closed lua_State.
+    private mapEventDispatcher: ((eventName: string, args: unknown[]) => void) | null = null;
 
     subscribe(cb: () => void): () => void {
         this.subscribers.add(cb);
@@ -104,8 +122,10 @@ export class MapStore {
         for (const [id, n] of this.areaNames) areaNames[id] = n;
         const hashes: Record<string, number> = {};
         for (const [h, id] of this.hashToRoom) hashes[h] = id;
+        const mCustomEnvColors: Record<number, MudletColor> = {};
+        for (const [id, c] of this.customEnvColors) mCustomEnvColors[id] = c;
         return {
-            version: 1, envColors: {}, areaNames, mCustomEnvColors: {},
+            version: 1, envColors: {}, areaNames, mCustomEnvColors,
             mpRoomDbHashToRoomId: hashes, mUserData: {},
             mapSymbolFont: DEFAULT_FONT, mapFontFudgeFactor: 1, useOnlyMapFont: false,
             areas, mRoomIdHash: {}, labels: {}, rooms,
@@ -343,6 +363,68 @@ export class MapStore {
 
     getAreaRooms(areaId: number): number[] {
         return [...(this.areas.get(areaId)?.rooms ?? [])];
+    }
+
+    getRooms(): Record<number, string> {
+        const out: Record<number, string> = {};
+        for (const [id, r] of this.rooms) out[id] = r.name;
+        return out;
+    }
+
+    // ── Map context-menu events (Mudlet addMapEvent) ──────────────────────────
+
+    setMapEventDispatcher(fn: ((eventName: string, args: unknown[]) => void) | null): void {
+        this.mapEventDispatcher = fn;
+    }
+
+    addMapEvent(
+        uniqueName: string,
+        eventName: string,
+        parent: string | null = null,
+        displayName: string | null = null,
+        ...args: unknown[]
+    ): boolean {
+        if (!uniqueName || !eventName) return false;
+        this.mapEvents.set(uniqueName, {
+            uniqueName,
+            eventName,
+            parent: parent && parent.length > 0 ? parent : null,
+            displayName: displayName && displayName.length > 0 ? displayName : uniqueName,
+            args,
+        });
+        return true;
+    }
+
+    removeMapEvent(uniqueName: string): boolean {
+        return this.mapEvents.delete(uniqueName);
+    }
+
+    getMapEvents(): MapEventEntry[] {
+        return [...this.mapEvents.values()];
+    }
+
+    /** Fire the registered event for a context-menu entry. The right-clicked
+     *  roomId is prepended to the entry's stored args before raising. */
+    dispatchMapEvent(uniqueName: string, roomId: number): void {
+        const entry = this.mapEvents.get(uniqueName);
+        if (!entry) return;
+        this.mapEventDispatcher?.(entry.eventName, [roomId, ...entry.args]);
+    }
+
+    // ── Custom env colors (Mudlet setCustomEnvColor) ──────────────────────────
+
+    /** Mudlet setCustomEnvColor(envID, r, g, b, a). envID identifies the user
+     *  environment used by setRoomEnv; the renderer reads mCustomEnvColors and
+     *  paints rooms with that env using these RGB values. spec=1 (RGB) is the
+     *  Qt QColor::Rgb spec, matching what the binary reader emits. */
+    setCustomEnvColor(envId: number, r: number, g: number, b: number, a = 255): void {
+        this.customEnvColors.set(envId, { spec: 1, alpha: a, r, g, b });
+        this.notify();
+    }
+
+    getCustomEnvColor(envId: number): { r: number; g: number; b: number; a: number } | undefined {
+        const c = this.customEnvColors.get(envId);
+        return c ? { r: c.r, g: c.g, b: c.b, a: c.alpha } : undefined;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

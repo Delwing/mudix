@@ -3,6 +3,7 @@ import type { Console } from '../../mud/text/Console';
 import type { AnsiAwareBuffer } from '../../mud/text/FormatState';
 import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
 import { MapStore } from '../../map/MapStore';
+import { saveMap } from '../../storage/mapStorage';
 
 interface ScriptWindowData extends ScriptWindowRenderData {
     pendingText: Array<string | AnsiAwareBuffer>;
@@ -32,10 +33,15 @@ export class WindowManager {
     private readonly elements      = new Map<string, HTMLElement>();
     private readonly lineBuffers   = new Map<string, string>();
     private readonly portalTargets = new Map<string, HTMLDivElement>();
+    private readonly resizeObservers = new Map<string, ResizeObserver>();
+    private readonly lastEmittedSize = new Map<string, { w: number; h: number }>();
     private readonly activeTabGroups = new Map<string, string>(); // groupId → active panelId
     private readonly mapCallbacks  = new Map<string, (roomId: number) => void>();
+    private mapLoadCallback: ((buf?: ArrayBuffer) => boolean) | null = null;
+    private _connectionId = '';
     /** Names of windows created by Lua createMiniConsole — distinguishes them
      *  from openUserWindow panels for windowType() reporting. */
+    private mainViewportEl: HTMLElement | null = null;
     private readonly miniConsoles  = new Set<string>();
     private hashToRoomId: Record<string, number> = {};
     private consoleRegistry: Map<string, Console> | null = null;
@@ -52,6 +58,9 @@ export class WindowManager {
     onDockExtentsChange?: (extents: Record<DockSide, number>) => void;
     /** Called when a map window is opened or made visible. */
     onMapOpen?:           (id: string) => void;
+    /** Bridge to ScriptingEngine.raiseEvent — used to fire system events
+     *  (e.g. sysUserWindowResizeEvent) from window-lifecycle code. */
+    onRaiseEvent?:        (event: string, args: unknown[]) => void;
 
     setConsoleRegistry(registry: Map<string, Console>): void {
         this.consoleRegistry = registry;
@@ -110,6 +119,29 @@ export class WindowManager {
             win.pendingText = [];
         }
         this.elements.set(id, element);
+        this.observeResize(id, element);
+    }
+
+    /** OutputArea registers the main `.output-wrapper` here so getColumnCount()
+     *  can measure character width against the actual rendered element. */
+    registerMainOutput(element: HTMLElement | null): void {
+        if (element) this.elements.set('main', element);
+        else         this.elements.delete('main');
+    }
+
+    /**
+     * Registers the full main-viewport element (the one that spans the entire
+     * console area including any setBorderTop/Bottom/Left/Right insets). Used
+     * by getMainWindowSize so label-positioning scripts always see the full
+     * window bounds, matching Mudlet semantics where labels live in window
+     * coordinates and borders carve space *out of* them.
+     */
+    registerMainViewport(element: HTMLElement | null): void {
+        this.mainViewportEl = element;
+    }
+
+    getMainViewportElement(): HTMLElement | null {
+        return this.mainViewportEl;
     }
 
     register(id: string, element: HTMLElement, _kind: 'html'): void {
@@ -121,6 +153,7 @@ export class WindowManager {
             }
             win.pendingText = [];
         }
+        this.observeResize(id, element);
     }
 
     pushBuffer(id: string, buffer: AnsiAwareBuffer): void {
@@ -147,6 +180,33 @@ export class WindowManager {
         this.controls.delete(id);
         this.elements.delete(id);
         this.consoleRegistry?.delete(id);
+        this.resizeObservers.get(id)?.disconnect();
+        this.resizeObservers.delete(id);
+        this.lastEmittedSize.delete(id);
+    }
+
+    /** Watch `element` for size changes and raise sysUserWindowResizeEvent
+     *  whenever its rendered dimensions differ from the last reported pair.
+     *  Catches both floating-window user drags and dock splitter drags through
+     *  the same DOM-level signal, so script-driven setSize() calls also fire
+     *  the event once the layout settles. */
+    private observeResize(id: string, element: HTMLElement): void {
+        if (typeof ResizeObserver === 'undefined') return;
+        this.resizeObservers.get(id)?.disconnect();
+        const observer = new ResizeObserver(() => {
+            const rect = element.getBoundingClientRect();
+            const w = Math.round(rect.width);
+            const h = Math.round(rect.height);
+            // Skip the initial 0×0 frame and any spurious zero-size entries
+            // that happen during portal moves between dock/floating shells.
+            if (w <= 0 && h <= 0) return;
+            const last = this.lastEmittedSize.get(id);
+            if (last && last.w === w && last.h === h) return;
+            this.lastEmittedSize.set(id, { w, h });
+            this.onRaiseEvent?.('sysUserWindowResizeEvent', [id, w, h]);
+        });
+        observer.observe(element);
+        this.resizeObservers.set(id, observer);
     }
 
     registerMapCallback(id: string, cb: (roomId: number) => void): void {
@@ -159,6 +219,48 @@ export class WindowManager {
 
     centerView(roomId: number): void {
         for (const cb of this.mapCallbacks.values()) cb(roomId);
+    }
+
+    /** Set by MapPanel on mount; cleared on unmount. The callback parses+renders
+     *  a buffer (when given) or reloads from IndexedDB (when omitted). */
+    registerMapLoadCallback(cb: (buf?: ArrayBuffer) => boolean): void {
+        this.mapLoadCallback = cb;
+    }
+
+    unregisterMapLoadCallback(): void {
+        this.mapLoadCallback = null;
+    }
+
+    setConnectionId(id: string): void {
+        this._connectionId = id;
+    }
+
+    /**
+     * Mudlet `loadMap([location])`. With a buffer the bytes are persisted to
+     * IndexedDB (so the map survives panel close/reopen and reload) and any
+     * open MapPanel is asked to re-render in place. Without a buffer the panel
+     * is told to reload from already-persisted storage. Returns false only on
+     * a synchronous parse failure surfaced by the panel; the IndexedDB write
+     * is fire-and-forget (failures appear in console.warn).
+     */
+    loadMap(buf?: ArrayBuffer): boolean {
+        if (buf && this._connectionId) {
+            // Clone for IndexedDB: the parser (qtdatastream's QString.read)
+            // mutates the buffer in-place via Buffer.swap16() to convert
+            // UTF-16 BE → LE for toString('ucs2'). saveMap awaits openDb()
+            // before put() does its structured clone, but the synchronous
+            // panel callback below runs first — so without a copy IDB
+            // persists parser-mutated bytes, and the next mount loads them
+            // and double-swaps QString regions into CJK garbage.
+            saveMap(this._connectionId, buf.slice(0)).catch(err =>
+                console.warn('[WindowManager] saveMap failed:', err));
+        }
+        if (this.mapLoadCallback) {
+            return this.mapLoadCallback(buf);
+        }
+        // No panel mounted: with a buffer we still persisted it, so the next
+        // panel open will pick it up. Without one, there's nothing to do.
+        return buf != null;
     }
 
     markAsMiniConsole(id: string): void {
@@ -186,6 +288,71 @@ export class WindowManager {
         win.y = y;
         this.notify();
         this.saveHint(id, win);
+    }
+
+    /** Mudlet setFontSize for a userwindow / miniconsole. Returns false if the
+     *  window doesn't exist. Mudlet clamps font size between 1 and 99. */
+    setFontSize(id: string, size: number): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        if (!Number.isFinite(size) || size < 1 || size > 99) return false;
+        win.fontSize = Math.round(size);
+        this.notify();
+        this.saveHint(id, win);
+        return true;
+    }
+
+    getFontSize(id: string): number | null {
+        const win = this.windows.get(id);
+        return win?.fontSize ?? null;
+    }
+
+    /** Mudlet setFont for a userwindow / miniconsole. Empty string clears the
+     *  override and lets the inherited font take over. */
+    setFont(id: string, family: string): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        win.fontFamily = family && family.trim() ? family : undefined;
+        this.notify();
+        this.saveHint(id, win);
+        return true;
+    }
+
+    getFont(id: string): string | null {
+        const win = this.windows.get(id);
+        return win?.fontFamily ?? null;
+    }
+
+    /** Mudlet setWindowWrap. 0 (or any non-positive value) clears the override. */
+    setWrap(id: string, wrapAt: number): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        if (!Number.isFinite(wrapAt)) return false;
+        const v = Math.round(wrapAt);
+        win.wrapAt = v > 0 ? v : undefined;
+        this.notify();
+        this.saveHint(id, win);
+        return true;
+    }
+
+    getWrap(id: string): number | null {
+        const win = this.windows.get(id);
+        return win?.wrapAt ?? null;
+    }
+
+    /** Mudlet setBackgroundColor for a userwindow / miniconsole. */
+    setBackgroundColor(id: string, r: number, g: number, b: number, a = 255): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        win.backgroundColor = { r, g, b, a };
+        this.notify();
+        this.saveHint(id, win);
+        return true;
+    }
+
+    getBackgroundColor(id: string): { r: number; g: number; b: number; a: number } | null {
+        const win = this.windows.get(id);
+        return win?.backgroundColor ?? null;
     }
 
     setSize(id: string, width: number, height: number): void {
@@ -502,6 +669,10 @@ export class WindowManager {
             splitGroup,
             splitOrder,
             splitFlex,
+            fontSize: hint?.fontSize,
+            fontFamily: hint?.fontFamily,
+            wrapAt: hint?.wrapAt,
+            backgroundColor: hint?.backgroundColor,
             pendingText: [],
         };
 
@@ -552,7 +723,7 @@ export class WindowManager {
 
     show(id: string): void {
         const win = this.windows.get(id);
-        if (!win) { this.open(id); return; }
+        if (!win) return;
         if (win.visible) return;
         win.visible = true;
         win.zIndex  = ++this.nextZ;
@@ -611,6 +782,23 @@ export class WindowManager {
     has(id: string): boolean { return this.windows.has(id); }
     getElement(id: string): HTMLElement | null { return this.elements.get(id) ?? null; }
 
+    /** Mudlet getUserWindowSize. Reports the live rendered size of a userwindow
+     *  / miniconsole when mounted (so docked panels return their actual on-screen
+     *  pixels rather than the stored hint), else falls back to the saved width
+     *  /height. Returns null if the window doesn't exist. */
+    getSize(id: string): { width: number; height: number } | null {
+        const win = this.windows.get(id);
+        if (!win) return null;
+        const el = this.elements.get(id);
+        if (el) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width > 0 || rect.height > 0) {
+                return { width: rect.width, height: rect.height };
+            }
+        }
+        return { width: win.width, height: win.height };
+    }
+
     // ── Private ───────────────────────────────────────────────────────────────
 
     private pushLine(win: ScriptWindowData, id: string, line: string): void {
@@ -646,9 +834,10 @@ export class WindowManager {
 
     private notify(): void {
         const arr = [...this.windows.values()]
-            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex }) => ({
+            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor }) => ({
                 id, title, kind, visible, x, y, width, height, zIndex,
                 docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex,
+                fontSize, fontFamily, wrapAt, backgroundColor,
                 isActiveTab: dockGroup ? this.activeTabGroups.get(dockGroup) === id : undefined,
             }))
             .sort((a, b) => a.zIndex - b.zIndex);
@@ -666,6 +855,10 @@ export class WindowManager {
             dockGroup: win.dockGroup, tabOrder:   win.tabOrder,
             isActiveTab: win.dockGroup ? this.activeTabGroups.get(win.dockGroup) === id : undefined,
             splitGroup: win.splitGroup, splitOrder: win.splitOrder, splitFlex: win.splitFlex,
+            fontSize:  win.fontSize,
+            fontFamily: win.fontFamily,
+            wrapAt:    win.wrapAt,
+            backgroundColor: win.backgroundColor,
         };
         this.windowHints[id] = hint;
         this.onWindowHint?.(id, hint);

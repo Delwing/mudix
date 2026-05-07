@@ -41,6 +41,14 @@ export interface WindowOpenOptions {
     autoDock?: boolean;
     /** Dock side to use when no saved hint exists (Mudlet dockingArea). "main" = floating. */
     dockingArea?: string;
+    /** Output font size in pixels (Mudlet setFontSize). */
+    fontSize?: number;
+    /** Output font family override (Mudlet setFont). */
+    fontFamily?: string;
+    /** Character-column wrap width (Mudlet setWindowWrap). 0/undefined disables. */
+    wrapAt?: number;
+    /** Window background fill (Mudlet setBackgroundColor). rgba 0..255. */
+    backgroundColor?: { r: number; g: number; b: number; a: number };
 }
 
 export interface WindowHandle {
@@ -73,4 +81,8 @@ export interface ScriptWindowRenderData {
     splitGroup?: string;
     splitOrder?: number;
     splitFlex?: number;
+    fontSize?: number;
+    fontFamily?: string;
+    wrapAt?: number;
+    backgroundColor?: { r: number; g: number; b: number; a: number };
 }

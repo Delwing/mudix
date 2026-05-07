@@ -13,6 +13,79 @@ function getMainWindowSize()
     return t[0], t[1]
 end
 
+function getUserWindowSize(name)
+    local t = __getUserWindowSize(name)
+    return t[0], t[1]
+end
+
+-- Mudlet getBackgroundColor([windowName]). JS returns the rgba channels as a
+-- 0-indexed array; unpack to four return values to match the C++ API.
+function getBackgroundColor(windowName)
+    local t = __getBackgroundColor(windowName)
+    return t[0], t[1], t[2], t[3]
+end
+
+-- Mudlet getCustomEnvColor(envID). JS returns nil for unknown IDs (matches
+-- Mudlet) and a 0-indexed [r,g,b,a] array otherwise.
+function getCustomEnvColor(envId)
+    local t = __getCustomEnvColor(envId)
+    if t == nil then return nil end
+    return t[0], t[1], t[2], t[3]
+end
+
+-- Mudlet getPackages() → 1-indexed Lua array of installed package names. JS
+-- arrays come in 0-indexed via wasmoon; rebuild as ipairs-friendly.
+function getPackages()
+    local t = __getPackages()
+    local out = {}
+    if type(t) == 'table' then
+        local i = 0
+        while t[i] ~= nil do
+            out[#out + 1] = t[i]
+            i = i + 1
+        end
+        if #out == 0 then for _, v in ipairs(t) do out[#out + 1] = v end end
+    end
+    return out
+end
+
+-- Mudlet-compatible getMudletVersion. Behaviour:
+--   no arg / nil      → table { major, minor, revision, build }
+--   "string"          → "major.minor.revision[-build]"
+--   "major" / "minor" / "revision" / "build" → field value
+--   "table"           → major, minor, revision as 3 separate return values
+--                       (mudlet-lua's mudletOlderThan relies on this)
+do
+    local MAJOR, MINOR, REVISION, BUILD = 4, 20, 0, ""
+    function getMudletVersion(mode)
+        if mode == nil then
+            return { major = MAJOR, minor = MINOR, revision = REVISION, build = BUILD }
+        elseif mode == "string" then
+            if BUILD ~= "" then
+                return string.format("%d.%d.%d-%s", MAJOR, MINOR, REVISION, BUILD)
+            end
+            return string.format("%d.%d.%d", MAJOR, MINOR, REVISION)
+        elseif mode == "major"    then return MAJOR
+        elseif mode == "minor"    then return MINOR
+        elseif mode == "revision" then return REVISION
+        elseif mode == "build"    then return BUILD
+        elseif mode == "table"    then return MAJOR, MINOR, REVISION
+        else
+            error('getMudletVersion: bad argument (expected nil/"string"/"major"/"minor"/"revision"/"build"/"table", got "' .. tostring(mode) .. '")', 2)
+        end
+    end
+end
+
+-- Mudlet saveProfile([location]). zustand state is already auto-saved on every
+-- mutation; this call additionally forces pending VFS writes (and any debounced
+-- SQL snapshots) through to IndexedDB / the linked folder. The flush itself is
+-- async fire-and-forget — failures surface in console.warn rather than the
+-- return tuple.
+function saveProfile(location)
+    local path = __mudix_saveProfile(location)
+    return true, path
+end
+
 -- Callback registry: stores Lua functions handed to tempTimer/Alias/Trigger/Key
 -- so JS only ever sees a numeric ID. JS invokes __mudix_dispatch_cb(id) via
 -- doStringSync, sidestepping wasmoon's broken Lua-function-from-JS proxy.
@@ -112,8 +185,13 @@ end
 
 do
     local _raw = __mudix_tempTrigger
-    function tempTrigger(pattern, fn)
-        return _raw(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempTrigger", 2)))
+    function tempTrigger(pattern, fn, expirationCount)
+        return _raw(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempTrigger", 2)), expirationCount)
+    end
+    -- Mudlet's tempRegexTrigger: regex pattern, code, optional expirationCount
+    -- (positive N = fire N times then auto-kill; -1/0/omitted = unlimited).
+    function tempRegexTrigger(pattern, fn, expirationCount)
+        return _raw(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempRegexTrigger", 2)), expirationCount)
     end
 end
 
@@ -121,6 +199,15 @@ do
     local _raw = __mudix_tempKey
     function tempKey(modifier, key, fn)
         return _raw(modifier, key, __mudix_register_cb(__mudix_to_fn(fn, "tempKey", 3)))
+    end
+end
+
+-- Mudlet permScript(name, parent, luaCode). mudlet-lua's permGroup invokes this
+-- with a 4th positional arg ("" type filler); Lua naturally drops it.
+do
+    local _raw = __mudix_permScript
+    function permScript(name, parent, code)
+        return _raw(tostring(name or ""), tostring(parent or ""), tostring(code or ""))
     end
 end
 

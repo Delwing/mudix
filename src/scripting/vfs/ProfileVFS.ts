@@ -14,6 +14,7 @@ import {
     existsSync,
     unlinkSync,
     rmSync,
+    renameSync,
     type FileSystem,
 } from '@zenfs/core';
 import { IndexedDB, WebAccess } from '@zenfs/dom';
@@ -125,6 +126,12 @@ export class ProfileVFS {
 
     deleteFile(path: string): void {
         unlinkSync(this.resolvePath(path));
+    }
+
+    rename(oldPath: string, newPath: string): void {
+        const absNew = this.resolvePath(newPath);
+        ensureParentDir(absNew);
+        renameSync(this.resolvePath(oldPath), absNew);
     }
 
     mkdir(path: string): void {
