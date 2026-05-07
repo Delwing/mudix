@@ -1,6 +1,6 @@
--- luasql.sqlite3 shim backed by the sqlite-wasm worker (sqliteClient.ts).
---
--- Mudlet's DB.lua expects this module to look like the real LuaSQL binding:
+-- luasql.sqlite3 shim backed by the main-thread sqlite-wasm bridge in
+-- LuaRuntime.ts. Mudlet's DB.lua expects this module to look like the real
+-- LuaSQL binding:
 --   local luasql = require "luasql.sqlite3"
 --   local env  = luasql.sqlite3()
 --   local conn = env:connect(path)
@@ -9,10 +9,8 @@
 --   local row = cur:fetch({}, "a")                -- assoc-mode row, or nil
 --   cur:close(); conn:close(); env:close()
 --
--- The JS bridge functions (__sql_*) return a Promise. We yield it via
--- __await (Bridge.lua), which the JS-side runner awaits and resumes with the
--- resolved value, so ___await(promise) evaluates to the resolved value here.
--- Errors are re-raised by __await on rejection.
+-- The JS bridge functions (__sql_*) are synchronous — they return a value
+-- directly, no Promise / __await dance.
 
 local function make_cursor(rows, columns)
     local pos = 0
@@ -51,9 +49,9 @@ local function make_conn(conn_id)
     local conn = {}
 
     function conn:execute(sql)
-        local result = __await(__sql_exec(conn_id, sql))
+        local result = __sql_exec(conn_id, sql)
         if result == nil then
-            return nil, "sqlite worker returned nil"
+            return nil, "sqlite returned nil"
         end
         if result.kind == "error" then
             return nil, result.message
@@ -69,7 +67,7 @@ local function make_conn(conn_id)
     end
 
     function conn:close()
-        __await(__sql_close(conn_id))
+        __sql_close(conn_id)
         return true
     end
 
@@ -84,7 +82,7 @@ local function make_env()
     local env = {}
 
     function env:connect(path)
-        local conn_id = __await(__sql_open(path))
+        local conn_id = __sql_open(path)
         if conn_id == nil then
             return nil, "failed to open " .. tostring(path)
         end

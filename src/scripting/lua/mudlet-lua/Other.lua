@@ -925,19 +925,15 @@ do
   -- name: The name of the event that was fired.
   -- ...:  All arguments passed to the raised event.
   function dispatchEventToFunctions(event, ...)
-    -- mudix patch: handlers may __await JS Promises (DB calls, etc.). Lua 5.1's
-    -- pcall introduces a C-call boundary that yields can't cross, so we use
-    -- __mudix_safecall (Bridge.lua) — a pcall that runs the handler in a sub-
-    -- coroutine and forwards yields up to the outer thread.
     if handlers[event] then
       for _, func in pairs(handlers[event]) do
-        local success, error = __mudix_safecall(func, event, ...)
+        local success, error = pcall(func, event, ...)
         if not success then showHandlerError(event, error) end
       end
     end
     if handlers["*"] then
       for _, func in pairs(handlers["*"]) do
-        local success, error = __mudix_safecall(func, event, ...)
+        local success, error = pcall(func, event, ...)
         if not success then showHandlerError(event, error) end
       end
     end
