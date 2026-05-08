@@ -36,12 +36,14 @@ function isTextEntry(path: string): boolean {
  * expected to flush the VFS afterwards (or let the next idle flush handle it).
  *
  * - .mpackage / .zip : unzip into <profilePath>/<packageName>/, find the XML inside, parse.
- * - .xml             : write the file into <profilePath>/<packageName>/<filename>, parse.
+ *                      The full payload is preserved on disk so resources
+ *                      (images/sounds/lua modules) remain available to scripts via the VFS.
+ * - .xml             : parse only. No files are written — the parsed nodes live in the
+ *                      app store, and a single-file package has no sibling resources
+ *                      that would need VFS storage.
  *
- * On disk the entire payload is preserved so resources (images/sounds/lua modules)
- * remain available to scripts via the VFS. The XML is parsed in package-mode
- * which wraps each category in a top-level group and tags every node with the
- * package name, making uninstall a tag-based cascade.
+ * The XML is parsed in package-mode, which wraps each category in a top-level
+ * group and tags every node with the package name, making uninstall a tag-based cascade.
  */
 export function installPackageFromBytes(filename: string, buf: Uint8Array, vfs: ProfileVFS): InstallResult {
     const packageName = packageNameFromFile(filename);
@@ -49,13 +51,14 @@ export function installPackageFromBytes(filename: string, buf: Uint8Array, vfs: 
 
     // Wipe any previous install of the same package (re-install is a clean slate).
     if (vfs.exists(pkgDir)) vfs.rmdir(pkgDir);
-    vfs.mkdir(pkgDir);
 
     let xmlContent: string;
-    let xmlRelPath: string;
+    let xmlRelPath: string | undefined;
     let manifestExtras: Partial<PackageManifest> = {};
 
     if (looksLikeZip(buf)) {
+        vfs.mkdir(pkgDir);
+
         const entries = unzipSync(buf);
         // Pick the first .xml at any depth — Mudlet places it at the root of the archive.
         const xmlEntry = Object.keys(entries).find(isXmlEntry);
@@ -79,10 +82,8 @@ export function installPackageFromBytes(filename: string, buf: Uint8Array, vfs: 
 
         manifestExtras = readConfigLua(entries);
     } else {
-        // Plain XML — treat as a single-file package.
+        // Plain XML — parse only, nothing to persist on disk.
         xmlContent = strFromU8(buf);
-        xmlRelPath = filename;
-        vfs.writeFile(`${pkgDir}/${filename}`, xmlContent);
     }
 
     const data = parseMudletXml(xmlContent, { packageName });
@@ -90,7 +91,7 @@ export function installPackageFromBytes(filename: string, buf: Uint8Array, vfs: 
     const manifest: PackageManifest = {
         name: packageName,
         ...manifestExtras,
-        xmlPath: xmlRelPath,
+        ...(xmlRelPath ? { xmlPath: xmlRelPath } : {}),
         sourceFile: filename,
         installedAt: new Date().toISOString(),
     };
