@@ -67,6 +67,7 @@ export class MapStore {
     private notifyPending = false;
     private mapEvents = new Map<string, MapEventEntry>();
     private customEnvColors = new Map<number, MudletColor>();
+    private mapUserData: Record<string, string> = {};
     // Set by LuaRuntime so dispatchMapEvent can fire raiseEvent into the runtime.
     // Cleared on runtime teardown to avoid firing into a closed lua_State.
     private mapEventDispatcher: ((eventName: string, args: unknown[]) => void) | null = null;
@@ -98,6 +99,7 @@ export class MapStore {
         this.areas.clear();
         this.areaNames.clear();
         this.hashToRoom.clear();
+        this.mapUserData = {};
         this.nextRoomId = 1;
         this.nextAreaId = 2;        // -1 is reserved below
         const defaultArea = makeArea();
@@ -126,7 +128,7 @@ export class MapStore {
         for (const [id, c] of this.customEnvColors) mCustomEnvColors[id] = c;
         return {
             version: 1, envColors: {}, areaNames, mCustomEnvColors,
-            mpRoomDbHashToRoomId: hashes, mUserData: {},
+            mpRoomDbHashToRoomId: hashes, mUserData: { ...this.mapUserData },
             mapSymbolFont: DEFAULT_FONT, mapFontFudgeFactor: 1, useOnlyMapFont: false,
             areas, mRoomIdHash: {}, labels: {}, rooms,
         };
@@ -323,6 +325,38 @@ export class MapStore {
     setRoomUserData(id: number, key: string, value: string): void {
         const r = this.rooms.get(id);
         if (r) { r.userData[key] = value; this.notify(); }
+    }
+
+    // ── Map-level user data ───────────────────────────────────────────────────
+    // Mudlet getMapUserData/setMapUserData/clearMapUserData operate on the
+    // map's mUserData dict. Loaded binary maps populate this via
+    // loadMapUserData(); scripts use it as free-form key/value storage that
+    // survives serialization back to .dat.
+
+    getMapUserData(key: string): string {
+        return this.mapUserData[key] ?? '';
+    }
+
+    setMapUserData(key: string, value: string): void {
+        this.mapUserData[key] = value;
+        this.notify();
+    }
+
+    clearMapUserData(key: string): boolean {
+        if (!(key in this.mapUserData)) return false;
+        delete this.mapUserData[key];
+        this.notify();
+        return true;
+    }
+
+    getAllMapUserData(): Record<string, string> {
+        return { ...this.mapUserData };
+    }
+
+    /** Replace the entire map-level user-data dict (e.g. after loading a .dat). */
+    loadMapUserData(data: Record<string, string> | undefined | null): void {
+        this.mapUserData = data ? { ...data } : {};
+        this.notify();
     }
 
     // ── Areas ─────────────────────────────────────────────────────────────────

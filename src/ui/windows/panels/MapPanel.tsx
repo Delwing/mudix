@@ -105,6 +105,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             const mudletMap = readMapFromBuffer(Buffer.from(buf));
             const { mapData, colors } = readerExport(mudletMap);
             manager.setHashMap(mudletMap.mpRoomDbHashToRoomId ?? {});
+            manager.mapStore.loadMapUserData(mudletMap.mUserData);
             initRenderer(mapData as AnyArea[], colors);
             return true;
         } catch (e) {

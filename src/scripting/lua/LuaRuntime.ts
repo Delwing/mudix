@@ -34,14 +34,18 @@ const DOCKMAP: Record<string, string> = {
 }
 
 // Mudlet's HTTP APIs accept Lua header tables of the shape
-// `{["Header-Name"] = "value"}`. wasmoon converts string-keyed Lua tables to
-// plain JS objects on the way in, so Object.entries gives us the pairs we
-// need for `fetch({ headers })`. Numeric/boolean values are stringified.
+// `{["Header-Name"] = "value"}`. wasmoon hands these in as a Proxy-wrapped
+// LuaTable — Object.keys/bracket access fall through to the JS instance's
+// own props (alive/thread/ref/pointer) and the proxy `get` handler tries to
+// .bind() the boolean, which throws. $detach(DictType.Object=1) materializes
+// the actual Lua keys into a plain object.
 function luaTableToHeaders(h: unknown): Record<string, string> | undefined {
     if (!h || typeof h !== 'object') return undefined;
+    const proxy = h as { $detach?: (dt: number) => Record<string, unknown> };
+    const obj = typeof proxy.$detach === 'function' ? proxy.$detach(1) : (h as Record<string, unknown>);
     const out: Record<string, string> = {};
-    for (const k of Object.keys(h as Record<string, unknown>)) {
-        const v = (h as Record<string, unknown>)[k];
+    for (const k of Object.keys(obj)) {
+        const v = obj[k];
         if (v != null) out[k] = String(v);
     }
     return Object.keys(out).length ? out : undefined;
@@ -439,6 +443,19 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setRoomChar',  (id: number, c: string)   => this.api.map.setRoomChar(id, c));
         this.lua.global.set('getRoomUserData', (id: number, k: string)           => this.api.map.getRoomUserData(id, k));
         this.lua.global.set('setRoomUserData', (id: number, k: string, v: string)=> this.api.map.setRoomUserData(id, k, v));
+
+        // ── Map-level user data ───────────────────────────────────────────────
+        // Mudlet getMapUserData(key)/setMapUserData(key, value)/clearMapUserData(key).
+        // Stored in MapStore.mapUserData and serialized into MudletMap.mUserData
+        // when toMudletMap() runs; loaded maps push their mUserData in via
+        // MapPanel.loadFromBuffer → MapStore.loadMapUserData.
+        this.lua.global.set('getMapUserData',    (k: unknown) => this.api.map.getMapUserData(String(k ?? '')));
+        this.lua.global.set('setMapUserData',    (k: unknown, v: unknown) => {
+            this.api.map.setMapUserData(String(k ?? ''), String(v ?? ''));
+            return true;
+        });
+        this.lua.global.set('clearMapUserData',  (k: unknown) => this.api.map.clearMapUserData(String(k ?? '')));
+        this.lua.global.set('getAllMapUserData', () => this.api.map.getAllMapUserData());
 
         // ── Exits ─────────────────────────────────────────────────────────────
         this.lua.global.set('getRoomExits',      (id: number)                          => this.api.map.getRoomExits(id));

@@ -17,7 +17,7 @@ There are no tests at this time.
 
 Mudix is a **web-based MUD (Multi-User Dungeon) client** built with React + TypeScript. It connects to MUD servers via WebSocket (with GMCP protocol support), renders ANSI-colored text output, supports Lua scripting for automation, and provides a dockable multi-panel UI.
 
-Key libraries: `dockview-react` (docking), `fengari-web` (Lua in browser), `mudlet-map-binary-reader/renderer` (map files), `zustand` (state), `pako` (compression).
+Key libraries: `dockview-react` (docking), `wasmoon-lua5.1` (Lua in browser, WASM-compiled Lua 5.1), `mudlet-map-binary-reader/renderer` (map files), `zustand` (state), `pako` (compression).
 
 ## Architecture Overview
 
@@ -48,7 +48,7 @@ User input (CommandBar)
 
 **`ScriptingEngine`** orchestrates runtimes via the **`IScriptingRuntime`** interface (`load`, `emitEvent`, `processInput`, `runWithMatches`, `destroy`). Only Lua is implemented today but the interface is designed for extension.
 
-**`LuaRuntime`** uses fengari-web to run Lua in the browser. It exposes the `mudix` global table:
+**`LuaRuntime`** uses wasmoon-lua5.1 to run Lua in the browser. It exposes the `mudix` global table:
 
 ```lua
 mudix.send(text)                  -- send command to MUD
