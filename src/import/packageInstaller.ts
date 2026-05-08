@@ -215,17 +215,63 @@ export async function uninstallPackageFiles(packageName: string, vfs: ProfileVFS
 }
 
 /**
+ * Resolve the absolute VFS path of a module's XML file. Honors `xmlVfsPath` (in-place
+ * modules) first, then falls back to the managed `<profilePath>/<name>/<xmlPath>` layout.
+ * Returns null if neither is set.
+ */
+export function moduleXmlAbsolutePath(manifest: PackageManifest, vfs: ProfileVFS): string | null {
+    if (manifest.xmlVfsPath) return manifest.xmlVfsPath;
+    if (manifest.xmlPath)    return `${vfs.profilePath}/${manifest.name}/${manifest.xmlPath}`;
+    return null;
+}
+
+/**
  * Re-read a module's XML from the VFS and return the parsed result.
  * Throws if the on-disk file is missing — modules require their XML to be present.
  */
 export function reloadModuleFromVfs(manifest: PackageManifest, vfs: ProfileVFS): MudletImportResult {
-    if (!manifest.xmlPath) {
-        throw new Error(`Module "${manifest.name}" has no xmlPath; cannot reload from disk`);
-    }
-    const path = `${vfs.profilePath}/${manifest.name}/${manifest.xmlPath}`;
-    if (!vfs.exists(path)) {
-        throw new Error(`Module "${manifest.name}" XML not found at ${path}`);
-    }
+    const path = moduleXmlAbsolutePath(manifest, vfs);
+    if (!path) throw new Error(`Module "${manifest.name}" has no xmlPath; cannot reload from disk`);
+    if (!vfs.exists(path)) throw new Error(`Module "${manifest.name}" XML not found at ${path}`);
     const xmlContent = vfs.readFile(path);
     return parseMudletXml(xmlContent, { packageName: manifest.name });
+}
+
+/**
+ * Install a module from a path that already lives inside the profile's VFS.
+ *
+ * - Plain XML : referenced in place. The manifest stores `xmlVfsPath` and no pkgDir is
+ *               created. Reload and sync read/write the user-chosen path verbatim, so
+ *               external tools (a synced folder, an editor) can keep editing it.
+ * - .mpackage / .zip : same flow as a normal module install — extracted into a fresh
+ *               pkgDir so resources are accessible. The original archive on disk is
+ *               left untouched but is no longer referenced by the module.
+ *
+ * Throws on read/parse failures.
+ */
+export function installModuleFromVfsPath(absolutePath: string, vfs: ProfileVFS): InstallResult {
+    if (!vfs.exists(absolutePath)) throw new Error(`File not found: ${absolutePath}`);
+    const filename = absolutePath.substring(absolutePath.lastIndexOf('/') + 1) || 'module';
+    const buf = vfs.readBinaryFile(absolutePath);
+
+    if (looksLikeZip(buf)) {
+        // Zips always go through the unzip-into-pkgDir flow; the user's source archive
+        // stays where it was but isn't part of the module's reload path.
+        return installPackageFromBytes(filename, buf, vfs, { kind: 'module' });
+    }
+
+    // Plain XML: reference in place, no pkgDir.
+    const xmlContent = strFromU8(buf);
+    const packageName = packageNameFromFile(filename);
+    const data = parseMudletXml(xmlContent, { packageName });
+
+    const manifest: PackageManifest = {
+        name: packageName,
+        xmlVfsPath: absolutePath,
+        sourceFile: filename,
+        installedAt: new Date().toISOString(),
+        kind: 'module',
+        sync: false,
+    };
+    return { manifest, data };
 }

@@ -15,7 +15,7 @@ import {ProfileVFS} from './vfs/ProfileVFS';
 import {registerVfs, unregisterVfs} from './vfs/vfsBridge';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
-import {installPackageFromBytes, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
+import {installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
 import {serializeMudletXml} from '../import/mudletXmlExport';
 
 function hexToRgb(hex: string): RgbColor | null {
@@ -267,7 +267,8 @@ export class ScriptingEngine {
         const pkg = (state.connectionPackages[id] ?? []).find(p => p.name === moduleName);
         if (!pkg) throw new Error(`module not installed: ${moduleName}`);
         if (pkg.kind !== 'module') throw new Error(`not a module: ${moduleName}`);
-        if (!pkg.xmlPath) throw new Error(`module "${moduleName}" has no xmlPath`);
+        const path = moduleXmlAbsolutePath(pkg, vfs);
+        if (!path) throw new Error(`module "${moduleName}" has no xmlPath`);
 
         const filterPkg = <T extends { packageName?: string }>(arr: T[] | undefined): T[] =>
             (arr ?? []).filter(n => n.packageName === moduleName);
@@ -281,7 +282,6 @@ export class ScriptingEngine {
             buttons:  filterPkg(state.connectionButtons[id]),
         }, moduleName);
 
-        const path = `${vfs.profilePath}/${moduleName}/${pkg.xmlPath}`;
         const parent = path.substring(0, path.lastIndexOf('/'));
         if (parent && !vfs.exists(parent)) vfs.mkdir(parent);
         vfs.writeFile(path, xml);

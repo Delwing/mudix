@@ -75,6 +75,13 @@ export interface PackageManifest {
     created?: string;
     /** Path of the XML file inside the package directory, relative to <profilePath>/<name>/ */
     xmlPath?: string;
+    /**
+     * Modules only: absolute VFS path of the XML, when the module references a file
+     * that lives outside the managed package directory. Reload and sync read/write
+     * this path verbatim and no pkgDir is ever created. Mutually exclusive with
+     * `xmlPath` in practice — if both are set, `xmlVfsPath` wins.
+     */
+    xmlVfsPath?: string;
     /** Source filename (e.g. "GenericMapper.mpackage"), useful for display. */
     sourceFile?: string;
     /** Wall-clock install time, ISO-8601. */

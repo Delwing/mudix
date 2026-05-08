@@ -8,7 +8,8 @@ import type { MudSession, ScriptLogSource, ScriptLogSourceKind } from '../../../
 import type { ProfileVFS } from '../../../scripting/vfs/ProfileVFS';
 import type { ScriptingEngine } from '../../../scripting/ScriptingEngine';
 import { LuaEditor } from './LuaEditor';
-import { installPackageFromFile, uninstallPackageFiles } from '../../../import/packageInstaller';
+import { installModuleFromVfsPath, installPackageFromFile, uninstallPackageFiles } from '../../../import/packageInstaller';
+import { VfsModulePickerModal } from './VfsModulePickerModal';
 import { strToU8 } from 'fflate';
 import './ScriptEditorPanel.css';
 
@@ -385,6 +386,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
     const importFileRef = useRef<HTMLInputElement>(null);
     const importModuleRef = useRef<HTMLInputElement>(null);
     const [importError, setImportError] = useState<string | null>(null);
+    const [showVfsPicker, setShowVfsPicker] = useState(false);
     const updatePackageManifest = useAppStore(s => s.updatePackageManifest);
 
     const importAs = useCallback(async (file: File, kind: 'package' | 'module') => {
@@ -428,6 +430,30 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
         e.target.value = '';
         await importAs(file, 'module');
     }, [importAs]);
+
+    const handleImportModuleFromVfs = useCallback((absolutePath: string) => {
+        if (!vfs) {
+            setImportError('VFS not ready — wait for the profile to finish loading');
+            return;
+        }
+        try {
+            const { manifest, data } = installModuleFromVfsPath(absolutePath, vfs);
+            installPackage(connectionId, manifest, data);
+            scriptingEngineRef?.current?.notifyPackageInstalled(manifest.name);
+            void vfs.flush();
+            const total = data.scripts.length + data.aliases.length + data.triggers.length + data.timers.length + data.keys.length;
+            setImportError(null);
+            const now = new Date();
+            const newEntries: LogEntry[] = [{ text: `Installed module "${manifest.name}" (${total} items) from VFS path ${absolutePath}`, level: 'info', timestamp: now }];
+            for (const w of data.warnings) newEntries.push({ text: `Warning: ${w}`, level: 'error', timestamp: now });
+            setLogs(prev => [...prev, ...newEntries]);
+            setErrorLog(prev => [...prev, ...newEntries]);
+            const warnCount = data.warnings.length;
+            if (warnCount > 0) setUnreadErrors(prev => prev + warnCount);
+        } catch (err) {
+            setImportError(err instanceof Error ? err.message : String(err));
+        }
+    }, [connectionId, installPackage, scriptingEngineRef, vfs]);
 
     const handleSyncModule = useCallback(async (moduleName: string) => {
         const engine = scriptingEngineRef?.current;
@@ -1158,9 +1184,24 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                 >
                     Import Module
                 </button>
+                <button
+                    className="script-editor__nav-import"
+                    onClick={() => setShowVfsPicker(true)}
+                    title="Import a module from a file already inside the profile's VFS — plain XML files are referenced in place"
+                    disabled={!vfs}
+                >
+                    Module from VFS…
+                </button>
                 <input ref={importFileRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportFile} />
                 <input ref={importModuleRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportModule} />
             </div>
+            {showVfsPicker && vfs && (
+                <VfsModulePickerModal
+                    vfs={vfs}
+                    onClose={() => setShowVfsPicker(false)}
+                    onPick={handleImportModuleFromVfs}
+                />
+            )}
 
             {/* Item list — hidden on the Errors and Packages tabs */}
             {isEditCategory && <div className="script-editor__list" style={{ width: listWidth }}>
@@ -1257,7 +1298,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                     <div className="script-editor__error-log-entries">
                         {packages.length === 0 ? (
                             <span className="script-editor__log-empty">
-                                Click "Import Package" or "Import Module" above to install a Mudlet package (.mpackage / .zip / .xml).
+                                Click "Import Package", "Import Module", or "Module from VFS…" above to install a Mudlet package (.mpackage / .zip / .xml).
                             </span>
                         ) : (
                             packages.map(pkg => {
