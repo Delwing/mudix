@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import type React from 'react';
 import type { WindowManager } from '../WindowManager';
 import type { LabelManager } from '../../labels/LabelManager';
 import { useStickyOutput } from '../../../hooks/useOutput';
@@ -16,12 +17,14 @@ interface TextPanelProps {
 }
 
 export function TextPanel({ id, manager, labels, fontSize, fontFamily, wrapAt, backgroundColor }: TextPanelProps) {
+    const viewportRef = useRef<HTMLDivElement>(null);
     const { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom, controls } =
         useStickyOutput(null, { stickyLines: 50 });
 
     useEffect(() => {
-        if (!controls || !outputRef.current) return;
+        if (!controls || !outputRef.current || !viewportRef.current) return;
         manager.registerTextPanel(id, controls, outputRef.current);
+        manager.registerViewport(id, viewportRef.current);
         return () => manager.unregister(id);
     }, [manager, id, controls]);
 
@@ -29,8 +32,12 @@ export function TextPanel({ id, manager, labels, fontSize, fontFamily, wrapAt, b
         ? `rgba(${backgroundColor.r}, ${backgroundColor.g}, ${backgroundColor.b}, ${backgroundColor.a / 255})`
         : undefined;
 
+    // Wrap StickyOutputPanel + LabelOverlay in a positioned box so the overlay
+    // positions against the same rectangle reported by getUserWindowSize. Without
+    // this, label-overlay's `inset: 0` would fall back to a dockview ancestor
+    // and labels sized to getUserWindowSize() wouldn't fill the user window.
     return (
-        <>
+        <div ref={viewportRef} style={VIEWPORT_STYLE}>
             <StickyOutputPanel
                 outputRef={outputRef}
                 sentinelRef={sentinelRef}
@@ -44,6 +51,8 @@ export function TextPanel({ id, manager, labels, fontSize, fontFamily, wrapAt, b
                 background={background}
             />
             {labels && <LabelOverlay manager={labels} parent={id} />}
-        </>
+        </div>
     );
 }
+
+const VIEWPORT_STYLE: React.CSSProperties = { position: 'relative', height: '100%', width: '100%' };

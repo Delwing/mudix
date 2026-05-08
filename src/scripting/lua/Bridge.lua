@@ -33,6 +33,14 @@ function getCustomEnvColor(envId)
     return t[0], t[1], t[2], t[3]
 end
 
+-- Mudlet getSelection([windowName]) → text, start, length on success;
+-- false, "no selection" otherwise. JS hands back a 0-indexed array or nil.
+function getSelection(windowName)
+    local t = __getSelection(windowName)
+    if t == nil then return false, "no selection" end
+    return t[0], t[1], t[2]
+end
+
 -- Mudlet getPackages() → 1-indexed Lua array of installed package names. JS
 -- arrays come in 0-indexed via wasmoon; rebuild as ipairs-friendly.
 local function rebuildJsArray(t)
@@ -234,6 +242,23 @@ do
     local _raw = __mudix_permScript
     function permScript(name, parent, code)
         return _raw(tostring(name or ""), tostring(parent or ""), tostring(code or ""))
+    end
+end
+
+-- Mudlet permRegexTrigger(name, parent, regexes, luaCode). The 3rd arg is a
+-- Lua array of regex pattern strings; flatten to \1-delimited so JS can split
+-- it back (LuaTable numeric iteration over wasmoon's JS proxy is unreliable).
+-- An empty/missing regex table is the documented way to create a trigger
+-- folder, and is what `permGroup("name", "trigger")` ends up calling.
+do
+    local _raw = __mudix_permRegexTrigger
+    local SEP = '\1'
+    function permRegexTrigger(name, parent, regexes, code)
+        local rs = {}
+        if type(regexes) == 'table' then
+            for _, r in ipairs(regexes) do rs[#rs + 1] = tostring(r) end
+        end
+        return _raw(tostring(name or ""), tostring(parent or ""), table.concat(rs, SEP), tostring(code or ""))
     end
 end
 

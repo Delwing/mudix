@@ -777,15 +777,14 @@ html, body, #root {
     height: 100%;
     display: flex;
     flex-direction: column;
-    line-height: 0.8;
+    line-height: 1.3;
 }
 
 .output-wrapper {
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 6px 10px 4px;
-    background: var(--console-bg);
+    background: var(--cons  ole-bg);
     color: var(--console-text);
     font-family: var(--font-output, var(--font-mono)), monospace;
     scrollbar-width: thin;
@@ -805,7 +804,6 @@ html, body, #root {
     display: flex;
     align-items: baseline;
     gap: 6px;
-    padding: 2px 0;
 }
 
 .output-msg-content {
@@ -813,7 +811,6 @@ html, body, #root {
     word-break: break-word;
     flex: 1;
     min-width: 0;
-    padding: 2px 0;
     max-width: var(--wrap-cols, none);
 }
 

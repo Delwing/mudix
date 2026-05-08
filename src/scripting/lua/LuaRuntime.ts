@@ -135,6 +135,8 @@ export class LuaRuntime implements IScriptingRuntime {
 
         this.lua.global.set('getProfileName', () => this.api.profileName);
 
+        this.lua.global.set('getEpoch', () => Date.now() / 1000);
+
         // Stub primitive — Other.lua calls registerAnonymousEventHandler("*",
         // "dispatchEventToFunctions") at module load to wire up the global event
         // bridge, then immediately overwrites this with its own Lua implementation.
@@ -535,7 +537,15 @@ export class LuaRuntime implements IScriptingRuntime {
         // ── Output / format ───────────────────────────────────────────────────
         this.lua.global.set('fg',          (name: string)  => this.api.fg(name));
         this.lua.global.set('bg',          (name: string)  => this.api.bg(name));
-        this.lua.global.set('insertText',  (text: string)  => this.api.insertText(text));
+        // insertText([window,] text). Mudlet's xEcho passes (win, segment) into
+        // _G["insertText"] for cinsertText/creplace/prefix; without the window
+        // overload the window name lands in the text slot and the actual segment
+        // is dropped, producing a wall of "main"s. The API itself decides where
+        // to write (lineBuffer at cursor inside triggers, echo otherwise).
+        this.lua.global.set('insertText', (a: string, b?: string) => {
+            if (b !== undefined) this.api.insertText(b, a);
+            else                 this.api.insertText(a);
+        });
         this.lua.global.set('feedTriggers',(text: string)  => this.api.feedTriggers(text));
         this.lua.global.set('deleteLine',  (win?: string)  => this.api.deleteLine(win));
         this.lua.global.set('printError',  (text: string)  => this.api.printError(text));
@@ -686,6 +696,15 @@ export class LuaRuntime implements IScriptingRuntime {
         // coerces nil args before calling.
         this.lua.global.set('__mudix_permScript', (name: unknown, parent: unknown, code: unknown) =>
             this.api.permScript(String(name ?? ''), String(parent ?? ''), String(code ?? '')));
+        // Mudlet permRegexTrigger(name, parent, regexes, luaCode). The Bridge.lua
+        // wrapper flattens the regex table to a \x01-delimited string (wasmoon's
+        // JS proxy for Lua tables doesn't iterate reliably from JS); we split it
+        // back here. An empty regexes string means "create a group".
+        this.lua.global.set('__mudix_permRegexTrigger', (name: unknown, parent: unknown, regexesStr: unknown, code: unknown) => {
+            const s = String(regexesStr ?? '');
+            const regexes = s.length === 0 ? [] : s.split('\x01');
+            return this.api.permRegexTrigger(String(name ?? ''), String(parent ?? ''), regexes, String(code ?? ''));
+        });
         // Mudlet setScript(name, luaCode[, pos]) — replace the source of an
         // existing script. pos is 1-indexed; missing/non-numeric falls back to
         // 1. Returns true or -1.
@@ -765,6 +784,14 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('selectSection', (a: string | number, b: number, c?: number) => {
             // selectSection([window,] from, length)
             c !== undefined ? this.api.selectSection(b, c, a as string) : this.api.selectSection(a as number, b);
+        });
+        // Mudlet getSelection([window]) → text, start, length (3 returns) or
+        // false, errMsg. The wasmoon → Lua boundary returns one value, so we
+        // hand back a 0-indexed [text, start, length] array (or null) and let
+        // Bridge.lua unpack into the documented multi-return.
+        this.lua.global.set('__getSelection', (win?: string) => {
+            const sel = this.api.getSelection(win);
+            return sel ? [sel.text, sel.start, sel.length] : null;
         });
 
         // ── Temp callbacks (timer/alias/trigger/key) ──────────────────────────

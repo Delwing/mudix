@@ -560,6 +560,7 @@ export class ScriptingEngine {
             this.api.setTimerToggler((name, enabled) => this.toggleTimerByName(name, enabled));
             this.api.setExistsCallback((name, type) => this.existsByName(name, type));
             this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
+            this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
             this.api.setSetScriptCallback((name, code, pos) => this.setScriptByName(name, code, pos));
             this.api.setCssRewriter((css) => {
                 const v = this.vfs;
@@ -763,6 +764,42 @@ export class ScriptingEngine {
             code,
             language: 'lua',
             eventHandlers: [],
+        });
+    }
+
+    /**
+     * Mudlet `permRegexTrigger(name, parent, regexes, luaCode)`. Creates a saved
+     * trigger named `name` under the trigger group `parent` (empty = root) with
+     * one or more regex patterns; matches fire OR-style. An empty `regexes` table
+     * creates a trigger group instead — matches the convention `permGroup` uses
+     * to bootstrap folders. Returns the new trigger's id, or -1 if `parent` is
+     * given but no trigger group with that name exists.
+     */
+    createPermRegexTrigger(name: string, parent: string, regexes: string[], code: string): string | number {
+        if (!name) return -1;
+        const store = useAppStore.getState();
+        const triggers = store.connectionTriggers[this.connectionId] ?? [];
+        let parentId: string | null = null;
+        if (parent && parent.length > 0) {
+            const group = triggers.find(t => t.isGroup && t.name === parent);
+            if (!group) return -1;
+            parentId = group.id;
+        }
+        const isGroup = regexes.length === 0;
+        const patterns: TriggerNode['patterns'] = regexes.map(r => ({ type: 'regex', text: r }));
+        return store.addTrigger(this.connectionId, {
+            name,
+            enabled: true,
+            isGroup,
+            parentId,
+            patterns,
+            code,
+            language: 'lua',
+            fireLength: 0,
+            multipleMatches: false,
+            multiline: false,
+            delta: 0,
+            isFilter: false,
         });
     }
 

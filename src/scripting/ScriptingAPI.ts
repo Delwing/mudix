@@ -187,6 +187,14 @@ export class ScriptingAPI {
     // of the already-rendered DOM. Set to null between lines.
     private lineBuffer: AnsiAwareBuffer | null = null;
 
+    // Column cursor for the active lineBuffer. Set by moveCursor and read by
+    // getColumnNumber so xEcho's "moveCursor(getColumnNumber + len(seg), ...)"
+    // dance threads inserts in order. Mudlet's prefix() drives this: it calls
+    // moveCursor(0, lineN) then cinsertText, which routes per-segment writes
+    // through insertText(win, seg) — those need to land at cursorCol, not at
+    // the end of the buffer.
+    private cursorCol = 0;
+
     // While lineBuffer is active, echo/cecho output is held here and flushed
     // to the output *after* the triggering line (or batch) is rendered.
     private echoDeferred: AnsiAwareBuffer[] = [];
@@ -229,6 +237,7 @@ export class ScriptingAPI {
     private timerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private existsCallback: ((name: string, type: string) => number) | null = null;
     private permScriptCallback: ((name: string, parent: string, code: string) => string | number) | null = null;
+    private permRegexTriggerCallback: ((name: string, parent: string, regexes: string[], code: string) => string | number) | null = null;
     private setScriptCallback: ((name: string, code: string, pos: number) => true | -1) | null = null;
 
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
@@ -339,6 +348,10 @@ export class ScriptingAPI {
         this.permScriptCallback = fn;
     }
 
+    setPermRegexTriggerCallback(fn: ((name: string, parent: string, regexes: string[], code: string) => string | number) | null): void {
+        this.permRegexTriggerCallback = fn;
+    }
+
     setSetScriptCallback(fn: ((name: string, code: string, pos: number) => true | -1) | null): void {
         this.setScriptCallback = fn;
     }
@@ -385,6 +398,10 @@ export class ScriptingAPI {
 
     permScript(name: string, parent: string, code: string): string | number {
         return this.permScriptCallback?.(name, parent, code) ?? -1;
+    }
+
+    permRegexTrigger(name: string, parent: string, regexes: string[], code: string): string | number {
+        return this.permRegexTriggerCallback?.(name, parent, regexes, code) ?? -1;
     }
 
     setScript(name: string, code: string, pos: number): true | -1 {
@@ -583,6 +600,22 @@ export class ScriptingAPI {
         this.selection = null;
     }
 
+    /**
+     * Mudlet `getSelection([windowName])`. Returns the currently selected text
+     * along with its 0-based start column and length on the active line. Returns
+     * null when no selection is set, or when `windowName` is given and doesn't
+     * match the selection's window — the Lua wrapper translates null into
+     * Mudlet's `false, "no selection"` 2-tuple.
+     */
+    getSelection(windowName?: string): { text: string; start: number; length: number } | null {
+        if (!this.selection) return null;
+        if (windowName !== undefined && !this.selectionMatches(windowName)) return null;
+        const buf = this.resolveBuffer(this.selection.windowName);
+        if (!buf) return null;
+        const { start, length } = this.selection;
+        return { text: buf.text.slice(start, start + length), start, length };
+    }
+
     applyFormatToSelection(state: FormatStateSnapshot): void {
         this.applyStateToSelection(state);
     }
@@ -598,6 +631,7 @@ export class ScriptingAPI {
     setLineBuffer(buffer: AnsiAwareBuffer): void {
         this.lineBuffer = buffer;
         this.selection = null;
+        this.cursorCol = 0;
         this.isDeferringEcho = true;
     }
 
@@ -694,9 +728,14 @@ export class ScriptingAPI {
         return this.getConsole(windowName)?.getLines(from, to) ?? [];
     }
 
-    getColumnNumber(_windowName?: string): number {
+    getColumnNumber(windowName?: string): number {
         // Mudlet returns the user cursor column (mUserCursor.x()), independent of
-        // the active selection. Trigger handlers run with the cursor at column 0.
+        // the active selection. While processing a line, return the live column
+        // cursor so xEcho's "advance by segment length" loop in cinsertText
+        // sees inserts threading forward, not stuck at 0. Otherwise we have no
+        // tracked cursor and report 0, matching pre-trigger state.
+        const isMain = !windowName || windowName === 'main';
+        if (this.lineBuffer && isMain) return this.cursorCol;
         return 0;
     }
 
@@ -735,9 +774,28 @@ export class ScriptingAPI {
         return this.session.windows.setWrap(name, v);
     }
 
-    insertText(text: string): void {
-        this.mainConsole.echo(text);
-        this.drainMain();
+    /**
+     * Mudlet `insertText([window,] text)`. During trigger processing for the
+     * main window, inserts at the column cursor inside the active lineBuffer
+     * (this is the path Mudlet's `prefix()` and `creplace()` rely on — they
+     * route through `cinsertText` → `xEcho` → `insertText(win, seg)` per
+     * segment). Outside that context we don't have a real column cursor, so
+     * the call degrades to an echo at end-of-buffer — same as before.
+     */
+    insertText(text: string, windowName?: string): void {
+        const isMain = !windowName || windowName === 'main';
+        if (this.lineBuffer && isMain) {
+            const state = this.mainConsole.format.toSnapshot();
+            const at = Math.max(0, Math.min(this.cursorCol, this.lineBuffer.text.length));
+            this.lineBuffer.insert(at, text, state);
+            return;
+        }
+        if (isMain) {
+            this.mainConsole.echo(text);
+            this.drainMain();
+        } else {
+            this.echoToWindow(windowName!, text);
+        }
     }
 
     moveCursorUp(windowName?: string): void {
@@ -748,7 +806,19 @@ export class ScriptingAPI {
         this.getConsole(windowName)?.moveDown();
     }
 
-    moveCursor(windowName: string | undefined, _x: number, y: number): void {
+    /**
+     * Mudlet `moveCursor([window,] x, y)`. While a lineBuffer is active and the
+     * target is main, set the column cursor used by `insertText` — y is ignored
+     * because the trigger-line buffer is single-line. Outside that context we
+     * still only support line-position seek (no real column cursor on rendered
+     * Console history).
+     */
+    moveCursor(windowName: string | undefined, x: number, y: number): void {
+        const isMain = !windowName || windowName === 'main';
+        if (this.lineBuffer && isMain) {
+            this.cursorCol = Math.max(0, Math.min(x, this.lineBuffer.text.length));
+            return;
+        }
         this.getConsole(windowName)?.moveTo(y);
     }
 

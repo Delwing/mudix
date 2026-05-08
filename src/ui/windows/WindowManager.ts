@@ -31,6 +31,10 @@ export class WindowManager {
     private readonly windows       = new Map<string, ScriptWindowData>();
     private readonly controls      = new Map<string, OutputRendererControls>();
     private readonly elements      = new Map<string, HTMLElement>();
+    /** Outer panel element used by getSize / sysUserWindowResizeEvent. Distinct
+     *  from `elements` (the writable text/HTML target) so size queries report the
+     *  full user-window box that labels live in, not the inner output area. */
+    private readonly viewports     = new Map<string, HTMLElement>();
     private readonly lineBuffers   = new Map<string, string>();
     private readonly portalTargets = new Map<string, HTMLDivElement>();
     private readonly resizeObservers = new Map<string, ResizeObserver>();
@@ -119,6 +123,14 @@ export class WindowManager {
             win.pendingText = [];
         }
         this.elements.set(id, element);
+    }
+
+    /** Registers the outer panel element for size queries and sysUserWindowResizeEvent.
+     *  Distinct from the writable element registered via registerTextPanel /
+     *  register('html'): labels position against this rectangle, so getUserWindowSize
+     *  must report it (not the inner output area). */
+    registerViewport(id: string, element: HTMLElement): void {
+        this.viewports.set(id, element);
         this.observeResize(id, element);
     }
 
@@ -138,6 +150,12 @@ export class WindowManager {
      */
     registerMainViewport(element: HTMLElement | null): void {
         this.mainViewportEl = element;
+        if (element) this.observeResize('main', element);
+        else {
+            this.resizeObservers.get('main')?.disconnect();
+            this.resizeObservers.delete('main');
+            this.lastEmittedSize.delete('main');
+        }
     }
 
     getMainViewportElement(): HTMLElement | null {
@@ -153,7 +171,6 @@ export class WindowManager {
             }
             win.pendingText = [];
         }
-        this.observeResize(id, element);
     }
 
     pushBuffer(id: string, buffer: AnsiAwareBuffer): void {
@@ -179,6 +196,7 @@ export class WindowManager {
     unregister(id: string): void {
         this.controls.delete(id);
         this.elements.delete(id);
+        this.viewports.delete(id);
         this.consoleRegistry?.delete(id);
         this.resizeObservers.get(id)?.disconnect();
         this.resizeObservers.delete(id);
@@ -203,7 +221,13 @@ export class WindowManager {
             const last = this.lastEmittedSize.get(id);
             if (last && last.w === w && last.h === h) return;
             this.lastEmittedSize.set(id, { w, h });
-            this.onRaiseEvent?.('sysUserWindowResizeEvent', [id, w, h]);
+            // Mudlet argument order:
+            //   sysWindowResizeEvent(width, height)         — main window
+            //   sysUserWindowResizeEvent(width, height, name) — user windows
+            // GeyserReposition's user-window branch reads `arg.."Container" == window.name`,
+            // so the name must be the third arg, not the first.
+            if (id === 'main') this.onRaiseEvent?.('sysWindowResizeEvent', [w, h]);
+            else               this.onRaiseEvent?.('sysUserWindowResizeEvent', [w, h, id]);
         });
         observer.observe(element);
         this.resizeObservers.set(id, observer);
@@ -785,11 +809,13 @@ export class WindowManager {
     /** Mudlet getUserWindowSize. Reports the live rendered size of a userwindow
      *  / miniconsole when mounted (so docked panels return their actual on-screen
      *  pixels rather than the stored hint), else falls back to the saved width
-     *  /height. Returns null if the window doesn't exist. */
+     *  /height. Returns null if the window doesn't exist. Prefers the viewport
+     *  element so the reported box matches the rectangle labels position against —
+     *  not the inner output area, which has paddings and a scrollbar gutter. */
     getSize(id: string): { width: number; height: number } | null {
         const win = this.windows.get(id);
         if (!win) return null;
-        const el = this.elements.get(id);
+        const el = this.viewports.get(id) ?? this.elements.get(id);
         if (el) {
             const rect = el.getBoundingClientRect();
             if (rect.width > 0 || rect.height > 0) {

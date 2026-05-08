@@ -290,6 +290,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('disableScript',    '(name)',        'Disable a script by name'),
     fn('permScript',       '(name, parent, code) → id',
         'Create a persistent Lua script under parent group (""=root). Returns the new id, or -1 if parent is given but no script group with that name exists.'),
+    fn('permRegexTrigger', '(name, parent, regexes, code) → id',
+        'Create a persistent regex trigger under parent group (""=root). regexes is a Lua array of regex strings (any-match). Empty regexes creates a trigger group. Returns the new id, or -1 if parent is given but no trigger group with that name exists.'),
     fn('setScript',        '(name, code, [pos]) → true|-1',
         'Replace the source of the pos-th (1-indexed, default 1) script named name. Returns true on success, -1 if no such script exists.'),
     // Trigger toggling
@@ -314,6 +316,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('selectString',    '([window,] text, occurrence)', 'Select Nth occurrence of text on current line; returns column index or -1'),
     fn('selectSection',   '([window,] from, length)',     'Select text by column position and length'),
     fn('deselect',        '([window])',                   'Clear the current selection'),
+    fn('getSelection',    '([window]) → text, start, length',
+        'Returns the current selection: text, 0-based start column, and length. Returns false, "no selection" when nothing is selected.'),
     // Timers
     fn('tempTimer',      '(seconds, fn, repeat?)', 'Create a timer (one-shot or repeating)'),
     fn('killTimer',      '(id)',           'Cancel a timer'),
@@ -333,6 +337,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('getMudixProfilePath', '() → string',        'Returns the VFS profile root path for this connection'),
     fn('getMudletHomeDir',   '() → string',        'Mudlet-compatible alias for getMudixProfilePath()'),
     fn('getMudletVersion',   '([mode]) → version', 'Mudlet version. No arg → {major, minor, revision, build} table. "string" → "X.Y.Z". "major"/"minor"/"revision"/"build" → field. "table" → major, minor, revision as 3 return values'),
+    fn('getEpoch',           '() → number',        'Seconds since the Unix epoch (1970-01-01 UTC) with millisecond precision'),
     fn('saveProfile',        '([location]) → true, path', 'Force pending profile data (VFS files, SQL snapshots) through to durable storage. zustand state auto-saves on every change so this is a no-op for triggers/aliases/scripts; useful after io.open/db: writes. The optional location arg is accepted for Mudlet compatibility but ignored.'),
     fn('loadRawFile',        '(path) → string',    'Read entire file from VFS and return its contents'),
     fn('loadfile',           '(filename)',          'Load a Lua file from VFS'),

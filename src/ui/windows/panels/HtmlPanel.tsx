@@ -12,11 +12,13 @@ interface HtmlPanelProps {
 }
 
 export function HtmlPanel({ id, manager, labels, backgroundColor }: HtmlPanelProps) {
+    const viewportRef = useRef<HTMLDivElement>(null);
     const ref = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        if (!ref.current) return;
+        if (!ref.current || !viewportRef.current) return;
         manager.register(id, ref.current, 'html');
+        manager.registerViewport(id, viewportRef.current);
         return () => manager.unregister(id);
     }, [manager, id]);
 
@@ -25,7 +27,7 @@ export function HtmlPanel({ id, manager, labels, backgroundColor }: HtmlPanelPro
         : INNER_STYLE;
 
     return (
-        <div style={WRAPPER_STYLE}>
+        <div ref={viewportRef} style={WRAPPER_STYLE}>
             <div ref={ref} className="window-html-panel" style={innerStyle} />
             {labels && <LabelOverlay manager={labels} parent={id} />}
         </div>
