@@ -94,6 +94,10 @@
     transition: color 0.1s, background 0.1s;
 }
 
+.script-editor__nav-import + .script-editor__nav-import {
+    margin-top: 0;
+}
+
 .script-editor__nav-import:hover {
     color: var(--text);
     background: color-mix(in srgb, var(--bg-surface) 50%, transparent);

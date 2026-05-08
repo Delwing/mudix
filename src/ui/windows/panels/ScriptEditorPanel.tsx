@@ -1346,13 +1346,14 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                                     >
                                                         Priority
                                                         <input
+                                                            className="input"
                                                             type="number"
                                                             value={pkg.priority ?? 0}
                                                             onChange={e => {
                                                                 const v = parseInt(e.target.value, 10);
                                                                 updatePackageManifest(connectionId, pkg.name, { priority: Number.isFinite(v) ? v : 0 });
                                                             }}
-                                                            style={{ width: 60, padding: '2px 4px', fontSize: 12 }}
+                                                            style={{ width: 70, height: 22, padding: '0 6px' }}
                                                         />
                                                     </label>
                                                     <button

@@ -6,6 +6,8 @@
 }
 
 :root {
+    color-scheme: dark;
+
     /* ── Theme tokens (overridden by [data-theme]) ── */
     --bg:           #090909;
     --bg-surface:   #090909;
@@ -62,6 +64,7 @@
 
 /* ── Light (Qt Fusion-style) ── */
 :root[data-theme="light"] {
+    color-scheme: light;
     --bg:           #f0f0f0;
     --bg-surface:   #fafafa;
     --bg-input:     #ffffff;

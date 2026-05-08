@@ -62,12 +62,12 @@ export function VfsModulePickerModal({ vfs, onClose, onPick }: Props) {
                     in place — the module will reload and sync against the path you choose.
                 </p>
                 <input
+                    className="input"
                     type="text"
                     value={filter}
                     placeholder="Filter…"
                     onChange={e => setFilter(e.target.value)}
                     autoFocus
-                    style={{ padding: '4px 8px', fontSize: 12 }}
                 />
                 <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--border, #333)', borderRadius: 3, background: 'var(--bg-elevated, #1a1a1a)' }}>
                     {filtered.length === 0 ? (
