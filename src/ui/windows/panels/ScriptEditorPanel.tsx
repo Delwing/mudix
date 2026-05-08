@@ -383,18 +383,17 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
     const uninstallPackage = useAppStore(s => s.uninstallPackage);
 
     const importFileRef = useRef<HTMLInputElement>(null);
+    const importModuleRef = useRef<HTMLInputElement>(null);
     const [importError, setImportError] = useState<string | null>(null);
+    const updatePackageManifest = useAppStore(s => s.updatePackageManifest);
 
-    const handleImportFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        e.target.value = '';
+    const importAs = useCallback(async (file: File, kind: 'package' | 'module') => {
         if (!vfs) {
             setImportError('VFS not ready — wait for the profile to finish loading');
             return;
         }
         try {
-            const { manifest, data } = await installPackageFromFile(file, vfs);
+            const { manifest, data } = await installPackageFromFile(file, vfs, { kind });
             // installPackage commits the new scripts to the store; the
             // engine's store subscription synchronously loads them into Lua
             // before this call returns. By the time notifyPackageInstalled
@@ -403,8 +402,9 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
             scriptingEngineRef?.current?.notifyPackageInstalled(manifest.name);
             const total = data.scripts.length + data.aliases.length + data.triggers.length + data.timers.length + data.keys.length;
             setImportError(null);
+            const label = kind === 'module' ? 'module' : 'package';
             const now = new Date();
-            const newEntries: LogEntry[] = [{ text: `Installed package "${manifest.name}" (${total} items) from ${file.name}`, level: 'info', timestamp: now }];
+            const newEntries: LogEntry[] = [{ text: `Installed ${label} "${manifest.name}" (${total} items) from ${file.name}`, level: 'info', timestamp: now }];
             for (const w of data.warnings) newEntries.push({ text: `Warning: ${w}`, level: 'error', timestamp: now });
             setLogs(prev => [...prev, ...newEntries]);
             setErrorLog(prev => [...prev, ...newEntries]);
@@ -414,6 +414,45 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
             setImportError(err instanceof Error ? err.message : String(err));
         }
     }, [connectionId, installPackage, scriptingEngineRef, vfs]);
+
+    const handleImportFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        e.target.value = '';
+        await importAs(file, 'package');
+    }, [importAs]);
+
+    const handleImportModule = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        e.target.value = '';
+        await importAs(file, 'module');
+    }, [importAs]);
+
+    const handleSyncModule = useCallback(async (moduleName: string) => {
+        const engine = scriptingEngineRef?.current;
+        if (!engine) return;
+        try {
+            await engine.syncModuleToFile(moduleName);
+            const now = new Date();
+            setLogs(prev => [...prev, { text: `Synced module "${moduleName}" to file`, level: 'info', timestamp: now }]);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setLogs(prev => [...prev, { text: `Sync failed for "${moduleName}": ${msg}`, level: 'error', timestamp: new Date() }]);
+        }
+    }, [scriptingEngineRef]);
+
+    const handleReloadModule = useCallback((moduleName: string) => {
+        const engine = scriptingEngineRef?.current;
+        if (!engine) return;
+        const ok = engine.reloadModuleFromFile(moduleName);
+        const now = new Date();
+        setLogs(prev => [...prev, { text: ok ? `Reloaded module "${moduleName}" from file` : `Reload failed for "${moduleName}"`, level: ok ? 'info' : 'error', timestamp: now }]);
+    }, [scriptingEngineRef]);
+
+    const handleToggleModuleSync = useCallback((moduleName: string, sync: boolean) => {
+        updatePackageManifest(connectionId, moduleName, { sync });
+    }, [connectionId, updatePackageManifest]);
 
     const handleUninstall = useCallback(async (packageName: string) => {
         // Raise sysUninstall/sysUninstallPackage before removing the
@@ -1112,7 +1151,15 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                 <button className="script-editor__nav-import" onClick={() => importFileRef.current?.click()} title="Import Mudlet package (.mpackage / .zip / .xml)">
                     Import Package
                 </button>
+                <button
+                    className="script-editor__nav-import"
+                    onClick={() => importModuleRef.current?.click()}
+                    title="Import as module — the on-disk XML is the source of truth and is reloaded on every profile open"
+                >
+                    Import Module
+                </button>
                 <input ref={importFileRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportFile} />
+                <input ref={importModuleRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportModule} />
             </div>
 
             {/* Item list — hidden on the Errors and Packages tabs */}
@@ -1210,17 +1257,21 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                     <div className="script-editor__error-log-entries">
                         {packages.length === 0 ? (
                             <span className="script-editor__log-empty">
-                                Click "Import Package" above to install a Mudlet package (.mpackage / .zip / .xml).
+                                Click "Import Package" or "Import Module" above to install a Mudlet package (.mpackage / .zip / .xml).
                             </span>
                         ) : (
                             packages.map(pkg => {
                                 const created = pkg.created ? formatPackageDate(pkg.created) : null;
                                 const installed = new Date(pkg.installedAt).toLocaleString();
+                                const isModule = pkg.kind === 'module';
                                 return (
                                     <div key={pkg.name} className="script-editor__pkg-card">
                                         <PackageIcon vfs={vfs} pkg={pkg} />
                                         <div className="script-editor__pkg-body">
-                                            <div className="script-editor__pkg-title">{pkg.title || pkg.name}</div>
+                                            <div className="script-editor__pkg-title">
+                                                {pkg.title || pkg.name}
+                                                {isModule && <span className="script-editor__pkg-tag" style={{ marginLeft: 8, fontSize: 10, padding: '1px 6px', border: '1px solid var(--accent)', color: 'var(--accent)', borderRadius: 3 }}>MODULE</span>}
+                                            </div>
                                             <div className="script-editor__pkg-byline">
                                                 {pkg.name !== (pkg.title || pkg.name) && <span>{pkg.name}</span>}
                                                 {pkg.version && <><span className="script-editor__pkg-byline-sep">·</span><span>v{pkg.version}</span></>}
@@ -1232,12 +1283,39 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                                 {created && <> · created {created}</>}
                                                 {' · installed '}{installed}
                                             </div>
+                                            {isModule && (
+                                                <div className="script-editor__pkg-module-actions" style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={!!pkg.sync}
+                                                            onChange={e => handleToggleModuleSync(pkg.name, e.target.checked)}
+                                                            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                                                        />
+                                                        Sync edits to file
+                                                    </label>
+                                                    <button
+                                                        className="script-editor__error-log-clear"
+                                                        onClick={() => handleSyncModule(pkg.name)}
+                                                        title="Write the current in-app state back to the module's XML file"
+                                                    >
+                                                        Sync to file
+                                                    </button>
+                                                    <button
+                                                        className="script-editor__error-log-clear"
+                                                        onClick={() => handleReloadModule(pkg.name)}
+                                                        title="Discard in-app changes and re-parse the XML file from disk"
+                                                    >
+                                                        Reload from file
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                         <button
                                             className="script-editor__error-log-clear"
                                             onClick={async () => {
                                                 const ok = await confirm<boolean>({
-                                                    title: 'Uninstall package?',
+                                                    title: isModule ? 'Uninstall module?' : 'Uninstall package?',
                                                     tone: 'danger',
                                                     message: (
                                                         <>
