@@ -481,17 +481,22 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
     }, [connectionId, updatePackageManifest]);
 
     const handleUninstall = useCallback(async (packageName: string) => {
+        // Capture the manifest before the store mutation — modules unlink without
+        // touching disk, so we need the kind flag to make that decision after the
+        // store entry is gone.
+        const manifest = packages.find(p => p.name === packageName);
         // Raise sysUninstall/sysUninstallPackage before removing the
         // package's items from the store so the package's own handlers can
         // still run during cleanup.
         scriptingEngineRef?.current?.notifyPackageUninstalled(packageName);
         uninstallPackage(connectionId, packageName);
-        if (vfs) {
-            try { await uninstallPackageFiles(packageName, vfs); }
+        if (vfs && manifest) {
+            try { await uninstallPackageFiles(manifest, vfs); }
             catch (err) { console.warn('[ScriptEditor] failed to remove package files:', err); }
         }
         const now = new Date();
-        setLogs(prev => [...prev, { text: `Uninstalled package "${packageName}"`, level: 'info', timestamp: now }]);
+        const label = manifest?.kind === 'module' ? 'module' : 'package';
+        setLogs(prev => [...prev, { text: `Uninstalled ${label} "${packageName}"`, level: 'info', timestamp: now }]);
     }, [connectionId, scriptingEngineRef, uninstallPackage, vfs]);
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1358,7 +1363,13 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                                 const ok = await confirm<boolean>({
                                                     title: isModule ? 'Uninstall module?' : 'Uninstall package?',
                                                     tone: 'danger',
-                                                    message: (
+                                                    message: isModule ? (
+                                                        <>
+                                                            Uninstall <strong>{pkg.title || pkg.name}</strong>? All scripts, aliases,
+                                                            triggers, timers and keys it added will be removed. The XML file on
+                                                            disk is left untouched — the module is only unlinked.
+                                                        </>
+                                                    ) : (
                                                         <>
                                                             Uninstall <strong>{pkg.title || pkg.name}</strong>? All scripts, aliases,
                                                             triggers, timers and keys it added will be removed, along with its files

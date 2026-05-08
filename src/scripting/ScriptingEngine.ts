@@ -515,7 +515,8 @@ export class ScriptingEngine {
      */
     uninstallPackageByName(packageName: string): boolean {
         const installed = useAppStore.getState().connectionPackages[this.connectionId] ?? [];
-        if (!installed.some(p => p.name === packageName)) {
+        const manifest = installed.find(p => p.name === packageName);
+        if (!manifest) {
             this.api.printError(`[uninstallPackage] package not installed: ${packageName}`);
             return false;
         }
@@ -523,7 +524,7 @@ export class ScriptingEngine {
         useAppStore.getState().uninstallPackage(this.connectionId, packageName);
         if (this.vfs) {
             const vfs = this.vfs;
-            void uninstallPackageFiles(packageName, vfs).catch(err => {
+            void uninstallPackageFiles(manifest, vfs).catch(err => {
                 console.warn('[ScriptingEngine] failed to remove package files:', err);
             });
         }
