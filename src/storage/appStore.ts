@@ -73,6 +73,7 @@ interface AppStore extends AppSchema {
     saveModalBounds: (connectionId: string, key: string, bounds: ModalBounds) => void;
     installPackage: (connectionId: string, manifest: PackageManifest, data: MudletImportResult) => void;
     uninstallPackage: (connectionId: string, packageName: string) => void;
+    updatePackageManifest: (connectionId: string, packageName: string, patch: Partial<Omit<PackageManifest, 'name'>>) => void;
 }
 
 export const useAppStore = create<AppStore>()(
@@ -376,6 +377,14 @@ export const useAppStore = create<AppStore>()(
                     connectionPackages:    { ...s.connectionPackages,    [connectionId]: [...prior, manifest] },
                 };
             }),
+            updatePackageManifest: (connectionId, packageName, patch) => set(s => ({
+                connectionPackages: {
+                    ...s.connectionPackages,
+                    [connectionId]: (s.connectionPackages[connectionId] ?? []).map(p =>
+                        p.name === packageName ? { ...p, ...patch, name: p.name } : p,
+                    ),
+                },
+            })),
             uninstallPackage: (connectionId, packageName) => set(s => {
                 const stripPkg = <T extends { packageName?: string }>(arr: T[]): T[] =>
                     arr.filter(n => n.packageName !== packageName);

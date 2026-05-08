@@ -15,7 +15,8 @@ import {ProfileVFS} from './vfs/ProfileVFS';
 import {registerVfs, unregisterVfs} from './vfs/vfsBridge';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
-import {installPackageFromBytes, uninstallPackageFiles} from '../import/packageInstaller';
+import {installPackageFromBytes, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
+import {serializeMudletXml} from '../import/mudletXmlExport';
 
 function hexToRgb(hex: string): RgbColor | null {
     const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
@@ -56,6 +57,29 @@ function formatErrorPrefix(kind: ScriptLogSourceKind, name: string): string {
 // use ANSI-only lines deliberately.  Toggle this flag per preference.
 const FILTER_ANSI_ONLY_LINES = true;
 
+/**
+ * Compare the slice of nodes tagged with `pkgName` between two arrays. Returns
+ * true if any tagged node was added, removed, or replaced (Zustand mutators
+ * always produce new node references for changed items, so reference equality
+ * is sufficient).
+ */
+function hasTaggedSliceChanged<T extends { id: string; packageName?: string }>(
+    pkgName: string,
+    next: T[] | undefined,
+    prev: T[] | undefined,
+): boolean {
+    if (next === prev) return false;
+    const a = (prev ?? []).filter(n => n.packageName === pkgName);
+    const b = (next ?? []).filter(n => n.packageName === pkgName);
+    if (a.length !== b.length) return true;
+    const byId = new Map(a.map(n => [n.id, n]));
+    for (const n of b) {
+        const old = byId.get(n.id);
+        if (old !== n) return true;
+    }
+    return false;
+}
+
 export class ScriptingEngine {
     private runtimes: { lua: IScriptingRuntime | null } = { lua: null };
     private readonly unsubs: (() => void)[] = [];
@@ -73,6 +97,9 @@ export class ScriptingEngine {
     // Last seen script list for the active connection. Used to diff against
     // the next store update so we know which scripts to load/unload.
     private prevScripts: ScriptNode[] = [];
+    // Pending debounced XML writes for sync-enabled modules (key: module name).
+    private moduleSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    private static readonly MODULE_SYNC_DEBOUNCE_MS = 500;
 
     constructor(
         private readonly session: MudSession,
@@ -114,6 +141,13 @@ export class ScriptingEngine {
      */
     private attachToStore(session: MudSession): void {
         const start = () => {
+            // Modules are loaded from disk on every profile open — XML on disk is the
+            // source of truth, so we re-read each module's XML and replace its nodes
+            // before any script/alias/trigger load runs against the store. This
+            // happens before the subscription is attached, so the reload itself
+            // doesn't trigger a write-back loop.
+            this.reloadModulesFromVfs();
+
             this.applyScriptsFromStore();
             this.applyAliasesFromStore();
             this.applyTimersFromStore();
@@ -135,12 +169,23 @@ export class ScriptingEngine {
 
             this.storeUnsub = useAppStore.subscribe((state, prevState) => {
                 const id = this.connectionId;
-                if (state.connectionScripts[id]      !== prevState.connectionScripts[id])      this.applyScriptsFromStore();
-                if (state.connectionAliases[id]      !== prevState.connectionAliases[id])      this.applyAliasesFromStore();
-                if (state.connectionTimers[id]       !== prevState.connectionTimers[id])       this.applyTimersFromStore();
-                if (state.connectionKeybindings[id]  !== prevState.connectionKeybindings[id])  this.applyKeybindingsFromStore();
-                if (this.triggersReady && state.connectionTriggers[id] !== prevState.connectionTriggers[id]) {
-                    this.applyTriggersFromStore();
+                const scriptsChanged  = state.connectionScripts[id]      !== prevState.connectionScripts[id];
+                const aliasesChanged  = state.connectionAliases[id]      !== prevState.connectionAliases[id];
+                const timersChanged   = state.connectionTimers[id]       !== prevState.connectionTimers[id];
+                const keysChanged     = state.connectionKeybindings[id]  !== prevState.connectionKeybindings[id];
+                const triggersChanged = state.connectionTriggers[id]     !== prevState.connectionTriggers[id];
+                const buttonsChanged  = state.connectionButtons[id]      !== prevState.connectionButtons[id];
+
+                if (scriptsChanged) this.applyScriptsFromStore();
+                if (aliasesChanged) this.applyAliasesFromStore();
+                if (timersChanged)  this.applyTimersFromStore();
+                if (keysChanged)    this.applyKeybindingsFromStore();
+                if (this.triggersReady && triggersChanged) this.applyTriggersFromStore();
+
+                // Sync-on-edit for modules: any tagged-node mutation schedules
+                // a debounced XML rewrite for affected modules.
+                if (scriptsChanged || aliasesChanged || timersChanged || keysChanged || triggersChanged || buttonsChanged) {
+                    this.scheduleModuleSyncForChanges(state, prevState);
                 }
             });
         };
@@ -149,6 +194,131 @@ export class ScriptingEngine {
         } else {
             this.unsubs.push(session.events.on('output.ready', start, { once: true }));
         }
+    }
+
+    /**
+     * For each installed module, re-parse its on-disk XML and replace its tagged
+     * nodes in the store. Errors are logged but don't abort the rest of profile
+     * load — a corrupted module shouldn't take the whole session down.
+     */
+    private reloadModulesFromVfs(): void {
+        const vfs = this.vfs;
+        if (!vfs) return;
+        const id = this.connectionId;
+        const packages = useAppStore.getState().connectionPackages[id] ?? [];
+        for (const pkg of packages) {
+            if (pkg.kind !== 'module') continue;
+            try {
+                const data = reloadModuleFromVfs(pkg, vfs);
+                useAppStore.getState().installPackage(id, pkg, data);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                this.api.printError(`[module] failed to reload "${pkg.name}": ${msg}`);
+            }
+        }
+    }
+
+    /**
+     * Detect whether any node tagged with a sync-enabled module's name changed
+     * between two store states; for each module that changed, schedule a
+     * debounced write of its current XML to disk. Comparison is done per
+     * collection so an unrelated change in another module doesn't cause a write.
+     */
+    private scheduleModuleSyncForChanges(state: ReturnType<typeof useAppStore.getState>, prevState: ReturnType<typeof useAppStore.getState>): void {
+        const id = this.connectionId;
+        const packages = state.connectionPackages[id] ?? [];
+        const dirtyModules = packages.filter(p => p.kind === 'module' && p.sync);
+        if (dirtyModules.length === 0) return;
+
+        for (const pkg of dirtyModules) {
+            const changed =
+                hasTaggedSliceChanged(pkg.name, state.connectionScripts[id],     prevState.connectionScripts[id]) ||
+                hasTaggedSliceChanged(pkg.name, state.connectionAliases[id],     prevState.connectionAliases[id]) ||
+                hasTaggedSliceChanged(pkg.name, state.connectionTriggers[id],    prevState.connectionTriggers[id]) ||
+                hasTaggedSliceChanged(pkg.name, state.connectionTimers[id],      prevState.connectionTimers[id]) ||
+                hasTaggedSliceChanged(pkg.name, state.connectionKeybindings[id], prevState.connectionKeybindings[id]) ||
+                hasTaggedSliceChanged(pkg.name, state.connectionButtons[id],     prevState.connectionButtons[id]);
+            if (changed) this.queueModuleSync(pkg.name);
+        }
+    }
+
+    private queueModuleSync(moduleName: string): void {
+        const existing = this.moduleSyncTimers.get(moduleName);
+        if (existing) clearTimeout(existing);
+        const timer = setTimeout(() => {
+            this.moduleSyncTimers.delete(moduleName);
+            this.syncModuleToFile(moduleName).catch(err => {
+                const msg = err instanceof Error ? err.message : String(err);
+                this.api.printError(`[module] sync failed for "${moduleName}": ${msg}`);
+            });
+        }, ScriptingEngine.MODULE_SYNC_DEBOUNCE_MS);
+        this.moduleSyncTimers.set(moduleName, timer);
+    }
+
+    /**
+     * Write the current in-store nodes for a module back to its XML file on disk.
+     * Used both by the auto-sync debounce and the "Sync to file" UI action.
+     */
+    async syncModuleToFile(moduleName: string): Promise<void> {
+        const vfs = this.vfs;
+        if (!vfs) throw new Error('no profile VFS available');
+        const id = this.connectionId;
+        const state = useAppStore.getState();
+        const pkg = (state.connectionPackages[id] ?? []).find(p => p.name === moduleName);
+        if (!pkg) throw new Error(`module not installed: ${moduleName}`);
+        if (pkg.kind !== 'module') throw new Error(`not a module: ${moduleName}`);
+        if (!pkg.xmlPath) throw new Error(`module "${moduleName}" has no xmlPath`);
+
+        const filterPkg = <T extends { packageName?: string }>(arr: T[] | undefined): T[] =>
+            (arr ?? []).filter(n => n.packageName === moduleName);
+
+        const xml = serializeMudletXml({
+            scripts:  filterPkg(state.connectionScripts[id]),
+            aliases:  filterPkg(state.connectionAliases[id]),
+            triggers: filterPkg(state.connectionTriggers[id]),
+            timers:   filterPkg(state.connectionTimers[id]),
+            keys:     filterPkg(state.connectionKeybindings[id]),
+            buttons:  filterPkg(state.connectionButtons[id]),
+        }, moduleName);
+
+        const path = `${vfs.profilePath}/${moduleName}/${pkg.xmlPath}`;
+        const parent = path.substring(0, path.lastIndexOf('/'));
+        if (parent && !vfs.exists(parent)) vfs.mkdir(parent);
+        vfs.writeFile(path, xml);
+        await vfs.flush();
+    }
+
+    /**
+     * Re-read a module's XML from disk and replace its tagged nodes in the store.
+     * Pairs with the "Reload from file" UI action.
+     */
+    reloadModuleFromFile(moduleName: string): boolean {
+        const vfs = this.vfs;
+        if (!vfs) {
+            this.api.printError('[module] no profile VFS available');
+            return false;
+        }
+        const id = this.connectionId;
+        const pkg = (useAppStore.getState().connectionPackages[id] ?? []).find(p => p.name === moduleName);
+        if (!pkg || pkg.kind !== 'module') {
+            this.api.printError(`[module] not a module: ${moduleName}`);
+            return false;
+        }
+        try {
+            const data = reloadModuleFromVfs(pkg, vfs);
+            useAppStore.getState().installPackage(id, pkg, data);
+            return true;
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.api.printError(`[module] reload failed for "${moduleName}": ${msg}`);
+            return false;
+        }
+    }
+
+    /** Toggle a module's sync flag. Updates the manifest in the store. */
+    setModuleSync(moduleName: string, sync: boolean): void {
+        const id = this.connectionId;
+        useAppStore.getState().updatePackageManifest(id, moduleName, { sync });
     }
 
     private applyAliasesFromStore(): void {
@@ -557,6 +727,8 @@ export class ScriptingEngine {
     }
 
     destroy(): void {
+        for (const t of this.moduleSyncTimers.values()) clearTimeout(t);
+        this.moduleSyncTimers.clear();
         this.storeUnsub?.();
         this.storeUnsub = null;
         for (const unsub of this.unsubs) unsub();

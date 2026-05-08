@@ -61,6 +61,8 @@ interface BaseNode {
 
 // ── Package manifest (Mudlet .mpackage / XML import) ─────────────────────────
 
+export type PackageKind = 'package' | 'module';
+
 export interface PackageManifest {
     name: string;
     version?: string;
@@ -77,6 +79,14 @@ export interface PackageManifest {
     sourceFile?: string;
     /** Wall-clock install time, ISO-8601. */
     installedAt: string;
+    /**
+     * 'package' (default) — parsed once, nodes persist in the store, source files may be discarded.
+     * 'module'           — XML on disk is the source of truth; reloaded on profile open. With `sync`
+     *                      enabled, in-app edits to the module's nodes are written back to the XML.
+     */
+    kind?: PackageKind;
+    /** Modules only: when true, mutations to this module's nodes are flushed back to the XML on disk. */
+    sync?: boolean;
 }
 
 // ── Item types (mirrors Mudlet's TScript / TAlias / TTrigger / TTimer / TKey) ──

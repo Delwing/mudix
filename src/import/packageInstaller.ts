@@ -1,11 +1,20 @@
 import { unzipSync, strFromU8 } from 'fflate';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
-import type { PackageManifest } from '../storage/schema';
+import type { PackageKind, PackageManifest } from '../storage/schema';
 import { parseMudletXml, type MudletImportResult } from './mudletXmlImport';
 
 export interface InstallResult {
     manifest: PackageManifest;
     data: MudletImportResult;
+}
+
+export interface InstallOptions {
+    /**
+     * 'package' (default) — plain XML imports skip VFS storage; only zips are kept on disk.
+     * 'module'            — XML on disk is the source of truth: even plain XML is written to the
+     *                       VFS so it can be re-parsed on the next profile open and synced to.
+     */
+    kind?: PackageKind;
 }
 
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04]; // "PK\x03\x04" — local file header
@@ -35,17 +44,25 @@ function isTextEntry(path: string): boolean {
  * Install a Mudlet package from in-memory bytes. Synchronous — the caller is
  * expected to flush the VFS afterwards (or let the next idle flush handle it).
  *
- * - .mpackage / .zip : unzip into <profilePath>/<packageName>/, find the XML inside, parse.
- *                      The full payload is preserved on disk so resources
- *                      (images/sounds/lua modules) remain available to scripts via the VFS.
- * - .xml             : parse only. No files are written — the parsed nodes live in the
- *                      app store, and a single-file package has no sibling resources
- *                      that would need VFS storage.
+ * Behaviour by kind:
+ * - .mpackage / .zip : always unzipped into <profilePath>/<packageName>/. The full payload
+ *                      is preserved so resources (images, sounds, lua modules) remain
+ *                      available to scripts via the VFS, regardless of `kind`.
+ * - .xml as 'package': parse only — no files written. Nodes live in the app store.
+ * - .xml as 'module' : the XML is also written to <profilePath>/<packageName>/<filename>;
+ *                      the on-disk file is treated as the source of truth, so it must exist
+ *                      to be re-parsed on profile open.
  *
  * The XML is parsed in package-mode, which wraps each category in a top-level
  * group and tags every node with the package name, making uninstall a tag-based cascade.
  */
-export function installPackageFromBytes(filename: string, buf: Uint8Array, vfs: ProfileVFS): InstallResult {
+export function installPackageFromBytes(
+    filename: string,
+    buf: Uint8Array,
+    vfs: ProfileVFS,
+    opts: InstallOptions = {},
+): InstallResult {
+    const kind: PackageKind = opts.kind ?? 'package';
     const packageName = packageNameFromFile(filename);
     const pkgDir = `${vfs.profilePath}/${packageName}`;
 
@@ -82,8 +99,14 @@ export function installPackageFromBytes(filename: string, buf: Uint8Array, vfs: 
 
         manifestExtras = readConfigLua(entries);
     } else {
-        // Plain XML — parse only, nothing to persist on disk.
         xmlContent = strFromU8(buf);
+        if (kind === 'module') {
+            // Modules need an on-disk XML to reload from on profile open.
+            vfs.mkdir(pkgDir);
+            vfs.writeFile(`${pkgDir}/${filename}`, xmlContent);
+            xmlRelPath = filename;
+        }
+        // Plain XML packages keep nothing on disk.
     }
 
     const data = parseMudletXml(xmlContent, { packageName });
@@ -94,15 +117,16 @@ export function installPackageFromBytes(filename: string, buf: Uint8Array, vfs: 
         ...(xmlRelPath ? { xmlPath: xmlRelPath } : {}),
         sourceFile: filename,
         installedAt: new Date().toISOString(),
+        ...(kind === 'module' ? { kind: 'module' as const, sync: false } : {}),
     };
 
     return { manifest, data };
 }
 
 /** Async wrapper that reads from a File and flushes the VFS to disk on success. */
-export async function installPackageFromFile(file: File, vfs: ProfileVFS): Promise<InstallResult> {
+export async function installPackageFromFile(file: File, vfs: ProfileVFS, opts: InstallOptions = {}): Promise<InstallResult> {
     const buf = new Uint8Array(await file.arrayBuffer());
-    const result = installPackageFromBytes(file.name, buf, vfs);
+    const result = installPackageFromBytes(file.name, buf, vfs, opts);
     await vfs.flush();
     return result;
 }
@@ -188,4 +212,20 @@ export async function uninstallPackageFiles(packageName: string, vfs: ProfileVFS
     const pkgDir = `${vfs.profilePath}/${packageName}`;
     if (vfs.exists(pkgDir)) vfs.rmdir(pkgDir);
     await vfs.flush();
+}
+
+/**
+ * Re-read a module's XML from the VFS and return the parsed result.
+ * Throws if the on-disk file is missing — modules require their XML to be present.
+ */
+export function reloadModuleFromVfs(manifest: PackageManifest, vfs: ProfileVFS): MudletImportResult {
+    if (!manifest.xmlPath) {
+        throw new Error(`Module "${manifest.name}" has no xmlPath; cannot reload from disk`);
+    }
+    const path = `${vfs.profilePath}/${manifest.name}/${manifest.xmlPath}`;
+    if (!vfs.exists(path)) {
+        throw new Error(`Module "${manifest.name}" XML not found at ${path}`);
+    }
+    const xmlContent = vfs.readFile(path);
+    return parseMudletXml(xmlContent, { packageName: manifest.name });
 }
