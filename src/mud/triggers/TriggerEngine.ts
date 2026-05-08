@@ -4,14 +4,64 @@ import { isEffectivelyEnabled } from '../../storage/schema';
 
 export type { TriggerNode };
 
-type TempFn = (matches: string[]) => void;
+type TempFn = (
+    matches: string[],
+    spans?: { captureSpans: CaptureSpan[]; namedSpans?: Record<string, CaptureSpan> },
+) => void;
 
-type MatchResult = { captures: string[]; matchedText: string; namedGroups?: Record<string, string> };
+/**
+ * Result of matching a trigger pattern against a line.
+ *
+ * `captureSpans` and `namedSpans` describe where each capture sits in the
+ * source line — needed by `selectCaptureGroup` so it can re-select the
+ * actual occurrence rather than picking the first textual match. Spans line
+ * up positionally with `captures` (so `captureSpans[0]` is the position of
+ * `captures[0]`, i.e. capture group 1). Both are optional because non-PCRE
+ * matchers (substring/exactMatch/etc.) don't produce capture-group spans.
+ */
+type CaptureSpan = { start: number; length: number };
+type MatchResult = {
+    captures: string[];
+    matchedText: string;
+    namedGroups?: Record<string, string>;
+    captureSpans?: CaptureSpan[];
+    namedSpans?: Record<string, CaptureSpan>;
+    matchStart?: number;
+};
 
 type Matcher = (line: string, isPrompt: boolean) => MatchResult | null;
 
+/**
+ * What `matchPerm`/`processAndTrigger` hand back to the engine. Adds the
+ * trigger node and the AND-trigger-only `multimatches` array on top of the
+ * raw `MatchResult`.
+ */
+export type TriggerMatch = {
+    trigger: TriggerNode;
+    captures: string[];
+    matchedText: string;
+    multimatches?: string[][];
+    namedGroups?: Record<string, string>;
+    captureSpans?: CaptureSpan[];
+    namedSpans?: Record<string, CaptureSpan>;
+    matchStart?: number;
+};
+
+function matchResultToTriggerMatch(trigger: TriggerNode, r: MatchResult): TriggerMatch {
+    return {
+        trigger,
+        captures: r.captures,
+        matchedText: r.matchedText,
+        namedGroups: r.namedGroups,
+        captureSpans: r.captureSpans,
+        namedSpans: r.namedSpans,
+        matchStart: r.matchStart,
+    };
+}
+
 type PcreInstance = InstanceType<typeof PCRE>;
-type PcreMatch = { length: number; [k: number]: { start: number; end: number; match: string } };
+type PcreMatchGroup = { start: number; end: number; match: string; name?: string; group?: number };
+type PcreMatch = { length: number; [k: number]: PcreMatchGroup; [k: string]: PcreMatchGroup | number };
 
 /** Kicked off at module load so PCRE is ready by the time anything matches. */
 const pcreReadyPromise = PCRE.init();
@@ -46,15 +96,35 @@ const luaEvalRef: { fn: ((code: string, line: string) => boolean) | null } = { f
 
 function pcreToMatchResult(m: PcreMatch): MatchResult {
     const captures: string[] = [];
+    const captureSpans: CaptureSpan[] = [];
+    const namedGroups: Record<string, string> = {};
+    const namedSpans: Record<string, CaptureSpan> = {};
     // pcre2-wasm-universal reports `m.length` as ovector pair count, which includes
     // the full match at index 0 — so capture groups are at 1..length-1, not 1..length.
     for (let i = 1; i < m.length; i++) {
-        const cap = m[i];
+        const cap = m[i] as PcreMatchGroup | undefined;
         // PCRE2 sets ovector to PCRE2_UNSET (start === -1) for unmatched optional
-        // groups; surface those as empty strings to mirror prior JS-RegExp behavior.
-        captures.push(cap && cap.start >= 0 ? cap.match : '');
+        // groups; surface those as empty strings (and zero-length spans rooted at
+        // 0) to mirror prior JS-RegExp behavior.
+        const matched = cap && cap.start >= 0;
+        captures.push(matched ? cap!.match : '');
+        captureSpans.push({
+            start: matched ? cap!.start : 0,
+            length: matched ? cap!.end - cap!.start : 0,
+        });
+        if (matched && cap!.name) {
+            namedGroups[cap!.name] = cap!.match;
+            namedSpans[cap!.name] = { start: cap!.start, length: cap!.end - cap!.start };
+        }
     }
-    return { captures, matchedText: m[0].match };
+    return {
+        captures,
+        matchedText: m[0].match,
+        matchStart: m[0].start,
+        captureSpans,
+        namedGroups: Object.keys(namedGroups).length > 0 ? namedGroups : undefined,
+        namedSpans: Object.keys(namedSpans).length > 0 ? namedSpans : undefined,
+    };
 }
 
 /**
@@ -104,7 +174,11 @@ function buildMatcher(p: TriggerPattern, register: (re: PcreInstance) => void): 
 }
 
 export class TriggerEngine {
-    private readonly temp = new Map<number, { re: PcreInstance; fn: TempFn }>();
+    private readonly temp = new Map<
+        number,
+        | { kind: 'regex'; re: PcreInstance; fn: TempFn }
+        | { kind: 'substring'; pattern: string; fn: TempFn }
+    >();
     private nextId = 1;
     private permCompiled: CompiledEntry[] = [];
     private allById = new Map<string, TriggerNode>();
@@ -130,21 +204,31 @@ export class TriggerEngine {
     }
 
     /**
-     * Register a temp trigger. The pattern is compiled with PCRE so it matches
-     * the same syntax as permanent triggers. Invalid patterns return a no-op
-     * disposer so the caller doesn't need to special-case compile failures.
-     * The `fn` callback receives `[fullMatch, capture1, capture2, ...]` —
-     * unmatched optional groups surface as empty strings.
+     * Register a temp trigger. `kind` selects the match strategy:
+     *   - `'regex'`    — PCRE, same syntax as permanent triggers (Mudlet
+     *                    `tempRegexTrigger`). The callback receives
+     *                    `[fullMatch, capture1, capture2, ...]`; unmatched
+     *                    optional groups surface as empty strings.
+     *   - `'substring'`— literal `String.prototype.includes` (Mudlet
+     *                    `tempTrigger`). The callback receives `[pattern]`
+     *                    so capture-group access against the substring is a
+     *                    no-op rather than a metacharacter trap.
+     * Invalid regex patterns return a no-op disposer so callers don't need
+     * to special-case compile failures.
      */
-    addTemp(pattern: string, fn: TempFn): () => void {
-        const re = compilePcre(pattern);
-        if (!re) return () => {};
+    addTemp(pattern: string, fn: TempFn, kind: 'regex' | 'substring' = 'regex'): () => void {
         const id = this.nextId++;
-        this.temp.set(id, { re, fn });
+        if (kind === 'substring') {
+            this.temp.set(id, { kind: 'substring', pattern, fn });
+        } else {
+            const re = compilePcre(pattern);
+            if (!re) return () => {};
+            this.temp.set(id, { kind: 'regex', re, fn });
+        }
         return () => {
             const entry = this.temp.get(id);
             if (!entry) return;
-            entry.re.destroy();
+            if (entry.kind === 'regex') entry.re.destroy();
             this.temp.delete(id);
         };
     }
@@ -226,32 +310,32 @@ export class TriggerEngine {
     // ── Temp triggers (session-scoped, created by scripts) ────────────────────
 
     processTemp(line: string): void {
-        for (const { re, fn } of this.temp.values()) {
-            const m = re.match(line) as PcreMatch | null;
+        for (const entry of this.temp.values()) {
+            if (entry.kind === 'substring') {
+                if (line.includes(entry.pattern)) {
+                    entry.fn([entry.pattern]);
+                }
+                continue;
+            }
+            const m = entry.re.match(line) as PcreMatch | null;
             if (!m) continue;
             const result = pcreToMatchResult(m);
-            fn([result.matchedText, ...result.captures]);
+            entry.fn(
+                [result.matchedText, ...result.captures],
+                {
+                    captureSpans: result.captureSpans ?? [],
+                    namedSpans: result.namedSpans,
+                },
+            );
         }
     }
 
     // ── Perm triggers (persisted, visible in UI) ──────────────────────────────
 
-    matchPerm(line: string, isPrompt = false): {
-        trigger: TriggerNode;
-        captures: string[];
-        matchedText: string;
-        multimatches?: string[][];
-        namedGroups?: Record<string, string>;
-    }[] {
+    matchPerm(line: string, isPrompt = false): TriggerMatch[] {
         const currentLine = this.lineCounter++;
         const seen = new Set<string>();
-        const results: {
-            trigger: TriggerNode;
-            captures: string[];
-            matchedText: string;
-            multimatches?: string[][];
-            namedGroups?: Record<string, string>;
-        }[] = [];
+        const results: TriggerMatch[] = [];
 
         for (const entry of this.permCompiled) {
             const { item } = entry;
@@ -277,12 +361,7 @@ export class TriggerEngine {
                         this.filterActiveText.set(item.id, result.captures[0] ?? result.matchedText);
                     }
                     if (item.code) {
-                        results.push({
-                            trigger: item,
-                            captures: result.captures,
-                            matchedText: result.matchedText,
-                            namedGroups: result.namedGroups,
-                        });
+                        results.push(matchResultToTriggerMatch(item, result));
                     }
                 }
             } else if (entry.kind === 'and') {
@@ -291,8 +370,8 @@ export class TriggerEngine {
             } else {
                 // OR entry (non-group)
                 if (entry.testAll) {
-                    for (const { captures, matchedText, namedGroups } of entry.testAll(effectiveLine)) {
-                        results.push({ trigger: item, captures, matchedText, namedGroups });
+                    for (const r of entry.testAll(effectiveLine)) {
+                        results.push(matchResultToTriggerMatch(item, r));
                     }
                 } else {
                     if (seen.has(item.id)) continue;
@@ -303,12 +382,7 @@ export class TriggerEngine {
                     }
                     if (result !== null) {
                         seen.add(item.id);
-                        results.push({
-                            trigger: item,
-                            captures: result.captures,
-                            matchedText: result.matchedText,
-                            namedGroups: result.namedGroups,
-                        });
+                        results.push(matchResultToTriggerMatch(item, result));
                     }
                 }
             }
@@ -322,7 +396,9 @@ export class TriggerEngine {
     }
 
     destroy(): void {
-        for (const { re } of this.temp.values()) re.destroy();
+        for (const entry of this.temp.values()) {
+            if (entry.kind === 'regex') entry.re.destroy();
+        }
         this.temp.clear();
         this.permCompiled = [];
         for (const re of this.pcreInstances) re.destroy();
@@ -341,13 +417,7 @@ export class TriggerEngine {
         effectiveLine: string,
         isPrompt: boolean,
         currentLine: number,
-    ): {
-        trigger: TriggerNode;
-        captures: string[];
-        matchedText: string;
-        multimatches?: string[][];
-        namedGroups?: Record<string, string>;
-    } | null {
+    ): TriggerMatch | null {
         const { item, conditions } = entry;
         const delta = item.delta ?? 0;
         let state = this.andStates.get(item.id);

@@ -126,7 +126,7 @@ export class Console {
     }
 
     moveTo(line: number): void {
-        this.cursorIdx = Math.max(0, Math.min(line - 1, this.history.length - 1));
+        this.cursorIdx = Math.max(0, Math.min(line, this.history.length - 1));
     }
 
     /** Mark cursor as positioned at the end of existing rendered content, so the
@@ -135,8 +135,11 @@ export class Console {
         this.consumeLeadingNewline = true;
     }
 
-    getLineNumber(): number { return this.cursor + 1; }
-    getLineCount(): number  { return this.history.length; }
+    // Mudlet's TConsole returns 0-indexed cursor.y() for getLineNumber and
+    // (size - 1) for getLineCount/getLastLineNumber. An empty buffer reports
+    // line index -1 to match Mudlet's "no current line" sentinel.
+    getLineNumber(): number { return this.cursor; }
+    getLineCount(): number  { return this.history.length - 1; }
 
     getLines(from: number, to: number): string[] {
         return this.history.slice(from - 1, to).map(b => b.text);

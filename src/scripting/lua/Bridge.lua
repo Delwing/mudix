@@ -218,21 +218,30 @@ do
 end
 
 do
-    local _raw = __mudix_tempTrigger
+    -- Mudlet:
+    --   tempTrigger(substring, fn[, expirationCount])  — literal substring match
+    --   tempRegexTrigger(regex, fn[, expirationCount]) — PCRE match
+    -- expirationCount: positive N fires N times then auto-kills; -1/0/omitted = unlimited.
+    local _sub = __mudix_tempTrigger
     function tempTrigger(pattern, fn, expirationCount)
-        return _raw(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempTrigger", 2)), expirationCount)
+        return _sub(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempTrigger", 2)), expirationCount)
     end
-    -- Mudlet's tempRegexTrigger: regex pattern, code, optional expirationCount
-    -- (positive N = fire N times then auto-kill; -1/0/omitted = unlimited).
+    local _re = __mudix_tempRegexTrigger
     function tempRegexTrigger(pattern, fn, expirationCount)
-        return _raw(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempRegexTrigger", 2)), expirationCount)
+        return _re(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempRegexTrigger", 2)), expirationCount)
     end
 end
 
 do
     local _raw = __mudix_tempKey
-    function tempKey(modifier, key, fn)
-        return _raw(modifier, key, __mudix_register_cb(__mudix_to_fn(fn, "tempKey", 3)))
+    -- Mudlet tempKey([modifier,] keyCode, fn). The 2-arg form omits the
+    -- modifier (no Ctrl/Shift/Alt/Meta required); we substitute 0 to keep
+    -- the JS binding signature uniform.
+    function tempKey(a, b, c)
+        if c == nil then
+            return _raw(0, a, __mudix_register_cb(__mudix_to_fn(b, "tempKey", 2)))
+        end
+        return _raw(a, b, __mudix_register_cb(__mudix_to_fn(c, "tempKey", 3)))
     end
 end
 

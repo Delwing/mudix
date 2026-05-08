@@ -1,6 +1,6 @@
 import {Lua} from 'wasmoon-lua5.1';
 import {unzip, strFromU8} from 'fflate';
-import type {IScriptingRuntime} from '../IScriptingRuntime';
+import type {IScriptingRuntime, CaptureSpan} from '../IScriptingRuntime';
 import type {ScriptingAPI} from '../ScriptingAPI';
 import type {ProfileVFS} from '../vfs/ProfileVFS';
 import UTF8 from './utf8.lua?raw';
@@ -15,6 +15,7 @@ import {setupRex} from './rex';
 import {setupYajl} from './yajl';
 import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
 import {QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
+import {qtKeyToDomCode, qtModifiersToList} from '../../mud/keybindings/qtKeys';
 import {HttpService} from '../http/HttpService';
 
 // All *.lua files under mudlet-lua/ are served via the VFS at /lua/<relative-path>.
@@ -59,6 +60,13 @@ export class LuaRuntime implements IScriptingRuntime {
     private nextTempId = 1;
     private _isPrompt = false;
     private currentMatches: string[] = [];
+    // selectCaptureGroup needs the actual offset of each capture in the
+    // source line; without these spans it falls back to selectString(text, 1)
+    // which picks the wrong occurrence when the captured text repeats.
+    // Indexed parallel to currentMatches: spans[0] = full match, spans[i] =
+    // capture group i. Empty when matches come from a non-PCRE source.
+    private currentCaptureSpans: CaptureSpan[] = [];
+    private currentNamedSpans: Record<string, CaptureSpan> = {};
     private _denyCurrentSend = false;
     private destroyed = false;
     private http!: HttpService;
@@ -447,16 +455,20 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setRoomUserData', (id: number, k: string, v: string)=> this.api.map.setRoomUserData(id, k, v));
 
         // ── Map-level user data ───────────────────────────────────────────────
-        // Mudlet getMapUserData(key)/setMapUserData(key, value)/clearMapUserData(key).
-        // Stored in MapStore.mapUserData and serialized into MudletMap.mUserData
-        // when toMudletMap() runs; loaded maps push their mUserData in via
+        // Mudlet getMapUserData(key) / setMapUserData(key, value) /
+        // clearMapUserData() / clearMapUserDataItem(key) operate on
+        // MapStore.mapUserData and serialize into MudletMap.mUserData when
+        // toMudletMap() runs; loaded maps push their mUserData in via
         // MapPanel.loadFromBuffer → MapStore.loadMapUserData.
         this.lua.global.set('getMapUserData',    (k: unknown) => this.api.map.getMapUserData(String(k ?? '')));
         this.lua.global.set('setMapUserData',    (k: unknown, v: unknown) => {
             this.api.map.setMapUserData(String(k ?? ''), String(v ?? ''));
             return true;
         });
-        this.lua.global.set('clearMapUserData',  (k: unknown) => this.api.map.clearMapUserData(String(k ?? '')));
+        // Mudlet split: clearMapUserData() wipes the whole dict;
+        // clearMapUserDataItem(key) drops a single key.
+        this.lua.global.set('clearMapUserData',     ()              => this.api.map.clearMapUserData());
+        this.lua.global.set('clearMapUserDataItem', (k: unknown)    => this.api.map.clearMapUserDataItem(String(k ?? '')));
         this.lua.global.set('getAllMapUserData', () => this.api.map.getAllMapUserData());
 
         // ── Exits ─────────────────────────────────────────────────────────────
@@ -813,7 +825,12 @@ export class LuaRuntime implements IScriptingRuntime {
                 if (!isRepeat) releaseCb(cbId);
             }, isRepeat);
         });
-        this.lua.global.set('killTimer', (id: number) => this.api.timers.killTimer(id));
+        // Mudlet `killTimer(idOrName)`: numeric id kills a temp timer; a name
+        // string removes a permanent timer (and any group sharing the name).
+        this.lua.global.set('killTimer', (idOrName: number | string) =>
+            typeof idOrName === 'string'
+                ? this.api.killByName('timer', idOrName)
+                : this.api.timers.killTimer(idOrName));
 
         // ── Aliases ───────────────────────────────────────────────────────────
         this.lua.global.set('__mudix_tempAlias', (pattern: string, cbId: number) => {
@@ -825,19 +842,24 @@ export class LuaRuntime implements IScriptingRuntime {
             this.tempIds.set(id, () => { unsub(); releaseCb(cbId); });
             return id;
         });
-        this.lua.global.set('killAlias', (id: number) => {
-            const unsub = this.tempIds.get(id);
+        this.lua.global.set('killAlias', (idOrName: number | string) => {
+            if (typeof idOrName === 'string') return this.api.killByName('alias', idOrName);
+            const unsub = this.tempIds.get(idOrName);
             if (!unsub) return false;
-            unsub(); this.tempIds.delete(id); return true;
+            unsub(); this.tempIds.delete(idOrName); return true;
         });
 
         // ── Triggers ──────────────────────────────────────────────────────────
-        // Mudlet's tempTrigger / tempRegexTrigger accept an optional
-        // expirationCount: positive N auto-removes the trigger after N fires;
-        // -1, 0, or omitted means unlimited. TriggerEngine compiles the
-        // pattern with PCRE (same engine as permanent triggers), so this shim
-        // is shared by both Lua wrappers.
-        this.lua.global.set('__mudix_tempTrigger', (pattern: string, cbId: number, expirationCount?: number) => {
+        // Mudlet semantics:
+        //   tempTrigger(pattern, fn, [expirationCount])      — substring match
+        //   tempRegexTrigger(pattern, fn, [expirationCount]) — PCRE match
+        // The two share auto-expiration: positive N auto-removes the trigger
+        // after N fires; -1/0/omitted = unlimited. The Bridge.lua wrappers
+        // dispatch to one of the two JS bindings below.
+        const installTempTrigger = (
+            pattern: string, cbId: number, kind: 'regex' | 'substring',
+            expirationCount: number | undefined, label: string,
+        ) => {
             const id = this.nextTempId++;
             const max = (typeof expirationCount === 'number' && expirationCount > 0) ? expirationCount : -1;
             let fires = 0;
@@ -850,35 +872,55 @@ export class LuaRuntime implements IScriptingRuntime {
                 releaseCb(cbId);
                 this.tempIds.delete(id);
             };
-            unsub = this.api.triggers.addTemp(pattern, (matches: string[]) => {
+            unsub = this.api.triggers.addTemp(pattern, (matches, spans) => {
                 if (killed) return;
+                const prevSpans = this.currentCaptureSpans;
+                const prevNamed = this.currentNamedSpans;
+                const prevMatches = this.currentMatches;
+                this.currentMatches = matches;
+                this.currentCaptureSpans = spans?.captureSpans ?? [];
+                this.currentNamedSpans = spans?.namedSpans ?? {};
                 this.setMatches(matches);
-                dispatchCb(cbId, 'tempTrigger');
+                try {
+                    dispatchCb(cbId, label);
+                } finally {
+                    this.currentMatches = prevMatches;
+                    this.currentCaptureSpans = prevSpans;
+                    this.currentNamedSpans = prevNamed;
+                }
                 fires++;
                 if (max > 0 && fires >= max) kill();
-            });
+            }, kind);
             this.tempIds.set(id, kill);
             return id;
-        });
-        this.lua.global.set('killTrigger', (id: number) => {
-            const unsub = this.tempIds.get(id);
+        };
+        this.lua.global.set('__mudix_tempTrigger', (pattern: string, cbId: number, expirationCount?: number) =>
+            installTempTrigger(pattern, cbId, 'substring', expirationCount, 'tempTrigger'));
+        this.lua.global.set('__mudix_tempRegexTrigger', (pattern: string, cbId: number, expirationCount?: number) =>
+            installTempTrigger(pattern, cbId, 'regex', expirationCount, 'tempRegexTrigger'));
+        this.lua.global.set('killTrigger', (idOrName: number | string) => {
+            if (typeof idOrName === 'string') return this.api.killByName('trigger', idOrName);
+            const unsub = this.tempIds.get(idOrName);
             if (!unsub) return false;
-            unsub(); this.tempIds.delete(id); return true;
+            unsub(); this.tempIds.delete(idOrName); return true;
         });
 
         // ── Keys ──────────────────────────────────────────────────────────────
+        // Mudlet `tempKey([modifier,] keyCode, fn)`. modifier is a Qt::Key-
+        // boardModifier bitmask (default 0 = no modifier); keyCode is a
+        // Qt::Key int. The Bridge.lua wrapper resolves the optional-modifier
+        // overload before passing here.
         this.lua.global.set('__mudix_tempKey', (modifier: number, key: string | number, cbId: number) => {
-            const mods: string[] = [];
-            if (modifier & 0x4000000) mods.push('ctrl');
-            if (modifier & 0x2000000) mods.push('shift');
-            if (modifier & 0x8000000) mods.push('alt');
-            if (modifier & 0x10000000) mods.push('meta');
-            const keyStr = typeof key === 'string' ? key : String(key);
-            return this.api.keys.addTemp(keyStr, mods, () => {
+            const mods = qtModifiersToList(modifier);
+            const keyCode = qtKeyToDomCode(key);
+            return this.api.keys.addTemp(keyCode, mods, () => {
                 dispatchCb(cbId, 'tempKey');
             });
         });
-        this.lua.global.set('killKey', (id: number) => this.api.keys.killKey(id));
+        this.lua.global.set('killKey', (idOrName: number | string) =>
+            typeof idOrName === 'string'
+                ? this.api.killByName('key', idOrName)
+                : this.api.keys.killKey(idOrName));
 
         // ── Error / debug ─────────────────────────────────────────────────────
         // showHandlerError is called by Other.lua's dispatchEventToFunctions when
@@ -911,15 +953,37 @@ export class LuaRuntime implements IScriptingRuntime {
                 : [undefined, a as string];
             this.api.replace(text, win);
         });
+        // Mudlet `selectCaptureGroup(groupNumber|groupName)`. Numeric form
+        // selects capture group N (1-indexed; N=0 is invalid in Mudlet).
+        // Named form selects the (?<name>...) capture by name. Returns the
+        // start column of the selection, or -1 if no such capture / unmatched.
         this.lua.global.set('selectCaptureGroup', (groupOrName: number | string) => {
+            const selectSpan = (span: { start: number; length: number }, fallbackText: string): number => {
+                if (span.length === 0) return -1;          // unmatched optional group
+                this.api.selectSection(span.start, span.length);
+                // Fall back to selectString if spans are absent (substring/exactMatch
+                // temp triggers). We still record the selection above, but it's
+                // bogus when start/length come from a non-PCRE source.
+                if (this.currentCaptureSpans.length === 0 && fallbackText) {
+                    return this.api.selectString(fallbackText, 1);
+                }
+                return span.start;
+            };
             if (typeof groupOrName === 'number') {
-                const idx = groupOrName - 1; // Lua 1-indexed → JS 0-indexed
-                if (idx < 0 || idx >= this.currentMatches.length) return -1;
-                const text = this.currentMatches[idx];
-                return this.api.selectString(text, 1);
+                // currentMatches is [fullMatch, cap1, cap2, ...]; capture group N
+                // (Mudlet's numbering) maps to currentMatches[N], but our
+                // currentCaptureSpans is stored as [cap1Span, cap2Span, ...] (no
+                // full-match span), so capture N sits at spans[N - 1].
+                const matchIdx = groupOrName;
+                if (matchIdx < 1 || matchIdx >= this.currentMatches.length) return -1;
+                const text = this.currentMatches[matchIdx];
+                const span = this.currentCaptureSpans[matchIdx - 1];
+                if (!span) return text ? this.api.selectString(text, 1) : -1;
+                return selectSpan(span, text);
             }
-            // TODO: named capture group lookup (requires storing namedGroups from runWithMatches)
-            return -1;
+            const span = this.currentNamedSpans[groupOrName];
+            if (!span) return -1;
+            return selectSpan(span, '');
         });
 
         // ── Network ───────────────────────────────────────────────────────────
@@ -1414,15 +1478,23 @@ export class LuaRuntime implements IScriptingRuntime {
         name: string,
         matches: string[],
         multimatches?: string[][],
-        _namedGroups?: Record<string, string>,
+        namedGroups?: Record<string, string>,
+        captureSpans?: CaptureSpan[],
+        namedSpans?: Record<string, CaptureSpan>,
     ): void {
-        const prev = this.currentMatches;
+        const prevMatches = this.currentMatches;
+        const prevSpans = this.currentCaptureSpans;
+        const prevNamedSpans = this.currentNamedSpans;
         this.currentMatches = matches;
-        this.setMatches(matches, multimatches);
+        this.currentCaptureSpans = captureSpans ?? [];
+        this.currentNamedSpans = namedSpans ?? {};
+        this.setMatches(matches, multimatches, namedGroups);
         try {
             this.execInner(code, name);
         } finally {
-            this.currentMatches = prev;
+            this.currentMatches = prevMatches;
+            this.currentCaptureSpans = prevSpans;
+            this.currentNamedSpans = prevNamedSpans;
         }
     }
 
@@ -1431,7 +1503,7 @@ export class LuaRuntime implements IScriptingRuntime {
     // table. Object.keys skips holes, so a sparse array with index 0 empty
     // pushes as a 1-indexed Lua sequence (which Mudlet user code expects:
     // matches[1] = full match, matches[2] = first capture).
-    private setMatches(matches: string[], multimatches?: string[][]): void {
+    private setMatches(matches: string[], multimatches?: string[][], namedGroups?: Record<string, string>): void {
         const oneIndexed = (arr: string[]): string[] => {
             const t: string[] = [];
             for (let i = 0; i < arr.length; i++) t[i + 1] = arr[i];
@@ -1441,6 +1513,9 @@ export class LuaRuntime implements IScriptingRuntime {
         const mm: string[][] = [];
         if (multimatches) for (let i = 0; i < multimatches.length; i++) mm[i + 1] = oneIndexed(multimatches[i]);
         this.lua.global.set('multimatches', mm);
+        // Mudlet exposes named captures as a global `namedCaptures` table;
+        // user code reads it as `namedCaptures.foo`.
+        this.lua.global.set('namedCaptures', namedGroups ?? {});
     }
 
     private exec(code: string, name: string): void {

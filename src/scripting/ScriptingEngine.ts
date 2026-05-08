@@ -113,6 +113,18 @@ export class ScriptingEngine {
     private moduleSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private static readonly MODULE_SYNC_DEBOUNCE_MS = 500;
 
+    // Mudlet's permScript/permRegexTrigger/setScript return a numeric script id;
+    // our store keys nodes by UUID. Hand each UUID a stable monotonic int when
+    // we first hit it so Lua callers see consistent numeric identity (and code
+    // doing `tbl[id] = x` doesn't break the way a UUID string would).
+    private uuidToNumericId = new Map<string, number>();
+    private nextNumericId = 1;
+    private numericIdFor(uuid: string): number {
+        let n = this.uuidToNumericId.get(uuid);
+        if (n === undefined) { n = this.nextNumericId++; this.uuidToNumericId.set(uuid, n); }
+        return n;
+    }
+
     constructor(
         private readonly session: MudSession,
         private readonly aliasEngine: AliasEngine,
@@ -562,6 +574,7 @@ export class ScriptingEngine {
             this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
             this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
             this.api.setSetScriptCallback((name, code, pos) => this.setScriptByName(name, code, pos));
+            this.api.setKillByNameCallback((kind, name) => this.killByName(kind, name));
             this.api.setCssRewriter((css) => {
                 const v = this.vfs;
                 if (!v) return css;
@@ -746,7 +759,7 @@ export class ScriptingEngine {
      * with that name exists. The store subscription loads the script's
      * handlers synchronously inside the addScript commit.
      */
-    createPermScript(name: string, parent: string, code: string): string | number {
+    createPermScript(name: string, parent: string, code: string): number {
         if (!name) return -1;
         const store = useAppStore.getState();
         const scripts = store.connectionScripts[this.connectionId] ?? [];
@@ -756,7 +769,7 @@ export class ScriptingEngine {
             if (!group) return -1;
             parentId = group.id;
         }
-        return store.addScript(this.connectionId, {
+        const uuid = store.addScript(this.connectionId, {
             name,
             enabled: true,
             isGroup: false,
@@ -765,6 +778,7 @@ export class ScriptingEngine {
             language: 'lua',
             eventHandlers: [],
         });
+        return this.numericIdFor(uuid);
     }
 
     /**
@@ -775,7 +789,7 @@ export class ScriptingEngine {
      * to bootstrap folders. Returns the new trigger's id, or -1 if `parent` is
      * given but no trigger group with that name exists.
      */
-    createPermRegexTrigger(name: string, parent: string, regexes: string[], code: string): string | number {
+    createPermRegexTrigger(name: string, parent: string, regexes: string[], code: string): number {
         if (!name) return -1;
         const store = useAppStore.getState();
         const triggers = store.connectionTriggers[this.connectionId] ?? [];
@@ -787,7 +801,7 @@ export class ScriptingEngine {
         }
         const isGroup = regexes.length === 0;
         const patterns: TriggerNode['patterns'] = regexes.map(r => ({ type: 'regex', text: r }));
-        return store.addTrigger(this.connectionId, {
+        const uuid = store.addTrigger(this.connectionId, {
             name,
             enabled: true,
             isGroup,
@@ -801,6 +815,7 @@ export class ScriptingEngine {
             delta: 0,
             isFilter: false,
         });
+        return this.numericIdFor(uuid);
     }
 
     /**
@@ -810,7 +825,7 @@ export class ScriptingEngine {
      * so handlers re-register cleanly. Returns true on success, -1 if no such
      * script exists.
      */
-    setScriptByName(name: string, code: string, pos: number): true | -1 {
+    setScriptByName(name: string, code: string, pos: number): number {
         if (!name) return -1;
         const store = useAppStore.getState();
         const scripts = store.connectionScripts[this.connectionId] ?? [];
@@ -819,7 +834,47 @@ export class ScriptingEngine {
         const target = matches[index];
         if (!target) return -1;
         store.updateScript(this.connectionId, target.id, { code });
-        return true;
+        return this.numericIdFor(target.id);
+    }
+
+    /**
+     * Mudlet `killTimer/killAlias/killTrigger/killKey(name)` deletes every
+     * permanent item sharing the given name. Returns true if at least one was
+     * removed. Mirrors `toggleTriggerByName`'s "all matches" semantics so
+     * groups and their sibling-named items vanish together. The store
+     * subscription tears down the runtime side (timers stop firing, triggers
+     * recompile) on the next tick.
+     */
+    killByName(kind: 'timer' | 'alias' | 'trigger' | 'key', name: string): boolean {
+        if (!name) return false;
+        const store = useAppStore.getState();
+        const id = this.connectionId;
+        switch (kind) {
+            case 'timer': {
+                const targets = (store.connectionTimers[id] ?? []).filter(t => t.name === name);
+                if (targets.length === 0) return false;
+                for (const t of targets) store.removeTimer(id, t.id);
+                return true;
+            }
+            case 'alias': {
+                const targets = (store.connectionAliases[id] ?? []).filter(t => t.name === name);
+                if (targets.length === 0) return false;
+                for (const t of targets) store.removeAlias(id, t.id);
+                return true;
+            }
+            case 'trigger': {
+                const targets = (store.connectionTriggers[id] ?? []).filter(t => t.name === name);
+                if (targets.length === 0) return false;
+                for (const t of targets) store.removeTrigger(id, t.id);
+                return true;
+            }
+            case 'key': {
+                const targets = (store.connectionKeybindings[id] ?? []).filter(t => t.name === name);
+                if (targets.length === 0) return false;
+                for (const t of targets) store.removeKeybinding(id, t.id);
+                return true;
+            }
+        }
     }
 
     /**
@@ -998,6 +1053,8 @@ export class ScriptingEngine {
         matchedText: string,
         multimatches?: string[][],
         namedGroups?: Record<string, string>,
+        captureSpans?: { start: number; length: number }[],
+        namedSpans?: Record<string, { start: number; length: number }>,
     ): void {
         // Built-in command send
         if (trigger.command) {
@@ -1030,7 +1087,8 @@ export class ScriptingEngine {
         // User code
         if (trigger.code && trigger.language === 'lua') {
             try {
-                this.runtimes.lua?.runWithMatches(trigger.code, trigger.name, matches, multimatches, namedGroups);
+                this.runtimes.lua?.runWithMatches(
+                    trigger.code, trigger.name, matches, multimatches, namedGroups, captureSpans, namedSpans);
             } catch (err) {
                 this.reportEntityError('trigger', trigger.id, trigger.name, err);
             }
@@ -1126,8 +1184,16 @@ export class ScriptingEngine {
             this.runtimes.lua?.setCurrentLine(plain, isPrompt);
             this.triggerEngine.processTemp(plain);
             const matches = this.triggerEngine.matchPerm(plain, isPrompt);
-            for (const { trigger, captures, matchedText, multimatches, namedGroups } of matches) {
-                this.executePermTrigger(trigger, [plain, ...captures], matchedText, multimatches, namedGroups);
+            for (const m of matches) {
+                this.executePermTrigger(
+                    m.trigger,
+                    [plain, ...m.captures],
+                    m.matchedText,
+                    m.multimatches,
+                    m.namedGroups,
+                    m.captureSpans,
+                    m.namedSpans,
+                );
             }
         } finally {
             this.api.clearLineBuffer();

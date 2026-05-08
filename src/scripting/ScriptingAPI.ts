@@ -236,9 +236,15 @@ export class ScriptingAPI {
     private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private timerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private existsCallback: ((name: string, type: string) => number) | null = null;
-    private permScriptCallback: ((name: string, parent: string, code: string) => string | number) | null = null;
-    private permRegexTriggerCallback: ((name: string, parent: string, regexes: string[], code: string) => string | number) | null = null;
-    private setScriptCallback: ((name: string, code: string, pos: number) => true | -1) | null = null;
+    // Mudlet returns a numeric script id from permScript/permRegexTrigger/setScript;
+    // -1 signals failure (missing parent group, unknown script name, etc.).
+    private permScriptCallback: ((name: string, parent: string, code: string) => number) | null = null;
+    private permRegexTriggerCallback: ((name: string, parent: string, regexes: string[], code: string) => number) | null = null;
+    private setScriptCallback: ((name: string, code: string, pos: number) => number) | null = null;
+    // Mudlet's killTimer/killAlias/killTrigger/killKey accept the name of a
+    // permanent item in addition to the numeric id of a temp one. The engine
+    // wires these to remove the matching store nodes.
+    private killByNameCallback: ((kind: 'timer' | 'alias' | 'trigger' | 'key', name: string) => boolean) | null = null;
 
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
@@ -344,16 +350,24 @@ export class ScriptingAPI {
         this.existsCallback = fn;
     }
 
-    setPermScriptCallback(fn: ((name: string, parent: string, code: string) => string | number) | null): void {
+    setPermScriptCallback(fn: ((name: string, parent: string, code: string) => number) | null): void {
         this.permScriptCallback = fn;
     }
 
-    setPermRegexTriggerCallback(fn: ((name: string, parent: string, regexes: string[], code: string) => string | number) | null): void {
+    setPermRegexTriggerCallback(fn: ((name: string, parent: string, regexes: string[], code: string) => number) | null): void {
         this.permRegexTriggerCallback = fn;
     }
 
-    setSetScriptCallback(fn: ((name: string, code: string, pos: number) => true | -1) | null): void {
+    setSetScriptCallback(fn: ((name: string, code: string, pos: number) => number) | null): void {
         this.setScriptCallback = fn;
+    }
+
+    setKillByNameCallback(fn: ((kind: 'timer' | 'alias' | 'trigger' | 'key', name: string) => boolean) | null): void {
+        this.killByNameCallback = fn;
+    }
+
+    killByName(kind: 'timer' | 'alias' | 'trigger' | 'key', name: string): boolean {
+        return this.killByNameCallback?.(kind, name) ?? false;
     }
 
     setCssRewriter(fn: ((css: string) => string) | null): void {
@@ -396,15 +410,15 @@ export class ScriptingAPI {
         return this.existsCallback?.(name, type) ?? 0;
     }
 
-    permScript(name: string, parent: string, code: string): string | number {
+    permScript(name: string, parent: string, code: string): number {
         return this.permScriptCallback?.(name, parent, code) ?? -1;
     }
 
-    permRegexTrigger(name: string, parent: string, regexes: string[], code: string): string | number {
+    permRegexTrigger(name: string, parent: string, regexes: string[], code: string): number {
         return this.permRegexTriggerCallback?.(name, parent, regexes, code) ?? -1;
     }
 
-    setScript(name: string, code: string, pos: number): true | -1 {
+    setScript(name: string, code: string, pos: number): number {
         return this.setScriptCallback?.(name, code, pos) ?? -1;
     }
 
@@ -712,16 +726,19 @@ export class ScriptingAPI {
         return this.getConsole(windowName)?.getLine() ?? '';
     }
 
+    // Mudlet line-index APIs are 0-indexed: getLineNumber() == cursor.y(),
+    // getLineCount()/getLastLineNumber() == size - 1. Missing windows report
+    // -1 (Mudlet's "no such window" sentinel).
     getLineNumber(windowName?: string): number {
-        return this.getConsole(windowName)?.getLineNumber() ?? 0;
+        return this.getConsole(windowName)?.getLineNumber() ?? -1;
     }
 
     getLineCount(windowName?: string): number {
-        return this.getConsole(windowName)?.getLineCount() ?? 0;
+        return this.getConsole(windowName)?.getLineCount() ?? -1;
     }
 
     getLastLineNumber(windowName?: string): number {
-        return this.getConsole(windowName)?.getLineCount() ?? 0;
+        return this.getConsole(windowName)?.getLineCount() ?? -1;
     }
 
     getLines(from: number, to: number, windowName?: string): string[] {

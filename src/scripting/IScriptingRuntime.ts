@@ -1,10 +1,25 @@
+/**
+ * `start` is the offset of the capture in the source line; `length` is the
+ * capture's byte length. Used by `selectCaptureGroup` to re-select the actual
+ * occurrence rather than the first textual match of the captured substring.
+ */
+export type CaptureSpan = { start: number; length: number };
+
 export interface IScriptingRuntime {
     load(code: string, name: string): void;
     /** Execute a code chunk once, without match context. Used for timers and keybindings. */
     run(code: string, name: string): void;
     /** Dispatch an event to user-registered handlers. Handlers run synchronously. */
     emitEvent(event: string, args: unknown[]): void;
-    runWithMatches(code: string, name: string, matches: string[], multimatches?: string[][], namedGroups?: Record<string, string>): void;
+    runWithMatches(
+        code: string,
+        name: string,
+        matches: string[],
+        multimatches?: string[][],
+        namedGroups?: Record<string, string>,
+        captureSpans?: CaptureSpan[],
+        namedSpans?: Record<string, CaptureSpan>,
+    ): void;
     destroy(): void;
     setCurrentLine(line: string, isPrompt: boolean): void;
     /**

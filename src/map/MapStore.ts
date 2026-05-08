@@ -342,7 +342,20 @@ export class MapStore {
         this.notify();
     }
 
-    clearMapUserData(key: string): boolean {
+    /**
+     * Mudlet `clearMapUserData()` (no args) wipes the entire map-level user
+     * data dict — used by scripts that want a clean slate when re-importing
+     * data. The single-key form is exposed under `clearMapUserDataItem` to
+     * match Mudlet's split.
+     */
+    clearMapUserData(): boolean {
+        if (Object.keys(this.mapUserData).length === 0) return false;
+        this.mapUserData = {};
+        this.notify();
+        return true;
+    }
+
+    clearMapUserDataItem(key: string): boolean {
         if (!(key in this.mapUserData)) return false;
         delete this.mapUserData[key];
         this.notify();
