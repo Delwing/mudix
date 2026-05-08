@@ -94,6 +94,13 @@ export interface PackageManifest {
     kind?: PackageKind;
     /** Modules only: when true, mutations to this module's nodes are flushed back to the XML on disk. */
     sync?: boolean;
+    /**
+     * Modules only: load priority. Mirrors Mudlet's TPackage::mPriority. Default 0.
+     * Negative-priority modules load before profile scripts (useful for setting up
+     * infrastructure that profile scripts rely on); non-negative priorities load
+     * after. Within the same priority, modules load in install order.
+     */
+    priority?: number;
 }
 
 // ── Item types (mirrors Mudlet's TScript / TAlias / TTrigger / TTimer / TKey) ──

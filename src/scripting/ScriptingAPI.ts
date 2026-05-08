@@ -213,6 +213,16 @@ export class ScriptingAPI {
     private packageInstaller: ((path: string) => boolean) | null = null;
     private packageUninstaller: ((name: string) => boolean) | null = null;
     private packagesGetter: (() => string[]) | null = null;
+    private moduleInstaller: ((path: string) => boolean) | null = null;
+    private moduleUninstaller: ((name: string) => boolean) | null = null;
+    private moduleSyncer: ((name: string) => Promise<void>) | null = null;
+    private moduleReloader: ((name: string) => boolean) | null = null;
+    private moduleSyncSetter: ((name: string, sync: boolean) => void) | null = null;
+    private moduleSyncGetter: ((name: string) => boolean) | null = null;
+    private modulePrioritySetter: ((name: string, priority: number) => boolean) | null = null;
+    private modulePriorityGetter: ((name: string) => number) | null = null;
+    private modulesGetter: (() => string[]) | null = null;
+    private moduleInfoGetter: ((name: string) => Record<string, unknown> | null) | null = null;
     private cssRewriter: ((css: string) => string) | null = null;
     private scriptToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
@@ -283,6 +293,31 @@ export class ScriptingAPI {
     getPackages(): string[] {
         return this.packagesGetter?.() ?? [];
     }
+
+    setModuleInstaller(fn: ((path: string) => boolean) | null): void { this.moduleInstaller = fn; }
+    setModuleUninstaller(fn: ((name: string) => boolean) | null): void { this.moduleUninstaller = fn; }
+    setModuleSyncer(fn: ((name: string) => Promise<void>) | null): void { this.moduleSyncer = fn; }
+    setModuleReloader(fn: ((name: string) => boolean) | null): void { this.moduleReloader = fn; }
+    setModuleSyncSetter(fn: ((name: string, sync: boolean) => void) | null): void { this.moduleSyncSetter = fn; }
+    setModuleSyncGetter(fn: ((name: string) => boolean) | null): void { this.moduleSyncGetter = fn; }
+    setModulePrioritySetter(fn: ((name: string, priority: number) => boolean) | null): void { this.modulePrioritySetter = fn; }
+    setModulePriorityGetter(fn: ((name: string) => number) | null): void { this.modulePriorityGetter = fn; }
+    setModulesGetter(fn: (() => string[]) | null): void { this.modulesGetter = fn; }
+    setModuleInfoGetter(fn: ((name: string) => Record<string, unknown> | null) | null): void { this.moduleInfoGetter = fn; }
+
+    installModule(path: string): boolean { return this.moduleInstaller?.(path) ?? false; }
+    uninstallModule(name: string): boolean { return this.moduleUninstaller?.(name) ?? false; }
+    syncModule(name: string): Promise<void> { return this.moduleSyncer?.(name) ?? Promise.resolve(); }
+    reloadModule(name: string): boolean { return this.moduleReloader?.(name) ?? false; }
+    enableModuleSync(name: string): void { this.moduleSyncSetter?.(name, true); }
+    disableModuleSync(name: string): void { this.moduleSyncSetter?.(name, false); }
+    getModuleSync(name: string): boolean { return this.moduleSyncGetter?.(name) ?? false; }
+    setModulePriority(name: string, priority: number): boolean {
+        return this.modulePrioritySetter?.(name, priority) ?? false;
+    }
+    getModulePriority(name: string): number { return this.modulePriorityGetter?.(name) ?? 0; }
+    getModules(): string[] { return this.modulesGetter?.() ?? []; }
+    getModuleInfo(name: string): Record<string, unknown> | null { return this.moduleInfoGetter?.(name) ?? null; }
 
     setScriptToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
         this.scriptToggler = fn;

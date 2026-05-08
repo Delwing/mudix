@@ -1340,6 +1340,21 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                                         />
                                                         Sync edits to file
                                                     </label>
+                                                    <label
+                                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
+                                                        title="Load priority. Negative values load this module before profile scripts. Takes effect on the next reload."
+                                                    >
+                                                        Priority
+                                                        <input
+                                                            type="number"
+                                                            value={pkg.priority ?? 0}
+                                                            onChange={e => {
+                                                                const v = parseInt(e.target.value, 10);
+                                                                updatePackageManifest(connectionId, pkg.name, { priority: Number.isFinite(v) ? v : 0 });
+                                                            }}
+                                                            style={{ width: 60, padding: '2px 4px', fontSize: 12 }}
+                                                        />
+                                                    </label>
                                                     <button
                                                         className="script-editor__error-log-clear"
                                                         onClick={() => handleSyncModule(pkg.name)}

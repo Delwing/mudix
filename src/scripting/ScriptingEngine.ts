@@ -15,8 +15,9 @@ import {ProfileVFS} from './vfs/ProfileVFS';
 import {registerVfs, unregisterVfs} from './vfs/vfsBridge';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
-import {installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
+import {installModuleFromVfsPath, installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
 import {serializeMudletXml} from '../import/mudletXmlExport';
+import type {PackageManifest} from '../storage/schema';
 
 function hexToRgb(hex: string): RgbColor | null {
     const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
@@ -63,6 +64,17 @@ const FILTER_ANSI_ONLY_LINES = true;
  * always produce new node references for changed items, so reference equality
  * is sufficient).
  */
+/**
+ * Effective load priority of a node: looks up the owning module's priority,
+ * defaulting to 0 for profile-owned nodes (no `packageName`) and for tagged
+ * nodes whose package isn't in the priority map (e.g. plain non-module
+ * packages, which Mudlet treats as priority 0).
+ */
+function priorityFor(node: { packageName?: string }, priorityMap: Map<string, number>): number {
+    if (!node.packageName) return 0;
+    return priorityMap.get(node.packageName) ?? 0;
+}
+
 function hasTaggedSliceChanged<T extends { id: string; packageName?: string }>(
     pkgName: string,
     next: T[] | undefined,
@@ -286,6 +298,7 @@ export class ScriptingEngine {
         if (parent && !vfs.exists(parent)) vfs.mkdir(parent);
         vfs.writeFile(path, xml);
         await vfs.flush();
+        this.raiseEvent('sysSyncOnModule', [moduleName]);
     }
 
     /**
@@ -307,6 +320,7 @@ export class ScriptingEngine {
         try {
             const data = reloadModuleFromVfs(pkg, vfs);
             useAppStore.getState().installPackage(id, pkg, data);
+            this.raiseEvent('sysReadModuleEvent', [moduleName]);
             return true;
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -319,6 +333,99 @@ export class ScriptingEngine {
     setModuleSync(moduleName: string, sync: boolean): void {
         const id = this.connectionId;
         useAppStore.getState().updatePackageManifest(id, moduleName, { sync });
+    }
+
+    /** Read a module's sync flag. Returns false if the package isn't a module. */
+    getModuleSync(moduleName: string): boolean {
+        const pkg = this.findManifest(moduleName);
+        return pkg?.kind === 'module' && !!pkg.sync;
+    }
+
+    /**
+     * Set a module's load priority. Negative values cause its scripts to load
+     * before profile scripts on the next full reload. The priority is metadata
+     * only — changing it doesn't re-run anything; the new order takes effect on
+     * the next profile open or explicit reload.
+     */
+    setModulePriority(moduleName: string, priority: number): boolean {
+        const pkg = this.findManifest(moduleName);
+        if (pkg?.kind !== 'module') return false;
+        const p = Math.trunc(Number(priority) || 0);
+        useAppStore.getState().updatePackageManifest(this.connectionId, moduleName, { priority: p });
+        return true;
+    }
+
+    /** Read a module's load priority (default 0). Returns 0 for non-modules. */
+    getModulePriority(moduleName: string): number {
+        const pkg = this.findManifest(moduleName);
+        if (pkg?.kind !== 'module') return 0;
+        return pkg.priority ?? 0;
+    }
+
+    /** List installed module names. Order matches install order. */
+    getModuleNames(): string[] {
+        const packages = useAppStore.getState().connectionPackages[this.connectionId] ?? [];
+        return packages.filter(p => p.kind === 'module').map(p => p.name);
+    }
+
+    /** Snapshot of a module's manifest, or null if not installed / not a module. */
+    getModuleInfo(moduleName: string): PackageManifest | null {
+        const pkg = this.findManifest(moduleName);
+        return pkg?.kind === 'module' ? { ...pkg } : null;
+    }
+
+    /**
+     * Install a module from a path inside the profile VFS. Plain XML stays in
+     * place (manifest holds the absolute VFS path). Zips/.mpackages extract into
+     * the standard pkgDir. Raises sysInstall, sysInstallPackage and
+     * sysInstallModule on success — sysInstallModule is the module-specific
+     * counterpart to sysInstallPackage.
+     */
+    installModuleFromPath(path: string): boolean {
+        const vfs = this.vfs;
+        if (!vfs) {
+            this.api.printError('[installModule] no profile VFS available');
+            return false;
+        }
+        try {
+            const { manifest, data } = installModuleFromVfsPath(path, vfs);
+            useAppStore.getState().installPackage(this.connectionId, manifest, data);
+            this.notifyPackageInstalled(manifest.name);
+            this.raiseEvent('sysInstallModule', [manifest.name]);
+            void vfs.flush();
+            return true;
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.api.printError(`[installModule] ${msg}`);
+            return false;
+        }
+    }
+
+    /**
+     * Uninstall a module by name. Refuses to act on regular packages so callers
+     * can keep installPackage/uninstallPackage and installModule/uninstallModule
+     * cleanly separated. Modules unlink — the on-disk XML is left in place.
+     */
+    uninstallModuleByName(moduleName: string): boolean {
+        const pkg = this.findManifest(moduleName);
+        if (pkg?.kind !== 'module') {
+            this.api.printError(`[uninstallModule] not a module: ${moduleName}`);
+            return false;
+        }
+        this.notifyPackageUninstalled(moduleName);
+        this.raiseEvent('sysUninstallModule', [moduleName]);
+        useAppStore.getState().uninstallPackage(this.connectionId, moduleName);
+        if (this.vfs) {
+            const vfs = this.vfs;
+            void uninstallPackageFiles(pkg, vfs).catch(err => {
+                console.warn('[ScriptingEngine] failed to remove module files:', err);
+            });
+        }
+        return true;
+    }
+
+    private findManifest(name: string): PackageManifest | undefined {
+        return (useAppStore.getState().connectionPackages[this.connectionId] ?? []).find(p => p.name === name);
     }
 
     private applyAliasesFromStore(): void {
@@ -368,7 +475,16 @@ export class ScriptingEngine {
         for (const id of prevEnabled.keys()) {
             if (!nextEnabledIds.has(id)) this.unloadScript(id);
         }
-        for (const s of next) {
+        // Mudlet-style module load priority: scripts owned by modules with a
+        // negative priority load before profile scripts; non-negative priorities
+        // load after. Within a priority bucket, original array order is preserved
+        // so existing trees stay deterministic. Profile-owned scripts (no
+        // packageName) are treated as priority 0.
+        const priorityMap = this.modulePriorityMap();
+        const orderedNext = next
+            .map((s, idx) => ({ s, idx, prio: priorityFor(s, priorityMap) }))
+            .sort((a, b) => a.prio - b.prio || a.idx - b.idx);
+        for (const { s } of orderedNext) {
             if (s.language !== 'lua' || !isEffectivelyEnabled(s, next)) continue;
             const was = prevEnabled.get(s.id);
             const handlersChanged = !!was && was.eventHandlers.join('\n') !== s.eventHandlers.join('\n');
@@ -376,6 +492,16 @@ export class ScriptingEngine {
                 this.reloadScript(s);
             }
         }
+    }
+
+    /** Map of module name → priority. Profile (no packageName) is implicitly 0. */
+    private modulePriorityMap(): Map<string, number> {
+        const map = new Map<string, number>();
+        const packages = useAppStore.getState().connectionPackages[this.connectionId] ?? [];
+        for (const p of packages) {
+            if (p.kind === 'module') map.set(p.name, p.priority ?? 0);
+        }
+        return map;
     }
 
     private initRuntime(connectionId: string): Promise<IScriptingRuntime> {
@@ -416,6 +542,19 @@ export class ScriptingEngine {
             this.api.setPackageUninstaller((name) => this.uninstallPackageByName(name));
             this.api.setPackagesGetter(() =>
                 (useAppStore.getState().connectionPackages[this.connectionId] ?? []).map(p => p.name));
+            this.api.setModuleInstaller((path) => this.installModuleFromPath(path));
+            this.api.setModuleUninstaller((name) => this.uninstallModuleByName(name));
+            this.api.setModuleSyncer((name) => this.syncModuleToFile(name));
+            this.api.setModuleReloader((name) => this.reloadModuleFromFile(name));
+            this.api.setModuleSyncSetter((name, sync) => this.setModuleSync(name, sync));
+            this.api.setModuleSyncGetter((name) => this.getModuleSync(name));
+            this.api.setModulePrioritySetter((name, p) => this.setModulePriority(name, p));
+            this.api.setModulePriorityGetter((name) => this.getModulePriority(name));
+            this.api.setModulesGetter(() => this.getModuleNames());
+            this.api.setModuleInfoGetter((name) => {
+                const info = this.getModuleInfo(name);
+                return info ? (info as unknown as Record<string, unknown>) : null;
+            });
             this.api.setScriptToggler((name, enabled) => this.toggleScriptByName(name, enabled));
             this.api.setTriggerToggler((name, enabled) => this.toggleTriggerByName(name, enabled));
             this.api.setTimerToggler((name, enabled) => this.toggleTimerByName(name, enabled));
