@@ -207,9 +207,15 @@ function readConfigLua(entries: Record<string, Uint8Array>): Partial<PackageMani
     return out;
 }
 
-/** Remove the on-disk package directory. The store handles tag-based node removal. */
-export async function uninstallPackageFiles(packageName: string, vfs: ProfileVFS): Promise<void> {
-    const pkgDir = `${vfs.profilePath}/${packageName}`;
+/**
+ * Remove a package's on-disk files. The store handles tag-based node removal
+ * separately. Modules are exempt: they unlink only — the underlying XML (and any
+ * unzipped resources) survive uninstall so the user's source files aren't
+ * silently destroyed when they remove the module from the app.
+ */
+export async function uninstallPackageFiles(manifest: PackageManifest, vfs: ProfileVFS): Promise<void> {
+    if (manifest.kind === 'module') return;
+    const pkgDir = `${vfs.profilePath}/${manifest.name}`;
     if (vfs.exists(pkgDir)) vfs.rmdir(pkgDir);
     await vfs.flush();
 }
