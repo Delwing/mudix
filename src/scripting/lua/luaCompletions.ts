@@ -272,6 +272,18 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('installPackage',   '(path|url)',    'Install a Mudlet .mpackage / .zip / .xml from a VFS path or URL'),
     fn('uninstallPackage', '(name)',        'Uninstall a previously installed package by name'),
     fn('getPackages',      '() → {name1, name2, ...}', 'Return a 1-indexed list of installed package names'),
+    // Modules
+    fn('installModule',    '(path)',        'Install a Mudlet module from a VFS path. Plain XML stays in place; zips extract into a managed pkgDir.'),
+    fn('uninstallModule',  '(name)',        'Uninstall a module. Unlinks only — the on-disk XML is left in place.'),
+    fn('reloadModule',     '(name)',        "Re-parse the module's XML from disk and replace its nodes in the store."),
+    fn('syncModule',       '(name)',        "Serialize the module's current in-app state back to its XML file."),
+    fn('enableModuleSync', '(name)',        "Auto-sync the module's nodes back to its XML on every edit."),
+    fn('disableModuleSync','(name)',        'Stop auto-syncing the module to its XML.'),
+    fn('getModuleSync',    '(name) → bool', 'Whether the module has auto-sync enabled.'),
+    fn('setModulePriority','(name, n)',     "Set the module's load priority. Negative values load before profile scripts; default 0."),
+    fn('getModulePriority','(name) → int',  "Read the module's load priority (default 0)."),
+    fn('getModules',       '() → {name1, ...}', 'Return a 1-indexed list of installed module names.'),
+    fn('getModuleInfo',    '(name [, key])', "Return the module's manifest as a table, or a single field when key is given."),
     fn('unzipAsync',       '(zipPath, destDir)', 'Extract a zip into destDir; raises sysUnzipDone / sysUnzipError'),
     // Script toggling
     fn('enableScript',     '(name)',        'Enable a script by name'),

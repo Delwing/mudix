@@ -35,8 +35,7 @@ end
 
 -- Mudlet getPackages() → 1-indexed Lua array of installed package names. JS
 -- arrays come in 0-indexed via wasmoon; rebuild as ipairs-friendly.
-function getPackages()
-    local t = __getPackages()
+local function rebuildJsArray(t)
     local out = {}
     if type(t) == 'table' then
         local i = 0
@@ -47,6 +46,33 @@ function getPackages()
         if #out == 0 then for _, v in ipairs(t) do out[#out + 1] = v end end
     end
     return out
+end
+
+function getPackages()
+    return rebuildJsArray(__getPackages())
+end
+
+-- Mudlet getModules() — same shape as getPackages(), but lists modules only.
+function getModules()
+    return rebuildJsArray(__getModules())
+end
+
+-- Mudlet syncModule(name). The JS side runs the actual write asynchronously;
+-- this wrapper kicks it off and returns immediately. sysSyncOnModule fires
+-- on completion.
+function syncModule(name)
+    __mudix_syncModule(name)
+end
+
+-- Mudlet getModuleInfo(name [, key]) — returns the manifest as a table when
+-- called with one argument, or a single string when called with a key.
+-- Mudlet exposes a fixed set of keys (author, title, description, version,
+-- created, package); we forward whatever the manifest carries.
+function getModuleInfo(name, key)
+    local info = __getModuleInfo(name)
+    if info == nil then return nil end
+    if key == nil then return info end
+    return info[key]
 end
 
 -- Mudlet-compatible getMudletVersion. Behaviour:

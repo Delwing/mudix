@@ -642,6 +642,39 @@ export class LuaRuntime implements IScriptingRuntime {
         // 1-indexed sequence.
         this.lua.global.set('__getPackages', () => this.api.getPackages());
 
+        // ── Modules ───────────────────────────────────────────────────────────
+        // Mudlet's module APIs are the package APIs' siblings: installModule
+        // takes a VFS path, modules persist their XML on disk, and uninstall
+        // unlinks rather than deleting source files. Negative priorities load
+        // before profile scripts; non-negative load after.
+        this.lua.global.set('installModule', (path: unknown) =>
+            this.api.installModule(String(path ?? '')));
+        this.lua.global.set('uninstallModule', (name: unknown) =>
+            this.api.uninstallModule(String(name ?? '')));
+        this.lua.global.set('reloadModule', (name: unknown) =>
+            this.api.reloadModule(String(name ?? '')));
+        this.lua.global.set('__mudix_syncModule', (name: unknown) => {
+            // Fire-and-forget; Lua callers don't get a promise. The underlying
+            // flush is async but the in-app effect (sysSyncOnModule) will fire
+            // on success.
+            void this.api.syncModule(String(name ?? '')).catch(() => {});
+        });
+        this.lua.global.set('enableModuleSync', (name: unknown) =>
+            this.api.enableModuleSync(String(name ?? '')));
+        this.lua.global.set('disableModuleSync', (name: unknown) =>
+            this.api.disableModuleSync(String(name ?? '')));
+        this.lua.global.set('getModuleSync', (name: unknown) =>
+            this.api.getModuleSync(String(name ?? '')));
+        this.lua.global.set('setModulePriority', (name: unknown, priority: unknown) => {
+            const p = Math.trunc(Number(priority ?? 0));
+            return this.api.setModulePriority(String(name ?? ''), Number.isFinite(p) ? p : 0);
+        });
+        this.lua.global.set('getModulePriority', (name: unknown) =>
+            this.api.getModulePriority(String(name ?? '')));
+        this.lua.global.set('__getModules', () => this.api.getModules());
+        this.lua.global.set('__getModuleInfo', (name: unknown) =>
+            this.api.getModuleInfo(String(name ?? '')));
+
         // ── Script enable/disable ─────────────────────────────────────────────
         // Mudlet looks scripts up by name; toggling the flag cascades the
         // store subscription which loads/unloads Lua handlers synchronously.
