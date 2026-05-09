@@ -182,34 +182,13 @@ export class ScriptingAPI {
 
     private readonly mainConsole = new Console();
 
-    // During trigger processing, holds the line buffer being built. When set,
-    // selectString/fg/bg/resetFormat/deleteLine operate on this buffer instead
-    // of the already-rendered DOM. Set to null between lines.
-    private lineBuffer: AnsiAwareBuffer | null = null;
-
-    // The 0-indexed line position the lineBuffer occupies in the conceptual
-    // (rendered + in-flight) buffer. Mudlet treats the matching line as a
-    // regular line in the console; mudix holds it separately until render, so
-    // we expose it as a virtual index one past the last rendered line. Set on
-    // setLineBuffer; cleared on clearLineBuffer.
-    private lineBufferLineIndex: number | null = null;
-
-    // Tracks where the user-facing cursor "is" while a lineBuffer is active.
-    // Initially true (trigger fires with cursor on the matching line); flips
-    // to false the moment moveCursor/moveCursorUp/moveCursorDown moves the
-    // cursor onto a rendered-history line, so subsequent insertText/replace/
-    // getCurrentLine/getColumnNumber follow the cursor rather than always
-    // targeting the lineBuffer. moveCursor back to lineBufferLineIndex flips
-    // it true again.
-    private cursorOnLineBuffer = false;
-
-    // Column cursor for the active lineBuffer. Set by moveCursor and read by
-    // getColumnNumber so xEcho's "moveCursor(getColumnNumber + len(seg), ...)"
-    // dance threads inserts in order. Mudlet's prefix() drives this: it calls
-    // moveCursor(0, lineN) then cinsertText, which routes per-segment writes
-    // through insertText(win, seg) — those need to land at cursorCol, not at
-    // the end of the buffer.
-    private cursorCol = 0;
+    // True while the trigger pipeline is running for the current line. Drives
+    // echo deferral and rerender suppression — Mudlet's TLuaInterpreter has no
+    // analogous flag (the renderer reads the buffer at paint time), but mudix
+    // renders via 'message' events, so we have to suppress per-mutation
+    // rerenders during trigger processing and let the post-trigger render
+    // pick up the final state in one shot.
+    private inTriggerProcessing = false;
 
     // While lineBuffer is active, echo/cecho output is held here and flushed
     // to the output *after* the triggering line (or batch) is rendered.
@@ -591,7 +570,7 @@ export class ScriptingAPI {
             const buf = this.resolveBuffer(sel.windowName);
             if (buf) {
                 buf.clearFormat([sel.start, sel.start + sel.length]);
-                if (!this.lineBuffer) buf.rerender();
+                if (!this.inTriggerProcessing) buf.rerender();
             }
             return;
         }
@@ -601,10 +580,11 @@ export class ScriptingAPI {
     // ── Selection ─────────────────────────────────────────────────────────────
 
     selectString(str: string, occurrence: number, windowName?: string): number {
-        const isMain = !windowName || windowName === 'main';
-        const line = (this.lineBuffer && isMain && this.cursorOnLineBuffer)
-            ? this.lineBuffer.text
-            : (this.getConsole(windowName)?.getLine() ?? '');
+        // Mudlet searches the cursor's current line. With Console as the
+        // canonical buffer that is just `Console.getLine()` — including the
+        // matching line during trigger processing (just appended) and any
+        // history line the cursor was moved to.
+        const line = this.getConsole(windowName)?.getLine() ?? '';
 
         let count = 0;
         let searchFrom = 0;
@@ -663,32 +643,28 @@ export class ScriptingAPI {
     // ── Trigger pipeline hooks (called by ScriptingEngine) ────────────────────
 
     /**
-     * Called before trigger processing for each incoming line. Installs the
-     * buffer so that selectString/fg/bg/deleteLine modify it in-place before
-     * render. Also enables echo deferral so trigger echo output appears after
-     * the rendered line rather than before it.
+     * Called before trigger processing for each incoming line. Pushes the
+     * matching line into mainConsole.history so cursor-driven APIs see it as
+     * a regular addressable line (Mudlet's TBuffer holds the matching line
+     * during trigger processing — the cursor is just an (x,y) into that
+     * single buffer). The cursor is automatically positioned on the new line
+     * at column 0 by Console.appendLine. Also enables echo deferral so
+     * trigger-emitted echoes appear after the rendered line.
      */
-    setLineBuffer(buffer: AnsiAwareBuffer): void {
-        this.lineBuffer = buffer;
+    beginLine(buffer: AnsiAwareBuffer): void {
+        this.mainConsole.appendLine(buffer);
+        this.inTriggerProcessing = true;
         this.selection = null;
-        this.cursorCol = 0;
-        // Mudlet's cursor sits on the matching line at trigger fire time.
-        // Mudix doesn't have it in history yet, so we expose the lineBuffer
-        // as a virtual line one past the last rendered line.
-        this.lineBufferLineIndex = this.mainConsole.getLineCount() + 1;
-        this.cursorOnLineBuffer = true;
         this.isDeferringEcho = true;
     }
 
     /**
      * Called after all triggers for a line have run (but before render).
-     * Clears the pre-render buffer reference; echo deferral stays active until
+     * Drops the trigger-active flag; echo deferral stays on until
      * flushDeferredEcho() is called.
      */
-    clearLineBuffer(): void {
-        this.lineBuffer = null;
-        this.lineBufferLineIndex = null;
-        this.cursorOnLineBuffer = false;
+    endLine(): void {
+        this.inTriggerProcessing = false;
         this.selection = null;
     }
 
@@ -754,37 +730,24 @@ export class ScriptingAPI {
     // ── Cursor / line access ──────────────────────────────────────────────────
 
     getCurrentLine(windowName?: string): string {
-        const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) return this.lineBuffer.text;
         return this.getConsole(windowName)?.getLine() ?? '';
     }
 
     // Mudlet line-index APIs are 0-indexed: getLineNumber() == cursor.y(),
     // getLineCount()/getLastLineNumber() == size - 1. Missing windows report
-    // -1 (Mudlet's "no such window" sentinel). Inside a trigger on main, the
-    // matching line is virtual (one past the last rendered line) — getLine*
-    // APIs report it as a real line so script logic like
-    // `moveCursor(x, getLineNumber())` lands back on the lineBuffer.
+    // -1 (Mudlet's "no such window" sentinel). With Console as the canonical
+    // buffer (network lines are pushed via beginLine before triggers fire),
+    // these read directly off Console — no special trigger branch needed.
     getLineNumber(windowName?: string): number {
-        const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain && this.lineBufferLineIndex != null) {
-            return this.lineBufferLineIndex;
-        }
         return this.getConsole(windowName)?.getLineNumber() ?? -1;
     }
 
     getLineCount(windowName?: string): number {
-        const isMain = !windowName || windowName === 'main';
-        const con = this.getConsole(windowName);
-        if (!con) return -1;
-        if (this.lineBuffer && isMain && this.lineBufferLineIndex != null) {
-            return this.lineBufferLineIndex;
-        }
-        return con.getLineCount();
+        return this.getConsole(windowName)?.getLineCount() ?? -1;
     }
 
     getLastLineNumber(windowName?: string): number {
-        return this.getLineCount(windowName);
+        return this.getConsole(windowName)?.getLineCount() ?? -1;
     }
 
     getLines(from: number, to: number, windowName?: string): string[] {
@@ -792,14 +755,9 @@ export class ScriptingAPI {
     }
 
     getColumnNumber(windowName?: string): number {
-        // Mudlet returns the user cursor column (mUserCursor.x()), independent
-        // of the active selection. While the cursor is on the trigger's
-        // matching line, return the live lineBuffer column so xEcho's
-        // "advance by segment length" loop in cinsertText threads forward
-        // correctly. Otherwise (no trigger, or moveCursor moved off the
-        // matching line) return the persistent column on the rendered Console.
-        const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) return this.cursorCol;
+        // Mudlet's mUserCursor.x() — just the cursor's column on the cursor's
+        // current line. Console owns the persistent column cursor for both
+        // history and the in-flight matching line.
         return this.getConsole(windowName)?.getCursorColumn() ?? 0;
     }
 
@@ -839,21 +797,25 @@ export class ScriptingAPI {
     }
 
     /**
-     * Mudlet `insertText([window,] text)`. During trigger processing for the
-     * main window, inserts at the column cursor inside the active lineBuffer
-     * (this is the path Mudlet's `prefix()` and `creplace()` rely on — they
-     * route through `cinsertText` → `xEcho` → `insertText(win, seg)` per
-     * segment). Outside that context we don't have a real column cursor, so
-     * the call degrades to an echo at end-of-buffer — same as before.
+     * Mudlet `insertText([window,] text)`. Inserts `text` at the cursor on
+     * the cursor's current line — works the same way during trigger processing
+     * (cursor is on the just-appended matching line) and outside (cursor is
+     * wherever moveCursor put it). Falls back to an end-of-buffer echo only
+     * when the cursor isn't on a valid line yet (empty buffer / sub-window
+     * without a backing buffer).
      */
     insertText(text: string, windowName?: string): void {
         const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) {
-            const state = this.mainConsole.format.toSnapshot();
-            const at = Math.max(0, Math.min(this.cursorCol, this.lineBuffer.text.length));
-            this.lineBuffer.insert(at, text, state);
+        const con = this.getConsole(windowName);
+        const buf = con?.getBuffer();
+        if (con && buf) {
+            const state = con.format.toSnapshot();
+            const at = Math.max(0, Math.min(con.getCursorColumn(), buf.text.length));
+            buf.insert(at, text, state);
+            if (!this.inTriggerProcessing) buf.rerender();
             return;
         }
+        // No current line: degrade to an echo so the text isn't lost.
         if (isMain) {
             this.mainConsole.echo(text);
             this.drainMain();
@@ -865,60 +827,31 @@ export class ScriptingAPI {
     /**
      * Mudlet `moveCursorUp([window,] [lines=1,] [keepHorizontal=false]) → bool`.
      * `keepHorizontal=true` preserves the column across the vertical move; the
-     * default (false) resets the column to 0, matching Mudlet semantics.
-     * Vertical moves always move the cursor onto rendered history — even from
-     * the in-flight matching line — so the lineBuffer "follow" mode is
-     * released.
+     * default (false) resets the column to 0.
      */
     moveCursorUp(windowName?: string, lines: number = 1, keepHorizontal: boolean = false): boolean {
-        const ok = this.getConsole(windowName)?.moveUp(lines, keepHorizontal) ?? false;
-        const isMain = !windowName || windowName === 'main';
-        if (ok && isMain) this.cursorOnLineBuffer = false;
-        return ok;
+        return this.getConsole(windowName)?.moveUp(lines, keepHorizontal) ?? false;
     }
 
     moveCursorDown(windowName?: string, lines: number = 1, keepHorizontal: boolean = false): boolean {
-        const ok = this.getConsole(windowName)?.moveDown(lines, keepHorizontal) ?? false;
-        const isMain = !windowName || windowName === 'main';
-        if (ok && isMain) this.cursorOnLineBuffer = false;
-        return ok;
+        return this.getConsole(windowName)?.moveDown(lines, keepHorizontal) ?? false;
     }
 
     /**
-     * Mudlet `moveCursor([window,] x, y) → bool`. The cursor moves freely on
-     * either rendered history or the in-flight matching line — there is no
-     * special "trigger mode" in Mudlet. When `y` matches the lineBuffer's
-     * virtual line index, x is recorded as the trigger-line column and the
-     * cursor stays "on" the matching line so subsequent insertText/replace/
-     * getCurrentLine target it. Otherwise the cursor is seeked on the rendered
-     * Console. Returns true on a successful move.
+     * Mudlet `moveCursor([window,] x, y) → bool`. The cursor is just an (x,y)
+     * into the central buffer — works the same way during trigger processing
+     * and outside, because the matching line is pushed into Console.history
+     * before triggers fire (Mudlet has the same model: matching line is the
+     * last line in TBuffer; cursor.y is its index). Returns true on a
+     * successful move.
      */
     moveCursor(windowName: string | undefined, x: number, y: number): boolean {
         if (!Number.isFinite(x) || x < 0) return false;
         if (!Number.isFinite(y) || y < 0) return false;
-        const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain && y === this.lineBufferLineIndex) {
-            this.cursorCol = Math.min(Math.trunc(x), this.lineBuffer.text.length);
-            this.cursorOnLineBuffer = true;
-            return true;
-        }
-        const con = this.getConsole(windowName);
-        if (!con) return false;
-        const ok = con.moveTo(y, x);
-        if (ok && isMain) this.cursorOnLineBuffer = false;
-        return ok;
+        return this.getConsole(windowName)?.moveTo(y, x) ?? false;
     }
 
     moveCursorEnd(windowName?: string): void {
-        const isMain = !windowName || windowName === 'main';
-        // Inside a trigger on main, the lineBuffer is the conceptual "last
-        // line" — position the cursor at its end and stay in lineBuffer mode.
-        if (this.lineBuffer && isMain) {
-            this.cursorCol = this.lineBuffer.text.length;
-            this.cursorOnLineBuffer = true;
-            this.mainConsole.markCursorAtEnd();
-            return;
-        }
         const con = this.getConsole(windowName);
         if (!con) return;
         const lastLine = con.getLineCount();
@@ -970,16 +903,24 @@ export class ScriptingAPI {
         if (!buf) return;
         buf.replace([sel.start, sel.start + sel.length], newText);
         this.selection = null;
-        if (!this.lineBuffer) buf.rerender();
+        if (!this.inTriggerProcessing) buf.rerender();
     }
 
+    /**
+     * Mudlet `deleteLine([window])`. Marks the cursor's current buffer as
+     * deleted. When that buffer is the matching line of an in-flight trigger,
+     * the renderer skips emitting it; when it's a rendered history line,
+     * Console.deleteLine removes it from the DOM.
+     */
     deleteLine(windowName?: string): void {
-        const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) {
-            this.lineBuffer.markAsDeleted();
+        const con = this.getConsole(windowName);
+        if (!con) return;
+        const buf = con.getBuffer();
+        if (this.inTriggerProcessing && buf) {
+            buf.markAsDeleted();
             return;
         }
-        this.getConsole(windowName)?.deleteLine();
+        con.deleteLine();
     }
 
     appendCmdLine(text: string): void {
@@ -1277,8 +1218,6 @@ export class ScriptingAPI {
     }
 
     private resolveBuffer(windowName: string | undefined): AnsiAwareBuffer | null {
-        const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) return this.lineBuffer;
         return this.getConsole(windowName)?.getBuffer() ?? null;
     }
 
@@ -1297,7 +1236,7 @@ export class ScriptingAPI {
         if (!buf) return;
         buf.applyFormat([sel.start, sel.start + sel.length], state);
         // Only rerender if already in the DOM (post-trigger path).
-        if (!this.lineBuffer) buf.rerender();
+        if (!this.inTriggerProcessing) buf.rerender();
     }
 
     private drainMain(): void {

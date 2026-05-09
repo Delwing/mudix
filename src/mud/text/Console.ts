@@ -74,6 +74,22 @@ export class Console {
         this.evict();
     }
 
+    /**
+     * Append a pre-built complete line buffer to history. Used by the network
+     * trigger pipeline: the line has already been parsed and is being added as
+     * a single canonical entry, not via partial accumulation. The cursor is
+     * placed on the new line at column 0 so triggers see Mudlet's "cursor on
+     * the matching line at trigger fire" state. Does NOT enqueue into pending
+     * — the renderer for network output drains via the 'message' event
+     * pipeline; pending is reserved for script-driven echo flushes.
+     */
+    appendLine(buffer: AnsiAwareBuffer): void {
+        this.history.push(buffer);
+        this.cursorIdx = this.history.length - 1;
+        this.cursorCol = 0;
+        this.evict();
+    }
+
     private evict(): void {
         while (this.history.length > this._maxLines) {
             const evicted = this.history.shift()!;

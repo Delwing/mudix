@@ -1179,7 +1179,7 @@ export class ScriptingEngine {
      * and flushed after all lines in the batch are rendered.
      */
     private processLineTriggers(plain: string, buffer: AnsiAwareBuffer, isPrompt = false): void {
-        this.api.setLineBuffer(buffer);
+        this.api.beginLine(buffer);
         try {
             this.runtimes.lua?.setCurrentLine(plain, isPrompt);
             this.triggerEngine.processTemp(plain);
@@ -1196,7 +1196,7 @@ export class ScriptingEngine {
                 );
             }
         } finally {
-            this.api.clearLineBuffer();
+            this.api.endLine();
         }
     }
 
