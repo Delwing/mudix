@@ -187,6 +187,22 @@ export class ScriptingAPI {
     // of the already-rendered DOM. Set to null between lines.
     private lineBuffer: AnsiAwareBuffer | null = null;
 
+    // The 0-indexed line position the lineBuffer occupies in the conceptual
+    // (rendered + in-flight) buffer. Mudlet treats the matching line as a
+    // regular line in the console; mudix holds it separately until render, so
+    // we expose it as a virtual index one past the last rendered line. Set on
+    // setLineBuffer; cleared on clearLineBuffer.
+    private lineBufferLineIndex: number | null = null;
+
+    // Tracks where the user-facing cursor "is" while a lineBuffer is active.
+    // Initially true (trigger fires with cursor on the matching line); flips
+    // to false the moment moveCursor/moveCursorUp/moveCursorDown moves the
+    // cursor onto a rendered-history line, so subsequent insertText/replace/
+    // getCurrentLine/getColumnNumber follow the cursor rather than always
+    // targeting the lineBuffer. moveCursor back to lineBufferLineIndex flips
+    // it true again.
+    private cursorOnLineBuffer = false;
+
     // Column cursor for the active lineBuffer. Set by moveCursor and read by
     // getColumnNumber so xEcho's "moveCursor(getColumnNumber + len(seg), ...)"
     // dance threads inserts in order. Mudlet's prefix() drives this: it calls
@@ -586,7 +602,7 @@ export class ScriptingAPI {
 
     selectString(str: string, occurrence: number, windowName?: string): number {
         const isMain = !windowName || windowName === 'main';
-        const line = (this.lineBuffer && isMain)
+        const line = (this.lineBuffer && isMain && this.cursorOnLineBuffer)
             ? this.lineBuffer.text
             : (this.getConsole(windowName)?.getLine() ?? '');
 
@@ -656,6 +672,11 @@ export class ScriptingAPI {
         this.lineBuffer = buffer;
         this.selection = null;
         this.cursorCol = 0;
+        // Mudlet's cursor sits on the matching line at trigger fire time.
+        // Mudix doesn't have it in history yet, so we expose the lineBuffer
+        // as a virtual line one past the last rendered line.
+        this.lineBufferLineIndex = this.mainConsole.getLineCount() + 1;
+        this.cursorOnLineBuffer = true;
         this.isDeferringEcho = true;
     }
 
@@ -666,6 +687,8 @@ export class ScriptingAPI {
      */
     clearLineBuffer(): void {
         this.lineBuffer = null;
+        this.lineBufferLineIndex = null;
+        this.cursorOnLineBuffer = false;
         this.selection = null;
     }
 
@@ -732,23 +755,36 @@ export class ScriptingAPI {
 
     getCurrentLine(windowName?: string): string {
         const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain) return this.lineBuffer.text;
+        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) return this.lineBuffer.text;
         return this.getConsole(windowName)?.getLine() ?? '';
     }
 
     // Mudlet line-index APIs are 0-indexed: getLineNumber() == cursor.y(),
     // getLineCount()/getLastLineNumber() == size - 1. Missing windows report
-    // -1 (Mudlet's "no such window" sentinel).
+    // -1 (Mudlet's "no such window" sentinel). Inside a trigger on main, the
+    // matching line is virtual (one past the last rendered line) — getLine*
+    // APIs report it as a real line so script logic like
+    // `moveCursor(x, getLineNumber())` lands back on the lineBuffer.
     getLineNumber(windowName?: string): number {
+        const isMain = !windowName || windowName === 'main';
+        if (this.lineBuffer && isMain && this.lineBufferLineIndex != null) {
+            return this.lineBufferLineIndex;
+        }
         return this.getConsole(windowName)?.getLineNumber() ?? -1;
     }
 
     getLineCount(windowName?: string): number {
-        return this.getConsole(windowName)?.getLineCount() ?? -1;
+        const isMain = !windowName || windowName === 'main';
+        const con = this.getConsole(windowName);
+        if (!con) return -1;
+        if (this.lineBuffer && isMain && this.lineBufferLineIndex != null) {
+            return this.lineBufferLineIndex;
+        }
+        return con.getLineCount();
     }
 
     getLastLineNumber(windowName?: string): number {
-        return this.getConsole(windowName)?.getLineCount() ?? -1;
+        return this.getLineCount(windowName);
     }
 
     getLines(from: number, to: number, windowName?: string): string[] {
@@ -756,14 +792,15 @@ export class ScriptingAPI {
     }
 
     getColumnNumber(windowName?: string): number {
-        // Mudlet returns the user cursor column (mUserCursor.x()), independent of
-        // the active selection. While processing a line, return the live column
-        // cursor so xEcho's "advance by segment length" loop in cinsertText
-        // sees inserts threading forward, not stuck at 0. Otherwise we have no
-        // tracked cursor and report 0, matching pre-trigger state.
+        // Mudlet returns the user cursor column (mUserCursor.x()), independent
+        // of the active selection. While the cursor is on the trigger's
+        // matching line, return the live lineBuffer column so xEcho's
+        // "advance by segment length" loop in cinsertText threads forward
+        // correctly. Otherwise (no trigger, or moveCursor moved off the
+        // matching line) return the persistent column on the rendered Console.
         const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain) return this.cursorCol;
-        return 0;
+        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) return this.cursorCol;
+        return this.getConsole(windowName)?.getCursorColumn() ?? 0;
     }
 
     /**
@@ -811,7 +848,7 @@ export class ScriptingAPI {
      */
     insertText(text: string, windowName?: string): void {
         const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain) {
+        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) {
             const state = this.mainConsole.format.toSnapshot();
             const at = Math.max(0, Math.min(this.cursorCol, this.lineBuffer.text.length));
             this.lineBuffer.insert(at, text, state);
@@ -827,40 +864,66 @@ export class ScriptingAPI {
 
     /**
      * Mudlet `moveCursorUp([window,] [lines=1,] [keepHorizontal=false]) → bool`.
-     * `keepHorizontal` is accepted for parity but ignored — Console history
-     * doesn't carry a persistent column cursor, so there's nothing to keep.
+     * `keepHorizontal=true` preserves the column across the vertical move; the
+     * default (false) resets the column to 0, matching Mudlet semantics.
+     * Vertical moves always move the cursor onto rendered history — even from
+     * the in-flight matching line — so the lineBuffer "follow" mode is
+     * released.
      */
-    moveCursorUp(windowName?: string, lines: number = 1, _keepHorizontal: boolean = false): boolean {
-        return this.getConsole(windowName)?.moveUp(lines) ?? false;
+    moveCursorUp(windowName?: string, lines: number = 1, keepHorizontal: boolean = false): boolean {
+        const ok = this.getConsole(windowName)?.moveUp(lines, keepHorizontal) ?? false;
+        const isMain = !windowName || windowName === 'main';
+        if (ok && isMain) this.cursorOnLineBuffer = false;
+        return ok;
     }
 
-    moveCursorDown(windowName?: string, lines: number = 1, _keepHorizontal: boolean = false): boolean {
-        return this.getConsole(windowName)?.moveDown(lines) ?? false;
+    moveCursorDown(windowName?: string, lines: number = 1, keepHorizontal: boolean = false): boolean {
+        const ok = this.getConsole(windowName)?.moveDown(lines, keepHorizontal) ?? false;
+        const isMain = !windowName || windowName === 'main';
+        if (ok && isMain) this.cursorOnLineBuffer = false;
+        return ok;
     }
 
     /**
-     * Mudlet `moveCursor([window,] x, y) → bool`. While a lineBuffer is active
-     * and the target is main, set the column cursor used by `insertText` — y is
-     * ignored because the trigger-line buffer is single-line. Outside that
-     * context only the line component (`y`) is honored — `x` has no effect on
-     * rendered history. Returns true when the cursor actually moved.
+     * Mudlet `moveCursor([window,] x, y) → bool`. The cursor moves freely on
+     * either rendered history or the in-flight matching line — there is no
+     * special "trigger mode" in Mudlet. When `y` matches the lineBuffer's
+     * virtual line index, x is recorded as the trigger-line column and the
+     * cursor stays "on" the matching line so subsequent insertText/replace/
+     * getCurrentLine target it. Otherwise the cursor is seeked on the rendered
+     * Console. Returns true on a successful move.
      */
     moveCursor(windowName: string | undefined, x: number, y: number): boolean {
+        if (!Number.isFinite(x) || x < 0) return false;
+        if (!Number.isFinite(y) || y < 0) return false;
         const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain) {
-            if (!Number.isFinite(x) || x < 0) return false;
-            this.cursorCol = Math.min(x, this.lineBuffer.text.length);
+        if (this.lineBuffer && isMain && y === this.lineBufferLineIndex) {
+            this.cursorCol = Math.min(Math.trunc(x), this.lineBuffer.text.length);
+            this.cursorOnLineBuffer = true;
             return true;
         }
         const con = this.getConsole(windowName);
         if (!con) return false;
-        return con.moveTo(y);
+        const ok = con.moveTo(y, x);
+        if (ok && isMain) this.cursorOnLineBuffer = false;
+        return ok;
     }
 
     moveCursorEnd(windowName?: string): void {
+        const isMain = !windowName || windowName === 'main';
+        // Inside a trigger on main, the lineBuffer is the conceptual "last
+        // line" — position the cursor at its end and stay in lineBuffer mode.
+        if (this.lineBuffer && isMain) {
+            this.cursorCol = this.lineBuffer.text.length;
+            this.cursorOnLineBuffer = true;
+            this.mainConsole.markCursorAtEnd();
+            return;
+        }
         const con = this.getConsole(windowName);
         if (!con) return;
-        con.moveTo(con.getLineCount());
+        const lastLine = con.getLineCount();
+        con.moveTo(lastLine);
+        con.setCursorColumn(con.getLine().length);
         con.markCursorAtEnd();
     }
 
@@ -912,7 +975,7 @@ export class ScriptingAPI {
 
     deleteLine(windowName?: string): void {
         const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain) {
+        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) {
             this.lineBuffer.markAsDeleted();
             return;
         }
@@ -1215,7 +1278,7 @@ export class ScriptingAPI {
 
     private resolveBuffer(windowName: string | undefined): AnsiAwareBuffer | null {
         const isMain = !windowName || windowName === 'main';
-        if (this.lineBuffer && isMain) return this.lineBuffer;
+        if (this.lineBuffer && isMain && this.cursorOnLineBuffer) return this.lineBuffer;
         return this.getConsole(windowName)?.getBuffer() ?? null;
     }
 

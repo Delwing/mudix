@@ -9,10 +9,10 @@ Scope: ~200 native bindings. Pure-Lua wrappers in bundled `mudlet-lua/` (cecho, 
 | Severity | Count | Meaning |
 |---|---|---|
 | OK | 58 | No meaningful discrepancy. |
-| minor | 90 | Same calls accepted, edge-case behavior or return shape differs. |
+| minor | 89 | Same calls accepted, edge-case behavior or return shape differs. |
 | major | 7 | Wrong arg count/order, missing required arg, broken overload, wrong return type. |
 | missing | 11 | Declared as a stub but Mudlet has real behavior scripts depend on. |
-| fixed | 32 | Top-priority items #1–#20 in the next section have been resolved. |
+| fixed | 33 | Top-priority items #1–#20 in the next section have been resolved (plus `getColumnNumber` upgraded as a side-effect of the column cursor work). |
 
 ---
 
@@ -127,13 +127,13 @@ Mudlet returns boolean and rejects negative `from`. mudix records the selection 
 - Returns `undefined` (Mudlet returns boolean).
 - Outside trigger processing, `x` is ignored — only the line component is honored. `ScriptingAPI.ts:816-823`.
 
-**Fix:** `moveCursor` now returns `true` on a successful move and `false` otherwise (empty buffer, out-of-range y, negative x in lineBuffer mode). The `x`-outside-triggers limitation is unchanged (rendered Console history doesn't carry a column cursor) and is now documented in the JSDoc as a known minor downgrade rather than a silent quirk.
+**Fix:** the lineBuffer is now exposed as a virtual line one past the last rendered line (`lineBufferLineIndex`); `getLineNumber` / `getLineCount` / `getLastLineNumber` report this index inside triggers so scripts see the matching line as a regular addressable line. `moveCursor(x, y)` works freely in every context — it stays in lineBuffer mode when y matches the matching line, otherwise seeks the rendered Console. A `cursorOnLineBuffer` flag tracks where the cursor "is", so `getCurrentLine` / `getColumnNumber` / `selectString` / `insertText` / `deleteLine` / `replace` follow the cursor instead of always targeting the lineBuffer. `Console` owns a persistent column cursor (`cursorCol`) so `moveCursor` outside triggers also honors x. Returns `true` on successful move.
 
 ### 19. `moveCursorUp`/`Down` ignore `lines` and `keepHorizontal` overloads — RESOLVED
 
 Mudlet (via mudlet-lua/lua/GUIUtils.lua): `moveCursorUp([win,] [lines=1,] [keepHorizontal])`. mudix accepts only `windowName`. Calling `moveCursorUp(5)` is interpreted as `windowName="5"` and silently fails. `LuaRuntime.ts:773-774`.
 
-**Fix:** the Lua bindings disambiguate the leading arg by type — string is the window name; number is the lines count (window defaults to main). `Console.moveUp/moveDown` now take an optional `lines` count (defaulting to 1). `keepHorizontal` is accepted for parity but ignored (no persistent column cursor on rendered history). Both return `true` when the cursor actually moved.
+**Fix:** the Lua bindings disambiguate the leading arg by type — string is the window name; number is the lines count (window defaults to main). `Console.moveUp/moveDown` take both `lines` and `keepHorizontal` flags. `keepHorizontal=true` preserves the column across the vertical move; `false` (default) resets it to 0. Stale columns are lazily clamped to the destination line's length on read. Both return `true` when the cursor actually moved.
 
 ### 20. `getLines` table is 0-indexed (Mudlet is 1-indexed) — RESOLVED
 
@@ -220,14 +220,14 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | getLineNumber | `([win]) → 0-indexed cursor.y` | resolved (see #1 in Top priorities) | — | fixed |
 | getLineCount | `([win]) → size - 1` (last index) | resolved (see #1) | — | fixed |
 | getLastLineNumber | `([win]) → size - 1`; -1 if missing | resolved (see #1) | — | fixed |
-| getColumnNumber | `([win]) → mUserCursor.x()` (persistent) | `cursorCol` only inside trigger; else 0 | Outside triggers always returns 0 | minor |
+| getColumnNumber | `([win]) → mUserCursor.x()` (persistent) | matches | Reads `Console.cursorCol` outside triggers; trigger lineBuffer column inside | fixed |
 | getColumnCount | font-metric column count | DOM probe; returns 0 if not mounted | Equivalent for monospace | minor |
 | setWindowWrap | `(name, wrapAt)` no return; name required | `([name,] n) → bool` | mudix returns bool and accepts no-name shorthand | minor |
 | getLines | `([win,] from, to) → 1-indexed table` | matches | Bridge.lua wrapper rebuilds the JS array as 1-indexed | fixed |
 | moveCursorUp | `([win,] [lines=1,] [keepHoriz])` | matches | Disambiguates by arg type; honors `lines`; ignores `keepHorizontal` | fixed |
 | moveCursorDown | `([win,] [lines=1,] [keepHoriz])` | matches | same | fixed |
 | moveCursorEnd | `([win])` — last char of last line | `Console.moveTo(lineCount)` | No column cursor on rendered history | minor |
-| moveCursor | `([win], x, y) → bool` | returns bool; column still ignored on history | Validates inputs, returns true on successful move; `x` outside triggers remains a documented minor downgrade | fixed |
+| moveCursor | `([win], x, y) → bool` | matches | Console owns a persistent column cursor; both line and column are honored on rendered history | fixed |
 
 ### Windows / labels
 

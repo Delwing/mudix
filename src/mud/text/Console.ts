@@ -14,6 +14,12 @@ export class Console {
     private pending:  AnsiAwareBuffer[] = [];
     private partial = new AnsiAwareBuffer();
     private cursorIdx = -1; // -1 = always resolve to last line
+    // Persistent column position on the rendered-history cursor line. Tracked
+    // independently of the active trigger lineBuffer (ScriptingAPI owns that).
+    // moveUp/moveDown reset to 0 unless keepHorizontal is set; moveCursor/
+    // moveTo set it explicitly. getCursorColumn clamps lazily to the current
+    // line's length, so moves into shorter lines silently snap to end.
+    private cursorCol = 0;
     private _maxLines = 1000;
     // Mudlet's TConsole treats `\n` as cursor advance — `moveCursorEnd` followed
     // by `echo("\n")` advances past the last line without producing a blank row.
@@ -90,6 +96,7 @@ export class Console {
         this.pending = [];
         this.partial = new AnsiAwareBuffer();
         this.cursorIdx = -1;
+        this.cursorCol = 0;
         this.consumeLeadingNewline = false;
     }
 
@@ -115,27 +122,60 @@ export class Console {
         this.cursorIdx = Math.min(idx, this.history.length - 1);
     }
 
-    moveUp(lines: number = 1): boolean {
+    /**
+     * Move the cursor up `lines` rows. When `keepHorizontal` is false (the
+     * default, matching Mudlet) the column resets to 0; when true the column
+     * is preserved across the move and lazily clamps to the destination
+     * line's length on read via `getCursorColumn`.
+     */
+    moveUp(lines: number = 1, keepHorizontal: boolean = false): boolean {
         const idx = this.cursor;
         if (idx <= 0) return false;
         const target = Math.max(0, idx - Math.max(1, Math.trunc(lines)));
         this.cursorIdx = target;
+        if (!keepHorizontal) this.cursorCol = 0;
         return target !== idx;
     }
 
-    moveDown(lines: number = 1): boolean {
+    moveDown(lines: number = 1, keepHorizontal: boolean = false): boolean {
         const idx = this.cursor;
         const last = this.history.length - 1;
         if (idx >= last) return false;
         const target = Math.min(last, idx + Math.max(1, Math.trunc(lines)));
         this.cursorIdx = target;
+        if (!keepHorizontal) this.cursorCol = 0;
         return target !== idx;
     }
 
-    moveTo(line: number): boolean {
+    /**
+     * Seek the cursor to absolute line `line` (0-indexed). When `col` is
+     * supplied, also set the column; otherwise the column is reset to 0 (the
+     * Mudlet `moveCursor(x=0, y)` default).
+     */
+    moveTo(line: number, col: number = 0): boolean {
         if (this.history.length === 0) return false;
         if (!Number.isFinite(line) || line < 0) return false;
+        if (!Number.isFinite(col) || col < 0) return false;
         this.cursorIdx = Math.min(Math.trunc(line), this.history.length - 1);
+        this.cursorCol = Math.trunc(col);
+        return true;
+    }
+
+    /**
+     * Mudlet's `mUserCursor.x()` — the column on the cursor line. Lazily
+     * clamped to the current line's length so a stale `cursorCol` from a
+     * `keepHorizontal` move never reports past the end of a shorter line.
+     */
+    getCursorColumn(): number {
+        const idx = this.cursor;
+        if (idx < 0) return 0;
+        const lineLen = this.history[idx]?.text.length ?? 0;
+        return Math.min(this.cursorCol, lineLen);
+    }
+
+    setCursorColumn(col: number): boolean {
+        if (!Number.isFinite(col) || col < 0) return false;
+        this.cursorCol = Math.trunc(col);
         return true;
     }
 
