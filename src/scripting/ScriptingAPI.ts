@@ -605,9 +605,19 @@ export class ScriptingAPI {
         return -1;
     }
 
-    selectSection(from: number, length: number, windowName?: string): void {
-        // Mudlet: 0-indexed `from`. See TConsole::selectSection.
+    /**
+     * Mudlet `selectSection([window,] from, length) → bool`. `from` is 0-indexed.
+     * Negative `from` is rejected (Mudlet behavior); zero/negative lengths
+     * register a no-op selection but still report success in Mudlet — we match
+     * that, but reject when the resolved buffer doesn't exist.
+     */
+    selectSection(from: number, length: number, windowName?: string): boolean {
+        if (!Number.isFinite(from) || from < 0) return false;
+        if (!Number.isFinite(length) || length < 0) return false;
+        const buf = this.resolveBuffer(windowName);
+        if (!buf) return false;
         this.selection = { windowName, start: from, length };
+        return true;
     }
 
     deselect(): void {
@@ -815,28 +825,36 @@ export class ScriptingAPI {
         }
     }
 
-    moveCursorUp(windowName?: string): void {
-        this.getConsole(windowName)?.moveUp();
+    /**
+     * Mudlet `moveCursorUp([window,] [lines=1,] [keepHorizontal=false]) → bool`.
+     * `keepHorizontal` is accepted for parity but ignored — Console history
+     * doesn't carry a persistent column cursor, so there's nothing to keep.
+     */
+    moveCursorUp(windowName?: string, lines: number = 1, _keepHorizontal: boolean = false): boolean {
+        return this.getConsole(windowName)?.moveUp(lines) ?? false;
     }
 
-    moveCursorDown(windowName?: string): void {
-        this.getConsole(windowName)?.moveDown();
+    moveCursorDown(windowName?: string, lines: number = 1, _keepHorizontal: boolean = false): boolean {
+        return this.getConsole(windowName)?.moveDown(lines) ?? false;
     }
 
     /**
-     * Mudlet `moveCursor([window,] x, y)`. While a lineBuffer is active and the
-     * target is main, set the column cursor used by `insertText` — y is ignored
-     * because the trigger-line buffer is single-line. Outside that context we
-     * still only support line-position seek (no real column cursor on rendered
-     * Console history).
+     * Mudlet `moveCursor([window,] x, y) → bool`. While a lineBuffer is active
+     * and the target is main, set the column cursor used by `insertText` — y is
+     * ignored because the trigger-line buffer is single-line. Outside that
+     * context only the line component (`y`) is honored — `x` has no effect on
+     * rendered history. Returns true when the cursor actually moved.
      */
-    moveCursor(windowName: string | undefined, x: number, y: number): void {
+    moveCursor(windowName: string | undefined, x: number, y: number): boolean {
         const isMain = !windowName || windowName === 'main';
         if (this.lineBuffer && isMain) {
-            this.cursorCol = Math.max(0, Math.min(x, this.lineBuffer.text.length));
-            return;
+            if (!Number.isFinite(x) || x < 0) return false;
+            this.cursorCol = Math.min(x, this.lineBuffer.text.length);
+            return true;
         }
-        this.getConsole(windowName)?.moveTo(y);
+        const con = this.getConsole(windowName);
+        if (!con) return false;
+        return con.moveTo(y);
     }
 
     moveCursorEnd(windowName?: string): void {
@@ -1047,22 +1065,31 @@ export class ScriptingAPI {
     setBorderRight(size: number): void { this.patchBorders('right', size); }
 
     /**
-     * Mudlet setBorderSizes. One arg sets all four sides; four args use CSS
-     * top/right/bottom/left ordering. Anything else is a no-op.
+     * Mudlet setBorderSizes — CSS-shorthand-style overloads:
+     *   1 arg  → uniform                 (all = a)
+     *   2 args → (vertical, horizontal)  (top=bottom=a, left=right=b)
+     *   3 args → (top, horizontal, bot)  (left=right=b)
+     *   4 args → CSS top/right/bottom/left
+     * Other arities no-op (matches Mudlet's silent reject).
      */
-    setBorderSizes(top?: number, right?: number, bottom?: number, left?: number): void {
-        if (right === undefined && bottom === undefined && left === undefined) {
-            const v = this.normalizeBorder(top);
-            if (v == null) return;
-            useAppStore.getState().patchUI({ outputBorders: { top: v, right: v, bottom: v, left: v } });
-            return;
+    setBorderSizes(a?: number, b?: number, c?: number, d?: number): void {
+        const A = this.normalizeBorder(a);
+        const B = this.normalizeBorder(b);
+        const C = this.normalizeBorder(c);
+        const D = this.normalizeBorder(d);
+        let t: number | null | undefined, r: number | null | undefined,
+            bo: number | null | undefined, l: number | null | undefined;
+        if (b === undefined && c === undefined && d === undefined) {
+            t = r = bo = l = A;
+        } else if (c === undefined && d === undefined) {
+            t = bo = A; r = l = B;
+        } else if (d === undefined) {
+            t = A; r = l = B; bo = C;
+        } else {
+            t = A; r = B; bo = C; l = D;
         }
-        const t = this.normalizeBorder(top);
-        const r = this.normalizeBorder(right);
-        const b = this.normalizeBorder(bottom);
-        const l = this.normalizeBorder(left);
-        if (t == null || r == null || b == null || l == null) return;
-        useAppStore.getState().patchUI({ outputBorders: { top: t, right: r, bottom: b, left: l } });
+        if (t == null || r == null || bo == null || l == null) return;
+        useAppStore.getState().patchUI({ outputBorders: { top: t, right: r, bottom: bo, left: l } });
     }
 
     getBorderTop(): number { return useAppStore.getState().ui.outputBorders?.top ?? 0; }

@@ -41,6 +41,67 @@ function getSelection(windowName)
     return t[0], t[1], t[2]
 end
 
+-- Mudlet getMapEvents() → { [uniqueName] = { ["event name"]=..., ["parent"]=...,
+-- ["display name"]=..., ["arguments"]={...} } }. JS hands back an array of
+-- entries (0-indexed); rebuild into Mudlet's exact key/shape so scripts can
+-- index by literal string keys.
+function getMapEvents()
+    local raw = __getMapEvents()
+    local out = {}
+    if type(raw) == 'table' then
+        local i = 0
+        while raw[i] ~= nil do
+            local e = raw[i]
+            local args = {}
+            local rawArgs = e.args
+            if type(rawArgs) == 'table' then
+                local j = 0
+                while rawArgs[j] ~= nil do
+                    args[#args + 1] = rawArgs[j]
+                    j = j + 1
+                end
+                if #args == 0 then
+                    for _, v in ipairs(rawArgs) do args[#args + 1] = v end
+                end
+            end
+            out[e.uniqueName] = {
+                ["event name"]   = e.eventName,
+                ["parent"]       = e.parent or "",
+                ["display name"] = e.displayName,
+                ["arguments"]    = args,
+            }
+            i = i + 1
+        end
+    end
+    return out
+end
+
+-- Mudlet addAreaName(name) → areaID on success, or (false, errMsg) on
+-- duplicate / empty name. JS hands back either a number or a table
+-- { ok=false, err=... } (wasmoon flattens it to numeric keys 0/1 across the
+-- bridge — we tolerate both shapes).
+function addAreaName(name)
+    local r = __addAreaName(name)
+    if type(r) == 'number' then return r end
+    if type(r) == 'table' then
+        local err = r.err or r[1] or r[0] or 'addAreaName: failed'
+        return false, err
+    end
+    return false, 'addAreaName: failed'
+end
+
+-- Mudlet setAreaName(areaID|areaName, newName) → true on success, or
+-- (false, errMsg) on duplicate/missing/empty.
+function setAreaName(idOrName, newName)
+    local r = __setAreaName(idOrName, newName)
+    if r == true then return true end
+    if type(r) == 'table' then
+        local err = r.err or r[1] or r[0] or 'setAreaName: failed'
+        return false, err
+    end
+    return false, 'setAreaName: failed'
+end
+
 -- Mudlet getPackages() → 1-indexed Lua array of installed package names. JS
 -- arrays come in 0-indexed via wasmoon; rebuild as ipairs-friendly.
 local function rebuildJsArray(t)
@@ -63,6 +124,12 @@ end
 -- Mudlet getModules() — same shape as getPackages(), but lists modules only.
 function getModules()
     return rebuildJsArray(__getModules())
+end
+
+-- Mudlet getLines([window,] from, to) → 1-indexed table of line strings.
+-- JS hands back a 0-indexed array via wasmoon; rebuild as ipairs-friendly.
+function getLines(a, b, c)
+    return rebuildJsArray(__getLines(a, b, c))
 end
 
 -- Mudlet syncModule(name). The JS side runs the actual write asynchronously;
@@ -103,7 +170,7 @@ do
         elseif mode == "minor"    then return MINOR
         elseif mode == "revision" then return REVISION
         elseif mode == "build"    then return BUILD
-        elseif mode == "table"    then return MAJOR, MINOR, REVISION
+        elseif mode == "table"    then return MAJOR, MINOR, REVISION, BUILD
         else
             error('getMudletVersion: bad argument (expected nil/"string"/"major"/"minor"/"revision"/"build"/"table", got "' .. tostring(mode) .. '")', 2)
         end
@@ -305,11 +372,36 @@ end
 -- for LuaTable doesn't support reliable numeric-key iteration from JS, so
 -- flatten the tables to \x01-delimited strings here in Lua (where ipairs
 -- is trivial) and let the JS binding split them.
+--
+-- Mudlet supports both with-window and no-window forms, disambiguated by
+-- argc and arg types:
+--   echoPopup(text, cmds, hints)               -- 3 args, no window
+--   echoPopup(text, cmds, hints, useFmt)       -- 4 args, no window (cmds is table at slot 2)
+--   echoPopup(window, text, cmds, hints)       -- 4 args, with window (text is string at slot 2)
+--   echoPopup(window, text, cmds, hints, fmt)  -- 5 args, full form
 do
     local _raw = echoPopup
     local SEP = '\1'
-    echoPopup = function(win, v, cmds, hints, fmt)
-        if not v or v == '' then return end
+    echoPopup = function(...)
+        local n = select('#', ...)
+        local a1, a2, a3, a4, a5 = ...
+        local win, text, cmds, hints, fmt
+        if n <= 2 then
+            return
+        elseif n == 3 then
+            win, text, cmds, hints, fmt = "main", a1, a2, a3, nil
+        elseif n == 4 then
+            if type(a2) == 'table' then
+                -- (text, cmds, hints, useFmt)
+                win, text, cmds, hints, fmt = "main", a1, a2, a3, a4
+            else
+                -- (window, text, cmds, hints)
+                win, text, cmds, hints, fmt = a1, a2, a3, a4, nil
+            end
+        else
+            win, text, cmds, hints, fmt = a1, a2, a3, a4, a5
+        end
+        if not text or text == '' then return end
         local cs, hs = {}, {}
         if type(cmds) == 'table' then
             for _, c in ipairs(cmds) do cs[#cs+1] = tostring(c) end
@@ -317,6 +409,6 @@ do
         if type(hints) == 'table' then
             for _, h in ipairs(hints) do hs[#hs+1] = tostring(h) end
         end
-        return _raw(win, v, table.concat(cs, SEP), table.concat(hs, SEP), fmt)
+        return _raw(win, text, table.concat(cs, SEP), table.concat(hs, SEP), fmt)
     end
 end

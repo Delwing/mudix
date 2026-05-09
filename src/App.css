@@ -784,7 +784,7 @@ html, body, #root {
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    background: var(--cons  ole-bg);
+    background: var(--console-bg);
     color: var(--console-text);
     font-family: var(--font-output, var(--font-mono)), monospace;
     scrollbar-width: thin;

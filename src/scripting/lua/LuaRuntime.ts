@@ -434,7 +434,16 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // ── Room CRUD ─────────────────────────────────────────────────────────
         this.lua.global.set('createRoomID', ()              => this.api.map.createRoomID());
-        this.lua.global.set('addRoom',      (id: number)    => this.api.map.addRoom(id));
+        // Mudlet addRoom(roomID [, areaID]) — when an areaID is given the new
+        // room is assigned to that area immediately (creating it if it doesn't
+        // exist). Without one, the room lives in the default area (0) until a
+        // later setRoomArea call.
+        this.lua.global.set('addRoom', (id: unknown, areaId?: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid)) return false;
+            const aid = areaId != null && areaId !== '' ? Number(areaId) : undefined;
+            return this.api.map.addRoom(rid, Number.isFinite(aid as number) ? aid : undefined);
+        });
         this.lua.global.set('deleteRoom',   (id: number)    => this.api.map.deleteRoom(id));
         this.lua.global.set('roomExists',   (id: number)    => this.api.map.roomExists(id));
 
@@ -442,7 +451,28 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('getRoomName',  (id: number)              => this.api.map.getRoomName(id) ?? false);
         this.lua.global.set('setRoomName',  (id: number, n: string)   => this.api.map.setRoomName(id, n));
         this.lua.global.set('getRoomArea',  (id: number)              => this.api.map.getRoomArea(id) ?? false);
-        this.lua.global.set('setRoomArea',  (id: number, a: number)   => this.api.map.setRoomArea(id, a));
+        // Mudlet setRoomArea(roomID|{ids}, areaID|areaName). wasmoon turns
+        // Lua arrays into 0-indexed JS objects/arrays; rebuild numeric IDs
+        // from either shape and forward area lookups by string or number.
+        this.lua.global.set('setRoomArea', (id: unknown, a: unknown) => {
+            let rooms: number | number[];
+            if (Array.isArray(id)) {
+                rooms = id.map(n => Number(n)).filter(n => Number.isFinite(n));
+            } else if (id && typeof id === 'object') {
+                const arr: number[] = [];
+                const t = id as Record<string | number, unknown>;
+                let i = 0;
+                while (t[i] !== undefined) { arr.push(Number(t[i])); i++; }
+                if (arr.length === 0) {
+                    for (let k = 1; t[k] !== undefined; k++) arr.push(Number(t[k]));
+                }
+                rooms = arr;
+            } else {
+                rooms = Number(id);
+            }
+            const area = typeof a === 'number' ? a : (typeof a === 'string' ? a : Number(a));
+            return this.api.map.setRoomArea(rooms, area);
+        });
         // getRoomCoordinates returns {x,y,z} as a table; a Lua wrapper below unpacks to three values.
         this.lua.global.set('__getRoomCoordinates', (id: number)      => this.api.map.getRoomCoordinates(id));
         this.lua.global.set('setRoomCoordinates',   (id: number, x: number, y: number, z: number) => this.api.map.setRoomCoordinates(id, x, y, z));
@@ -472,17 +502,25 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('getAllMapUserData', () => this.api.map.getAllMapUserData());
 
         // ── Exits ─────────────────────────────────────────────────────────────
+        // Mudlet's setExit/setExitStub accept the direction either as the
+        // numeric 1-12 index or as a name ("north"/"n"/etc.); MapStore's
+        // parseDirection normalizes both forms.
         this.lua.global.set('getRoomExits',      (id: number)                          => this.api.map.getRoomExits(id));
-        this.lua.global.set('setExit',           (from: number, to: number, dir: number) => this.api.map.setExit(from, to, dir));
+        this.lua.global.set('setExit', (from: unknown, to: unknown, dir: unknown) =>
+            this.api.map.setExit(Number(from), Number(to), dir as number | string));
         this.lua.global.set('getExitStubs',      (id: number)                          => this.api.map.getExitStubs(id));
-        this.lua.global.set('setExitStub',       (id: number, dir: number, set: boolean)=> this.api.map.setExitStub(id, dir, set));
+        this.lua.global.set('setExitStub', (id: unknown, dir: unknown, set: unknown) =>
+            this.api.map.setExitStub(Number(id), dir as number | string, !!set));
         this.lua.global.set('addSpecialExit',    (from: number, to: number, cmd: string)=> this.api.map.addSpecialExit(from, to, cmd));
         this.lua.global.set('removeSpecialExit', (from: number, cmd: string)            => this.api.map.removeSpecialExit(from, cmd));
         this.lua.global.set('getSpecialExitsSwap',(id: number)                         => this.api.map.getSpecialExitsSwap(id));
 
         // ── Doors ─────────────────────────────────────────────────────────────
+        // setDoor's direction can be a stock direction (numeric or name) or
+        // an arbitrary special-exit command string.
         this.lua.global.set('getDoors', (id: number)                      => this.api.map.getDoors(id));
-        this.lua.global.set('setDoor',  (id: number, dir: string, val: number) => this.api.map.setDoor(id, dir, val));
+        this.lua.global.set('setDoor', (id: unknown, dir: unknown, val: unknown) =>
+            this.api.map.setDoor(Number(id), dir as number | string, Number(val)));
 
         // ── Map context-menu events ───────────────────────────────────────────
         // Mudlet addMapEvent(uniqueName, eventName [, parent [, displayName [, ...args]]]).
@@ -505,19 +543,17 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('removeMapEvent', (uniqueName: unknown) => {
             return this.api.map.removeMapEvent(String(uniqueName ?? ''));
         });
-        // Mudlet shape: { [uniqueName] = { event, parent, display, args } }.
-        this.lua.global.set('getMapEvents', () => {
-            const out: Record<string, unknown> = {};
-            for (const e of this.api.map.getMapEvents()) {
-                out[e.uniqueName] = {
-                    event: e.eventName,
-                    parent: e.parent ?? '',
-                    display: e.displayName,
-                    args: e.args,
-                };
-            }
-            return out;
-        });
+        // Mudlet shape:
+        //   { [uniqueName] = {
+        //         ["event name"]   = "...",
+        //         ["parent"]       = "...",
+        //         ["display name"] = "...",
+        //         ["arguments"]    = { ... },  -- 1-indexed extra args
+        //   } }
+        // Build the per-entry table on the Lua side via doString so the keys
+        // land as proper Lua strings and the args table is 1-indexed (wasmoon
+        // would otherwise key a JS array 0..n-1).
+        this.lua.global.set('__getMapEvents', () => this.api.map.getMapEvents());
 
         // ── Custom env colors ─────────────────────────────────────────────────
         // Mudlet setCustomEnvColor(envID, r, g, b, a). Updates mCustomEnvColors
@@ -538,11 +574,30 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         // ── Areas ─────────────────────────────────────────────────────────────
-        this.lua.global.set('addAreaName',    (name: string)            => this.api.map.addAreaName(name));
-        this.lua.global.set('deleteArea',     (id: number)              => this.api.map.deleteArea(id));
+        // Mudlet addAreaName / setAreaName return (false, errMsg) on duplicate
+        // or empty inputs; MapStore packs failures as { ok:false, err } and a
+        // Bridge.lua wrapper turns those into a Lua multi-return.
+        this.lua.global.set('__addAreaName', (name: unknown) => {
+            const r = this.api.map.addAreaName(String(name ?? ''));
+            if (typeof r === 'number') return r;
+            return { ok: false, err: r.err };
+        });
+        // deleteArea(areaID|areaName) — accept either form.
+        this.lua.global.set('deleteArea', (idOrName: unknown) =>
+            this.api.map.deleteArea(idOrName as number | string));
         this.lua.global.set('getAreaTable',   ()                        => this.api.map.getAreaTable());
-        this.lua.global.set('getRoomAreaName',(areaId: number)          => this.api.map.getRoomAreaName(areaId) ?? false);
-        this.lua.global.set('setAreaName',    (areaId: number, n: string)=> this.api.map.setAreaName(areaId, n));
+        // getRoomAreaName is bidirectional: number → name string, name → number.
+        // Returns false when the input cannot be resolved (matches the
+        // existing convention; Mudlet returns nil/false on miss).
+        this.lua.global.set('getRoomAreaName', (idOrName: unknown) => {
+            const v = this.api.map.getRoomAreaName(idOrName as number | string);
+            return v ?? false;
+        });
+        this.lua.global.set('__setAreaName', (idOrName: unknown, n: unknown) => {
+            const r = this.api.map.setAreaName(idOrName as number | string, String(n ?? ''));
+            if (r === true) return true;
+            return { ok: false, err: typeof r === 'object' ? r.err : 'setAreaName: failed' };
+        });
         this.lua.global.set('getAreaRooms',   (areaId: number)          => this.api.map.getAreaRooms(areaId));
         this.lua.global.set('getRooms',       ()                        => this.api.map.getRooms());
 
@@ -611,30 +666,25 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('clearCmdLine', (_name?: string) => this.api.clearCmdLine());
 
         // ── Command-line context menu ─────────────────────────────────────────
-        // Mudlet addCommandLineMenuEvent([cmdLineName,] uniqueName, event [, displayName]).
-        // We support the single command bar — the optional cmdLineName arg is
-        // detected by counting strings and ignored. Right-clicking the command
-        // bar shows registered entries; clicking one raises `event(cmdLineText)`.
+        // Mudlet addCommandLineMenuEvent([cmdLineName,] menuLabel, eventName).
+        // The menuLabel is both the unique key and the display string — there
+        // is no separate displayName arg. We support the single command bar
+        // and ignore the optional cmdLineName arg.
         this.api.cmdLineMenu.setDispatcher((event, args) => this.emitEvent(event, args));
         this.lua.global.set('addCommandLineMenuEvent', (
-            a: unknown, b: unknown, c?: unknown, d?: unknown,
+            a: unknown, b: unknown, c?: unknown,
         ) => {
-            // Distinguish 2-arg (uniqueName, event) from 3-arg
-            // (uniqueName, event, displayName) vs 3-arg
-            // (cmdLineName, uniqueName, event) by treating any 4-arg form as
-            // (cmdLineName, uniqueName, event, displayName) and dropping the
-            // first arg. The 3-arg form is ambiguous; Mudlet's typical usage
-            // passes (uniqueName, event, displayName).
-            let uniqueName: unknown, eventName: unknown, displayName: unknown;
-            if (d !== undefined) {
-                uniqueName = b; eventName = c; displayName = d;
+            // 2 args: (menuLabel, eventName).
+            // 3 args: (cmdLineName, menuLabel, eventName) — drop cmdLineName.
+            let menuLabel: unknown, eventName: unknown;
+            if (c !== undefined) {
+                menuLabel = b; eventName = c;
             } else {
-                uniqueName = a; eventName = b; displayName = c;
+                menuLabel = a; eventName = b;
             }
             return this.api.cmdLineMenu.add(
-                String(uniqueName ?? ''),
+                String(menuLabel ?? ''),
                 String(eventName ?? ''),
-                displayName == null ? undefined : String(displayName),
             );
         });
         this.lua.global.set('removeCommandLineMenuEvent', (a: unknown, b?: unknown) => {
@@ -778,24 +828,52 @@ export class LuaRuntime implements IScriptingRuntime {
                 ? this.api.setWindowWrap(a, Number(b))
                 : this.api.setWindowWrap('main', Number(a));
         });
-        this.lua.global.set('getLines', (a: string | number, b: number, c?: number) => {
-            // getLines([window,] from, to)
-            return c !== undefined ? this.api.getLines(b, c, a as string) : this.api.getLines(a as number, b);
+        // getLines([window,] from, to) — JS array crosses wasmoon as a
+        // 0-indexed Lua table; the Bridge.lua wrapper rebuilds it as a
+        // 1-indexed sequence so `ipairs` works as Mudlet scripts expect.
+        this.lua.global.set('__getLines', (a: string | number, b: number, c?: number) => {
+            return c !== undefined
+                ? this.api.getLines(b, c, a as string)
+                : this.api.getLines(a as number, b);
         });
-        this.lua.global.set('moveCursorUp',   (win?: string)=> this.api.moveCursorUp(win));
-        this.lua.global.set('moveCursorDown',  (win?: string)=> this.api.moveCursorDown(win));
+        // Mudlet moveCursorUp/Down([window,] [lines=1,] [keepHorizontal=false]).
+        // Disambiguate by type of the first arg: a leading string is the window
+        // name; a leading number is the lines count (window defaults to main).
+        const parseMoveLineArgs = (a: unknown, b: unknown, c: unknown): [string | undefined, number, boolean] => {
+            if (typeof a === 'string') {
+                const lines = b === undefined ? 1 : Number(b);
+                const keep = !!c;
+                return [a, Number.isFinite(lines) ? lines : 1, keep];
+            }
+            if (a === undefined) return [undefined, 1, false];
+            const lines = Number(a);
+            const keep = !!b;
+            return [undefined, Number.isFinite(lines) ? lines : 1, keep];
+        };
+        this.lua.global.set('moveCursorUp', (a?: unknown, b?: unknown, c?: unknown) => {
+            const [win, lines, keep] = parseMoveLineArgs(a, b, c);
+            return this.api.moveCursorUp(win, lines, keep);
+        });
+        this.lua.global.set('moveCursorDown', (a?: unknown, b?: unknown, c?: unknown) => {
+            const [win, lines, keep] = parseMoveLineArgs(a, b, c);
+            return this.api.moveCursorDown(win, lines, keep);
+        });
         this.lua.global.set('moveCursorEnd',  (win?: string)=> this.api.moveCursorEnd(win));
+        // moveCursor([window,] x, y) → bool. Mudlet returns true on success.
         this.lua.global.set('moveCursor', (a: string | number, b: number, c?: number) => {
-            // moveCursor([window,] x, y)
-            c !== undefined ? this.api.moveCursor(a as string, b, c) : this.api.moveCursor(undefined, a as number, b);
+            return c !== undefined
+                ? this.api.moveCursor(a as string, b, c)
+                : this.api.moveCursor(undefined, a as number, b);
         });
         this.lua.global.set('selectString', (a: string, b: string | number, c?: number) => {
             // selectString([window,] text, occurrence)
             return c !== undefined ? this.api.selectString(b as string, c, a) : this.api.selectString(a, b as number);
         });
         this.lua.global.set('selectSection', (a: string | number, b: number, c?: number) => {
-            // selectSection([window,] from, length)
-            c !== undefined ? this.api.selectSection(b, c, a as string) : this.api.selectSection(a as number, b);
+            // selectSection([window,] from, length) → bool
+            return c !== undefined
+                ? this.api.selectSection(b, c, a as string)
+                : this.api.selectSection(a as number, b);
         });
         // Mudlet getSelection([window]) → text, start, length (3 returns) or
         // false, errMsg. The wasmoon → Lua boundary returns one value, so we
@@ -1080,14 +1158,16 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setBorderLeft',   (n: unknown) => this.api.setBorderLeft(Number(n)));
         this.lua.global.set('setBorderRight',  (n: unknown) => this.api.setBorderRight(Number(n)));
 
-        // setBorderSizes(size) → uniform; setBorderSizes(top, right, bottom, left)
-        // → CSS-ordered. Other arities mirror Mudlet's silent no-op.
+        // Mudlet setBorderSizes follows CSS-shorthand semantics:
+        //   1 arg  → uniform
+        //   2 args → (vertical, horizontal)
+        //   3 args → (top, horizontal, bottom)
+        //   4 args → (top, right, bottom, left)
+        // ScriptingAPI.setBorderSizes does the case-split; we forward only the
+        // args that were actually passed so the undefined slots stay undefined.
         this.lua.global.set('setBorderSizes', (a?: unknown, b?: unknown, c?: unknown, d?: unknown) => {
-            if (b === undefined && c === undefined && d === undefined) {
-                this.api.setBorderSizes(Number(a));
-            } else {
-                this.api.setBorderSizes(Number(a), Number(b), Number(c), Number(d));
-            }
+            const num = (v: unknown) => v === undefined ? undefined : Number(v);
+            this.api.setBorderSizes(num(a), num(b), num(c), num(d));
         });
 
         this.lua.global.set('getBorderTop',    () => this.api.getBorderTop());

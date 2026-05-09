@@ -115,18 +115,28 @@ export class Console {
         this.cursorIdx = Math.min(idx, this.history.length - 1);
     }
 
-    moveUp(): void {
+    moveUp(lines: number = 1): boolean {
         const idx = this.cursor;
-        if (idx > 0) this.cursorIdx = idx - 1;
+        if (idx <= 0) return false;
+        const target = Math.max(0, idx - Math.max(1, Math.trunc(lines)));
+        this.cursorIdx = target;
+        return target !== idx;
     }
 
-    moveDown(): void {
+    moveDown(lines: number = 1): boolean {
         const idx = this.cursor;
-        if (idx < this.history.length - 1) this.cursorIdx = idx + 1;
+        const last = this.history.length - 1;
+        if (idx >= last) return false;
+        const target = Math.min(last, idx + Math.max(1, Math.trunc(lines)));
+        this.cursorIdx = target;
+        return target !== idx;
     }
 
-    moveTo(line: number): void {
-        this.cursorIdx = Math.max(0, Math.min(line, this.history.length - 1));
+    moveTo(line: number): boolean {
+        if (this.history.length === 0) return false;
+        if (!Number.isFinite(line) || line < 0) return false;
+        this.cursorIdx = Math.min(Math.trunc(line), this.history.length - 1);
+        return true;
     }
 
     /** Mark cursor as positioned at the end of existing rendered content, so the

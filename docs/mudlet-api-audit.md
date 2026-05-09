@@ -9,9 +9,10 @@ Scope: ~200 native bindings. Pure-Lua wrappers in bundled `mudlet-lua/` (cecho, 
 | Severity | Count | Meaning |
 |---|---|---|
 | OK | 58 | No meaningful discrepancy. |
-| minor | 91 | Same calls accepted, edge-case behavior or return shape differs. |
-| major | 38 | Wrong arg count/order, missing required arg, broken overload, wrong return type. |
+| minor | 90 | Same calls accepted, edge-case behavior or return shape differs. |
+| major | 7 | Wrong arg count/order, missing required arg, broken overload, wrong return type. |
 | missing | 11 | Declared as a stub but Mudlet has real behavior scripts depend on. |
+| fixed | 32 | Top-priority items #1–#20 in the next section have been resolved. |
 
 ---
 
@@ -19,7 +20,7 @@ Scope: ~200 native bindings. Pure-Lua wrappers in bundled `mudlet-lua/` (cecho, 
 
 The discrepancies most likely to silently break ported Mudlet scripts.
 
-### 1. Off-by-one in line-number APIs (cursor)
+### 1. Off-by-one in line-number APIs (cursor) — RESOLVED
 
 Mudlet's `getLineCount`, `getLastLineNumber`, `getLineNumber` all return **0-indexed line index** (i.e. `size - 1`); mudix returns 1-indexed counts. Any script doing `for i = 1, getLineCount() do` will read one line past the end (or skip the first line, depending on intent).
 
@@ -27,92 +28,118 @@ Mudlet's `getLineCount`, `getLastLineNumber`, `getLineNumber` all return **0-ind
 - `getLineCount([win])` — mudix `history.length`, Mudlet `size - 1`. `Console.ts:139`.
 - `getLastLineNumber([win])` — mudix `history.length`, Mudlet `size - 1` (and `-1` for missing window). `ScriptingAPI.ts:723`.
 
-### 2. Kill APIs take numeric tempIDs, but Mudlet takes name strings
+### 2. Kill APIs take numeric tempIDs, but Mudlet takes name strings — RESOLVED
 
 Mudlet's `killTimer/killAlias/killTrigger/killKey` accept the **name string** of a permanent item. mudix only accepts the numeric ID returned by `tempTimer/tempAlias/...`. Calling `killTimer("myTimer")` is a silent no-op.
 
 - `killTimer`, `killAlias`, `killTrigger`, `killKey` — `LuaRuntime.ts:816,828,863,881`.
 
-### 3. `permScript` / `permRegexTrigger` / `setScript` return UUID strings, not ints
+### 3. `permScript` / `permRegexTrigger` / `setScript` return UUID strings, not ints — RESOLVED
 
 Mudlet returns a numeric `id` on success. mudix returns a UUID string from the Zustand store. Code doing `if id > 0 then …` works (string is truthy) but anything storing the id as a key in a numeric table breaks.
 
 - `LuaRuntime.ts:697-714`, `ScriptingAPI.ts:399-409`.
 
-### 4. `tempKey` requires modifier; numeric keycodes don't translate
+### 4. `tempKey` requires modifier; numeric keycodes don't translate — RESOLVED
 
 - Mudlet: `tempKey([modifier,] keyCode, fn)` — modifier optional; `keyCode` is a Qt::Key int.
 - mudix: requires 3 args; passes the key through `String(key)`. Numeric Qt::Key codes get stringified instead of mapped to a `KeyboardEvent.key` value, so `tempKey(0x4000000, 0x01000004, fn)` (Ctrl+Enter) won't match. `LuaRuntime.ts:870-880`.
 
-### 5. `tempTrigger` does regex matching, not substring
+### 5. `tempTrigger` does regex matching, not substring — RESOLVED
 
 Mudlet's `tempTrigger` is **substring-match** (a literal contains check). `tempRegexTrigger` is regex. mudix routes both to `TriggerEngine.addTemp`, which compiles the pattern as PCRE. Scripts written for `tempTrigger` will fail when their substring contains regex metacharacters (`(`, `[`, `?`, etc.).
 
 - `LuaRuntime.ts:840-862`, shared primitive.
 
-### 6. `selectCaptureGroup`
+### 6. `selectCaptureGroup` — RESOLVED
 
 - **Numeric form**: mudix re-runs `selectString(text, 1)` — picks the **first** occurrence of the captured substring on the line, not the actual capture position. If the captured text appears more than once, this selects the wrong span.
 - **Named form**: returns `-1` (TODO). `LuaRuntime.ts:914-922`.
 
-### 7. `clearMapUserData` clears a single key (Mudlet clears the whole map dict)
+### 7. `clearMapUserData` clears a single key (Mudlet clears the whole map dict) — RESOLVED
 
 Mudlet: `clearMapUserData()` (no args, clears entire map user-data table) — Mudlet's `clearMapUserDataItem(key)` clears one key. mudix's `clearMapUserData(key)` is doing the **`Item`** behavior under the wrong name. Scripts calling `clearMapUserData()` with no args silently clear `""`.
 
 - `LuaRuntime.ts:459`, `ScriptingAPI.ts → MapStore.clearMapUserData`.
 
-### 8. `setExit` / `setExitStub` / `setDoor` reject string directions
+### 8. `setExit` / `setExitStub` / `setDoor` reject string directions — RESOLVED
 
 Mudlet accepts both string (`"north"`, `"n"`) and integer (1–12) directions. mudix only accepts integers. Most user scripts use strings. `LuaRuntime.ts:464-473`.
 
-### 9. Area APIs reject name lookups
+**Fix:** added `parseDirection()` helper in `MapStore.ts` that normalizes either form to the 1-12 index. `setExit` / `setExitStub` / `setDoor` now accept `number | string`. `setDoor` additionally normalizes the direction key to the canonical field name when the input maps to a stock direction; arbitrary special-exit cmd strings still pass through unchanged.
+
+### 9. Area APIs reject name lookups — RESOLVED
 
 `setRoomArea`, `getRoomAreaName`, `setAreaName`, `deleteArea`: Mudlet accepts either area-ID number **or** area-name string. mudix only accepts numeric IDs. `LuaRuntime.ts:437,532-533,530`.
 
-### 10. `addRoom` drops the `areaID` arg
+**Fix:** `MapStore` got a private `resolveAreaId(idOrName)` helper. `setRoomArea` now also accepts an array of room IDs and an area-ID-or-name; `getRoomAreaName` is bidirectional (number→name, name→number); `setAreaName` and `deleteArea` accept either form. `setRoomArea` and `setAreaName` validate the lookup and return `false` (or `(false, errMsg)` for `setAreaName`) on miss instead of silently no-op'ing.
+
+### 10. `addRoom` drops the `areaID` arg — RESOLVED
 
 Mudlet: `addRoom(roomID, areaID)`. mudix: `addRoom(id)` only — the room is created but never assigned to its target area. `LuaRuntime.ts:429`.
 
-### 11. `getMapEvents` uses wrong field names
+**Fix:** `MapStore.addRoom(id, areaId?)` now accepts an optional area ID. When provided, the room is created in that area, the area is created if missing, and the room is registered on the area's `rooms` list (so `getAreaRooms` reflects it immediately). The Lua binding forwards the second arg.
+
+### 11. `getMapEvents` uses wrong field names — RESOLVED
 
 Mudlet shape: `{[uniqueName] = {["event name"]=, ["parent"]=, ["display name"]=, ["arguments"]={...}}}`. mudix returns `{event=, parent=, display=, args=}`. `LuaRuntime.ts:497-508`.
 
-### 12. `addAreaName` returns existing ID on duplicate
+**Fix:** moved the table-build into Bridge.lua's `getMapEvents()` wrapper so the per-entry keys are real Lua strings (`["event name"]`, `["parent"]`, `["display name"]`, `["arguments"]`) and the `arguments` array is rebuilt 1-indexed. JS exposes the raw entries via `__getMapEvents`.
+
+### 12. `addAreaName` returns existing ID on duplicate — RESOLVED
 
 Mudlet returns `(false, errMsg)` on duplicate or empty name. mudix returns the existing ID, masking the conflict from script logic. `LuaRuntime.ts:529`.
 
-### 13. `addCommandLineMenuEvent` arg semantics wrong
+**Fix:** `MapStore.addAreaName` now returns `{ ok: false, err }` on dup/empty and a numeric id on success. JS exposes `__addAreaName`; a Bridge.lua wrapper unpacks the result into Mudlet's `(false, errMsg)` multi-return. `setAreaName` got the same treatment for new-name conflicts.
+
+### 13. `addCommandLineMenuEvent` arg semantics wrong — RESOLVED
 
 Mudlet: `addCommandLineMenuEvent([cmdLineName,] menuLabel, eventName)` — **no `displayName` arg**. mudix treats the 4-arg form as `(cmdLineName, uniqueName, event, displayName)` and the 3-arg form as `(uniqueName, event, displayName)`. The `displayName` slot doesn't exist in Mudlet; menu entries display the `menuLabel` directly. `LuaRuntime.ts:607-627`.
 
-### 14. `echoPopup` no-window form is broken
+**Fix:** the binding now treats the 2-arg form as `(menuLabel, eventName)` and the 3-arg form as `(cmdLineName, menuLabel, eventName)` — `cmdLineName` is dropped (single command bar) and `menuLabel` doubles as both the unique key and the display string (matching Mudlet, which has no separate display slot).
+
+### 14. `echoPopup` no-window form is broken — RESOLVED
 
 Bridge.lua's wrapper does not auto-detect the no-window form. Calling `echoPopup(text, {cmds}, {hints})` (3 args) ends up with `text` interpreted as a window name and `{cmds}` interpreted as the popup text. Mudlet's C++ uses argc-based detection. `Bridge.lua:302`.
 
-### 15. `getMudletVersion("table")` returns 3 values, not 4
+**Fix:** the Bridge.lua wrapper now uses `select('#', ...)` argc-based detection. 3-arg → `(text, cmds, hints)`. 4-arg disambiguates by `type(arg2) == 'table'` (`(text, cmds, hints, useFmt)` vs `(window, text, cmds, hints)`). 5-arg → full form with window and fmt.
+
+### 15. `getMudletVersion("table")` returns 3 values, not 4 — RESOLVED
 
 Mudlet returns `(major, minor, revision, build)`. mudix returns `(major, minor, revision)` only — drops `build`. `Bridge.lua:106`.
 
-### 16. `setBorderSizes` missing 2-arg and 3-arg overloads
+**Fix:** the `"table"` branch in Bridge.lua now returns four values: `MAJOR, MINOR, REVISION, BUILD`.
+
+### 16. `setBorderSizes` missing 2-arg and 3-arg overloads — RESOLVED
 
 Mudlet supports 1, 2, 3, or 4 args (uniform / vertical-horizontal / top-horizontal-bottom / TRBL). mudix supports only 1 and 4. `LuaRuntime.ts:1021-1027`.
 
-### 17. `selectSection` returns nothing; no validation
+**Fix:** `ScriptingAPI.setBorderSizes` now case-splits on argc to implement the full CSS-shorthand semantics (1=uniform, 2=V/H, 3=top/H/bottom, 4=TRBL). The Lua binding forwards only the args actually passed, so missing slots stay `undefined` and the overload selection works.
+
+### 17. `selectSection` returns nothing; no validation — RESOLVED
 
 Mudlet returns boolean and rejects negative `from`. mudix records the selection unconditionally and returns `undefined`. Scripts using `if not selectSection(...)` always see `nil`. `ScriptingAPI.ts:594`.
 
-### 18. `moveCursor` returns nothing; ignores `x` outside trigger context
+**Fix:** `selectSection` now validates `from >= 0`, requires a finite non-negative length, and verifies the resolved buffer exists before recording the selection. Returns `true` on success, `false` otherwise. The Lua binding forwards the bool.
+
+### 18. `moveCursor` returns nothing; ignores `x` outside trigger context — RESOLVED
 
 - Returns `undefined` (Mudlet returns boolean).
 - Outside trigger processing, `x` is ignored — only the line component is honored. `ScriptingAPI.ts:816-823`.
 
-### 19. `moveCursorUp`/`Down` ignore `lines` and `keepHorizontal` overloads
+**Fix:** `moveCursor` now returns `true` on a successful move and `false` otherwise (empty buffer, out-of-range y, negative x in lineBuffer mode). The `x`-outside-triggers limitation is unchanged (rendered Console history doesn't carry a column cursor) and is now documented in the JSDoc as a known minor downgrade rather than a silent quirk.
+
+### 19. `moveCursorUp`/`Down` ignore `lines` and `keepHorizontal` overloads — RESOLVED
 
 Mudlet (via mudlet-lua/lua/GUIUtils.lua): `moveCursorUp([win,] [lines=1,] [keepHorizontal])`. mudix accepts only `windowName`. Calling `moveCursorUp(5)` is interpreted as `windowName="5"` and silently fails. `LuaRuntime.ts:773-774`.
 
-### 20. `getLines` table is 0-indexed (Mudlet is 1-indexed)
+**Fix:** the Lua bindings disambiguate the leading arg by type — string is the window name; number is the lines count (window defaults to main). `Console.moveUp/moveDown` now take an optional `lines` count (defaulting to 1). `keepHorizontal` is accepted for parity but ignored (no persistent column cursor on rendered history). Both return `true` when the cursor actually moved.
+
+### 20. `getLines` table is 0-indexed (Mudlet is 1-indexed) — RESOLVED
 
 JS array crosses the wasmoon boundary as a 0-indexed Lua table. `ipairs(t)` skips the first entry. Other primitives use a Bridge.lua `rebuildJsArray` wrapper for this; `getLines` doesn't. `LuaRuntime.ts:769-772`.
+
+**Fix:** raw bridge moved to `__getLines`; the Bridge.lua `getLines` wrapper now passes the result through `rebuildJsArray`, returning a 1-indexed sequence so `ipairs` walks all entries.
 
 ### 21. `createMiniConsole` parent is silently dropped
 
@@ -176,8 +203,8 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | deleteLine | `deleteLine([win])` | OK | OK | OK |
 | replace | `replace([win,] with, [keepcolor])` | 2-arg only | Drops `keepcolor` (3rd arg) | minor |
 | echoLink | `echoLink([win,] text, cmd, hint, [useCurrentFmt])` | `hasWindow = typeof d === 'string'` | Drops `useCurrentFormat` (no Mudlet default blue+underline styling) | minor |
-| **echoPopup** | `echoPopup([win,] text, {cmds}, {hints}, [useCurrentFmt])` | always 5-arg `(win, text, cmds, hints, fmt)` | Bridge.lua wrapper does NOT auto-detect no-window form — `echoPopup(text, {cmds}, {hints})` garbles args | **major** |
-| **selectCaptureGroup** | `(groupNum|groupName)` | numeric only; named TODO | Named-group lookup unimplemented; numeric path uses `selectString` which picks the wrong occurrence when captured text repeats | **major** |
+| echoPopup | `echoPopup([win,] text, {cmds}, {hints}, [useCurrentFmt])` | argc-based detection in Bridge.lua wrapper | Auto-detects no-window form (3-arg) and disambiguates 4-arg via `type(arg2)` | fixed |
+| selectCaptureGroup | `(groupNum|groupName)` | resolved | (see #6 in Top priorities) | fixed |
 | printError | `printError(msg, [showStack], [haltExec])` | `(text)` only | Drops `showStackTrace` and `haltExecution` | minor |
 | feedTriggers | `feedTriggers(text, [utf8=true])` | `(text)` only | Drops encoding flag (irrelevant in JS) | OK |
 
@@ -186,21 +213,21 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | Function | Mudlet signature | mudix accepts | Discrepancy | Severity |
 |---|---|---|---|---|
 | selectString | `([win,] text, occurrence) → start col or -1` | same | OK | OK |
-| **selectSection** | `([win,] from, length) → bool` | same; returns nothing | No bool return; no bounds validation | **major** |
+| selectSection | `([win,] from, length) → bool` | matches | Validates from/length ≥ 0 and that the buffer exists; returns bool | fixed |
 | getSelection | `([win]) → text, start, length OR nil, errMsg` | `false, "no selection"` | Mudlet returns `nil, msg`; mudix returns `false, msg` | minor |
 | isPrompt | reflects `promptBuffer[userCursorY]` | cached `_isPrompt` for last line only | Can't query historical lines via moveCursor + isPrompt | minor |
 | getCurrentLine | `([win]) → string, [bad_window_value]` | string; `''` on missing | No error tuple | minor |
-| **getLineNumber** | `([win]) → 0-indexed cursor.y` | `cursor + 1` | Off-by-one — mudix is 1-indexed | **major** |
-| **getLineCount** | `([win]) → size - 1` (last index) | `history.length` (count) | Off-by-one | **major** |
-| **getLastLineNumber** | `([win]) → size - 1`; -1 if missing | `history.length`; never -1 | Off-by-one + missing error sentinel | **major** |
+| getLineNumber | `([win]) → 0-indexed cursor.y` | resolved (see #1 in Top priorities) | — | fixed |
+| getLineCount | `([win]) → size - 1` (last index) | resolved (see #1) | — | fixed |
+| getLastLineNumber | `([win]) → size - 1`; -1 if missing | resolved (see #1) | — | fixed |
 | getColumnNumber | `([win]) → mUserCursor.x()` (persistent) | `cursorCol` only inside trigger; else 0 | Outside triggers always returns 0 | minor |
 | getColumnCount | font-metric column count | DOM probe; returns 0 if not mounted | Equivalent for monospace | minor |
 | setWindowWrap | `(name, wrapAt)` no return; name required | `([name,] n) → bool` | mudix returns bool and accepts no-name shorthand | minor |
-| **getLines** | `([win,] from, to) → 1-indexed table` | JS array → 0-indexed Lua table | `ipairs` skips first entry; needs Bridge wrapper | **major** |
-| **moveCursorUp** | `([win,] [lines=1,] [keepHoriz])` | `(win)` only | Calling `moveCursorUp(5)` interpreted as window name | **major** |
-| **moveCursorDown** | `([win,] [lines=1,] [keepHoriz])` | `(win)` only | same | **major** |
+| getLines | `([win,] from, to) → 1-indexed table` | matches | Bridge.lua wrapper rebuilds the JS array as 1-indexed | fixed |
+| moveCursorUp | `([win,] [lines=1,] [keepHoriz])` | matches | Disambiguates by arg type; honors `lines`; ignores `keepHorizontal` | fixed |
+| moveCursorDown | `([win,] [lines=1,] [keepHoriz])` | matches | same | fixed |
 | moveCursorEnd | `([win])` — last char of last line | `Console.moveTo(lineCount)` | No column cursor on rendered history | minor |
-| **moveCursor** | `([win], x, y) → bool` | returns nothing; outside trigger ignores `x` | No bool return; column ignored on history | **major** |
+| moveCursor | `([win], x, y) → bool` | returns bool; column still ignored on history | Validates inputs, returns true on successful move; `x` outside triggers remains a documented minor downgrade | fixed |
 
 ### Windows / labels
 
@@ -250,13 +277,13 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | getRoomHashByID | string or `(false, errMsg)` | string or false | No errMsg | minor |
 | loadMap | `([location])` — accepts `.dat`/`.xml` | `.dat` only | No XML import | minor |
 | createRoomID | `([minimum])` | no args | Drops optional `minimum` | minor |
-| **addRoom** | `(roomID, areaID) → bool` | `(roomID)` only | Drops `areaID` — room not assigned to area | **major** |
+| addRoom | `(roomID, areaID) → bool` | `(roomID, areaID?)` | Optional `areaID` is honored; the area is created if missing and the room is registered on its `rooms` list | fixed |
 | deleteRoom | `(roomID) → bool` | no return | Missing bool | minor |
 | roomExists | `(roomID) → bool` | matches | OK | OK |
 | getRoomName | string or `(false, errMsg)` | string or false | No errMsg | minor |
 | setRoomName | matches; no return | matches | minor |
 | getRoomArea | number | number or false | `false` on miss | minor |
-| **setRoomArea** | `(roomID|{ids}, areaID|areaName) → bool` | `(id, areaId)` number-only | Rejects name string and array of room IDs | **major** |
+| setRoomArea | `(roomID|{ids}, areaID|areaName) → bool` | accepts both | Single ID and array of IDs supported; area lookup by ID or name; returns bool | fixed |
 | getRoomCoordinates | `x, y, z` (3 returns) | Bridge unpacks JS `[x,y,z]` | OK | minor |
 | setRoomCoordinates | matches; bool | no return | Missing bool | minor |
 | getRoomsByPosition | 0-indexed table | 0-indexed via wasmoon | OK | OK |
@@ -268,27 +295,27 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | setRoomUserData | matches; bool | no return | Missing bool | minor |
 | getMapUserData | string or `(false, errMsg)` | `''` on miss | Different miss-shape | minor |
 | setMapUserData | matches | matches | OK | OK |
-| **clearMapUserData** | no args; clears entire dict | `(key)` — clears single key | **Wrong semantics**: clears single key (this is `clearMapUserDataItem` in Mudlet) | **major** |
+| clearMapUserData | no args; clears entire dict | resolved (see #7 in Top priorities) | `clearMapUserData()` wipes all; `clearMapUserDataItem(key)` clears one | fixed |
 | getAllMapUserData | matches | matches | OK | OK |
 | getRoomExits | `{[dir]=roomID}` | matches | OK | OK |
-| **setExit** | `(from, to, dir)` — dir is string OR int | int only | Rejects "north"/"n"; no bool return | **major** |
+| setExit | `(from, to, dir)` — dir is string OR int | both forms accepted | `parseDirection()` normalizes int 1-12 or name ("north"/"n"); returns bool | fixed |
 | getExitStubs | 0-indexed table | 0-indexed | OK | OK |
-| **setExitStub** | `(roomID, dir, set)` — dir is string OR int | int only | Rejects string direction | **major** |
+| setExitStub | `(roomID, dir, set)` — dir is string OR int | both forms accepted | Same `parseDirection()` normalization; returns bool | fixed |
 | addSpecialExit | matches; bool | no return | Missing bool | minor |
 | removeSpecialExit | matches; bool | no return | Missing bool | minor |
 | getSpecialExitsSwap | `{[cmd]=toRoomID}` | matches | OK | OK |
 | getDoors | `{[dir]=status}` | matches | OK | OK |
-| setDoor | `(roomID, exitCmd, status) → bool` — validates exit | no validation, no return | Skips Mudlet exit-existence check | minor |
+| setDoor | `(roomID, exitCmd, status) → bool` — validates exit | accepts int or name; falls through to special-exit cmd | Door key normalizes to canonical field name for stock directions; returns bool | fixed |
 | addMapEvent | no return | bool | Extra return shouldn't break | minor |
 | removeMapEvent | no return | bool | same | minor |
-| **getMapEvents** | `{[unique]={["event name"]=, ["parent"]=, ["display name"]=, ["arguments"]={...}}}` | `{event=, parent=, display=, args=}` | Wrong field names | **major** |
+| getMapEvents | `{[unique]={["event name"]=, ["parent"]=, ["display name"]=, ["arguments"]={...}}}` | matches | Bridge.lua wrapper builds the literal-key shape and rebuilds args 1-indexed | fixed |
 | setCustomEnvColor | `(envID, r, g, b, a)` | matches; alpha stored, renderer uses RGB | minor |
 | getCustomEnvColor | not in Mudlet (Mudlet has `getCustomEnvColorTable`) | mudix-only | Non-canonical accessor | minor |
-| **addAreaName** | `→ areaID OR (false, errMsg)` on dup | returns existing ID on dup | Masks duplicate-name conflict | **major** |
-| **deleteArea** | `(areaID|areaName) → bool` | number-only, no return | Rejects name; no bool; deletes contained rooms (Mudlet moves them to default) | **major** |
+| addAreaName | `→ areaID OR (false, errMsg)` on dup | matches | Returns numeric ID on success, `(false, errMsg)` on duplicate or empty name (via Bridge.lua wrapper) | fixed |
+| deleteArea | `(areaID|areaName) → bool` | both forms accepted | Returns bool; mudix still deletes contained rooms (Mudlet moves them to default) — flagged as future follow-up | fixed |
 | getAreaTable | `{[name]=id}` | matches | OK | OK |
-| **getRoomAreaName** | `(areaID|areaName)` — bidirectional | number-only | Rejects string lookup | **major** |
-| **setAreaName** | `(areaID|areaName, newName) → bool` | number-only | Rejects name lookup; no return | **major** |
+| getRoomAreaName | `(areaID|areaName)` — bidirectional | bidirectional | Number → name string; name → ID | fixed |
+| setAreaName | `(areaID|areaName, newName) → bool` | both forms accepted | Bridge.lua wrapper turns conflict/missing into `(false, errMsg)`; returns true on success | fixed |
 | getAreaRooms | 0-indexed table | matches | OK | OK |
 | getRooms | `{[id]=name}` | matches | OK | OK |
 
@@ -298,19 +325,19 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 |---|---|---|---|---|
 | tempTimer | `(seconds, code|fn, [repeating])` → id | matches | OK | OK |
 | tempAlias | `(regex, code|fn)` | matches | OK | OK |
-| tempTrigger | **substring-match** | regex (PCRE) | Wrong match semantics | **major** |
-| **tempRegexTrigger** | regex match | regex | shares primitive — OK for this name | (counted under tempTrigger) |
-| **tempKey** | `([modifier,] keyCode, fn)` — modifier optional; keyCode is Qt::Key int | `(modifier, key, fn)` requires 3 args; numeric key gets stringified | Modifier required; numeric Qt::Key codes don't translate | **major** |
-| **killTimer** | `(id|name) → bool` | numeric id only | Mudlet accepts name strings | **major** |
-| **killAlias** | `(name) → bool` | numeric id | wrong arg type | **major** |
-| **killTrigger** | `(id|name) → bool` | numeric id | same | **major** |
-| **killKey** | `(name) → bool` | numeric id | same | **major** |
+| tempTrigger | substring-match | resolved (see #5 in Top priorities) | — | fixed |
+| tempRegexTrigger | regex match | regex | shares primitive — OK for this name | OK |
+| tempKey | `([modifier,] keyCode, fn)` — modifier optional; keyCode is Qt::Key int | resolved (see #4 in Top priorities) | — | fixed |
+| killTimer | `(id|name) → bool` | resolved (see #2 in Top priorities) | — | fixed |
+| killAlias | `(name) → bool` | resolved (see #2) | — | fixed |
+| killTrigger | `(id|name) → bool` | resolved (see #2) | — | fixed |
+| killKey | `(name) → bool` | resolved (see #2) | — | fixed |
 | enableTrigger/disableTrigger/enableTimer/disableTimer | `(name) → bool` | matches | OK | OK |
 | enableScript/disableScript | `(name) → true` (errors if missing) | bool (false if missing) | mudix doesn't raise | minor |
 | exists | `(name|id, type) → count` | name+type only | No id-form lookup; accepts both `key` and `keybind` | minor |
-| **permScript** | `(name, parent, code) → numeric id` | UUID string | Return type mismatch | **major** |
-| **permRegexTrigger** | `(name, parent, regexes, code) → numeric id` | UUID string | same; also empty regex list creates folder (Mudlet rejects) | **major** |
-| **setScript** | `(name, code, [pos]) → numeric id` | `true` or `-1` | Wrong return type | **major** |
+| permScript | `(name, parent, code) → numeric id` | resolved (see #3 in Top priorities) | — | fixed |
+| permRegexTrigger | `(name, parent, regexes, code) → numeric id` | resolved (see #3) | — | fixed |
+| setScript | `(name, code, [pos]) → numeric id` | resolved (see #3) | — | fixed |
 | installPackage | `(location)` — http URLs via Other.lua | VFS path only (Other.lua override may handle URLs) | Verify Other.lua override is loaded | minor |
 | uninstallPackage | `(name) → true | nil` | bool | `false` vs `nil` | minor |
 | getPackages | 1-indexed table | Bridge rebuilds | OK | OK |
@@ -335,7 +362,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | saveProfile | `([location, [filename]]) → (true, filename) | (nil, errMsg)` | always `(true, path)` | Never reports failure; ignores location and filename | minor |
 | unzipAsync | matches | matches | OK | OK |
 | **remainingTime** | `(id|name) → seconds` | stub returns -1 | TODO | **missing** |
-| **selectCaptureGroup** | numeric AND named | numeric only (off-by-one risk if capture repeats); named TODO | see "Top priorities" #6 | **major** |
+| selectCaptureGroup | numeric AND named | resolved (see #6 in Top priorities) | — | fixed |
 
 ### Network / HTTP / cmdline
 
@@ -351,7 +378,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | appendCmdLine | `([name,] text)` | name dropped (single bar) | OK | OK |
 | printCmdLine | `([name,] text)` | name dropped | OK | OK |
 | clearCmdLine | `([name])` | name dropped | OK | OK |
-| **addCommandLineMenuEvent** | `([cmdLineName,] menuLabel, eventName)` — **no displayName** | introduces phantom `displayName` slot | Wrong arg semantics | **major** |
+| addCommandLineMenuEvent | `([cmdLineName,] menuLabel, eventName)` — **no displayName** | matches | 2-arg `(menuLabel, eventName)` and 3-arg `(cmdLineName, menuLabel, eventName)` (cmdLineName dropped) | fixed |
 | removeCommandLineMenuEvent | `([cmdLineName,] menuLabel) → bool` | drops cmdLineName | Mudlet returns `(false, msg)` on missing | minor |
 | getCommandLineMenuEvents | not in Mudlet C++ | mudix-only | OK as extension | OK |
 | **setCmdLineAction** | `(cmdLineName, fn, [args...])` — intercepts Enter | no-op stub | Real Mudlet API; scripts that intercept Enter silently fail | **missing** |
@@ -365,7 +392,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | Function | Mudlet signature | mudix accepts | Discrepancy | Severity |
 |---|---|---|---|---|
 | setBorderTop/Bottom/Left/Right | `(size)` | matches | OK | OK |
-| **setBorderSizes** | 1/2/3/4 args (uniform / vertical-horizontal / top-h-bottom / TRBL) | 1 and 4 only | Missing 2- and 3-arg forms | **major** |
+| setBorderSizes | 1/2/3/4 args (uniform / vertical-horizontal / top-h-bottom / TRBL) | matches | All four arities case-split in `ScriptingAPI.setBorderSizes` | fixed |
 | getBorderTop/Bottom/Left/Right/Sizes | matches | matches | OK | OK |
 | setBorderColor | `(r,g,b)` (alpha forced 255) | accepts optional alpha | mudix accepts alpha Mudlet ignores; no 0-255 validation | minor |
 | resetBorderColor | doesn't exist in Mudlet | mudix extension | OK | OK |
@@ -375,7 +402,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | getFont | `([name])` string family | string or false | `false` for missing window | minor |
 | getMainWindowSize | console-only area (excludes toolbars) | viewport rect | Reports viewport, not console area | minor |
 | getUserWindowSize | size or main-console fallback for missing | (0,0) on missing | Different miss-shape | minor |
-| **getMudletVersion** | `"table"` mode → 4 returns `(M, m, r, build)` | 3 returns | Drops `build` | **major** |
+| getMudletVersion | `"table"` mode → 4 returns `(M, m, r, build)` | 4 returns | Bridge.lua now returns BUILD as the 4th value | fixed |
 | getProfileName | host profile dir name | connection display name | Semantically close, not identical | minor |
 | getEpoch | seconds with sub-second precision | `Date.now()/1000` | OK | OK |
 

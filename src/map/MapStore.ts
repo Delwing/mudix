@@ -10,6 +10,34 @@ const DIR_FIELD: Record<number, string> = {
     11: 'in', 12: 'out',
 };
 
+// Mudlet exit/door APIs accept either an integer 1-12 or a long/short
+// direction name. Normalize either form to the canonical 1-12 index, or
+// undefined when the value isn't a recognized direction.
+const DIR_NAME_TO_INT: Record<string, number> = {
+    n: 1, north: 1,
+    ne: 2, northeast: 2,
+    nw: 3, northwest: 3,
+    e: 4, east: 4,
+    w: 5, west: 5,
+    s: 6, south: 6,
+    se: 7, southeast: 7,
+    sw: 8, southwest: 8,
+    u: 9, up: 9,
+    d: 10, down: 10,
+    in: 11,
+    out: 12,
+};
+
+export function parseDirection(dir: unknown): number | undefined {
+    if (typeof dir === 'number') {
+        return DIR_FIELD[dir] ? dir : undefined;
+    }
+    if (typeof dir === 'string') {
+        return DIR_NAME_TO_INT[dir.toLowerCase()];
+    }
+    return undefined;
+}
+
 const DEFAULT_FONT: MudletFont = {
     family: 'Bitstream Vera Sans Mono', style: 'Normal',
     pointSize: 8, pixelSize: -1, styleHint: 5, styleStrategy: 1,
@@ -145,9 +173,19 @@ export class MapStore {
 
     // ── Room CRUD ─────────────────────────────────────────────────────────────
 
-    addRoom(id: number): boolean {
+    addRoom(id: number, areaId?: number): boolean {
         if (this.rooms.has(id)) return false;
-        this.rooms.set(id, makeRoom(0));
+        const initialArea = areaId != null && Number.isFinite(areaId) ? Number(areaId) : 0;
+        this.rooms.set(id, makeRoom(initialArea));
+        if (areaId != null && Number.isFinite(areaId)) {
+            const aid = Number(areaId);
+            if (!this.areas.has(aid)) {
+                this.areas.set(aid, makeArea());
+                if (!this.areaNames.has(aid)) this.areaNames.set(aid, `Area ${aid}`);
+                if (aid >= this.nextAreaId) this.nextAreaId = aid + 1;
+            }
+            this.areas.get(aid)!.rooms.push(id);
+        }
         this.notify();
         return true;
     }
@@ -178,23 +216,50 @@ export class MapStore {
 
     getRoomArea(id: number): number | undefined { return this.rooms.get(id)?.area; }
 
-    setRoomArea(id: number, areaId: number): void {
-        const room = this.rooms.get(id);
-        if (!room) return;
-        const oldArea = this.areas.get(room.area);
-        if (oldArea) {
-            oldArea.rooms = oldArea.rooms.filter(r => r !== id);
-            this.updateAreaBounds(room.area);
+    /**
+     * Mudlet `setRoomArea(roomID|{ids}, areaID|areaName)`. Accepts either a
+     * single room ID or an array of room IDs, and either a numeric area ID or
+     * an area-name string. Returns false if the area name cannot be resolved.
+     */
+    setRoomArea(id: number | number[], areaIdOrName: number | string): boolean {
+        const aid = this.resolveAreaId(areaIdOrName);
+        if (aid == null) return false;
+        const ids = Array.isArray(id) ? id.map(n => Number(n)).filter(n => Number.isFinite(n)) : [Number(id)];
+        let touched = false;
+        for (const rid of ids) {
+            const room = this.rooms.get(rid);
+            if (!room) continue;
+            const oldArea = this.areas.get(room.area);
+            if (oldArea) {
+                oldArea.rooms = oldArea.rooms.filter(r => r !== rid);
+                this.updateAreaBounds(room.area);
+            }
+            if (!this.areas.has(aid)) {
+                this.areas.set(aid, makeArea());
+                if (!this.areaNames.has(aid)) this.areaNames.set(aid, `Area ${aid}`);
+                if (aid >= this.nextAreaId) this.nextAreaId = aid + 1;
+            }
+            this.areas.get(aid)!.rooms.push(rid);
+            room.area = aid;
+            this.updateAreaBounds(aid);
+            touched = true;
         }
-        if (!this.areas.has(areaId)) {
-            this.areas.set(areaId, makeArea());
-            if (!this.areaNames.has(areaId)) this.areaNames.set(areaId, `Area ${areaId}`);
-            if (areaId >= this.nextAreaId) this.nextAreaId = areaId + 1;
+        if (touched) this.notify();
+        return touched;
+    }
+
+    /** Resolve area-id-or-name → numeric id, or undefined if unknown. */
+    private resolveAreaId(idOrName: number | string): number | undefined {
+        if (typeof idOrName === 'number') {
+            return Number.isFinite(idOrName) ? idOrName : undefined;
         }
-        this.areas.get(areaId)!.rooms.push(id);
-        room.area = areaId;
-        this.updateAreaBounds(areaId);
-        this.notify();
+        if (typeof idOrName === 'string') {
+            const n = Number(idOrName);
+            if (Number.isFinite(n) && /^-?\d+$/.test(idOrName.trim())) return n;
+            for (const [aid, name] of this.areaNames) if (name === idOrName) return aid;
+            return undefined;
+        }
+        return undefined;
     }
 
     getRoomCoordinates(id: number): [number, number, number] | undefined {
@@ -268,24 +333,33 @@ export class MapStore {
         return exits;
     }
 
-    setExit(from: number, to: number, dir: number): void {
+    /**
+     * Mudlet `setExit(from, to, dir)` — `dir` is either a 1-12 integer or a
+     * direction name ("north"/"n"/etc.). Returns true on success.
+     */
+    setExit(from: number, to: number, dir: number | string): boolean {
         const room = this.rooms.get(from);
-        if (!room) return;
-        const field = DIR_FIELD[dir];
-        if (!field) return;
+        if (!room) return false;
+        const dirInt = parseDirection(dir);
+        if (dirInt == null) return false;
+        const field = DIR_FIELD[dirInt];
         (room as unknown as Record<string, number>)[field] = to;
-        if (to >= 0) room.stubs = room.stubs.filter(s => s !== dir);
+        if (to >= 0) room.stubs = room.stubs.filter(s => s !== dirInt);
         this.notify();
+        return true;
     }
 
     getExitStubs(id: number): number[] { return [...(this.rooms.get(id)?.stubs ?? [])]; }
 
-    setExitStub(id: number, dir: number, set: boolean): void {
+    setExitStub(id: number, dir: number | string, set: boolean): boolean {
         const room = this.rooms.get(id);
-        if (!room) return;
-        if (set) { if (!room.stubs.includes(dir)) room.stubs.push(dir); }
-        else room.stubs = room.stubs.filter(s => s !== dir);
+        if (!room) return false;
+        const dirInt = parseDirection(dir);
+        if (dirInt == null) return false;
+        if (set) { if (!room.stubs.includes(dirInt)) room.stubs.push(dirInt); }
+        else room.stubs = room.stubs.filter(s => s !== dirInt);
         this.notify();
+        return true;
     }
 
     addSpecialExit(from: number, to: number, cmd: string): void {
@@ -308,12 +382,22 @@ export class MapStore {
         return { ...(this.rooms.get(id)?.doors ?? {}) };
     }
 
-    setDoor(id: number, dir: string, val: number): void {
+    /**
+     * Mudlet `setDoor(roomID, exitCmd, status)`. exitCmd is either a stock
+     * direction (numeric 1-12 or name like "north"/"n"), in which case the
+     * door is keyed by the canonical field name ("north"/"northeast"/...), or
+     * an arbitrary special-exit command string, which is used as-is.
+     */
+    setDoor(id: number, dir: number | string, val: number): boolean {
         const room = this.rooms.get(id);
-        if (!room) return;
-        if (val <= 0) delete room.doors[dir];
-        else room.doors[dir] = val;
+        if (!room) return false;
+        const dirInt = parseDirection(dir);
+        const key = dirInt != null ? DIR_FIELD[dirInt] : (typeof dir === 'string' ? dir : '');
+        if (!key) return false;
+        if (val <= 0) delete room.doors[key];
+        else room.doors[key] = val;
         this.notify();
+        return true;
     }
 
     // ── User data ─────────────────────────────────────────────────────────────
@@ -374,8 +458,17 @@ export class MapStore {
 
     // ── Areas ─────────────────────────────────────────────────────────────────
 
-    addAreaName(name: string): number {
-        for (const [id, n] of this.areaNames) if (n === name) return id;
+    /**
+     * Mudlet `addAreaName(name)` returns a numeric area ID on success or
+     * `(false, errMsg)` when the name is empty or already in use.
+     */
+    addAreaName(name: string): number | { ok: false; err: string } {
+        if (typeof name !== 'string' || name.length === 0) {
+            return { ok: false, err: 'addAreaName: area name must be a non-empty string' };
+        }
+        for (const [, n] of this.areaNames) {
+            if (n === name) return { ok: false, err: `addAreaName: an area called "${name}" already exists` };
+        }
         const id = this.nextAreaId++;
         this.areas.set(id, makeArea());
         this.areaNames.set(id, name);
@@ -383,9 +476,16 @@ export class MapStore {
         return id;
     }
 
-    deleteArea(id: number): void {
+    /**
+     * Mudlet `deleteArea(areaID|areaName)` — deletes the area record and the
+     * rooms it contained. Returns true on success, false if the area can't be
+     * resolved.
+     */
+    deleteArea(idOrName: number | string): boolean {
+        const id = this.resolveAreaId(idOrName);
+        if (id == null) return false;
         const area = this.areas.get(id);
-        if (!area) return;
+        if (!area) return false;
         for (const roomId of area.rooms) {
             const r = this.rooms.get(roomId);
             if (r?.hash) this.hashToRoom.delete(r.hash);
@@ -394,6 +494,7 @@ export class MapStore {
         this.areas.delete(id);
         this.areaNames.delete(id);
         this.notify();
+        return true;
     }
 
     getAreaTable(): Record<string, number> {
@@ -402,10 +503,42 @@ export class MapStore {
         return out;
     }
 
-    getRoomAreaName(areaId: number): string | undefined { return this.areaNames.get(areaId); }
+    /**
+     * Mudlet `getRoomAreaName(areaID|areaName)` — bidirectional. Given an ID
+     * returns the name; given a name returns the ID. Returns undefined when
+     * the input cannot be resolved.
+     */
+    getRoomAreaName(idOrName: number | string): string | number | undefined {
+        if (typeof idOrName === 'number') {
+            return this.areaNames.get(idOrName);
+        }
+        if (typeof idOrName === 'string') {
+            for (const [aid, name] of this.areaNames) if (name === idOrName) return aid;
+            return undefined;
+        }
+        return undefined;
+    }
 
-    setAreaName(areaId: number, name: string): void {
-        if (this.areaNames.has(areaId)) { this.areaNames.set(areaId, name); this.notify(); }
+    /**
+     * Mudlet `setAreaName(areaID|areaName, newName) → true | false, errMsg`.
+     * Rejects empty new names and names that conflict with another area.
+     */
+    setAreaName(idOrName: number | string, newName: string): boolean | { ok: false; err: string } {
+        if (typeof newName !== 'string' || newName.length === 0) {
+            return { ok: false, err: 'setAreaName: new area name must be a non-empty string' };
+        }
+        const id = this.resolveAreaId(idOrName);
+        if (id == null || !this.areaNames.has(id)) {
+            return { ok: false, err: 'setAreaName: area not found' };
+        }
+        for (const [aid, n] of this.areaNames) {
+            if (aid !== id && n === newName) {
+                return { ok: false, err: `setAreaName: an area called "${newName}" already exists` };
+            }
+        }
+        this.areaNames.set(id, newName);
+        this.notify();
+        return true;
     }
 
     getAreaRooms(areaId: number): number[] {
