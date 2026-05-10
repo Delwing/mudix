@@ -33,8 +33,10 @@ export class Console {
         this.format.foreground = { space: 'rgb', r, g, b };
     }
 
-    setBgColor(r: number, g: number, b: number): void {
-        this.format.background = { space: 'rgb', r, g, b };
+    setBgColor(r: number, g: number, b: number, a?: number): void {
+        this.format.background = a !== undefined && a < 255
+            ? { space: 'rgb', r, g, b, a }
+            : { space: 'rgb', r, g, b };
     }
 
     setBold(v: boolean):          void { this.format.bold          = v || undefined; }

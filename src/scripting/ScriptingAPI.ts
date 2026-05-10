@@ -5,7 +5,7 @@ import type { TimerEngine } from '../mud/timers/TimerEngine';
 import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
-import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink } from '../mud/text/FormatState';
+import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
 import { Console } from '../mud/text/Console';
 import { useAppStore } from '../storage';
@@ -456,7 +456,14 @@ export class ScriptingAPI {
         this.drainWindowConsole(win, con);
     }
 
-    echoLink(text: string, cmd: string, tooltip: string, win?: string): void {
+    /**
+     * Mudlet `echoLink([win,] text, cmd, hint, [useCurrentFormat])`. With
+     * `useCurrentFormat=false` (the default), the link is rendered with
+     * Mudlet's built-in style: blue foreground + underline. With
+     * `useCurrentFormat=true`, the current pen state on the resolved console
+     * is preserved.
+     */
+    echoLink(text: string, cmd: string, tooltip: string, win?: string, useCurrentFormat = false): void {
         if (!text) return;  // xEcho emits empty-text calls for colour-only segments
         const hyperlink: FormatHyperlink = {
             onClick: () => { this.executeScript?.(cmd); },
@@ -464,7 +471,18 @@ export class ScriptingAPI {
         };
         const con = this.outputConsole(win);
         con.format.hyperlink = hyperlink;
-        con.echo(text);
+        if (!useCurrentFormat) {
+            // Mudlet's TConsole::echoLink default: blue + underline.
+            const prevFg = con.format.foreground;
+            const prevUnderline = con.format.underline;
+            con.format.foreground = { space: 'rgb', r: 0, g: 0, b: 255 };
+            con.format.underline = true;
+            con.echo(text);
+            con.format.foreground = prevFg;
+            con.format.underline = prevUnderline;
+        } else {
+            con.echo(text);
+        }
         con.format.hyperlink = undefined;
         if (!win || win === 'main') {
             this.drainMain();
@@ -549,11 +567,14 @@ export class ScriptingAPI {
         this.outputConsole(win).setFgColor(r, g, b);
     }
 
-    setBgColor(r: number, g: number, b: number, win?: string): void {
+    setBgColor(r: number, g: number, b: number, a?: number, win?: string): void {
+        const color: RgbColor = a !== undefined && a < 255
+            ? { space: 'rgb', r, g, b, a }
+            : { space: 'rgb', r, g, b };
         if (this.selectionMatches(win)) {
-            this.applyStateToSelection({ background: { space: 'rgb', r, g, b } });
+            this.applyStateToSelection({ background: color });
         }
-        this.outputConsole(win).setBgColor(r, g, b);
+        this.outputConsole(win).setBgColor(r, g, b, a);
     }
 
     setBold(v: boolean, win?: string): void {
@@ -586,7 +607,7 @@ export class ScriptingAPI {
         const state = namedColorToState(name, true);
         if (!state || state.background?.space !== 'rgb') return;
         const c = state.background;
-        this.setBgColor(c.r, c.g, c.b, win);
+        this.setBgColor(c.r, c.g, c.b, undefined, win);
     }
 
     resetFormat(windowName?: string): void {
@@ -642,7 +663,13 @@ export class ScriptingAPI {
         return true;
     }
 
-    deselect(): void {
+    /**
+     * Mudlet `deselect([windowName])`. With a window name, only clears the
+     * selection if it belongs to that window — selections in other consoles
+     * remain intact. Without an arg, clears unconditionally.
+     */
+    deselect(windowName?: string): void {
+        if (windowName !== undefined && !this.selectionMatches(windowName)) return;
         this.selection = null;
     }
 
@@ -924,12 +951,21 @@ export class ScriptingAPI {
         return true;
     }
 
-    replace(newText: string, windowName?: string): void {
+    /**
+     * Mudlet `replace([win,] with, [keepcolor])`. Default (`keepcolor=false`)
+     * applies the resolved console's current pen state (set via
+     * setFgColor/setBgColor/etc.) to the replacement text. With
+     * `keepcolor=true`, the replacement inherits the selection's existing
+     * format — same as our previous behavior.
+     */
+    replace(newText: string, windowName?: string, keepColor = false): void {
         if (!this.selection) return;
         const sel = this.selection;
-        const buf = this.resolveBuffer(windowName ?? sel.windowName);
+        const targetWin = windowName ?? sel.windowName;
+        const buf = this.resolveBuffer(targetWin);
         if (!buf) return;
-        buf.replace([sel.start, sel.start + sel.length], newText);
+        const state = keepColor ? undefined : this.outputConsole(targetWin).format.toSnapshot();
+        buf.replace([sel.start, sel.start + sel.length], newText, state);
         this.selection = null;
         if (!this.inTriggerProcessing) buf.rerender();
     }

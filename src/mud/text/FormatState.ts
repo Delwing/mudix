@@ -21,6 +21,7 @@ export interface RgbColor {
     r: number;
     g: number;
     b: number;
+    a?: number;
 }
 
 export interface HexColor {
@@ -69,7 +70,9 @@ function cloneColor(color?: FormatColor): FormatColor | undefined {
     if (color.space === "hex") {
         return {space: "hex", color: color.color};
     }
-    return {space: "rgb", r: color.r, g: color.g, b: color.b};
+    return color.a !== undefined
+        ? {space: "rgb", r: color.r, g: color.g, b: color.b, a: color.a}
+        : {space: "rgb", r: color.r, g: color.g, b: color.b};
 }
 
 function hyperlinksEqual(a?: FormatHyperlink, b?: FormatHyperlink): boolean {
@@ -84,7 +87,7 @@ function colorsEqual(a?: FormatColor, b?: FormatColor): boolean {
         return a.index === b.index;
     }
     if (a.space === "rgb" && b.space === "rgb") {
-        return a.r === b.r && a.g === b.g && a.b === b.b;
+        return a.r === b.r && a.g === b.g && a.b === b.b && (a.a ?? 255) === (b.a ?? 255);
     }
     if (a.space === "hex" && b.space === "hex") {
         return a.color === b.color;
@@ -902,6 +905,9 @@ export class AnsiAwareBuffer {
             return color.color;
         }
         if (color.space === "rgb") {
+            if (color.a !== undefined && color.a < 255) {
+                return `rgba(${color.r}, ${color.g}, ${color.b}, ${(color.a / 255).toFixed(3)})`;
+            }
             const r = color.r.toString(16).padStart(2, "0");
             const g = color.g.toString(16).padStart(2, "0");
             const b = color.b.toString(16).padStart(2, "0");

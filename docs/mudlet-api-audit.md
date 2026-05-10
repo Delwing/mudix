@@ -9,10 +9,10 @@ Scope: ~200 native bindings. Pure-Lua wrappers in bundled `mudlet-lua/` (cecho, 
 | Severity | Count | Meaning |
 |---|---|---|
 | OK | 58 | No meaningful discrepancy. |
-| minor | 89 | Same calls accepted, edge-case behavior or return shape differs. |
-| major | 2 | Wrong arg count/order, missing required arg, broken overload, wrong return type. |
+| minor | 84 | Same calls accepted, edge-case behavior or return shape differs. |
+| major | 0 | Wrong arg count/order, missing required arg, broken overload, wrong return type. |
 | missing | 0 | Declared as a stub but Mudlet has real behavior scripts depend on. |
-| fixed | 49 | Top-priority items #1–#28 in the next section have been resolved (plus `getColumnNumber` upgraded as a side-effect of the column cursor work). |
+| fixed | 56 | Top-priority items #1–#28 plus 5 follow-up minor items: `setFgColor`/`setBgColor` channel validation + alpha, `deselect` window arg, `replace` keepcolor, `echoLink` useCurrentFormat. |
 
 ---
 
@@ -210,15 +210,15 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | echo | `echo([miniconsole|label,] text)` | `echo(a, b?)` | OK; label routing replaces HTML (matches Mudlet) | OK |
 | fg | `fg([window], colorName)` | `fg(name)` (overwritten by GUIUtils.lua wrapper) | Dead JS binding, GUIUtils.lua provides full surface | OK |
 | bg | `bg([window,] colorName)` | same pattern as `fg` | same | OK |
-| setFgColor | `setFgColor([win], r, g, b)` | overload via `typeof a === 'string'` | No 0–255 validation; `Number()` coerces NaN silently | minor |
-| setBgColor | `setBgColor([win], r, g, b, [alpha])` | 4-arg only | Drops optional alpha (4th arg in 4-num form / 5th in win form) | minor |
+| setFgColor | `setFgColor([win], r, g, b)` | overload via `typeof a === 'string'` | Each channel validated (finite int rounded into 0–255); invalid args silent no-op | fixed |
+| setBgColor | `setBgColor([win], r, g, b, [alpha])` | matches | Optional alpha plumbed through `RgbColor`; alpha < 255 renders via `rgba()`; same channel validation | fixed |
 | setBold/Italics/Underline/StrikeOut | `set*([win,] bool)` | overload via first-arg type | OK; `!!a` coerces non-bool | OK |
 | resetFormat | `resetFormat([win])` | adds selection-clearing layer | OK | OK |
-| deselect | `deselect([win])` | ignores window arg (single global selection) | mudix has one global selection, not per-console | minor |
+| deselect | `deselect([win])` | matches | When `win` is given, only clears the selection if it belongs to that window; no-arg form clears unconditionally | fixed |
 | insertText | `insertText([win,] text)` | overload by arg count | OK | OK |
 | deleteLine | `deleteLine([win])` | OK | OK | OK |
-| replace | `replace([win,] with, [keepcolor])` | 2-arg only | Drops `keepcolor` (3rd arg) | minor |
-| echoLink | `echoLink([win,] text, cmd, hint, [useCurrentFmt])` | `hasWindow = typeof d === 'string'` | Drops `useCurrentFormat` (no Mudlet default blue+underline styling) | minor |
+| replace | `replace([win,] with, [keepcolor])` | matches | 2-arg form disambiguated by `typeof b` (string=window, boolean=keepcolor); default applies the resolved console's current pen state, `keepcolor=true` preserves the selection's existing format | fixed |
+| echoLink | `echoLink([win,] text, cmd, hint, [useCurrentFmt])` | matches | Default styles the link with Mudlet's built-in blue + underline; `useCurrentFormat=true` preserves the current pen instead | fixed |
 | echoPopup | `echoPopup([win,] text, {cmds}, {hints}, [useCurrentFmt])` | argc-based detection in Bridge.lua wrapper | Auto-detects no-window form (3-arg) and disambiguates 4-arg via `type(arg2)` | fixed |
 | selectCaptureGroup | `(groupNum|groupName)` | resolved | (see #6 in Top priorities) | fixed |
 | printError | `printError(msg, [showStack], [haltExec])` | `(text)` only | Drops `showStackTrace` and `haltExecution` | minor |

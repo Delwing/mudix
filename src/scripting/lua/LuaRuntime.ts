@@ -121,21 +121,37 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         // Format state — called by xEcho between text chunks.
-        // Lua uses two calling conventions: (win, r, g, b) and (r, g, b).
-        // Coerce to Number because decho/xEcho passes regex captures as Lua strings.
+        // Lua calling conventions:
+        //   setFgColor([win,] r, g, b)
+        //   setBgColor([win,] r, g, b, [a])
+        // Mudlet validates each channel as integer 0..255; non-finite, negative,
+        // or >255 inputs are rejected. We mirror that — invalid args produce a
+        // silent no-op (Mudlet logs an error; we can't, so the caller sees the
+        // pen unchanged on the next echo).
+        const channel = (v: unknown): number | null => {
+            const n = Number(v);
+            if (!Number.isFinite(n)) return null;
+            const i = Math.round(n);
+            return i >= 0 && i <= 255 ? i : null;
+        };
         this.lua.global.set('setFgColor', (winOrR: unknown, rOrG: unknown, gOrB?: unknown, b?: unknown) => {
-            if (typeof winOrR === 'string') {
-                this.api.setFgColor(Number(rOrG), Number(gOrB!), Number(b!), winOrR);
-            } else {
-                this.api.setFgColor(Number(winOrR), Number(rOrG), Number(gOrB!));
-            }
+            const hasWin = typeof winOrR === 'string';
+            const r = channel(hasWin ? rOrG : winOrR);
+            const g = channel(hasWin ? gOrB : rOrG);
+            const bb = channel(hasWin ? b : gOrB);
+            if (r === null || g === null || bb === null) return;
+            this.api.setFgColor(r, g, bb, hasWin ? (winOrR as string) : undefined);
         });
-        this.lua.global.set('setBgColor', (winOrR: unknown, rOrG: unknown, gOrB?: unknown, b?: unknown) => {
-            if (typeof winOrR === 'string') {
-                this.api.setBgColor(Number(rOrG), Number(gOrB!), Number(b!), winOrR);
-            } else {
-                this.api.setBgColor(Number(winOrR), Number(rOrG), Number(gOrB!));
-            }
+        this.lua.global.set('setBgColor', (winOrR: unknown, rOrG: unknown, gOrB?: unknown, b?: unknown, alpha?: unknown) => {
+            const hasWin = typeof winOrR === 'string';
+            const r = channel(hasWin ? rOrG : winOrR);
+            const g = channel(hasWin ? gOrB : rOrG);
+            const bb = channel(hasWin ? b : gOrB);
+            if (r === null || g === null || bb === null) return;
+            const aRaw = hasWin ? alpha : b;
+            const a = aRaw !== undefined ? channel(aRaw) : undefined;
+            if (aRaw !== undefined && a === null) return;
+            this.api.setBgColor(r, g, bb, a ?? undefined, hasWin ? (winOrR as string) : undefined);
         });
         // Mudlet overloads these: setBold(v) or setBold(win, v). Disambiguate by first-arg type.
         const styleSetter = (apply: (v: boolean, win?: string) => void) =>
@@ -148,7 +164,9 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setUnderline', styleSetter((v, w) => this.api.setUnderline(v, w)));
         this.lua.global.set('setStrikeOut', styleSetter((v, w) => this.api.setStrikethrough(v, w)));
         this.lua.global.set('resetFormat', (_win?: string) => this.api.resetFormat(_win));
-        this.lua.global.set('deselect', (_win?: string) => this.api.deselect());
+        this.lua.global.set('deselect', (win?: string) =>
+            this.api.deselect(typeof win === 'string' ? win : undefined),
+        );
 
         this.lua.global.set('getProfileName', () => this.api.profileName);
 
@@ -695,14 +713,16 @@ export class LuaRuntime implements IScriptingRuntime {
         // by the Lua wrapper installed later in the doString block.
         this.lua.global.set('echoLink', (a: unknown, b: unknown, c: unknown, d?: unknown, e?: unknown) => {
             // Calling conventions (Mudlet-compatible):
-            //   echoLink(text, cmd, tooltip [, fmt])          — 3-4 args, no window
-            //   echoLink(window, text, cmd, tooltip [, fmt])  — 4-5 args, with window
-            // Distinguish by typeof d: 'string' = tooltip (window form), 'boolean'|undefined = fmt
+            //   echoLink(text, cmd, tooltip [, useCurrentFormat])           — 3-4 args, no window
+            //   echoLink(window, text, cmd, tooltip [, useCurrentFormat])   — 4-5 args, with window
+            // Distinguish by typeof d: 'string' = tooltip (window form), 'boolean'|undefined = useCurrentFormat
             const hasWindow = typeof d === 'string';
-            const [win, text, cmd, tooltip] = hasWindow
-                ? [a as string, b as string, c as string, d as string]
-                : [undefined, a as string, b as string, c as string];
-            this.api.echoLink(text, cmd, tooltip, win);
+            const win = hasWindow ? (a as string) : undefined;
+            const text = hasWindow ? (b as string) : (a as string);
+            const cmd = hasWindow ? (c as string) : (b as string);
+            const tooltip = hasWindow ? (d as string) : (c as string);
+            const useCurrentFormat = !!(hasWindow ? e : d);
+            this.api.echoLink(text, cmd, tooltip, win, useCurrentFormat);
         });
 
         // Lua wrapper converts cmds/hints tables to \x01-delimited strings before calling here.
@@ -1104,13 +1124,30 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         // ── Text manipulation ─────────────────────────────────────────────────
-        this.lua.global.set('replace', (a: unknown, b?: unknown) => {
-            // replace([window,] newText)
-            const hasWindow = b !== undefined;
-            const [win, text] = hasWindow
-                ? [a as string, b as string]
-                : [undefined, a as string];
-            this.api.replace(text, win);
+        this.lua.global.set('replace', (a: unknown, b?: unknown, c?: unknown) => {
+            // Mudlet calling conventions:
+            //   replace(with)
+            //   replace(with, keepcolor)
+            //   replace(window, with [, keepcolor])
+            // Disambiguate the 2-arg form by typeof b: string ⇒ window form,
+            // boolean ⇒ keepcolor form.
+            let win: string | undefined;
+            let text: string;
+            let keepColor = false;
+            if (c !== undefined) {
+                win = a as string;
+                text = String(b ?? '');
+                keepColor = !!c;
+            } else if (typeof b === 'string') {
+                win = a as string;
+                text = b;
+            } else if (b !== undefined) {
+                text = String(a ?? '');
+                keepColor = !!b;
+            } else {
+                text = String(a ?? '');
+            }
+            this.api.replace(text, win, keepColor);
         });
         // Mudlet `selectCaptureGroup(groupNumber|groupName)`. Numeric form
         // selects capture group N (1-indexed; N=0 is invalid in Mudlet).
