@@ -10,9 +10,9 @@ Scope: ~200 native bindings. Pure-Lua wrappers in bundled `mudlet-lua/` (cecho, 
 |---|---|---|
 | OK | 58 | No meaningful discrepancy. |
 | minor | 89 | Same calls accepted, edge-case behavior or return shape differs. |
-| major | 7 | Wrong arg count/order, missing required arg, broken overload, wrong return type. |
-| missing | 11 | Declared as a stub but Mudlet has real behavior scripts depend on. |
-| fixed | 33 | Top-priority items #1–#20 in the next section have been resolved (plus `getColumnNumber` upgraded as a side-effect of the column cursor work). |
+| major | 2 | Wrong arg count/order, missing required arg, broken overload, wrong return type. |
+| missing | 0 | Declared as a stub but Mudlet has real behavior scripts depend on. |
+| fixed | 49 | Top-priority items #1–#28 in the next section have been resolved (plus `getColumnNumber` upgraded as a side-effect of the column cursor work). |
 
 ---
 
@@ -141,24 +141,32 @@ JS array crosses the wasmoon boundary as a 0-indexed Lua table. `ipairs(t)` skip
 
 **Fix:** raw bridge moved to `__getLines`; the Bridge.lua `getLines` wrapper now passes the result through `rebuildJsArray`, returning a 1-indexed sequence so `ipairs` walks all entries.
 
-### 21. `createMiniConsole` parent is silently dropped
+### 21. `createMiniConsole` parent is silently dropped — RESOLVED
 
 Mudlet's 6-arg form `(parent, name, x, y, w, h)` nests the miniconsole inside a userwindow. mudix accepts the parent arg but treats it as `main`. `ScriptingAPI.ts:849-866`.
 
-### 22. `raiseLabel` / `lowerLabel` — wrong function name
+**Fix:** `ScriptWindowData` now carries an optional `parent` field. `createMiniConsole` forwards the parent into `WindowManager.open` and `FloatingWindowLayer` portals parent-anchored windows into `manager.getViewport(parent)` via a separate `floating-window-root--nested` portal (`position: absolute`), so the script's (x, y) are interpreted relative to the parent userwindow and the miniconsole follows the parent on move/resize. `registerViewport` now triggers a notify so a miniconsole created before the parent panel mounts re-portals once the parent's viewport registers.
+
+### 22. `raiseLabel` / `lowerLabel` — wrong function name — RESOLVED
 
 Mudlet exposes `raiseWindow(labelName)` / `lowerWindow(labelName)` for both labels and userwindows. There is no `raiseLabel` / `lowerLabel` in Mudlet. Scripts written against Mudlet docs will get `attempt to call a nil value`. `LuaRuntime.ts:337-342`.
 
-### 23. `setLabelClickCallback` doesn't pass an event table
+**Fix:** added `raiseWindow(name)` / `lowerWindow(name)` Lua globals that route to the label manager when `name` is a label and to `WindowManager.bringToFront` / `sendToBack` when it's a userwindow. `WindowManager.sendToBack` computes a fresh below-min `zIndex` so successive lower calls maintain relative ordering. `raiseLabel` / `lowerLabel` are kept as aliases so existing mudix-only scripts don't break.
+
+### 23. `setLabelClickCallback` doesn't pass an event table — RESOLVED
 
 Mudlet's click callback receives a `{button, x, y, …}` event table. mudix calls the callback with no args. Vararg trailing args are also dropped. Old cb id leaks in Lua registry on rebind. `LuaRuntime.ts:310-314`, `Bridge.lua:268-273`.
 
-### 24. `sendCmdLine` semantics inverted
+**Fix:** `LabelManager` callbacks now receive a `{button, x, y, globalX, globalY, alt, ctrl, shift, meta}` event table built from the React `MouseEvent` (with DOM-button → Mudlet-button-int translation). The Lua side dispatches via a new `__mudix_dispatch_cb_arg(id)` that reads `__mudix_cb_arg`, so the `dispatchCbWithArg` JS helper can hand the table through. The Bridge.lua wrapper bakes trailing varargs into the registered closure, treats `fn == nil` as "clear" (passes cb id 0), and the JS-side `setLabelCb` helper tracks the prior cb id per (label, slot) and calls `__mudix_unregister_cb` on rebind so `__mudix_cb` doesn't leak.
+
+### 24. `sendCmdLine` semantics inverted — RESOLVED
 
 - Mudlet: stages text into the command bar (`setPlainText` + `selectAll`); does **not** submit.
 - mudix: immediately sends the text to the MUD via `api.send`. `LuaRuntime.ts:901-903`.
 
-### 25. Missing real label callbacks (browser supports them)
+**Fix:** `sendCmdLine([cmdLineName,] text)` now emits `script.setcmd` (the same path `printCmdLine` uses) so the text replaces the command bar's contents without sending. The App-side handler additionally focuses and `select()`s the input (matches Mudlet's trailing `selectAll`). The `cmdLineName` arg is accepted for API parity and ignored — mudix has a single command bar.
+
+### 25. Missing real label callbacks (browser supports them) — RESOLVED
 
 These are stubs but the DOM has full equivalents — should be promoted from `missing` to working bindings.
 
@@ -171,17 +179,25 @@ These are stubs but the DOM has full equivalents — should be promoted from `mi
 
 `LuaRuntime.ts:396-401`. Used by Geyser gauges and many HUD packages.
 
-### 26. Missing `setCmdLineAction` / `resetCmdLineAction`
+**Fix:** all six are now real bindings. `LabelManager` grew a slot for each (`onMouseUp`, `onDoubleClick`, `onMouseMove`, `onWheel`, `onMouseEnter`, `onMouseLeave`); `LabelOverlay` wires the corresponding React handlers, builds a Mudlet-shaped event table (mouse callbacks get `{button, x, y, globalX, globalY, alt, ctrl, shift, meta}`; the wheel callback adds `angleDelta = {x, y}` derived from `WheelEvent.deltaX/Y` with the sign flipped to match Qt's "scroll up = positive" convention). All six route through the same Bridge.lua `bind` helper as `setLabelClickCallback`, so they support fn-or-code, `nil` to clear, trailing varargs baked into the closure, and the per-slot leak fix from #23.
+
+### 26. Missing `setCmdLineAction` / `resetCmdLineAction` — RESOLVED
 
 Real Mudlet APIs that intercept Enter on the command bar. mudix declares them as stubs. Scripts that want a custom command parser fall through to default sending. `LuaRuntime.ts:402-403`.
 
-### 27. Missing `setAppStyleSheet` / `setUserWindowStyleSheet`
+**Fix:** `ScriptingAPI` got a single nullable `cmdLineAction` slot; `ScriptingEngine.processInput` checks it before alias matching and consumes the line by invoking the action with the typed text (errors are routed through `printError` and still consume so untransformed text doesn't leak to the MUD). The Lua side uses the same cb-id-with-arg path as label callbacks: Bridge.lua's `setCmdLineAction(...)` accepts both `(fn, ...)` and `(cmdLineName, fn, ...)` (the name is dropped — single command bar), bakes trailing varargs into the closure, treats `fn == nil` as clear, and the JS-side `cmdLineActionCbId` is freed via `__mudix_unregister_cb` on rebind so the registry doesn't leak. `resetCmdLineAction([cmdLineName])` clears the action.
+
+### 27. Missing `setAppStyleSheet` / `setUserWindowStyleSheet` — RESOLVED
 
 Real Mudlet APIs that scripts (theme switchers, package CSS) depend on. Browser approximations exist (inject `<style>` into `document.head`, scope per-panel). Currently no-op stubs. `LuaRuntime.ts:363-378`.
 
-### 28. `remainingTime` is a stub
+**Fix:** both bindings now install (or replace) a real `<style>` element in `document.head`. `setAppStyleSheet(css, [tag])` uses `mudix-app-stylesheet-{tag}` as the element id so multiple themes can coexist, and raises `sysAppStyleSheetChange` via a new `eventRaiser` callback that ScriptingEngine wires up (the same mechanism already used for `sysWindowResizeEvent`). `setUserWindowStyleSheet(name, css)` uses `mudix-userwindow-stylesheet--{name}`. `TextPanel` and `HtmlPanel` now stamp `data-mudix-window={id}` on their viewport so script CSS can self-scope via `[data-mudix-window="..."] selector`. Qt-specific QSS selectors (`QLabel::hover`, etc.) still need the css rewriter to translate them, but plain web CSS — what every modern theme package emits — works as-is.
+
+### 28. `remainingTime` is a stub — RESOLVED
 
 Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `LuaRuntime.ts:1048` (TODO).
+
+**Fix:** `TimerEngine` now stores each timer's `start` (epoch ms) and resolved `intervalMs` alongside the handle. `remainingTime(idOrName)` returns `intervalMs - elapsed` for one-shot timers (clamped at 0) and `intervalMs - (elapsed % intervalMs)` for repeating timers (always > 0, never the just-fired 0). Numeric arg looks up tempTimer ids; string arg looks up perm timers by stored id first, falling back to a name → id index built at `loadPerm`. Misses still return -1.
 
 ---
 
@@ -238,7 +254,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | openMapWidget | `([area\|x,y,w,h]) → true` | returns WindowHandle | 2-arg `(x, y)` form unsupported; missing `true` return | minor |
 | clearUserWindow | `([name])` — defaults to main | requires name | No-arg call passes `undefined` to clear | minor |
 | clearWindow | alias of clearUserWindow | OK | OK | OK |
-| **createMiniConsole** | `([parent,] name, x, y, w, h)` — parent nests inside userwindow | accepts parent but ignores it | Parent silently dropped; nested miniconsoles unsupported | **major** |
+| createMiniConsole | `([parent,] name, x, y, w, h)` — parent nests inside userwindow | matches | Parent stored on window data; non-main parent portals into the parent's viewport so (x, y) are parent-relative | fixed |
 | hideWindow | `(name)` — labels first, then sub-consoles | matches | OK | OK |
 | showWindow | `(name) → bool` | no return | Missing bool return | minor |
 | moveWindow | `(name, x, y)` — labels first | matches | OK | OK |
@@ -249,23 +265,23 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | createLabel | `([parent,] name, x, y, w, h, fillBg, [clickThrough])` | overload by 2nd-arg type | OK; `!!` coerces non-bool args (Mudlet errors) | minor |
 | deleteLabel | `(name) → true OR false, errMsg` | returns bool | No errMsg | minor |
 | setLabelStyleSheet | Qt CSS | DOM CSS via cssRewriter | Qt-specific selectors (`QLabel::hover`) need rewriter support | minor |
-| **setLabelClickCallback** | `(name, fn|nil, [args...])`; fn receives event table | no event arg, no varargs, can't pass nil to clear | Click handlers reading `event.button` see nil; cb id leak on rebind | **major** |
+| setLabelClickCallback | `(name, fn|nil, [args...])`; fn receives event table | matches | Event table `{button, x, y, globalX, globalY, alt, ctrl, shift, meta}`; `nil` clears; trailing args baked into closure; per-slot cb id tracked + freed on rebind | fixed |
 | setLabelToolTip | `(name, text, [duration]) → bool` | duration ignored | No duration; no bool | minor |
 | resetLabelToolTip | `(name)` | matches | OK | OK |
 | enableClickthrough | `(name)` | matches | OK | OK |
 | disableClickthrough | `(name)` | matches | OK | OK |
-| **raiseLabel** | doesn't exist; Mudlet has `raiseWindow(labelName)` | mudix-only name | Wrong global name; scripts get nil-call error | **major** |
-| **lowerLabel** | doesn't exist; Mudlet has `lowerWindow(labelName)` | mudix-only name | same | **major** |
+| raiseWindow | `(name)` — labels and userwindows | matches | Routes to label manager or `WindowManager.bringToFront`; `raiseLabel` kept as legacy alias | fixed |
+| lowerWindow | `(name)` — labels and userwindows | matches | Same; `WindowManager.sendToBack` computes a fresh below-min zIndex; `lowerLabel` kept as legacy alias | fixed |
 | setLabelCursor | `(name, shapeInt) → bool`; GUIUtils.lua wraps strings | int only | Relies on bundled GUIUtils.lua wrapper for strings | minor |
 | resetLabelCursor | `(name)` | matches | OK | OK |
-| **setAppStyleSheet** | `(css, [tag]) → true`; raises sysAppStyleSheetChange | no-op stub | Theme-switcher packages depend on this | **missing** |
-| **setUserWindowStyleSheet** | `(name, css) → bool` | no-op stub | Per-window CSS (achievable via dockview panel scoping) | **missing** |
-| **setLabelDoubleClickCallback** | label dblclick callback | no-op stub | DOM `dblclick` available | **missing** |
-| **setLabelReleaseCallback** | label mouseup callback | no-op stub | DOM `mouseup` available | **missing** |
-| **setLabelMoveCallback** | label mousemove callback | no-op stub | DOM `mousemove` available | **missing** |
-| **setLabelWheelCallback** | label wheel callback | no-op stub | DOM `wheel` available | **missing** |
-| **setLabelOnEnter** | label mouseenter callback | no-op stub | DOM `mouseenter` available | **missing** |
-| **setLabelOnLeave** | label mouseleave callback | no-op stub | DOM `mouseleave` available | **missing** |
+| setAppStyleSheet | `(css, [tag]) → true`; raises sysAppStyleSheetChange | matches | Installs/replaces `<style id="mudix-app-stylesheet-{tag}">`; raises `sysAppStyleSheetChange` | fixed |
+| setUserWindowStyleSheet | `(name, css) → bool` | matches | Installs/replaces `<style id="mudix-userwindow-stylesheet--{name}">`; panels expose `data-mudix-window` for script-side scoping | fixed |
+| setLabelDoubleClickCallback | `(name, fn|nil, [args...])` | matches | Wired via DOM `dblclick`; same event-table + clear + leak-fix path as `setLabelClickCallback` | fixed |
+| setLabelReleaseCallback | `(name, fn|nil, [args...])` | matches | Wired via DOM `mouseup`; same path | fixed |
+| setLabelMoveCallback | `(name, fn|nil, [args...])` | matches | Wired via DOM `mousemove`; same path | fixed |
+| setLabelWheelCallback | `(name, fn|nil, [args...])` | matches | Wired via DOM `wheel`; event also carries `angleDelta = {x, y}` | fixed |
+| setLabelOnEnter | `(name, fn|nil, [args...])` | matches | Wired via DOM `mouseenter`; same path | fixed |
+| setLabelOnLeave | `(name, fn|nil, [args...])` | matches | Wired via DOM `mouseleave`; same path | fixed |
 
 ### Mapper
 
@@ -356,12 +372,12 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | showHandlerError | logs via host.mLuaInterpreter | `printError("[event \"…\"] …")` | parallel | OK |
 | expandAlias | `(cmd, [echo=true])` (nil echo → false) | `echo ?? true` (nil → true) | nil-echo handling differs; no `true` return | minor |
 | denyCurrentSend | sets gate flag | matches | OK | OK |
-| **sendCmdLine** | stages text in cmdbar (no submit) | calls `api.send` (immediate transmit) | **Inverted semantics** | **major** |
+| sendCmdLine | stages text in cmdbar (no submit) | matches | Emits `script.setcmd` to replace bar contents; App handler focuses + selects all; `cmdLineName` arg accepted and ignored | fixed |
 | send | `(cmd, [echo=true]) → true` | no return | Missing return | minor |
 | sendGMCP | `(message, [what])` | drops 2nd arg | Missing optional `what` | minor |
 | saveProfile | `([location, [filename]]) → (true, filename) | (nil, errMsg)` | always `(true, path)` | Never reports failure; ignores location and filename | minor |
 | unzipAsync | matches | matches | OK | OK |
-| **remainingTime** | `(id|name) → seconds` | stub returns -1 | TODO | **missing** |
+| remainingTime | `(id|name) → seconds` | matches | TimerEngine tracks start+intervalMs per entry; numeric→tempTimer, string→perm via id/name index; -1 on miss | fixed |
 | selectCaptureGroup | numeric AND named | resolved (see #6 in Top priorities) | — | fixed |
 
 ### Network / HTTP / cmdline
@@ -381,8 +397,8 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | addCommandLineMenuEvent | `([cmdLineName,] menuLabel, eventName)` — **no displayName** | matches | 2-arg `(menuLabel, eventName)` and 3-arg `(cmdLineName, menuLabel, eventName)` (cmdLineName dropped) | fixed |
 | removeCommandLineMenuEvent | `([cmdLineName,] menuLabel) → bool` | drops cmdLineName | Mudlet returns `(false, msg)` on missing | minor |
 | getCommandLineMenuEvents | not in Mudlet C++ | mudix-only | OK as extension | OK |
-| **setCmdLineAction** | `(cmdLineName, fn, [args...])` — intercepts Enter | no-op stub | Real Mudlet API; scripts that intercept Enter silently fail | **missing** |
-| **resetCmdLineAction** | `(cmdLineName) → bool` | no-op stub | same | **missing** |
+| setCmdLineAction | `(cmdLineName, fn, [args...])` — intercepts Enter | matches | Single-bar form; cmdLineName arg accepted and ignored. fn=nil clears; trailing args baked into closure; cb id freed on rebind | fixed |
+| resetCmdLineAction | `(cmdLineName) → bool` | matches | Clears the action and frees the cb id | fixed |
 | openWebPage | `(url) → bool` | `window.open(url, '_blank')` | Missing bool return | minor |
 | debugc | single arg, routes to error-info console | variadic, routes to devtools | minor | minor |
 | errorc | `(content, [debugInfo])` | variadic to script log | minor | minor |

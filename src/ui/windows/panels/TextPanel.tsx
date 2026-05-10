@@ -37,7 +37,7 @@ export function TextPanel({ id, manager, labels, fontSize, fontFamily, wrapAt, b
     // this, label-overlay's `inset: 0` would fall back to a dockview ancestor
     // and labels sized to getUserWindowSize() wouldn't fill the user window.
     return (
-        <div ref={viewportRef} style={VIEWPORT_STYLE}>
+        <div ref={viewportRef} data-mudix-window={id} style={VIEWPORT_STYLE}>
             <StickyOutputPanel
                 outputRef={outputRef}
                 sentinelRef={sentinelRef}

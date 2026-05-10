@@ -27,7 +27,7 @@ export function HtmlPanel({ id, manager, labels, backgroundColor }: HtmlPanelPro
         : INNER_STYLE;
 
     return (
-        <div ref={viewportRef} style={WRAPPER_STYLE}>
+        <div ref={viewportRef} data-mudix-window={id} style={WRAPPER_STYLE}>
             <div ref={ref} className="window-html-panel" style={innerStyle} />
             {labels && <LabelOverlay manager={labels} parent={id} />}
         </div>

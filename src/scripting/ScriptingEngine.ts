@@ -549,6 +549,7 @@ export class ScriptingEngine {
             });
             this.api.setSendRequestDispatcher((text) =>
                 this.runtimes.lua?.dispatchSendRequest(text) ?? false);
+            this.api.setEventRaiser((event, args) => this.raiseEvent(event, args));
             this.api.setFeedDispatcher((groups) => this.processFlushBatch(groups));
             this.api.setPackageInstaller((path) => this.installPackageFromVfsPath(path));
             this.api.setPackageUninstaller((name) => this.uninstallPackageByName(name));
@@ -916,6 +917,18 @@ export class ScriptingEngine {
 
     /** Run input through aliases. Returns true if an alias matched (caller should not send). */
     processInput(text: string): boolean {
+        // setCmdLineAction takes the whole Enter event; aliases and the MUD
+        // send are bypassed when an action is installed (matches Mudlet — the
+        // script owns the command bar end-to-end). Errors in the action are
+        // routed through printError and still consume the input so the bare
+        // text isn't silently sent.
+        const action = this.api.getCmdLineAction();
+        if (action) {
+            try { action(text); }
+            catch (e) { this.api.printError(`[setCmdLineAction] ${e instanceof Error ? e.message : String(e)}`); }
+            this.api.flushOutput();
+            return true;
+        }
         // JS temp aliases
         if (this.aliasEngine.processTemp(text)) {
             this.api.flushOutput();

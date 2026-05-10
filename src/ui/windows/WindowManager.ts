@@ -132,6 +132,13 @@ export class WindowManager {
     registerViewport(id: string, element: HTMLElement): void {
         this.viewports.set(id, element);
         this.observeResize(id, element);
+        // Re-render: parented miniconsoles whose parent just mounted need a
+        // chance to portal into the freshly registered viewport.
+        this.notify();
+    }
+
+    getViewport(id: string): HTMLElement | undefined {
+        return this.viewports.get(id);
     }
 
     /** OutputArea registers the main `.output-wrapper` here so getColumnCount()
@@ -399,6 +406,18 @@ export class WindowManager {
         const win = this.windows.get(id);
         if (!win) return;
         win.zIndex = ++this.nextZ;
+        this.notify();
+    }
+
+    /** Mudlet lowerWindow for a userwindow — drop below every other floating
+     *  window. Computes a fresh below-min zIndex so successive lowerWindow
+     *  calls maintain relative order. */
+    sendToBack(id: string): void {
+        const win = this.windows.get(id);
+        if (!win) return;
+        let min = Infinity;
+        for (const w of this.windows.values()) if (w.id !== id && w.zIndex < min) min = w.zIndex;
+        win.zIndex = (Number.isFinite(min) ? min : 10) - 1;
         this.notify();
     }
 
@@ -697,6 +716,7 @@ export class WindowManager {
             fontFamily: hint?.fontFamily,
             wrapAt: hint?.wrapAt,
             backgroundColor: hint?.backgroundColor,
+            parent: options.parent,
             pendingText: [],
         };
 
@@ -860,10 +880,10 @@ export class WindowManager {
 
     private notify(): void {
         const arr = [...this.windows.values()]
-            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor }) => ({
+            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor, parent }) => ({
                 id, title, kind, visible, x, y, width, height, zIndex,
                 docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex,
-                fontSize, fontFamily, wrapAt, backgroundColor,
+                fontSize, fontFamily, wrapAt, backgroundColor, parent,
                 isActiveTab: dockGroup ? this.activeTabGroups.get(dockGroup) === id : undefined,
             }))
             .sort((a, b) => a.zIndex - b.zIndex);

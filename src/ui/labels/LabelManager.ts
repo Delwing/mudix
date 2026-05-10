@@ -27,14 +27,48 @@ export interface LabelState {
     backgroundColor?: { r: number; g: number; b: number; a: number };
     /** Qt-style CSS string set via setLabelStyleSheet; parsed at render time. */
     styleSheet?: string;
-    /** Click handler installed by setLabelClickCallback. */
-    onClick?: () => void;
+    /** Click handler installed by setLabelClickCallback. The event table mirrors
+     *  Mudlet's `mudlet.mouse_button` shape: `{button, x, y, alt, ctrl, shift, meta}`. */
+    onClick?: (event: LabelMouseEvent) => void;
+    /** Pointer down (Mudlet release callback fires on mouseup; press is implicit). */
+    onMouseDown?: (event: LabelMouseEvent) => void;
+    /** Pointer up — Mudlet setLabelReleaseCallback. */
+    onMouseUp?: (event: LabelMouseEvent) => void;
+    /** Double-click — Mudlet setLabelDoubleClickCallback. */
+    onDoubleClick?: (event: LabelMouseEvent) => void;
+    /** Pointer move — Mudlet setLabelMoveCallback. */
+    onMouseMove?: (event: LabelMouseEvent) => void;
+    /** Wheel — Mudlet setLabelWheelCallback. event.angleDelta carries the scroll. */
+    onWheel?: (event: LabelWheelEvent) => void;
+    /** Pointer enter — Mudlet setLabelOnEnter. */
+    onMouseEnter?: (event: LabelMouseEvent) => void;
+    /** Pointer leave — Mudlet setLabelOnLeave. */
+    onMouseLeave?: (event: LabelMouseEvent) => void;
     /** Tooltip text rendered via the title attribute. */
     tooltip?: string;
     /** CSS cursor value (e.g. 'pointer', 'crosshair', 'none'). */
     cursor?: string;
     /** z-index applied to the label DIV. Higher = on top of other labels. */
     zIndex?: number;
+}
+
+/** Event payload for label mouse callbacks. Mirrors Mudlet's button-int convention
+ *  (1=left, 2=right, 4=middle) so ported scripts can read `event.button` directly. */
+export interface LabelMouseEvent {
+    button: number;
+    x: number;
+    y: number;
+    globalX: number;
+    globalY: number;
+    alt: boolean;
+    ctrl: boolean;
+    shift: boolean;
+    meta: boolean;
+}
+
+export interface LabelWheelEvent extends LabelMouseEvent {
+    /** Mudlet exposes wheel deltas via `angleDelta.x` / `angleDelta.y` (Qt naming). */
+    angleDelta: { x: number; y: number };
 }
 
 type Listener = (labels: LabelState[]) => void;
@@ -138,10 +172,58 @@ export class LabelManager {
         return true;
     }
 
-    setClickCallback(name: string, fn: () => void): boolean {
+    setClickCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
         lbl.onClick = fn;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    setMouseUpCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.onMouseUp = fn;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    setDoubleClickCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.onDoubleClick = fn;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    setMouseMoveCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.onMouseMove = fn;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    setWheelCallback(name: string, fn: ((e: LabelWheelEvent) => void) | undefined): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.onWheel = fn;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    setMouseEnterCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.onMouseEnter = fn;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    setMouseLeaveCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.onMouseLeave = fn;
         this.notify(lbl.parent);
         return true;
     }

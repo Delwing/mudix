@@ -49,6 +49,10 @@ export interface WindowOpenOptions {
     wrapAt?: number;
     /** Window background fill (Mudlet setBackgroundColor). rgba 0..255. */
     backgroundColor?: { r: number; g: number; b: number; a: number };
+    /** For miniconsoles, the parent userwindow id ('main' or another userwindow's
+     *  name). When set to a non-main parent, the miniconsole is rendered inside
+     *  that parent's viewport at parent-relative (x, y) coordinates. */
+    parent?: string;
 }
 
 export interface WindowHandle {
@@ -85,4 +89,6 @@ export interface ScriptWindowRenderData {
     fontFamily?: string;
     wrapAt?: number;
     backgroundColor?: { r: number; g: number; b: number; a: number };
+    /** For miniconsoles created with a parent userwindow — see WindowOpenOptions.parent. */
+    parent?: string;
 }

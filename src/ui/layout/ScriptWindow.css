@@ -7,6 +7,12 @@
     overflow: hidden;
 }
 
+/* Nested variant: portaled into a parent userwindow viewport for parent-anchored
+ * miniconsoles. position:absolute so absolute child coords are parent-relative. */
+.floating-window-root--nested {
+    position: absolute;
+}
+
 .script-window {
     position: absolute;
     display: flex;

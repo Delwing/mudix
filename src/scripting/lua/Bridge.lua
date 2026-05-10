@@ -202,6 +202,12 @@ function __mudix_dispatch_cb(id)
     local fn = __mudix_cb[id]
     if fn then return fn() end
 end
+-- Variant for callbacks that receive a single argument (label mouse events
+-- carry a {button, x, y, ...} table). JS sets __mudix_cb_arg before invoking.
+function __mudix_dispatch_cb_arg(id)
+    local fn = __mudix_cb[id]
+    if fn then return fn(__mudix_cb_arg) end
+end
 
 -- JS event bridge. emitEvent() sets __mudix_evt_name + __mudix_evt_args
 -- (a JS array, so its keys are 0-indexed) and runs this dispatcher.
@@ -338,13 +344,93 @@ do
     end
 end
 
--- setLabelClickCallback(name, fnOrCode) — Mudlet also accepts trailing args,
--- but we don't pass them through yet. Strings compile as Lua chunks (matches
--- the temp* family).
+-- Mudlet's label-event setters all share a shape: name + (function | code |
+-- nil) + optional trailing args that get baked into the closure. The JS side
+-- (LuaRuntime.setLabelCb) tracks the prior cb id per slot and frees it on
+-- rebind so handlers don't leak in __mudix_cb. cb id 0 means "clear".
 do
-    local _raw = __mudix_setLabelClickCallback
-    function setLabelClickCallback(name, fn)
-        return _raw(name, __mudix_register_cb(__mudix_to_fn(fn, "setLabelClickCallback", 2)))
+    local function bind(name, who, fn, raw, ...)
+        if fn == nil then return raw(name, 0) end
+        local f = __mudix_to_fn(fn, who, 2)
+        if select('#', ...) > 0 then
+            local trailing = {...}
+            local inner = f
+            f = function(event) return inner(event, unpack(trailing)) end
+        end
+        return raw(name, __mudix_register_cb(f))
+    end
+
+    local _click = __mudix_setLabelClickCallback
+    function setLabelClickCallback(name, fn, ...)
+        return bind(name, "setLabelClickCallback", fn, _click, ...)
+    end
+
+    local _dblclick = __mudix_setLabelDoubleClickCallback
+    function setLabelDoubleClickCallback(name, fn, ...)
+        return bind(name, "setLabelDoubleClickCallback", fn, _dblclick, ...)
+    end
+
+    local _release = __mudix_setLabelReleaseCallback
+    function setLabelReleaseCallback(name, fn, ...)
+        return bind(name, "setLabelReleaseCallback", fn, _release, ...)
+    end
+
+    local _move = __mudix_setLabelMoveCallback
+    function setLabelMoveCallback(name, fn, ...)
+        return bind(name, "setLabelMoveCallback", fn, _move, ...)
+    end
+
+    local _enter = __mudix_setLabelOnEnter
+    function setLabelOnEnter(name, fn, ...)
+        return bind(name, "setLabelOnEnter", fn, _enter, ...)
+    end
+
+    local _leave = __mudix_setLabelOnLeave
+    function setLabelOnLeave(name, fn, ...)
+        return bind(name, "setLabelOnLeave", fn, _leave, ...)
+    end
+
+    local _wheel = __mudix_setLabelWheelCallback
+    function setLabelWheelCallback(name, fn, ...)
+        return bind(name, "setLabelWheelCallback", fn, _wheel, ...)
+    end
+end
+
+-- Mudlet setCmdLineAction([cmdLineName,] fn, [args...]). The cmdLineName arg
+-- targets a specific command bar; mudix has only one, so we tolerate either
+-- shape — strings as the leading arg are dropped, functions become the
+-- handler. The action receives the typed text plus any trailing varargs.
+do
+    local _set = __mudix_setCmdLineAction
+    local _reset = __mudix_resetCmdLineAction
+    function setCmdLineAction(...)
+        local n = select('#', ...)
+        if n == 0 then
+            error("setCmdLineAction: missing function argument", 2)
+        end
+        local first = select(1, ...)
+        local fn, extras
+        if type(first) == 'string' then
+            -- (cmdLineName, fn, ...) — drop the name.
+            fn = select(2, ...)
+            extras = { select(3, ...) }
+        else
+            fn = first
+            extras = { select(2, ...) }
+        end
+        if fn == nil then
+            return _set(0)
+        end
+        local f = __mudix_to_fn(fn, "setCmdLineAction", 1)
+        if #extras > 0 then
+            local trailing = extras
+            local inner = f
+            f = function(text) return inner(text, unpack(trailing)) end
+        end
+        return _set(__mudix_register_cb(f))
+    end
+    function resetCmdLineAction(_cmdLineName)
+        return _reset()
     end
 end
 

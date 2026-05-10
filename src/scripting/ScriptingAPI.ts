@@ -4,7 +4,7 @@ import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine } from '../mud/timers/TimerEngine';
 import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
-import type { LabelManager, LabelCreateOptions } from '../ui/labels/LabelManager';
+import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
 import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
 import { Console } from '../mud/text/Console';
@@ -85,6 +85,14 @@ class ScriptingWindowsAPI {
         this.session.windows.setPosition(id, x, y);
     }
 
+    bringToFront(id: string): void {
+        this.session.windows.bringToFront(id);
+    }
+
+    sendToBack(id: string): void {
+        this.session.windows.sendToBack(id);
+    }
+
     resize(id: string, width: number, height: number): void {
         this.session.windows.setSize(id, width, height);
     }
@@ -152,8 +160,26 @@ class ScriptingLabelsAPI {
         const rewrite = this.cssRewriter();
         return this.manager.setStyleSheet(name, rewrite ? rewrite(css) : css);
     }
-    setClickCallback(name: string, fn: () => void): boolean {
+    setClickCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
         return this.manager.setClickCallback(name, fn);
+    }
+    setMouseUpCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        return this.manager.setMouseUpCallback(name, fn);
+    }
+    setDoubleClickCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        return this.manager.setDoubleClickCallback(name, fn);
+    }
+    setMouseMoveCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        return this.manager.setMouseMoveCallback(name, fn);
+    }
+    setMouseEnterCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        return this.manager.setMouseEnterCallback(name, fn);
+    }
+    setMouseLeaveCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
+        return this.manager.setMouseLeaveCallback(name, fn);
+    }
+    setWheelCallback(name: string, fn: ((e: LabelWheelEvent) => void) | undefined): boolean {
+        return this.manager.setWheelCallback(name, fn);
     }
     setTooltip(name: string, text: string | undefined): boolean {
         return this.manager.setTooltip(name, text);
@@ -872,12 +898,13 @@ export class ScriptingAPI {
 
     /**
      * Mudlet `createMiniConsole([parent,] name, x, y, width, height)`. Creates
-     * a positioned floating text panel, or repositions it if it already exists
-     * (Mudlet 3.0+ semantics). The optional `parent` userwindow arg is accepted
-     * for compatibility with Geyser but treated as main — nested miniconsoles
-     * aren't supported. Returns true on success.
+     * a positioned text panel inside the given parent (defaults to `main`), or
+     * repositions it if it already exists (Mudlet 3.0+ semantics). When parent
+     * is a userwindow, the miniconsole renders inside that parent's viewport
+     * at parent-relative coordinates and follows parent moves/resizes.
+     * Returns true on success.
      */
-    createMiniConsole(name: string, x: number, y: number, width: number, height: number, _parent?: string): boolean {
+    createMiniConsole(name: string, x: number, y: number, width: number, height: number, parent?: string): boolean {
         if (!name) return false;
         const wm = this.session.windows;
         if (!wm.has(name)) {
@@ -886,6 +913,7 @@ export class ScriptingAPI {
                 title: name,
                 autoDock: false,
                 ignoreHint: true,
+                parent: parent && parent !== 'main' ? parent : undefined,
             });
         } else {
             wm.show(name);
@@ -933,6 +961,65 @@ export class ScriptingAPI {
 
     clearCmdLine(): void {
         this.session.events.emit('script.clearcmd');
+    }
+
+    // ── Command-line action (Mudlet setCmdLineAction) ─────────────────────────
+    // When set, the action receives every Enter-submitted line *before* alias
+    // matching and the MUD send. The script fully owns the command bar — it
+    // may parse, store, route, or re-emit the text via send()/expandAlias().
+    private cmdLineAction: ((text: string) => void) | null = null;
+
+    setCmdLineAction(fn: ((text: string) => void) | null): void {
+        this.cmdLineAction = fn;
+    }
+
+    /** Engine-side accessor: returns the currently registered action, or null. */
+    getCmdLineAction(): ((text: string) => void) | null {
+        return this.cmdLineAction;
+    }
+
+    // ── Stylesheets (Mudlet setAppStyleSheet / setUserWindowStyleSheet) ───────
+    // Real Mudlet APIs that scripts (theme switchers, package CSS) depend on.
+    // Browser equivalent: install or replace a `<style>` tag in document.head
+    // keyed by `tag` (app-wide) or window name (per-window). Per-window CSS is
+    // not auto-scoped — scripts that want true window-local rules must qualify
+    // their selectors with `[data-mudix-window="name"]` (added to text/html
+    // panels). After a successful app-level install we raise
+    // sysAppStyleSheetChange via `eventRaiser` so themes can hook re-applies.
+
+    private eventRaiser: ((event: string, args: unknown[]) => void) | null = null;
+
+    setEventRaiser(fn: ((event: string, args: unknown[]) => void) | null): void {
+        this.eventRaiser = fn;
+    }
+
+    setAppStyleSheet(css: string, tag?: string): boolean {
+        const key = tag && tag.length > 0 ? tag : 'default';
+        const id = `mudix-app-stylesheet-${key}`;
+        let el = document.getElementById(id) as HTMLStyleElement | null;
+        if (!el) {
+            el = document.createElement('style');
+            el.id = id;
+            el.dataset.mudixAppStylesheet = key;
+            document.head.appendChild(el);
+        }
+        el.textContent = css ?? '';
+        this.eventRaiser?.('sysAppStyleSheetChange', [css ?? '', tag ?? '']);
+        return true;
+    }
+
+    setUserWindowStyleSheet(name: string, css: string): boolean {
+        if (!name) return false;
+        const id = `mudix-userwindow-stylesheet--${name}`;
+        let el = document.getElementById(id) as HTMLStyleElement | null;
+        if (!el) {
+            el = document.createElement('style');
+            el.id = id;
+            el.dataset.mudixUserwindowStylesheet = name;
+            document.head.appendChild(el);
+        }
+        el.textContent = css ?? '';
+        return true;
     }
 
     centerView(roomId: number): void {

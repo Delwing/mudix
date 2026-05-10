@@ -61,6 +61,14 @@ export default function App() {
         });
         const unsub2 = session.events.on('script.setcmd', (text: string) => {
             setCommand(text);
+            // Mudlet sendCmdLine ends with selectAll; replicate so the user can
+            // overtype or hit Backspace to clear without manually selecting.
+            queueMicrotask(() => {
+                const el = commandInputRef.current;
+                if (!el) return;
+                el.focus();
+                el.select();
+            });
         });
         const unsub3 = session.events.on('script.clearcmd', () => {
             setCommand('');

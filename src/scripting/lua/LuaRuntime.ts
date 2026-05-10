@@ -58,6 +58,15 @@ export class LuaRuntime implements IScriptingRuntime {
     // Temp alias/trigger IDs → unsub fns (engines return unsub, not numeric IDs).
     private readonly tempIds = new Map<number, () => void>();
     private nextTempId = 1;
+    // Tracks label callback ids per slot so re-binds can free the prior Lua-
+    // registry slot via __mudix_unregister_cb (avoids the leak the audit flagged
+    // for setLabelClickCallback). Outer key: label name, inner key: slot id
+    // ("click", "doubleClick", "release", ...). Value: registered cb id or 0
+    // when cleared.
+    private readonly labelCbIds = new Map<string, Map<string, number>>();
+    // Mudlet setCmdLineAction installs at most one Enter-interceptor. Track its
+    // cb id so a re-bind frees the prior chunk (same leak fix as label cbs).
+    private cmdLineActionCbId = 0;
     private _isPrompt = false;
     private currentMatches: string[] = [];
     // selectCaptureGroup needs the actual offset of each capture in the
@@ -311,15 +320,47 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setLabelStyleSheet', (name: string, css: string) => {
             this.api.labels.setStyleSheet(name, css == null ? '' : String(css));
         });
-        // setLabelClickCallback(name, fn). The fn is registered via the Lua-side
-        // cb registry (Bridge.lua wrapper); JS only sees a numeric ID. Replacing
-        // the callback leaks the prior cb id in the Lua registry — bounded and
-        // acceptable for now.
-        this.lua.global.set('__mudix_setLabelClickCallback', (name: string, cbId: number) => {
-            return this.api.labels.setClickCallback(name, () => {
-                this.dispatchCb(cbId, `label "${name}"`);
-            });
-        });
+        // Mudlet's setLabelClickCallback / setLabelDoubleClickCallback /
+        // setLabelReleaseCallback / setLabelMoveCallback / setLabelOnEnter /
+        // setLabelOnLeave / setLabelWheelCallback all share a shape: name + a
+        // Lua function (or `nil` to clear). Bridge.lua compiles the function
+        // and hands JS a numeric cb id (via `__mudix_register_cb`); cb id 0
+        // means "clear". We track the prior id per label-per-slot so a rebind
+        // unregisters the prior chunk in `__mudix_cb` instead of leaking it.
+        type LabelCbSlot = 'click' | 'doubleClick' | 'release' | 'move' | 'enter' | 'leave' | 'wheel';
+        const setLabelCb = (
+            name: string,
+            slot: LabelCbSlot,
+            cbId: number,
+            install: (handler: ((event: unknown) => void) | undefined) => boolean,
+        ): boolean => {
+            let slots = this.labelCbIds.get(name);
+            if (!slots) { slots = new Map(); this.labelCbIds.set(name, slots); }
+            const prev = slots.get(slot) ?? 0;
+            if (prev && prev !== cbId) this.unregisterCb(prev);
+            if (!cbId) {
+                slots.delete(slot);
+                return install(undefined);
+            }
+            slots.set(slot, cbId);
+            return install((event: unknown) =>
+                this.dispatchCbWithArg(cbId, event, `label "${name}" ${slot}`));
+        };
+
+        this.lua.global.set('__mudix_setLabelClickCallback', (name: string, cbId: number) =>
+            setLabelCb(name, 'click', cbId, fn => this.api.labels.setClickCallback(name, fn as never)));
+        this.lua.global.set('__mudix_setLabelDoubleClickCallback', (name: string, cbId: number) =>
+            setLabelCb(name, 'doubleClick', cbId, fn => this.api.labels.setDoubleClickCallback(name, fn as never)));
+        this.lua.global.set('__mudix_setLabelReleaseCallback', (name: string, cbId: number) =>
+            setLabelCb(name, 'release', cbId, fn => this.api.labels.setMouseUpCallback(name, fn as never)));
+        this.lua.global.set('__mudix_setLabelMoveCallback', (name: string, cbId: number) =>
+            setLabelCb(name, 'move', cbId, fn => this.api.labels.setMouseMoveCallback(name, fn as never)));
+        this.lua.global.set('__mudix_setLabelOnEnter', (name: string, cbId: number) =>
+            setLabelCb(name, 'enter', cbId, fn => this.api.labels.setMouseEnterCallback(name, fn as never)));
+        this.lua.global.set('__mudix_setLabelOnLeave', (name: string, cbId: number) =>
+            setLabelCb(name, 'leave', cbId, fn => this.api.labels.setMouseLeaveCallback(name, fn as never)));
+        this.lua.global.set('__mudix_setLabelWheelCallback', (name: string, cbId: number) =>
+            setLabelCb(name, 'wheel', cbId, fn => this.api.labels.setWheelCallback(name, fn as never)));
         // setLabelToolTip(name, text [, duration]) — duration arg is accepted for
         // Mudlet compatibility but ignored: the title attribute has no per-tooltip
         // duration. resetLabelToolTip clears it.
@@ -339,15 +380,29 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('disableClickthrough', (name: unknown) => {
             if (typeof name === 'string') this.api.labels.setClickThrough(name, false);
         });
-        // Z-order. Each call bumps the label past every other label raised so
-        // far (or below every other lowered label). No Mudlet-side global
-        // ordering — labels not raised/lowered float at z-index auto.
-        this.lua.global.set('raiseLabel', (name: unknown) => {
-            if (typeof name === 'string') this.api.labels.raise(name);
-        });
-        this.lua.global.set('lowerLabel', (name: unknown) => {
-            if (typeof name === 'string') this.api.labels.lower(name);
-        });
+        // Mudlet raiseWindow(name) / lowerWindow(name) — works on labels and
+        // userwindows. For labels, each call bumps z past every other raised
+        // label (or below every other lowered one). For userwindows, the call
+        // restacks the floating window. Returns true if the target existed.
+        const raiseAny = (name: unknown): boolean => {
+            if (typeof name !== 'string') return false;
+            if (this.api.labels.has(name)) { this.api.labels.raise(name); return true; }
+            if (this.api.windows.has(name)) { this.api.windows.bringToFront(name); return true; }
+            return false;
+        };
+        const lowerAny = (name: unknown): boolean => {
+            if (typeof name !== 'string') return false;
+            if (this.api.labels.has(name)) { this.api.labels.lower(name); return true; }
+            if (this.api.windows.has(name)) { this.api.windows.sendToBack(name); return true; }
+            return false;
+        };
+        this.lua.global.set('raiseWindow', raiseAny);
+        this.lua.global.set('lowerWindow', lowerAny);
+        // raiseLabel / lowerLabel are mudix-only legacy names. Mudlet doesn't
+        // have them; ported scripts should use raiseWindow / lowerWindow. Kept
+        // as aliases so existing user scripts don't break.
+        this.lua.global.set('raiseLabel', raiseAny);
+        this.lua.global.set('lowerLabel', lowerAny);
         // setLabelCursor(name, shapeInt). The Mudlet GUIUtils.lua wrapper
         // converts string shape names → ints via mudlet.cursor before calling
         // here, so we only handle the integer case. shape -1 ('Reset') clears.
@@ -364,25 +419,24 @@ export class LuaRuntime implements IScriptingRuntime {
             if (typeof name === 'string') this.api.labels.setCursor(name, undefined);
         });
 
-        // setAppStyleSheet is a no-op stub: Mudlet applies a Qt-style CSS to the
-        // whole app, which has no clean web equivalent. Warn once so script
-        // authors notice, then swallow further calls silently.
-        let appStyleSheetWarned = false;
-        this.lua.global.set('setAppStyleSheet', () => {
-            if (!appStyleSheetWarned) {
-                appStyleSheetWarned = true;
-                console.warn('[mudix] setAppStyleSheet is not supported at the moment; call ignored.');
-            }
+        // Mudlet setAppStyleSheet(css, [tag]) — install or replace a CSS block
+        // in document.head, then raise sysAppStyleSheetChange so theme scripts
+        // can re-apply derivative styles. The optional `tag` lets multiple
+        // independent stylesheets coexist (each is keyed in `<style>`'s id).
+        this.lua.global.set('setAppStyleSheet', (css: unknown, tag?: unknown) => {
+            return this.api.setAppStyleSheet(
+                String(css ?? ''),
+                tag != null ? String(tag) : undefined,
+            );
         });
 
-        // setUserWindowStyleSheet is a no-op stub: per-userwindow Qt CSS isn't
-        // implemented yet. Warn once and swallow further calls silently.
-        let userWindowStyleSheetWarned = false;
-        this.lua.global.set('setUserWindowStyleSheet', () => {
-            if (!userWindowStyleSheetWarned) {
-                userWindowStyleSheetWarned = true;
-                console.warn('[mudix] setUserWindowStyleSheet is not yet implemented; call ignored.');
-            }
+        // Mudlet setUserWindowStyleSheet(name, css) — install or replace a
+        // per-window CSS block. Selectors aren't auto-scoped — script authors
+        // can qualify with `[data-mudix-window="name"]` for true per-window
+        // rules, or use class selectors when they only apply that style to
+        // one panel anyway.
+        this.lua.global.set('setUserWindowStyleSheet', (name: unknown, css: unknown) => {
+            return this.api.setUserWindowStyleSheet(String(name ?? ''), String(css ?? ''));
         });
 
         // No-op stubs for unimplemented label callbacks and the cmdline action
@@ -401,14 +455,35 @@ export class LuaRuntime implements IScriptingRuntime {
                 }
             });
         };
-        registerStub('setLabelDoubleClickCallback');
-        registerStub('setLabelReleaseCallback');
-        registerStub('setLabelMoveCallback');
-        registerStub('setLabelWheelCallback');
-        registerStub('setLabelOnEnter');
-        registerStub('setLabelOnLeave');
-        registerStub('setCmdLineAction');
-        registerStub('resetCmdLineAction');
+        // setLabelDoubleClickCallback / setLabelReleaseCallback /
+        // setLabelMoveCallback / setLabelWheelCallback / setLabelOnEnter /
+        // setLabelOnLeave: real bindings installed in Bridge.lua over the
+        // __mudix_setLabel* primitives above.
+
+        // Mudlet setCmdLineAction([cmdLineName,] fn, [args...]). Single command
+        // bar in mudix → cmdLineName is dropped. JS hands a numeric cb id
+        // (Bridge.lua wrapper bakes any trailing args into the closure); 0
+        // means "clear". The prior cb id is freed in __mudix_cb on rebind.
+        this.lua.global.set('__mudix_setCmdLineAction', (cbId: number) => {
+            const prev = this.cmdLineActionCbId;
+            if (prev && prev !== cbId) this.unregisterCb(prev);
+            this.cmdLineActionCbId = cbId || 0;
+            if (!cbId) {
+                this.api.setCmdLineAction(null);
+                return true;
+            }
+            this.api.setCmdLineAction((text: string) => {
+                this.dispatchCbWithArg(cbId, text, 'setCmdLineAction');
+            });
+            return true;
+        });
+        this.lua.global.set('__mudix_resetCmdLineAction', () => {
+            const prev = this.cmdLineActionCbId;
+            if (prev) this.unregisterCb(prev);
+            this.cmdLineActionCbId = 0;
+            this.api.setCmdLineAction(null);
+            return true;
+        });
 
         // ── Map view ──────────────────────────────────────────────────────────
         this.lua.global.set('centerview',      (id: number)              => this.api.centerView(id));
@@ -1018,8 +1093,14 @@ export class LuaRuntime implements IScriptingRuntime {
             this.api.expandAlias(text, echo ?? true);
             this.api.flushOutput();
         });
-        this.lua.global.set('sendCmdLine', (text: string) => {
-            void this.api.send(text, true);
+        // Mudlet sendCmdLine([cmdLineName,] text) stages text into the command
+        // bar (setPlainText + selectAll) without submitting it. Scripts use
+        // this to pre-fill the input for the user to edit before pressing
+        // Enter. The cmdLineName arg is ignored — mudix has a single command
+        // bar.
+        this.lua.global.set('sendCmdLine', (a: unknown, b?: unknown) => {
+            const text = b !== undefined ? String(b ?? '') : String(a ?? '');
+            this.api.printCmdLine(text);
         });
 
         // ── Text manipulation ─────────────────────────────────────────────────
@@ -1188,8 +1269,13 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('resetBorderColor', () => this.api.resetBorderColor());
 
         // ── Timers (extended) ─────────────────────────────────────────────────
-        // TODO: implement remainingTime — requires TimerEngine to track scheduled fire times
-        this.lua.global.set('remainingTime', (_id: unknown) => -1);
+        // Mudlet remainingTime(idOrName). Numeric arg → tempTimer id; string
+        // arg → permanent timer name. -1 when no live timer matches.
+        this.lua.global.set('remainingTime', (idOrName: unknown) => {
+            if (typeof idOrName === 'number') return this.api.timers.remainingTime(idOrName);
+            if (typeof idOrName === 'string') return this.api.timers.remainingTime(idOrName);
+            return -1;
+        });
 
         // Bootstrap chunks run sync — none of them yield. setupRex needs an
         // await for one-time PCRE wasm init; sqliteReady gates the SQL bridge
@@ -1655,6 +1741,22 @@ export class LuaRuntime implements IScriptingRuntime {
     private dispatchCb(cbId: number, label: string): void {
         this.runChunk(`__mudix_dispatch_cb(${cbId})`, label);
         this.api.flushOutput();
+    }
+
+    // Same as dispatchCb but passes a single argument to the callback. Used by
+    // label mouse callbacks to deliver the {button, x, y, ...} event table.
+    private dispatchCbWithArg(cbId: number, arg: unknown, label: string): void {
+        this.lua.global.set('__mudix_cb_arg', arg);
+        this.runChunk(`__mudix_dispatch_cb_arg(${cbId})`, label);
+        this.api.flushOutput();
+    }
+
+    // Unregister a previously registered callback id (Lua side). Used to free
+    // entries in __mudix_cb on rebind so labels with rapidly-changing handlers
+    // don't leak refs.
+    private unregisterCb(cbId: number): void {
+        if (!cbId) return;
+        this.runChunk(`__mudix_unregister_cb(${cbId})`, 'unregister cb');
     }
 
     private execModule(code: string, name: string, globalName: string): void {
