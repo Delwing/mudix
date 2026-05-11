@@ -26,6 +26,62 @@ const LENGTH_PROPS = new Set([
 ]);
 
 export function cssTextToStyle(css: string): React.CSSProperties {
+    return declarationsToStyle(stripRulesetBraces(css));
+}
+
+// Parse a Qt-style stylesheet that mixes flat declarations and selector
+// rulesets. Returns the flat declarations (everything in the base block or in a
+// `QLabel { … }` rule) as inline style, plus a list of scoped rules keyed by
+// CSS pseudo-class for state selectors like `QLabel::hover`, `QLabel:pressed`,
+// etc. Caller is expected to inject scoped rules into a `<style>` element
+// targeting the specific label via a unique selector prefix.
+export function cssTextToParts(css: string): {
+    inline: React.CSSProperties;
+    scoped: Array<{ pseudo: string; declarations: string }>;
+} {
+    if (css.indexOf('{') < 0) {
+        return { inline: declarationsToStyle(css), scoped: [] };
+    }
+    const inlineDecls: string[] = [];
+    const scoped: Array<{ pseudo: string; declarations: string }> = [];
+    for (const rule of splitRulesets(css)) {
+        const pseudo = qtSelectorToPseudo(rule.selector);
+        if (pseudo === '') inlineDecls.push(rule.body);
+        else if (pseudo !== null) scoped.push({ pseudo, declarations: rule.body });
+        // Unknown selectors (other widget types, descendant rules) are dropped —
+        // they wouldn't have applied to a QLabel in Mudlet either.
+    }
+    return { inline: declarationsToStyle(inlineDecls.join(';')), scoped };
+}
+
+// Translate a Qt selector ("QLabel", "QLabel:hover", "QLabel::hover",
+// "QLabel:!hover", ":hover", "*") into the CSS pseudo-class suffix to apply.
+// Empty string = no pseudo (applies as inline). null = drop the rule.
+function qtSelectorToPseudo(sel: string): string | null {
+    const trimmed = sel.trim();
+    if (!trimmed) return null;
+    if (trimmed === '*' || /^QLabel$/i.test(trimmed)) return '';
+    // Strip optional widget-type prefix (e.g., QLabel:hover → :hover). We only
+    // accept QLabel or no prefix; other widget types don't render here.
+    const m = trimmed.match(/^(QLabel)?(:{1,2}!?[\w-]+)$/i);
+    if (!m) return null;
+    let pseudo = m[2];
+    // Qt's `::state` is equivalent to `:state` for pseudo-classes; CSS requires
+    // single colon. (Real pseudo-elements like `::before` aren't Qt states.)
+    if (pseudo.startsWith('::')) pseudo = pseudo.slice(1);
+    // Qt's `:!state` is the negation; map to CSS `:not(:state)`.
+    if (pseudo.startsWith(':!')) pseudo = ':not(:' + pseudo.slice(2) + ')';
+    // Map Qt-specific state names to their CSS equivalents.
+    const QT_TO_CSS: Record<string, string> = {
+        ':pressed': ':active',
+        ':!pressed': ':not(:active)',
+    };
+    return QT_TO_CSS[pseudo] ?? pseudo;
+}
+
+// Apply Qt→CSS translations on a flat declaration block and return inline
+// styles. Used for both the base block and `QLabel { … }` rule bodies.
+function declarationsToStyle(css: string): React.CSSProperties {
     const out: Record<string, string> = {};
     for (const decl of splitDeclarations(css)) {
         const i = decl.indexOf(':');
@@ -42,6 +98,85 @@ export function cssTextToStyle(css: string): React.CSSProperties {
         out[camel] = val;
     }
     return out as React.CSSProperties;
+}
+
+// Translate a flat declaration block into a CSS declaration string (Qt → CSS
+// for values like QLinearGradient and unitless lengths). Used to serialize a
+// scoped pseudo-state ruleset body for injection into a `<style>` element.
+export function qtDeclarationsToCss(css: string): string {
+    const out: string[] = [];
+    for (const decl of splitDeclarations(css)) {
+        const i = decl.indexOf(':');
+        if (i < 0) continue;
+        let key = decl.slice(0, i).trim().toLowerCase();
+        let val = decl.slice(i + 1).trim();
+        if (!key || !val) continue;
+        if (/QLinearGradient\s*\(/i.test(val)) val = translateLinearGradient(val);
+        if (key === 'background-color' && /-gradient\s*\(/.test(val)) key = 'background';
+        if (LENGTH_PROPS.has(key)) val = ensurePxUnits(val);
+        out.push(`${key}: ${val}`);
+    }
+    return out.join('; ');
+}
+
+// Pull out base-level declarations from a stylesheet that may also have
+// selector rulesets. Used by cssTextToStyle for back-compat callers that don't
+// care about scoped state rules.
+function stripRulesetBraces(css: string): string {
+    if (css.indexOf('{') < 0) return css;
+    const inline: string[] = [];
+    for (const rule of splitRulesets(css)) {
+        if (rule.selector === '' || /^QLabel$/i.test(rule.selector.trim())) {
+            inline.push(rule.body);
+        }
+    }
+    return inline.join(';');
+}
+
+// Walk a stylesheet of the form `[base decls;] selector { decls; } selector { … }`.
+// Returns each piece as { selector, body }. Base-level declarations come back
+// with selector === ''. Brace-aware so nested `()` in values (e.g. gradients)
+// don't get confused for ruleset boundaries.
+function splitRulesets(css: string): Array<{ selector: string; body: string }> {
+    const out: Array<{ selector: string; body: string }> = [];
+    let i = 0;
+    let chunkStart = 0;
+    while (i < css.length) {
+        const c = css[i];
+        if (c === '(') {
+            const close = matchingClose(css, i);
+            if (close < 0) break;
+            i = close + 1;
+            continue;
+        }
+        if (c === '{') {
+            const selector = css.slice(chunkStart, i);
+            const close = matchingBrace(css, i);
+            const end = close < 0 ? css.length : close;
+            out.push({ selector, body: css.slice(i + 1, end) });
+            i = end + 1;
+            chunkStart = i;
+            continue;
+        }
+        i++;
+    }
+    if (chunkStart < css.length) {
+        const tail = css.slice(chunkStart).trim();
+        if (tail) out.push({ selector: '', body: tail });
+    }
+    return out;
+}
+
+function matchingBrace(s: string, openIdx: number): number {
+    let depth = 1;
+    for (let i = openIdx + 1; i < s.length; i++) {
+        if (s[i] === '{') depth++;
+        else if (s[i] === '}') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
 }
 
 // Paren-aware split on `;` so semicolons inside e.g. QLinearGradient() don't

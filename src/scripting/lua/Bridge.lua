@@ -202,6 +202,24 @@ function customHTTP(method, data, url, headers, file)
     return true, url
 end
 
+-- Mudlet getCustomEnvColorTable() → { [envID] = { r, g, b, a } } with the
+-- inner table 1-indexed. JS hands the inner over as { r=, g=, b=, a= }; rebuild
+-- as a 4-element 1-indexed array. envID keys cross the wasmoon bridge as
+-- numeric strings — coerce back to number so script code that does t[i] works.
+function getCustomEnvColorTable()
+    local raw = __getCustomEnvColorTable()
+    local out = {}
+    if type(raw) == 'table' then
+        for k, c in pairs(raw) do
+            local id = tonumber(k)
+            if id and type(c) == 'table' then
+                out[id] = { c.r, c.g, c.b, c.a }
+            end
+        end
+    end
+    return out
+end
+
 -- Mudlet getMapEvents() → { [uniqueName] = { ["event name"]=..., ["parent"]=...,
 -- ["display name"]=..., ["arguments"]={...} } }. JS hands back an array of
 -- entries (0-indexed); rebuild into Mudlet's exact key/shape so scripts can

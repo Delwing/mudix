@@ -782,6 +782,12 @@ export class LuaRuntime implements IScriptingRuntime {
             const c = this.api.map.getCustomEnvColor(Number(envId));
             return c ? [c.r, c.g, c.b, c.a] : null;
         });
+        // Mudlet getCustomEnvColorTable() → { [envID] = {r, g, b, a} } with
+        // 1-indexed inner arrays. The raw JS bridge returns plain objects; the
+        // Bridge.lua wrapper rebuilds the inner tables 1-indexed and re-keys by
+        // numeric envID.
+        this.lua.global.set('__getCustomEnvColorTable',
+            () => this.api.map.getCustomEnvColorTable());
 
         // ── Areas ─────────────────────────────────────────────────────────────
         // Mudlet addAreaName / setAreaName return (false, errMsg) on duplicate
@@ -1138,13 +1144,15 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('getLastLineNumber', (win?: string)=> this.api.getLastLineNumber(win));
         this.lua.global.set('getColumnNumber',(win?: string)=> this.api.getColumnNumber(win));
         this.lua.global.set('getColumnCount', (win?: string)=> this.api.getColumnCount(win));
-        // setWindowWrap(windowName, charsPerLine). Mudlet requires a window
-        // name; we additionally accept a single numeric arg as shorthand for
-        // the main console since "main" is a valid target here.
+        // setWindowWrap(windowName, charsPerLine) — Mudlet shape. The name arg
+        // is required; non-string raises a bad-argument error so scripts that
+        // forgot the name (the no-arg "shorthand") see the same failure they
+        // would in Mudlet.
         this.lua.global.set('setWindowWrap', (a: unknown, b?: unknown) => {
-            return (typeof a === 'string')
-                ? this.api.setWindowWrap(a, Number(b))
-                : this.api.setWindowWrap('main', Number(a));
+            if (typeof a !== 'string') {
+                throw new Error('setWindowWrap: bad argument #1 type (window name as string expected, got ' + typeof a + ')');
+            }
+            return this.api.setWindowWrap(a, Number(b));
         });
         // getLines([window,] from, to) — JS array crosses wasmoon as a
         // 0-indexed Lua table; the Bridge.lua wrapper rebuilds it as a

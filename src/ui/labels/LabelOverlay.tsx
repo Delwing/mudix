@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
 import type { LabelManager, LabelMouseEvent, LabelState, LabelWheelEvent } from './LabelManager';
-import { cssTextToStyle } from './qtCss';
+import { cssTextToParts, qtDeclarationsToCss } from './qtCss';
 import './LabelOverlay.css';
 
 // Mudlet uses Qt::MouseButton flags (1=left, 2=right, 4=middle); DOM `button`
@@ -62,6 +62,29 @@ function Label({ l }: { l: LabelState }) {
     // to land on the new fn even if React hasn't re-mounted us yet.
     const ref = useRef(l);
     ref.current = l;
+
+    // Manage a single <style> element per label for Qt pseudo-state rules
+    // (`QLabel:hover`, etc.). Inline styles can't express these, and `<style
+    // scoped>` was deprecated — so inject into <head>, scoped via the label's
+    // data-attribute selector.
+    useEffect(() => {
+        if (!l.styleSheet) return;
+        const parts = cssTextToParts(l.styleSheet);
+        if (parts.scoped.length === 0) return;
+        const id = `mudix-label-stylesheet--${l.name}`;
+        let el = document.getElementById(id) as HTMLStyleElement | null;
+        if (!el) {
+            el = document.createElement('style');
+            el.id = id;
+            document.head.appendChild(el);
+        }
+        const sel = `[data-mudix-label="${cssEscape(l.name)}"]`;
+        el.textContent = parts.scoped
+            .map(r => `${sel}${r.pseudo} { ${qtDeclarationsToCss(r.declarations)} }`)
+            .join('\n');
+        return () => { document.getElementById(id)?.remove(); };
+    }, [l.styleSheet, l.name]);
+
     if (!l.visible) return null;
 
     const style: React.CSSProperties = {
@@ -83,12 +106,13 @@ function Label({ l }: { l: LabelState }) {
     }
     // Stylesheet wins over computed background when both are set, matching
     // Mudlet (where setLabelStyleSheet replaces the QLabel's full QSS block).
-    if (l.styleSheet) Object.assign(style, cssTextToStyle(l.styleSheet));
+    if (l.styleSheet) Object.assign(style, cssTextToParts(l.styleSheet).inline);
 
     return (
         <div
             className="label"
             style={style}
+            data-mudix-label={l.name}
             title={l.tooltip}
             onClick={l.onClick && (e => ref.current.onClick?.(buildMouseEvent(e)))}
             onMouseUp={l.onMouseUp && (e => ref.current.onMouseUp?.(buildMouseEvent(e)))}
@@ -100,4 +124,12 @@ function Label({ l }: { l: LabelState }) {
             dangerouslySetInnerHTML={{ __html: l.html }}
         />
     );
+}
+
+// CSS.escape polyfill for attribute selector values — IE/older Safari don't
+// expose it, and label names can contain hyphens/spaces/quotes a script writer
+// might choose. Cheap, identifier-only fallback when CSS.escape is unavailable.
+function cssEscape(s: string): string {
+    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s);
+    return s.replace(/["\\\n\r]/g, '\\$&');
 }

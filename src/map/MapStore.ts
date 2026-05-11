@@ -1,5 +1,5 @@
-import type { MudletRoom, MudletArea, MudletMap, MudletFont, MudletColor } from 'mudlet-map-binary-reader';
-import { readerExport } from 'mudlet-map-binary-reader';
+import type {MudletArea, MudletColor, MudletFont, MudletMap, MudletRoom} from 'mudlet-map-binary-reader';
+import {readerExport} from 'mudlet-map-binary-reader';
 
 export type MapRendererData = ReturnType<typeof readerExport>;
 
@@ -170,10 +170,9 @@ export class MapStore {
      * id isn't reserved; a follow-up `addRoom(id)` is what actually claims it.
      */
     createRoomID(minimum?: number): number {
-        const floor = minimum != null && Number.isFinite(minimum) && minimum > 0
+        let id = minimum != null && Number.isFinite(minimum) && minimum > 0
             ? Math.trunc(minimum)
             : this.nextRoomId;
-        let id = floor;
         while (this.rooms.has(id)) id++;
         if (id >= this.nextRoomId) this.nextRoomId = id + 1;
         return id;
@@ -658,6 +657,14 @@ export class MapStore {
     getCustomEnvColor(envId: number): { r: number; g: number; b: number; a: number } | undefined {
         const c = this.customEnvColors.get(envId);
         return c ? { r: c.r, g: c.g, b: c.b, a: c.alpha } : undefined;
+    }
+
+    getCustomEnvColorTable(): Record<number, { r: number; g: number; b: number; a: number }> {
+        const out: Record<number, { r: number; g: number; b: number; a: number }> = {};
+        for (const [id, c] of this.customEnvColors) {
+            out[id] = { r: c.r, g: c.g, b: c.b, a: c.alpha };
+        }
+        return out;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
