@@ -827,6 +827,23 @@
     background: var(--hover-bg);
 }
 
+.script-editor__error-log-path {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.script-editor__error-log-path:hover {
+    color: var(--accent);
+    text-decoration-style: solid;
+}
+
 /* ── Packages view ────────────────────────────────────────── */
 .script-editor__pkg-card {
     display: flex;

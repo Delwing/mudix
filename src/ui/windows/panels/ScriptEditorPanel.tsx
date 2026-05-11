@@ -325,6 +325,37 @@ function formatTime(d: Date): string {
     return d.toTimeString().slice(0, 8);
 }
 
+// Matches Lua-error path tokens like `arkadia/skrypty/config/scripts_config.lua:107`
+// or `/profiles/<id>/foo.lua:42`. Allows /, ., _, -, alnum in path segments.
+// (?<=[\s\[(:'"`]|^) anchors the start so we don't mid-word-match.
+const VFS_PATH_RE = /(?<=^|[\s\[(:'"`])((?:\/[\w.-]+)*[\w.-]+(?:\/[\w.-]+)+\.lua)(?::(\d+))?/g;
+
+// Split an error-log entry's text into renderable segments, turning every
+// substring that matches a VFS-resolvable .lua path into a clickable token.
+// Returns plain strings for non-matching segments and { path, line } objects
+// for matches. The caller resolves the path against the VFS at click time.
+function segmentLogText(
+    text: string,
+    canOpen: (relOrAbs: string) => boolean,
+): Array<string | { match: string; path: string; line?: number }> {
+    const out: Array<string | { match: string; path: string; line?: number }> = [];
+    let cursor = 0;
+    VFS_PATH_RE.lastIndex = 0;
+    for (let m = VFS_PATH_RE.exec(text); m; m = VFS_PATH_RE.exec(text)) {
+        const [whole, path, lineStr] = m;
+        if (!canOpen(path)) continue;
+        if (m.index > cursor) out.push(text.substring(cursor, m.index));
+        out.push({
+            match: whole,
+            path,
+            ...(lineStr ? { line: parseInt(lineStr, 10) } : {}),
+        });
+        cursor = m.index + whole.length;
+    }
+    if (cursor < text.length) out.push(text.substring(cursor));
+    return out.length > 0 ? out : [text];
+}
+
 /** config.lua's `created` field is free-form; render as a localized date when parseable, raw otherwise. */
 function formatPackageDate(raw: string): string {
     const t = Date.parse(raw);
@@ -340,9 +371,10 @@ interface ScriptEditorPanelProps {
     initialListWidth?: number;
     initialMetaHeight?: number;
     onSplitsChange?: (listWidth: number, metaHeight: number | null) => void;
+    onOpenVfsFile?: (path: string, line?: number) => void;
 }
 
-export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineRef, initialListWidth, initialMetaHeight, onSplitsChange }: ScriptEditorPanelProps) {
+export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineRef, initialListWidth, initialMetaHeight, onSplitsChange, onOpenVfsFile }: ScriptEditorPanelProps) {
     const confirm = useConfirm();
     const [category, setCategory] = useState<Category>('scripts');
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -1430,23 +1462,42 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                         {errorLog.length === 0 ? (
                             <span className="script-editor__log-empty">Lua errors and script output will appear here.</span>
                         ) : (
-                            errorLog.map((entry, i) => (
-                                <div key={i} className={`script-editor__error-log-entry script-editor__error-log-entry--${entry.level}`}>
-                                    <span className="script-editor__error-log-time">{formatTime(entry.timestamp)}</span>
-                                    <span className="script-editor__error-log-text">{entry.text}</span>
-                                    {entry.source && (
-                                        <button
-                                            className="script-editor__error-log-jump"
-                                            type="button"
-                                            onClick={() => handleErrorJump(entry.source!)}
-                                            title={`Open ${entry.source.kind} "${entry.source.name}"${entry.source.line !== undefined ? ` at line ${entry.source.line}` : ''}`}
-                                            aria-label={`Open ${entry.source.kind} ${entry.source.name}`}
-                                        >
-                                            →
-                                        </button>
-                                    )}
-                                </div>
-                            ))
+                            errorLog.map((entry, i) => {
+                                const segments = vfs && onOpenVfsFile
+                                    ? segmentLogText(entry.text, p => vfs.exists(p))
+                                    : [entry.text];
+                                return (
+                                    <div key={i} className={`script-editor__error-log-entry script-editor__error-log-entry--${entry.level}`}>
+                                        <span className="script-editor__error-log-time">{formatTime(entry.timestamp)}</span>
+                                        <span className="script-editor__error-log-text">
+                                            {segments.map((seg, j) => typeof seg === 'string'
+                                                ? <span key={j}>{seg}</span>
+                                                : (
+                                                    <button
+                                                        key={j}
+                                                        type="button"
+                                                        className="script-editor__error-log-path"
+                                                        onClick={() => onOpenVfsFile?.(seg.path, seg.line)}
+                                                        title={`Open ${seg.path}${seg.line !== undefined ? ` (line ${seg.line})` : ''} in file browser`}
+                                                    >
+                                                        {seg.match}
+                                                    </button>
+                                                ))}
+                                        </span>
+                                        {entry.source && (
+                                            <button
+                                                className="script-editor__error-log-jump"
+                                                type="button"
+                                                onClick={() => handleErrorJump(entry.source!)}
+                                                title={`Open ${entry.source.kind} "${entry.source.name}"${entry.source.line !== undefined ? ` at line ${entry.source.line}` : ''}`}
+                                                aria-label={`Open ${entry.source.kind} ${entry.source.name}`}
+                                            >
+                                                →
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })
                         )}
                         <div ref={errorLogEndRef} />
                     </div>

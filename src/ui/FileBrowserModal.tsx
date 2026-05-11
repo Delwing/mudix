@@ -7,6 +7,7 @@ import { ContextMenu } from './components';
 import { useAppStore } from '../storage';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 import { getSqliteClient } from '../db/sqliteClient';
+import { CodeEditorPreview, EDITABLE_EXTENSIONS } from './CodeEditorPreview';
 import {
     isFolderLinkSupported,
     loadFolderHandle,
@@ -61,6 +62,12 @@ interface PreviewProps {
     filename: string;
     path: string;
     vfs: ProfileVFS;
+    // Editable strategies wire these so the modal can prompt on unsaved file
+    // switches and refresh tree metadata (size, etc.) after a save.
+    onDirtyChange?: (dirty: boolean) => void;
+    onSaved?: () => void;
+    // Optional jump-to-line request. Bumps `revision` for re-fire on repeat.
+    gotoLine?: { line: number; revision: number } | null;
 }
 
 interface FilePreviewStrategy {
@@ -73,14 +80,6 @@ interface FilePreviewStrategy {
 
 function PlainTextPreview({ content }: PreviewProps) {
     return <pre className="vfs-preview-text">{content}</pre>;
-}
-
-function JsonPreview({ content }: PreviewProps) {
-    const formatted = useMemo(() => {
-        try { return JSON.stringify(JSON.parse(content), null, 2); }
-        catch { return content; }
-    }, [content]);
-    return <pre className="vfs-preview-text">{formatted}</pre>;
 }
 
 const SQL_PAGE_SIZE = 50;
@@ -373,8 +372,12 @@ function ImagePreview({ filename, path, vfs }: PreviewProps) {
     );
 }
 
+function fileExtLower(filename: string): string {
+    const i = filename.lastIndexOf('.');
+    return i >= 0 ? filename.substring(i + 1).toLowerCase() : '';
+}
+
 const plainTextStrategy: FilePreviewStrategy = { canPreview: () => true, Preview: PlainTextPreview };
-const jsonStrategy: FilePreviewStrategy = { canPreview: (n) => n.endsWith('.json'), Preview: JsonPreview };
 const sqliteStrategy: FilePreviewStrategy = {
     canPreview: (n) => /\.(db|sqlite|sqlite3)$/i.test(n),
     isBinary: true,
@@ -385,9 +388,13 @@ const imageStrategy: FilePreviewStrategy = {
     isBinary: true,
     Preview: ImagePreview,
 };
+const codeEditorStrategy: FilePreviewStrategy = {
+    canPreview: (n) => EDITABLE_EXTENSIONS.has(fileExtLower(n)),
+    Preview: CodeEditorPreview,
+};
 
 // Add new strategies here — order matters, first match wins
-const previewStrategies: FilePreviewStrategy[] = [sqliteStrategy, imageStrategy, jsonStrategy, plainTextStrategy];
+const previewStrategies: FilePreviewStrategy[] = [sqliteStrategy, imageStrategy, codeEditorStrategy, plainTextStrategy];
 
 function getPreviewStrategy(filename: string): FilePreviewStrategy {
     return previewStrategies.find(s => s.canPreview(filename)) ?? plainTextStrategy;
@@ -527,7 +534,17 @@ function TreeNode({ node, depth, expanded, selectedPath, uploadDir, onToggle, on
 
 // ─── Preview Panel ─────────────────────────────────────────────────────────
 
-function PreviewPanel({ file, content, error, vfs }: { file: VFSNode | null; content: string | null; error: string | null; vfs: ProfileVFS | null }): ReactNode {
+interface PreviewPanelProps {
+    file: VFSNode | null;
+    content: string | null;
+    error: string | null;
+    vfs: ProfileVFS | null;
+    onDirtyChange: (dirty: boolean) => void;
+    onSaved: () => void;
+    gotoLine?: { line: number; revision: number } | null;
+}
+
+function PreviewPanel({ file, content, error, vfs, onDirtyChange, onSaved, gotoLine }: PreviewPanelProps): ReactNode {
     if (!file) return <p className="vfs-preview-empty">Select a file to preview</p>;
     if (error) {
         return (
@@ -540,7 +557,20 @@ function PreviewPanel({ file, content, error, vfs }: { file: VFSNode | null; con
     if (!vfs) return null;
     const strategy = getPreviewStrategy(file.name);
     if (!strategy.isBinary && content === null) return null;
-    return <strategy.Preview content={content ?? ''} filename={file.name} path={file.path} vfs={vfs} />;
+    // key={path} forces a clean remount on file switch so editor state and
+    // dirty flags can't leak between files.
+    return (
+        <strategy.Preview
+            key={file.path}
+            content={content ?? ''}
+            filename={file.name}
+            path={file.path}
+            vfs={vfs}
+            onDirtyChange={onDirtyChange}
+            onSaved={onSaved}
+            gotoLine={gotoLine ?? null}
+        />
+    );
 }
 
 // ─── Modal ─────────────────────────────────────────────────────────────────
@@ -551,9 +581,19 @@ interface FileBrowserModalProps {
     connectionId: string;
     vfs: ProfileVFS | null;
     onClose: () => void;
+    // Optional path to select on open/refresh — used by the Cmd+P quick-open
+    // palette and ScriptEditorModal to reveal a file in the tree and load its
+    // preview. initialPathTick bumps on each programmatic open so the selection
+    // effect re-fires even when the same path is picked twice in a row.
+    initialPath?: string | null;
+    initialPathTick?: number;
+    // Line to scroll-and-position the cursor on once the preview opens.
+    // Read alongside `initialPath`/`initialPathTick` so error-log hyperlinks
+    // like `foo.lua:42` land on line 42.
+    initialLine?: number;
 }
 
-export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModalProps) {
+export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, initialPathTick, initialLine }: FileBrowserModalProps) {
     const savedBounds     = useAppStore(s => s.connectionModalBounds[connectionId]?.['files']);
     const saveModalBounds = useAppStore(s => s.saveModalBounds);
 
@@ -564,6 +604,10 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
 
     const [resyncing, setResyncing] = useState(false);
     const refresh = useCallback(async () => {
+        if (previewDirtyRef.current) {
+            const ok = window.confirm('Refresh will discard your unsaved edits. Continue?');
+            if (!ok) return;
+        }
         if (vfs?.source === 'folder') {
             setResyncing(true);
             try { await vfs.resync(); }
@@ -574,6 +618,7 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
         setSelectedFile(null);
         setPreviewContent(null);
         setPreviewError(null);
+        setPreviewDirty(false);
     }, [bumpRev, vfs]);
 
     const tree = useMemo(() => {
@@ -609,8 +654,26 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
     const [selectedFile, setSelectedFile] = useState<VFSNode | null>(null);
     const [previewContent, setPreviewContent] = useState<string | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
+    const [previewDirty, setPreviewDirty] = useState(false);
+    // Goto-line request handed to editable previews. `revision` is monotonic
+    // so the same line can be re-jumped on a fresh hyperlink click.
+    const [previewGoto, setPreviewGoto] = useState<{ line: number; revision: number } | null>(null);
+
+    // Editable strategies pipe their dirty flag up here so the modal can guard
+    // against losing unsaved changes when the user picks another file/closes.
+    const previewDirtyRef = useRef(false);
+    previewDirtyRef.current = previewDirty;
+
+    const confirmDiscardIfDirty = useCallback((currentName: string | undefined) => {
+        if (!previewDirtyRef.current) return true;
+        const name = currentName ?? 'this file';
+        return window.confirm(`Discard unsaved changes to ${name}?`);
+    }, []);
 
     const handleSelect = useCallback((node: VFSNode) => {
+        if (selectedFile && node.path === selectedFile.path) return; // re-click no-op
+        if (!confirmDiscardIfDirty(selectedFile?.name)) return;
+        setPreviewDirty(false);
         setSelectedFile(node);
         if (!vfs) return;
         // Binary previews (e.g. SQLite) read the file themselves — don't try
@@ -627,13 +690,62 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
             setPreviewContent(null);
             setPreviewError(String(e));
         }
-    }, [vfs]);
+    }, [vfs, selectedFile, confirmDiscardIfDirty]);
+
+    const handlePreviewSaved = useCallback(() => {
+        // Refresh tree so the file's size badge reflects the new contents.
+        bumpRev();
+    }, [bumpRev]);
+
+    // Programmatic file open (Cmd+P quick-open, script editor "reveal in
+    // files"). Expands parent dirs in the tree, then routes through
+    // handleSelect so its dirty-edit guard still prompts before switching.
+    // initialPathTick re-triggers this even when the same path is picked
+    // twice in a row. Accepts both absolute paths and VFS-relative paths
+    // (the latter come from error-log hyperlinks, which Lua emits relative
+    // to the profile root).
+    useEffect(() => {
+        if (!initialPath || !vfs) return;
+        const root = vfs.profilePath;
+        const abs = initialPath.startsWith(root + '/')
+            ? initialPath
+            : `${root}/${initialPath.replace(/^\/+/, '')}`;
+        const info = vfs.stat(abs);
+        if (!info || info.type !== 'file') return;
+        const rel = abs.substring(root.length + 1);
+        const parts = rel.split('/');
+        if (parts.length > 1) {
+            setExpanded(prev => {
+                const next = new Set(prev);
+                let cur = root;
+                for (let i = 0; i < parts.length - 1; i++) {
+                    cur = `${cur}/${parts[i]}`;
+                    next.add(cur);
+                }
+                return next;
+            });
+        }
+        const name = parts[parts.length - 1];
+        handleSelect({ name, path: abs, type: 'file', size: info.size });
+        // Queue the line jump even when initialLine is undefined (the editor
+        // ignores nulls): the previous request is replaced so a stale jump
+        // from an earlier open can't fire after a no-line click.
+        setPreviewGoto(initialLine !== undefined
+            ? { line: initialLine, revision: (initialPathTick ?? Date.now()) }
+            : null);
+    }, [initialPath, initialPathTick, initialLine, vfs, handleSelect]);
+
+    const handleCloseModal = useCallback(() => {
+        if (!confirmDiscardIfDirty(selectedFile?.name)) return;
+        onClose();
+    }, [confirmDiscardIfDirty, selectedFile, onClose]);
 
     const clearSelection = useCallback((removedPath: string) => {
         setSelectedFile(prev => {
             if (prev && (prev.path === removedPath || prev.path.startsWith(removedPath + '/'))) {
                 setPreviewContent(null);
                 setPreviewError(null);
+                setPreviewDirty(false);
                 return null;
             }
             return prev;
@@ -896,7 +1008,7 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
         <>
             <ResizableModal
                 title="Profile Files"
-                onClose={onClose}
+                onClose={handleCloseModal}
                 savedBounds={savedBounds}
                 onBoundsChange={b => saveModalBounds(connectionId, 'files', b)}
                 defaultW={620}
@@ -1028,7 +1140,15 @@ export function FileBrowserModal({ connectionId, vfs, onClose }: FileBrowserModa
                         )}
                     </div>
                     <div className="vfs-preview-panel">
-                        <PreviewPanel file={selectedFile} content={previewContent} error={previewError} vfs={vfs} />
+                        <PreviewPanel
+                            file={selectedFile}
+                            content={previewContent}
+                            error={previewError}
+                            vfs={vfs}
+                            onDirtyChange={setPreviewDirty}
+                            onSaved={handlePreviewSaved}
+                            gotoLine={previewGoto}
+                        />
                     </div>
                 </div>
             </ResizableModal>

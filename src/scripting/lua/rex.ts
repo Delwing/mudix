@@ -4,9 +4,41 @@ import type { Lua } from 'wasmoon-lua5.1';
 type MatchResult = Record<number, { start: number; end: number; match: string }> & { length: number };
 
 const withRe = <T>(pattern: string, flags: string, fn: (re: InstanceType<typeof PCRE>) => T): T => {
+    if (typeof pattern !== 'string') {
+        throw new TypeError(
+            `rex: pattern must be a string, got ${typeof pattern}. ` +
+            `Pass either a string or a compiled object from rex.new().`,
+        );
+    }
     const re = new PCRE(pattern, flags);
     try { return fn(re); } finally { re.destroy(); }
 };
+
+// DEBUG: diagnose pcre2-wasm-universal's hardcoded 1000-iter cap in matchAll.
+// Logs the callsite, pattern, subject length, ANSI-escape count, and head/tail
+// of the subject so we can identify what's blowing past the cap.
+function logSafetyLimit(callsite: string, pattern: string, subject: string): void {
+    const ansiCount = (subject.match(/\x1b\[/g) ?? []).length;
+    console.error('[matchAll safety limit]', {
+        callsite,
+        pattern,
+        subjectLength: subject.length,
+        ansiEscapeCount: ansiCount,
+        subjectHead: subject.slice(0, 200),
+        subjectTail: subject.slice(-200),
+    });
+}
+
+function safeMatchAll<T>(re: InstanceType<typeof PCRE>, subject: string, callsite: string, pattern: string): T {
+    try {
+        return re.matchAll(subject) as T;
+    } catch (err) {
+        if (err instanceof Error && err.message.includes('safety limit exceeded')) {
+            logSafetyLimit(callsite, pattern, subject);
+        }
+        throw err;
+    }
+}
 
 function extractCaptures(m: MatchResult): (string | false)[] {
     const caps: (string | false)[] = [];
@@ -49,7 +81,7 @@ export async function setupRex(lua: Lua): Promise<void> {
     // split(subject, pattern) → array of [section, cap1, ...] for Lua iterator
     lua.global.set('__rex_split__', (subject: string, pattern: string) => {
         return withRe(pattern, '', re => {
-            const matches = re.matchAll(subject);
+            const matches = safeMatchAll<MatchResult[]>(re, subject, 'rex.split', pattern);
             const results: (string | false)[][] = [];
             let lastEnd = 0;
             for (const m of matches) {
@@ -64,7 +96,7 @@ export async function setupRex(lua: Lua): Promise<void> {
     // gsub(subject, pattern, repl) → string  (repl: string or Lua function)
     lua.global.set('__rex_gsub__', (subject: string, pattern: string, repl: unknown) => {
         return withRe(pattern, '', re => {
-            const matches = re.matchAll(subject);
+            const matches = safeMatchAll<MatchResult[]>(re, subject, 'rex.gsub', pattern);
             let result = '';
             let lastEnd = 0;
             for (const m of matches) {
@@ -104,20 +136,37 @@ export async function setupRex(lua: Lua): Promise<void> {
             return unpack(r)
         end
 
+        -- Mudlet's rex_pcre2 accepts either a raw pattern string OR a compiled
+        -- pattern object (from rex.new) as the pattern argument to module-level
+        -- functions like rex.gsub / rex.match. We mirror that by tagging the
+        -- compiled objects with __pattern/__flags and unwrapping here before
+        -- forwarding the string to the JS bridge — passing the table itself
+        -- through silently coerces to a bogus pattern in PCRE and can spin
+        -- matchAll until the safety cap fires.
+        local function unwrap(p)
+            if type(p) == 'table' and p.__pattern then
+                return p.__pattern, p.__flags or ''
+            end
+            return p, ''
+        end
+
         M.match = function(subject, pattern, init)
-            local t = _match(subject, pattern, init)
+            local p = unwrap(pattern)
+            local t = _match(subject, p, init)
             if t == nil then return nil end
             return jsarr2vararg(t)
         end
 
         M.find = function(subject, pattern, init)
-            local t = _find(subject, pattern, init)
+            local p = unwrap(pattern)
+            local t = _find(subject, p, init)
             if t == nil then return nil end
             return jsarr2vararg(t)
         end
 
         M.split = function(subject, pattern)
-            local results = _split(subject, pattern)
+            local p = unwrap(pattern)
+            local results = _split(subject, p)
             local i = -1
             return function()
                 i = i + 1
@@ -129,14 +178,16 @@ export async function setupRex(lua: Lua): Promise<void> {
         end
 
         M.gsub = function(subject, pattern, repl, n)
-            return _gsub(subject, pattern, repl)
+            local p = unwrap(pattern)
+            return _gsub(subject, p, repl)
         end
 
         M.new = function(pattern, flags)
-            local p = pattern
-            return setmetatable({}, { __index = {
-                match = function(self, subject, init) return M.match(subject, p, init) end,
-                find  = function(self, subject, init) return M.find(subject, p, init)  end,
+            return setmetatable({ __pattern = pattern, __flags = flags or '' }, { __index = {
+                match = function(self, subject, init) return M.match(subject, self, init) end,
+                find  = function(self, subject, init) return M.find(subject, self, init)  end,
+                gsub  = function(self, subject, repl, n) return M.gsub(subject, self, repl, n) end,
+                split = function(self, subject) return M.split(subject, self) end,
             }})
         end
 

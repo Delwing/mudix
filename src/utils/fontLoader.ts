@@ -3,29 +3,142 @@ import type { OutputFontSource } from '../storage';
 
 const PROBE_TEXT = 'mwijMWIJ0123!@#';
 const PROBE_FALLBACKS = ['monospace', 'serif', 'sans-serif'] as const;
+const PROBE_FONT_SIZE_PX = 72;
 
 function quoteFamily(family: string): string {
     return `"${family.replace(/"/g, '\\"')}"`;
 }
 
 /**
- * Returns true when `family` measures differently than every fallback —
- * the canonical "is this font installed/loaded?" trick. `document.fonts.check`
- * is unreliable for unknown system fonts and can't distinguish a missing
- * family from one that's just not in the FontFaceSet yet.
+ * DOM offsetWidth probe: render the same text once with each of three generic
+ * fallbacks and once with the candidate family prepended; if any pair diverges,
+ * the candidate is being applied. We probe all three generics because a
+ * monospace target often coincides with the monospace fallback width while
+ * still differing from serif/sans-serif. Note: document.fonts.check() is NOT
+ * usable here — Chrome returns true for any well-formed family because a
+ * fallback always completes rendering, so it can't distinguish installed
+ * from missing.
  */
+function checkViaDomMeasurement(family: string): boolean {
+    if (typeof document === 'undefined' || !document.body) return false;
+    const probe = document.createElement('span');
+    probe.textContent = PROBE_TEXT;
+    probe.style.cssText =
+        `position:absolute;left:-9999px;top:-9999px;visibility:hidden;` +
+        `white-space:nowrap;font-size:${PROBE_FONT_SIZE_PX}px;line-height:1;`;
+    document.body.appendChild(probe);
+    try {
+        return PROBE_FALLBACKS.some(fb => {
+            probe.style.fontFamily = fb;
+            const baseline = probe.offsetWidth;
+            probe.style.fontFamily = `${quoteFamily(family)}, ${fb}`;
+            return probe.offsetWidth !== baseline;
+        });
+    } finally {
+        probe.remove();
+    }
+}
+
+/** Synchronous detection. May false-negative on a system font whose face the
+ *  browser hasn't materialized yet — use {@link ensureFontAvailable} when an
+ *  await is acceptable. */
 export function isFontAvailable(family: string): boolean {
     const trimmed = family.trim();
     if (!trimmed) return false;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return false;
-    return PROBE_FALLBACKS.every(fb => {
-        ctx.font = `16px ${fb}`;
-        const baseline = ctx.measureText(PROBE_TEXT).width;
-        ctx.font = `16px ${quoteFamily(trimmed)}, ${fb}`;
-        return ctx.measureText(PROBE_TEXT).width !== baseline;
-    });
+    return checkViaDomMeasurement(trimmed);
+}
+
+/** Async variant: nudges the browser via document.fonts.load() first (this
+ *  causes Chrome to materialize an installed system face into the FontFaceSet
+ *  so subsequent measurements can see it), then measures via the DOM probe. */
+export async function ensureFontAvailable(family: string): Promise<boolean> {
+    const trimmed = family.trim();
+    if (!trimmed) return false;
+    try {
+        await document.fonts?.load?.(`${PROBE_FONT_SIZE_PX}px ${quoteFamily(trimmed)}`);
+    } catch {
+        // ignore — DOM measurement may still succeed for installed fonts
+    }
+    return checkViaDomMeasurement(trimmed);
+}
+
+// ── Diagnostics ─────────────────────────────────────────────────────────────
+
+export interface FontProbeRow {
+    fallback: string;
+    baselineWidth: number;
+    candidateWidth: number;
+    diverges: boolean;
+}
+
+export interface FontProbeReport {
+    family: string;
+    text: string;
+    fontSizePx: number;
+    rows: FontProbeRow[];
+    available: boolean;
+    fontsCheckSays: boolean;
+    fontsLoadFaces: number;
+    fontFamiliesInSet: number;
+}
+
+/** Run the probe and return raw measurements for debugging the detector. */
+export async function diagnoseFontProbe(family: string): Promise<FontProbeReport> {
+    const trimmed = family.trim();
+    const report: FontProbeReport = {
+        family: trimmed,
+        text: PROBE_TEXT,
+        fontSizePx: PROBE_FONT_SIZE_PX,
+        rows: [],
+        available: false,
+        fontsCheckSays: false,
+        fontsLoadFaces: 0,
+        fontFamiliesInSet: 0,
+    };
+    if (!trimmed || typeof document === 'undefined' || !document.body) return report;
+
+    const specifier = `${PROBE_FONT_SIZE_PX}px ${quoteFamily(trimmed)}`;
+    try {
+        const faces = await document.fonts?.load?.(specifier);
+        report.fontsLoadFaces = faces?.length ?? 0;
+    } catch {
+        // ignore
+    }
+    try {
+        report.fontsCheckSays = document.fonts?.check?.(specifier);
+    } catch {
+        // ignore
+    }
+    try {
+        report.fontFamiliesInSet = document.fonts ? Array.from(document.fonts).length : 0;
+    } catch {
+        // ignore
+    }
+
+    const probe = document.createElement('span');
+    probe.textContent = PROBE_TEXT;
+    probe.style.cssText =
+        `position:absolute;left:-9999px;top:-9999px;visibility:hidden;` +
+        `white-space:nowrap;font-size:${PROBE_FONT_SIZE_PX}px;line-height:1;`;
+    document.body.appendChild(probe);
+    try {
+        for (const fb of PROBE_FALLBACKS) {
+            probe.style.fontFamily = fb;
+            const baseline = probe.offsetWidth;
+            probe.style.fontFamily = `${quoteFamily(trimmed)}, ${fb}`;
+            const candidate = probe.offsetWidth;
+            report.rows.push({
+                fallback: fb,
+                baselineWidth: baseline,
+                candidateWidth: candidate,
+                diverges: candidate !== baseline,
+            });
+        }
+    } finally {
+        probe.remove();
+    }
+    report.available = report.rows.some(r => r.diverges);
+    return report;
 }
 
 export interface LocalFontEntry {
@@ -35,23 +148,21 @@ export interface LocalFontEntry {
     style?: string;
 }
 
-interface LocalFontApi {
-    query: () => Promise<LocalFontEntry[]>;
-}
+type QueryLocalFontsFn = () => Promise<LocalFontEntry[]>;
 
-function getLocalFontApi(): LocalFontApi | null {
-    const api = (navigator as unknown as { fonts?: LocalFontApi }).fonts;
-    return api && typeof api.query === 'function' ? api : null;
+function getQueryLocalFonts(): QueryLocalFontsFn | null {
+    const fn = (window as unknown as { queryLocalFonts?: QueryLocalFontsFn }).queryLocalFonts;
+    return typeof fn === 'function' ? fn.bind(window) : null;
 }
 
 export function isLocalFontApiSupported(): boolean {
-    return getLocalFontApi() !== null;
+    return getQueryLocalFonts() !== null;
 }
 
 export async function queryLocalFonts(): Promise<LocalFontEntry[]> {
-    const api = getLocalFontApi();
-    if (!api) throw new Error('Local Font Access API not available in this browser.');
-    return api.query();
+    const fn = getQueryLocalFonts();
+    if (!fn) throw new Error('Local Font Access API not available in this browser.');
+    return fn();
 }
 
 const LINK_DATA_ATTR = 'mudixFontUrl';

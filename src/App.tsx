@@ -9,6 +9,7 @@ import { useEngines } from './hooks/useEngines';
 import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
 import { FileBrowserModal } from './ui/FileBrowserModal';
+import { QuickOpenPalette } from './ui/QuickOpenPalette';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont } from './utils/fontLoader';
 
@@ -19,7 +20,10 @@ export default function App() {
     const [sessionStarted, setSessionStarted] = useState(false);
     const [scriptsOpen, setScriptsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [filesOpen, setFilesOpen] = useState(false);
+    // pickedAt bumps on every external open so FileBrowserModal re-runs its
+    // selection effect even when the same path is picked twice in a row.
+    const [filesOpen, setFilesOpen] = useState<false | { initialPath?: string; initialLine?: number; pickedAt?: number }>(false);
+    const [quickOpenOpen, setQuickOpenOpen] = useState(false);
     const commandInputRef = useRef<HTMLInputElement>(null);
     const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
     const deepLinkProfileId = useRef(new URLSearchParams(window.location.search).get('profile'));
@@ -103,6 +107,23 @@ export default function App() {
         return () => document.removeEventListener('keydown', handleKeyDown);
     }, [sessionStarted]);
 
+    // Quick-open (Cmd+P / Ctrl+P). Fires regardless of focus so it also works
+    // from inside CodeMirror editors and the command bar. preventDefault on the
+    // event suppresses the browser's print dialog.
+    useEffect(() => {
+        if (!sessionStarted) return;
+        const handleQuickOpen = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P')) {
+                if (!engineRef.current?.currentVFS) return;
+                e.preventDefault();
+                e.stopPropagation();
+                setQuickOpenOpen(true);
+            }
+        };
+        document.addEventListener('keydown', handleQuickOpen, true);
+        return () => document.removeEventListener('keydown', handleQuickOpen, true);
+    }, [sessionStarted, engineRef]);
+
     const setProfileQuery = (id: string | null) => {
         const url = new URL(window.location.href);
         if (id) url.searchParams.set('profile', id);
@@ -174,7 +195,9 @@ export default function App() {
     };
 
     const handleOpenScripts = () => setScriptsOpen(v => !v);
-    const handleOpenFiles = () => setFilesOpen(v => !v);
+    const handleOpenFiles = () => setFilesOpen(v => v ? false : {});
+    const handleOpenVfsFile = (initialPath: string, initialLine?: number) =>
+        setFilesOpen({ initialPath, ...(initialLine !== undefined ? { initialLine } : {}), pickedAt: Date.now() });
     const handleOpenSettings = () => setSettingsOpen(v => !v);
 
     const handleSend = () => {
@@ -289,13 +312,24 @@ export default function App() {
                     vfs={engineRef.current?.currentVFS ?? null}
                     scriptingEngineRef={engineRef}
                     onClose={() => setScriptsOpen(false)}
+                    onOpenVfsFile={handleOpenVfsFile}
                 />
             )}
             {filesOpen && (
                 <FileBrowserModal
                     connectionId={activeConnectionId ?? ''}
                     vfs={engineRef.current?.currentVFS ?? null}
+                    initialPath={filesOpen.initialPath ?? null}
+                    initialPathTick={filesOpen.pickedAt}
+                    initialLine={filesOpen.initialLine}
                     onClose={() => setFilesOpen(false)}
+                />
+            )}
+            {quickOpenOpen && engineRef.current?.currentVFS && (
+                <QuickOpenPalette
+                    vfs={engineRef.current.currentVFS}
+                    onPick={path => handleOpenVfsFile(path)}
+                    onClose={() => setQuickOpenOpen(false)}
                 />
             )}
         </div>

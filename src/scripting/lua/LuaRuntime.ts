@@ -360,16 +360,16 @@ export class LuaRuntime implements IScriptingRuntime {
         // createLabel([window,] name, x, y, w, h, fillBackground [, clickThrough]).
         // Mudlet detects the optional window arg by counting; we use the second-
         // arg type because (string,string) ⇒ window form and (string,number) ⇒
-        // no window. fillBackground/clickThrough must be actual booleans —
-        // Mudlet raises a bad-argument error on non-bool inputs; we match by
-        // throwing so the script log carries a clear message instead of silently
-        // coercing 0/1/strings.
+        // no window. fillBackground/clickThrough accept booleans or numbers —
+        // Mudlet's own createGauge passes `1` for fillBg and the documented API
+        // is "0 (transparent) or 1 (filled)", so rejecting numbers breaks
+        // gauges and scripts ported from Mudlet. Anything else raises a
+        // bad-argument error matching Mudlet's shape.
         const boolArg = (v: unknown, who: string, argN: number, optional: boolean): boolean => {
-            if (optional && v === undefined) return false;
-            if (typeof v !== 'boolean') {
-                throw new Error(`${who}: bad argument #${argN} type (boolean expected, got ${typeof v})`);
-            }
-            return v;
+            if (optional && (v === undefined || v === null)) return false;
+            if (typeof v === 'boolean') return v;
+            if (typeof v === 'number') return v !== 0;
+            throw new Error(`${who}: bad argument #${argN} type (boolean expected, got ${typeof v})`);
         };
         this.lua.global.set('createLabel', (...args: unknown[]) => {
             const hasWindow = typeof args[0] === 'string' && typeof args[1] === 'string';
@@ -1812,7 +1812,10 @@ export class LuaRuntime implements IScriptingRuntime {
                 return chunk;
             }
 
-            const f = (fmt ?? '*l').toString().replace(/^\*/, '');
+            // Lua 5.1's liolib only inspects the character after '*', so '*all'
+            // and '*a' both mean "read entire file". Match that behavior.
+            const raw = (fmt ?? '*l').toString();
+            const f = (raw.startsWith('*') ? raw.charAt(1) : raw.charAt(0)) || 'l';
 
             if (f === 'l' || f === 'L') {
                 if (h.pos >= h.content.length) return null;

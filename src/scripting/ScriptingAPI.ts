@@ -1128,24 +1128,17 @@ export class ScriptingAPI {
     private lastPingMs: number | null = null;
 
     getMainWindowSize(): [number, number] {
-        // Mudlet reports the main console area only — the viewport minus the
-        // border insets carved by setBorderTop / setBorderBottom / etc. The
-        // outer rectangle is the coordinate space labels live in (so absolute-
-        // positioned labels still address the full area), but `getMainWindowSize`
-        // reflects the *usable* output region so width/height arithmetic stays
-        // sane regardless of how the user configured borders.
+        // Reports the full viewport (the coordinate space labels live in), not
+        // the console area. Borders carve insets out of this rectangle without
+        // shrinking it — matches Mudlet so scripts that place labels with
+        // `y = h - labelHeight` after setBorderBottom land in the carved zone.
         const el = this.session.windows.getMainViewportElement()
                 ?? this.session.windows.getElement('main');
-        const borders = useAppStore.getState().ui.outputBorders ?? { top: 0, right: 0, bottom: 0, left: 0 };
         if (el) {
             const rect = el.getBoundingClientRect();
-            const w = Math.max(0, rect.width - borders.left - borders.right);
-            const h = Math.max(0, rect.height - borders.top - borders.bottom);
-            if (w > 0 || h > 0) return [w, h];
+            if (rect.width > 0 || rect.height > 0) return [rect.width, rect.height];
         }
-        const w = Math.max(0, window.innerWidth - borders.left - borders.right);
-        const h = Math.max(0, window.innerHeight - borders.top - borders.bottom);
-        return [w, h];
+        return [window.innerWidth, window.innerHeight];
     }
 
     /**

@@ -198,6 +198,19 @@ do
         return _profile_dir()
     end
 
+    -- Lua's LUA_IDSIZE = 60 truncates `short_src` in error/traceback formatting,
+    -- producing `...<tail>` for long chunknames. The profile root prefix
+    -- `/profiles/<uuid>/` alone burns ~48 chars, so VFS-loaded files almost
+    -- always get chopped. Strip the prefix so chunknames are VFS-relative and
+    -- the error renderer can match them as hyperlinkable paths.
+    local function _short_chunkname(path)
+        local prefix = _profile_dir() .. '/'
+        if path:sub(1, #prefix) == prefix then
+            return path:sub(#prefix + 1)
+        end
+        return path
+    end
+
     -- Seed package.path with the profile directory so vanilla require() works,
     -- and so user scripts can prepend extra patterns (Mudlet idiom):
     --   package.path = getMudletHomeDir() .. "/foo/?.lua;" .. package.path
@@ -218,7 +231,7 @@ do
             if f then
                 local code = f:read("*a")
                 f:close()
-                local fn, ce = loadstring(code, "@" .. fullpath)
+                local fn, ce = loadstring(code, "@" .. _short_chunkname(fullpath))
                 if not fn then error(ce) end
                 return fn
             end
@@ -232,7 +245,7 @@ do
         if not f then error(e, 2) end
         local code = f:read('*a')
         f:close()
-        local chunk, ce = loadstring(code, '@' .. path)
+        local chunk, ce = loadstring(code, '@' .. _short_chunkname(path))
         if not chunk then error(ce, 2) end
         return chunk()
     end
@@ -242,7 +255,7 @@ do
         if not f then return nil, e end
         local code = f:read('*a')
         f:close()
-        return loadstring(code, '@' .. path)
+        return loadstring(code, '@' .. _short_chunkname(path))
     end
 
     os.remove = function(path)

@@ -1,14 +1,17 @@
-import { useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
+import { useState, useEffect, useRef, type ChangeEvent } from 'react';
 import type { ProfileVFS } from '../../scripting/vfs/ProfileVFS';
 import type { OutputFontSource } from '../../storage';
 import { Button } from './Button';
 import { Input } from './Input';
 import {
+    ensureFontAvailable,
     isFontAvailable,
     queryLocalFonts,
     isLocalFontApiSupported,
     loadFontFromUrl,
     loadFontFromVfs,
+    diagnoseFontProbe,
+    type FontProbeReport,
     type LocalFontEntry,
 } from '../../utils/fontLoader';
 
@@ -75,7 +78,17 @@ interface SubProps {
 function NameTab({ value, onChange }: SubProps) {
     const [name, setName] = useState(value?.kind === 'system' ? value.family : '');
     const trimmed = name.trim();
-    const valid = useMemo(() => (trimmed ? isFontAvailable(trimmed) : null), [trimmed]);
+    const [valid, setValid] = useState<boolean | null>(() => (trimmed ? isFontAvailable(trimmed) : null));
+    const [report, setReport] = useState<FontProbeReport | null>(null);
+
+    useEffect(() => {
+        if (!trimmed) { setValid(null); setReport(null); return; }
+        setValid(isFontAvailable(trimmed));
+        let cancelled = false;
+        ensureFontAvailable(trimmed).then(ok => { if (!cancelled) setValid(ok); });
+        diagnoseFontProbe(trimmed).then(r => { if (!cancelled) setReport(r); });
+        return () => { cancelled = true; };
+    }, [trimmed]);
 
     return (
         <div className="font-picker__name">
@@ -98,7 +111,45 @@ function NameTab({ value, onChange }: SubProps) {
                     {valid ? '✓ Detected on this system.' : '✗ Not detected — applying anyway will fall back to monospace.'}
                 </p>
             )}
+            {report && <ProbeDebug report={report} />}
         </div>
+    );
+}
+
+function ProbeDebug({ report }: { report: FontProbeReport }) {
+    return (
+        <details className="font-picker__debug" style={{ marginTop: 8, fontSize: 12, fontFamily: 'monospace' }}>
+            <summary style={{ cursor: 'pointer' }}>Probe diagnostics</summary>
+            <div style={{ marginTop: 6, padding: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 4 }}>
+                <div>family: <strong>{report.family}</strong></div>
+                <div>probe text: {report.text}</div>
+                <div>size: {report.fontSizePx}px</div>
+                <div>document.fonts.check(): <strong>{String(report.fontsCheckSays)}</strong> (unreliable, ignored)</div>
+                <div>document.fonts.load() returned faces: <strong>{report.fontsLoadFaces}</strong></div>
+                <div>FontFaceSet size: <strong>{report.fontFamiliesInSet}</strong></div>
+                <table style={{ marginTop: 6, borderCollapse: 'collapse', width: '100%' }}>
+                    <thead>
+                        <tr>
+                            <th style={{ textAlign: 'left', padding: '2px 6px' }}>fallback</th>
+                            <th style={{ textAlign: 'right', padding: '2px 6px' }}>baseline</th>
+                            <th style={{ textAlign: 'right', padding: '2px 6px' }}>w/ candidate</th>
+                            <th style={{ textAlign: 'center', padding: '2px 6px' }}>diverges?</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {report.rows.map(r => (
+                            <tr key={r.fallback}>
+                                <td style={{ padding: '2px 6px' }}>{r.fallback}</td>
+                                <td style={{ padding: '2px 6px', textAlign: 'right' }}>{r.baselineWidth}px</td>
+                                <td style={{ padding: '2px 6px', textAlign: 'right' }}>{r.candidateWidth}px</td>
+                                <td style={{ padding: '2px 6px', textAlign: 'center' }}>{r.diverges ? '✓' : '✗'}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                <div style={{ marginTop: 6 }}>verdict: <strong>{report.available ? 'available' : 'not detected'}</strong></div>
+            </div>
+        </details>
     );
 }
 

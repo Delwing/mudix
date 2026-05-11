@@ -17,9 +17,10 @@ interface Props {
     vfs: ProfileVFS | null;
     scriptingEngineRef?: React.RefObject<ScriptingEngine | null>;
     onClose: () => void;
+    onOpenVfsFile?: (path: string, line?: number) => void;
 }
 
-export function ScriptEditorModal({ connectionId, session, vfs, scriptingEngineRef, onClose }: Props) {
+export function ScriptEditorModal({ connectionId, session, vfs, scriptingEngineRef, onClose, onOpenVfsFile }: Props) {
     const savedBounds = useAppStore(s => s.connectionScriptEditorBounds[connectionId]);
     const saveBounds  = useAppStore(s => s.saveScriptEditorBounds);
 
@@ -51,6 +52,7 @@ export function ScriptEditorModal({ connectionId, session, vfs, scriptingEngineR
                     boundsRef.current = { ...boundsRef.current, listWidth, metaHeight: metaHeight ?? undefined };
                     saveBounds(connectionId, boundsRef.current!);
                 }}
+                onOpenVfsFile={onOpenVfsFile}
             />
         </ResizableModal>
     );

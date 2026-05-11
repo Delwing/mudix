@@ -66,6 +66,19 @@ type PcreMatch = { length: number; [k: number]: PcreMatchGroup; [k: string]: Pcr
 /** Kicked off at module load so PCRE is ready by the time anything matches. */
 const pcreReadyPromise = PCRE.init();
 
+// DEBUG: diagnose pcre2-wasm-universal's hardcoded 1000-iter cap in matchAll.
+function logSafetyLimit(callsite: string, pattern: string, subject: string): void {
+    const ansiCount = (subject.match(/\x1b\[/g) ?? []).length;
+    console.error('[matchAll safety limit]', {
+        callsite,
+        pattern,
+        subjectLength: subject.length,
+        ansiEscapeCount: ansiCount,
+        subjectHead: subject.slice(0, 200),
+        subjectTail: subject.slice(-200),
+    });
+}
+
 type CompiledOrEntry = {
     kind: 'or';
     item: TriggerNode;
@@ -287,9 +300,20 @@ export class TriggerEngine {
                         const re = compilePcre(pattern.text);
                         if (re) {
                             register(re);
+                            const triggerName = item.name;
+                            const patternText = pattern.text;
                             testAll = (line: string) => {
                                 const results: MatchResult[] = [];
-                                for (const m of re.matchAll(line) as PcreMatch[]) {
+                                let pcreMatches: PcreMatch[];
+                                try {
+                                    pcreMatches = re.matchAll(line) as PcreMatch[];
+                                } catch (err) {
+                                    if (err instanceof Error && err.message.includes('safety limit exceeded')) {
+                                        logSafetyLimit(`trigger:${triggerName}(multipleMatches)`, patternText, line);
+                                    }
+                                    throw err;
+                                }
+                                for (const m of pcreMatches) {
                                     results.push(pcreToMatchResult(m));
                                 }
                                 return results;
