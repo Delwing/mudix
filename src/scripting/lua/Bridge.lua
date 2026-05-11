@@ -478,8 +478,9 @@ end
 
 do
     -- Mudlet:
-    --   tempTrigger(substring, fn[, expirationCount])  — literal substring match
-    --   tempRegexTrigger(regex, fn[, expirationCount]) — PCRE match
+    --   tempTrigger(substring, fn[, expirationCount])           — literal substring match
+    --   tempRegexTrigger(regex, fn[, expirationCount])          — PCRE match
+    --   tempExactMatchTrigger(exact, fn[, expirationCount])     — full-line equality
     -- expirationCount: positive N fires N times then auto-kills; -1/0/omitted = unlimited.
     local _sub = __mudix_tempTrigger
     function tempTrigger(pattern, fn, expirationCount)
@@ -488,6 +489,10 @@ do
     local _re = __mudix_tempRegexTrigger
     function tempRegexTrigger(pattern, fn, expirationCount)
         return _re(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempRegexTrigger", 2)), expirationCount)
+    end
+    local _ex = __mudix_tempExactMatchTrigger
+    function tempExactMatchTrigger(pattern, fn, expirationCount)
+        return _ex(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempExactMatchTrigger", 2)), expirationCount)
     end
 end
 

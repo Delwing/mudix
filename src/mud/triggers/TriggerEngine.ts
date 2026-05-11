@@ -178,6 +178,7 @@ export class TriggerEngine {
         number,
         | { kind: 'regex'; re: PcreInstance; fn: TempFn }
         | { kind: 'substring'; pattern: string; fn: TempFn }
+        | { kind: 'exactMatch'; pattern: string; fn: TempFn }
     >();
     private nextId = 1;
     private permCompiled: CompiledEntry[] = [];
@@ -205,21 +206,27 @@ export class TriggerEngine {
 
     /**
      * Register a temp trigger. `kind` selects the match strategy:
-     *   - `'regex'`    — PCRE, same syntax as permanent triggers (Mudlet
-     *                    `tempRegexTrigger`). The callback receives
-     *                    `[fullMatch, capture1, capture2, ...]`; unmatched
-     *                    optional groups surface as empty strings.
-     *   - `'substring'`— literal `String.prototype.includes` (Mudlet
-     *                    `tempTrigger`). The callback receives `[pattern]`
-     *                    so capture-group access against the substring is a
-     *                    no-op rather than a metacharacter trap.
+     *   - `'regex'`     — PCRE, same syntax as permanent triggers (Mudlet
+     *                     `tempRegexTrigger`). The callback receives
+     *                     `[fullMatch, capture1, capture2, ...]`; unmatched
+     *                     optional groups surface as empty strings.
+     *   - `'substring'` — literal `String.prototype.includes` (Mudlet
+     *                     `tempTrigger`). The callback receives `[pattern]`
+     *                     so capture-group access against the substring is a
+     *                     no-op rather than a metacharacter trap.
+     *   - `'exactMatch'`— full-line equality (Mudlet
+     *                     `tempExactMatchTrigger`). Callback receives `[line]`.
      * Invalid regex patterns return a no-op disposer so callers don't need
      * to special-case compile failures.
      */
-    addTemp(pattern: string, fn: TempFn, kind: 'regex' | 'substring' = 'regex'): () => void {
+    addTemp(
+        pattern: string,
+        fn: TempFn,
+        kind: 'regex' | 'substring' | 'exactMatch' = 'regex',
+    ): () => void {
         const id = this.nextId++;
-        if (kind === 'substring') {
-            this.temp.set(id, { kind: 'substring', pattern, fn });
+        if (kind === 'substring' || kind === 'exactMatch') {
+            this.temp.set(id, { kind, pattern, fn });
         } else {
             const re = compilePcre(pattern);
             if (!re) return () => {};
@@ -314,6 +321,12 @@ export class TriggerEngine {
             if (entry.kind === 'substring') {
                 if (line.includes(entry.pattern)) {
                     entry.fn([entry.pattern]);
+                }
+                continue;
+            }
+            if (entry.kind === 'exactMatch') {
+                if (line === entry.pattern) {
+                    entry.fn([line]);
                 }
                 continue;
             }

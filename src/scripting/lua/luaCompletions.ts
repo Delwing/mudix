@@ -327,6 +327,7 @@ const MUDLET_GLOBALS: Completion[] = [
     // Triggers
     fn('tempTrigger',    '(pattern, fn, expirationCount?) → id', 'Create a temporary trigger. expirationCount: positive N auto-kills after N fires; omitted/<=0 = unlimited'),
     fn('tempRegexTrigger','(regex, fn, expirationCount?) → id', 'Create a temporary regex trigger. expirationCount: positive N auto-kills after N fires; omitted/<=0 = unlimited'),
+    fn('tempExactMatchTrigger','(line, fn, expirationCount?) → id', 'Create a temporary trigger that fires when the line is exactly equal to the pattern. expirationCount: positive N auto-kills after N fires; omitted/<=0 = unlimited'),
     fn('killTrigger',    '(id)',           'Remove a trigger'),
     fn('tempLineTrigger','(linesAhead, count, code)', 'Trigger N lines ahead'),
     // Keys

@@ -1255,13 +1255,14 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // ── Triggers ──────────────────────────────────────────────────────────
         // Mudlet semantics:
-        //   tempTrigger(pattern, fn, [expirationCount])      — substring match
-        //   tempRegexTrigger(pattern, fn, [expirationCount]) — PCRE match
-        // The two share auto-expiration: positive N auto-removes the trigger
+        //   tempTrigger(pattern, fn, [expirationCount])           — substring match
+        //   tempRegexTrigger(pattern, fn, [expirationCount])      — PCRE match
+        //   tempExactMatchTrigger(pattern, fn, [expirationCount]) — full-line equality
+        // All three share auto-expiration: positive N auto-removes the trigger
         // after N fires; -1/0/omitted = unlimited. The Bridge.lua wrappers
-        // dispatch to one of the two JS bindings below.
+        // dispatch to one of the JS bindings below.
         const installTempTrigger = (
-            pattern: string, cbId: number, kind: 'regex' | 'substring',
+            pattern: string, cbId: number, kind: 'regex' | 'substring' | 'exactMatch',
             expirationCount: number | undefined, label: string,
         ) => {
             const id = this.nextTempId++;
@@ -1302,6 +1303,8 @@ export class LuaRuntime implements IScriptingRuntime {
             installTempTrigger(pattern, cbId, 'substring', expirationCount, 'tempTrigger'));
         this.lua.global.set('__mudix_tempRegexTrigger', (pattern: string, cbId: number, expirationCount?: number) =>
             installTempTrigger(pattern, cbId, 'regex', expirationCount, 'tempRegexTrigger'));
+        this.lua.global.set('__mudix_tempExactMatchTrigger', (pattern: string, cbId: number, expirationCount?: number) =>
+            installTempTrigger(pattern, cbId, 'exactMatch', expirationCount, 'tempExactMatchTrigger'));
         this.lua.global.set('killTrigger', (idOrName: number | string) => {
             if (typeof idOrName === 'string') return this.api.killByName('trigger', idOrName);
             const unsub = this.tempIds.get(idOrName);

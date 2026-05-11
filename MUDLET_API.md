@@ -198,7 +198,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `killTrigger(id)` | ✅ | Delete temp trigger by ID |
 | `tempRegexTrigger(pattern, code)` | 🚧 | Explicit regex variant |
 | `tempBeginOfLineTrigger(pattern, code)` | 🚧 | Anchored `^` trigger |
-| `tempExactMatchTrigger(pattern, code)` | 🚧 | Full-line exact match |
+| `tempExactMatchTrigger(pattern, code)` | ✅ | Full-line exact match |
 | `tempColorTrigger(fg, bg, code)` | 🚧 | Match on ANSI color in line |
 | `tempLineTrigger(from, count, code)` | 🚧 | Fire on N consecutive lines |
 | `tempPromptTrigger(code)` | 🚧 | Fire on MUD prompt detection |
