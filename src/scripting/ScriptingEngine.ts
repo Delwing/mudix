@@ -164,7 +164,7 @@ export class ScriptingEngine {
      * — patterns won't compile before that.
      */
     private attachToStore(session: MudSession): void {
-        const start = () => {
+        const start = async () => {
             // Modules are loaded from disk on every profile open — XML on disk is the
             // source of truth, so we re-read each module's XML and replace its nodes
             // before any script/alias/trigger load runs against the store. This
@@ -172,14 +172,24 @@ export class ScriptingEngine {
             // doesn't trigger a write-back loop.
             this.reloadModulesFromVfs();
 
+            // Mudlet parity: the persisted map is parsed into the MapStore
+            // before scripts run, so the initial script load (and sysLoadEvent)
+            // sees an initialized map — hashes via getRoomIDbyHash and map-level
+            // user data via getMapUserData are immediately queryable.
+            const mapLoaded = await this.session.windows.bootstrapMap();
+
             this.applyScriptsFromStore();
             this.applyAliasesFromStore();
             this.applyTimersFromStore();
             this.applyKeybindingsFromStore();
             // sysLoadEvent fires once after the initial script load.
+            // sysMapLoadEvent follows when a persisted map was ingested, so
+            // scripts can register a sysMapLoadEvent handler during sysLoadEvent
+            // and still see the firing for the boot-time load.
             // Map-open notification keeps map-aware scripts in sync if the
             // map is already visible at connection time.
             this.raiseEvent('sysLoadEvent');
+            if (mapLoaded) this.raiseEvent('sysMapLoadEvent');
             if (this.api.windows.isVisible('map')) this.mapOpen.notify();
             this.api.flushOutput();
 
@@ -213,10 +223,13 @@ export class ScriptingEngine {
                 }
             });
         };
+        const safeStart = () => {
+            start().catch(err => console.warn('[ScriptingEngine] start failed:', err));
+        };
         if (session.outputReady) {
-            start();
+            safeStart();
         } else {
-            this.unsubs.push(session.events.on('output.ready', start, { once: true }));
+            this.unsubs.push(session.events.on('output.ready', safeStart, { once: true }));
         }
     }
 

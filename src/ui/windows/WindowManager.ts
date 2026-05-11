@@ -3,7 +3,14 @@ import type { Console } from '../../mud/text/Console';
 import type { AnsiAwareBuffer } from '../../mud/text/FormatState';
 import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
 import { MapStore } from '../../map/MapStore';
-import { saveMap } from '../../storage/mapStorage';
+import { saveMap, loadMap as loadMapFromStorage } from '../../storage/mapStorage';
+import { readMapFromBuffer, readerExport } from 'mudlet-map-binary-reader';
+import { Buffer } from 'buffer';
+
+type CachedMapData = {
+    mapData: unknown[];
+    colors: { envId: number; colors: number[] }[];
+};
 
 interface ScriptWindowData extends ScriptWindowRenderData {
     pendingText: Array<string | AnsiAwareBuffer>;
@@ -42,6 +49,14 @@ export class WindowManager {
     private readonly activeTabGroups = new Map<string, string>(); // groupId → active panelId
     private readonly mapCallbacks  = new Map<string, (roomId: number) => void>();
     private mapLoadCallback: ((buf?: ArrayBuffer) => boolean) | null = null;
+    /** Parsed renderer data from the last successful map ingest. MapPanel reads
+     *  this on mount instead of re-fetching from IndexedDB, so the binary parse
+     *  happens once per session even if the panel is toggled. */
+    private cachedMapData: CachedMapData | null = null;
+    /** Single in-flight bootstrap promise — both ScriptingEngine.start (which
+     *  awaits the map before applying scripts, Mudlet parity) and MapPanel on
+     *  mount call into this; whichever lands first triggers the work. */
+    private mapBootstrapInflight: Promise<boolean> | null = null;
     private _connectionId = '';
     /** Names of windows created by Lua createMiniConsole — distinguishes them
      *  from openUserWindow panels for windowType() reporting. */
@@ -267,12 +282,61 @@ export class WindowManager {
     }
 
     /**
+     * Parse a Mudlet `.dat` buffer and apply it to this session's map state:
+     * hashes go onto the manager, user data goes onto the MapStore, and the
+     * renderer-ready payload is cached for MapPanel to consume. Throws on
+     * parse failure so callers can surface the error (the file-upload path in
+     * MapPanel turns it into status='error'; bootstrap logs and moves on).
+     */
+    ingestMapBuffer(buf: ArrayBuffer): CachedMapData {
+        const mudletMap = readMapFromBuffer(Buffer.from(buf));
+        const { mapData, colors } = readerExport(mudletMap);
+        this.setHashMap(mudletMap.mpRoomDbHashToRoomId ?? {});
+        this.mapStore.loadMapUserData(mudletMap.mUserData);
+        this.cachedMapData = { mapData, colors };
+        return this.cachedMapData;
+    }
+
+    getCachedMapData(): CachedMapData | null {
+        return this.cachedMapData;
+    }
+
+    /**
+     * Mudlet parity: a map is available to scripts before `sysLoadEvent` fires.
+     * ScriptingEngine awaits this in its start() path so the initial script
+     * load runs against an initialized MapStore (and the binary's hashes + user
+     * data when one is persisted). Idempotent — the first caller kicks off the
+     * IndexedDB fetch, everyone else awaits the same promise. Returns true
+     * when a persisted map was successfully ingested.
+     */
+    async bootstrapMap(): Promise<boolean> {
+        if (this.mapBootstrapInflight) return this.mapBootstrapInflight;
+        this.mapBootstrapInflight = (async () => {
+            // Mudlet starts the session with an initialized (possibly empty)
+            // map — calling newEmptyMap() flips isInitialized() so scripts can
+            // start adding rooms without first calling it themselves.
+            this.mapStore.newEmptyMap();
+            if (!this._connectionId) return false;
+            try {
+                const buf = await loadMapFromStorage(this._connectionId);
+                if (!buf) return false;
+                this.ingestMapBuffer(buf);
+                return true;
+            } catch (err) {
+                console.warn('[WindowManager] bootstrapMap failed:', err);
+                return false;
+            }
+        })();
+        return this.mapBootstrapInflight;
+    }
+
+    /**
      * Mudlet `loadMap([location])`. With a buffer the bytes are persisted to
-     * IndexedDB (so the map survives panel close/reopen and reload) and any
-     * open MapPanel is asked to re-render in place. Without a buffer the panel
-     * is told to reload from already-persisted storage. Returns false only on
-     * a synchronous parse failure surfaced by the panel; the IndexedDB write
-     * is fire-and-forget (failures appear in console.warn).
+     * IndexedDB (so the map survives panel close/reopen and reload), parsed
+     * into the manager/store, and any open MapPanel is asked to re-render.
+     * Without a buffer the panel is told to reload from cache. Returns false
+     * on synchronous parse failure; the IndexedDB write is fire-and-forget
+     * (failures appear in console.warn). Fires sysMapLoadEvent on success.
      */
     loadMap(buf?: ArrayBuffer): boolean {
         if (buf && this._connectionId) {
@@ -280,18 +344,24 @@ export class WindowManager {
             // mutates the buffer in-place via Buffer.swap16() to convert
             // UTF-16 BE → LE for toString('ucs2'). saveMap awaits openDb()
             // before put() does its structured clone, but the synchronous
-            // panel callback below runs first — so without a copy IDB
-            // persists parser-mutated bytes, and the next mount loads them
-            // and double-swaps QString regions into CJK garbage.
+            // ingest below runs first — so without a copy IDB persists
+            // parser-mutated bytes, and the next mount loads them and
+            // double-swaps QString regions into CJK garbage.
             saveMap(this._connectionId, buf.slice(0)).catch(err =>
                 console.warn('[WindowManager] saveMap failed:', err));
+            try {
+                this.ingestMapBuffer(buf);
+            } catch (err) {
+                console.warn('[WindowManager] loadMap parse failed:', err);
+                return false;
+            }
         }
-        if (this.mapLoadCallback) {
-            return this.mapLoadCallback(buf);
-        }
-        // No panel mounted: with a buffer we still persisted it, so the next
-        // panel open will pick it up. Without one, there's nothing to do.
-        return buf != null;
+        // The panel callback is advisory — its return value reports render
+        // success, but sysMapLoadEvent fires on successful data ingest so
+        // headless scripts (no MapPanel open) still receive the event.
+        this.mapLoadCallback?.(buf);
+        if (buf) this.onRaiseEvent?.('sysMapLoadEvent', []);
+        return true;
     }
 
     markAsMiniConsole(id: string): void {

@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MapReader, MapRenderer, createSettings } from 'mudlet-map-renderer';
 import type { RoomContextMenuEventDetail } from 'mudlet-map-renderer';
-import { readMapFromBuffer, readerExport } from 'mudlet-map-binary-reader';
-import { Buffer } from 'buffer';
-import { saveMap, loadMap } from '../../../storage/mapStorage';
 import type { WindowManager } from '../WindowManager';
 import type { MapEventEntry } from '../../../map/MapStore';
 
@@ -35,7 +32,6 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const [currentLevel, setCurrentLevel] = useState<number>(0);
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
-    const [storeInitialized, setStoreInitialized] = useState(() => manager.mapStore.isInitialized());
     const [contextMenu, setContextMenu] = useState<{
         x: number;
         y: number;
@@ -100,13 +96,18 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         setStatus('ready');
     }, [manager]);
 
-    const loadFromBuffer = useCallback((buf: ArrayBuffer): boolean => {
+    // Render whatever buffer the manager has already parsed. The binary parse
+    // itself lives on WindowManager — bootstrap runs it once at session start
+    // (before scripts), and Lua loadMap(...) re-ingests through the manager.
+    // The panel just consumes the cached renderer-ready payload.
+    const renderCached = useCallback((opts?: { keepArea?: number; keepLevel?: number }): boolean => {
+        const cached = manager.getCachedMapData();
+        if (!cached) {
+            setStatus('empty');
+            return false;
+        }
         try {
-            const mudletMap = readMapFromBuffer(Buffer.from(buf));
-            const { mapData, colors } = readerExport(mudletMap);
-            manager.setHashMap(mudletMap.mpRoomDbHashToRoomId ?? {});
-            manager.mapStore.loadMapUserData(mudletMap.mUserData);
-            initRenderer(mapData as AnyArea[], colors);
+            initRenderer(cached.mapData as AnyArea[], cached.colors, opts?.keepArea, opts?.keepLevel);
             return true;
         } catch (e) {
             setErrorMsg(e instanceof Error ? e.message : String(e));
@@ -115,33 +116,18 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         }
     }, [initRenderer, manager]);
 
-    const reloadFromStorage = useCallback(() => {
+    // Boot path: ScriptingEngine and this panel both call bootstrapMap; the
+    // manager dedupes to a single IndexedDB fetch + parse. Once it resolves
+    // we render from the cache (or fall into 'empty' when no map is stored).
+    useEffect(() => {
+        let cancelled = false;
         setStatus('loading');
-        loadMap(connectionId).then(buf => {
-            if (buf) {
-                loadFromBuffer(buf);
-            } else {
-                setStatus('empty');
-            }
-        }).catch(() => setStatus('empty'));
-    }, [connectionId, loadFromBuffer]);
-
-    // Load from IndexedDB on mount
-    useEffect(() => {
-        reloadFromStorage();
-    }, [reloadFromStorage]);
-
-    // Wire up the scripting `loadMap()` entry point. With a buffer the parse
-    // runs synchronously so Lua's `loadMap(path)` reflects parse failure; with
-    // no buffer we re-fetch from IndexedDB asynchronously and return true.
-    useEffect(() => {
-        manager.registerMapLoadCallback((buf?: ArrayBuffer) => {
-            if (buf) return loadFromBuffer(buf);
-            reloadFromStorage();
-            return true;
+        manager.bootstrapMap().then(() => {
+            if (cancelled) return;
+            renderCached();
         });
-        return () => manager.unregisterMapLoadCallback();
-    }, [manager, loadFromBuffer, reloadFromStorage]);
+        return () => { cancelled = true; };
+    }, [manager, renderCached]);
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -225,7 +211,6 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     currentLevelRef.current = currentLevel;
     useEffect(() => {
         const unsub = manager.mapStore.subscribe(() => {
-            setStoreInitialized(manager.mapStore.isInitialized());
             const data = manager.mapStore.toRendererData();
             if (!data) return;
             initRenderer(
@@ -242,6 +227,20 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         }
         return unsub;
     }, [manager, initRenderer]);
+
+    // Lua loadMap() routes through WindowManager which ingests the buffer and
+    // calls back here to re-render. The manager has already updated the cache
+    // by the time this fires — preserve the current area/level so the user's
+    // view doesn't reset to area #1 on every reload.
+    useEffect(() => {
+        manager.registerMapLoadCallback(() => {
+            return renderCached({
+                keepArea: currentAreaRef.current ?? undefined,
+                keepLevel: currentLevelRef.current,
+            });
+        });
+        return () => manager.unregisterMapLoadCallback();
+    }, [manager, renderCached]);
 
     // centerview: switch to the room's area/level, mark player position, and center.
     // The callback is stored in a ref so it always captures the latest renderer state.
@@ -276,13 +275,18 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         setStatus('loading');
         try {
             const buf = await file.arrayBuffer();
-            await saveMap(connectionId, buf);
-            loadFromBuffer(buf);
+            // Routes through WindowManager: persists to IndexedDB, parses into
+            // MapStore + cache, raises sysMapLoadEvent, and fires the registered
+            // callback (renderCached) which sets status='ready' on success.
+            if (!manager.loadMap(buf)) {
+                setErrorMsg('Failed to parse map file');
+                setStatus('error');
+            }
         } catch (err) {
             setErrorMsg(err instanceof Error ? err.message : String(err));
             setStatus('error');
         }
-    }, [connectionId, loadFromBuffer]);
+    }, [manager]);
 
     const selectArea = useCallback((id: number) => {
         const areaLevels = readerRef.current?.getArea(id).getZLevels().sort((a, b) => a - b) ?? [0];
@@ -382,22 +386,11 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             )}
             {status === 'empty' && (
                 <div className="map-overlay">
-                    {storeInitialized ? (
-                        <span className="map-overlay-hint">Map initialized — run your mapper script to add rooms</span>
-                    ) : (
-                        <>
-                            <label className="map-load-btn">
-                                Load Mudlet Map
-                                <input type="file" accept=".dat" onChange={handleFileChange} hidden />
-                            </label>
-                            <button
-                                className="map-load-btn"
-                                onClick={() => { manager.mapStore.newEmptyMap(); }}
-                            >
-                                New Empty Map
-                            </button>
-                        </>
-                    )}
+                    <label className="map-load-btn">
+                        Load Mudlet Map
+                        <input type="file" accept=".dat" onChange={handleFileChange} hidden />
+                    </label>
+                    <span className="map-overlay-hint">…or run your mapper script to add rooms</span>
                 </div>
             )}
             {status === 'error' && (
