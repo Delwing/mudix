@@ -4,13 +4,8 @@ import type { AnsiAwareBuffer } from '../../mud/text/FormatState';
 import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
 import { MapStore } from '../../map/MapStore';
 import { saveMap, loadMap as loadMapFromStorage } from '../../storage/mapStorage';
-import { readMapFromBuffer, readerExport } from 'mudlet-map-binary-reader';
+import { readMapFromBuffer } from 'mudlet-map-binary-reader';
 import { Buffer } from 'buffer';
-
-type CachedMapData = {
-    mapData: unknown[];
-    colors: { envId: number; colors: number[] }[];
-};
 
 interface ScriptWindowData extends ScriptWindowRenderData {
     pendingText: Array<string | AnsiAwareBuffer>;
@@ -49,10 +44,6 @@ export class WindowManager {
     private readonly activeTabGroups = new Map<string, string>(); // groupId → active panelId
     private readonly mapCallbacks  = new Map<string, (roomId: number) => void>();
     private mapLoadCallback: ((buf?: ArrayBuffer) => boolean) | null = null;
-    /** Parsed renderer data from the last successful map ingest. MapPanel reads
-     *  this on mount instead of re-fetching from IndexedDB, so the binary parse
-     *  happens once per session even if the panel is toggled. */
-    private cachedMapData: CachedMapData | null = null;
     /** Single in-flight bootstrap promise — both ScriptingEngine.start (which
      *  awaits the map before applying scripts, Mudlet parity) and MapPanel on
      *  mount call into this; whichever lands first triggers the work. */
@@ -62,7 +53,6 @@ export class WindowManager {
      *  from openUserWindow panels for windowType() reporting. */
     private mainViewportEl: HTMLElement | null = null;
     private readonly miniConsoles  = new Set<string>();
-    private hashToRoomId: Record<string, number> = {};
     private consoleRegistry: Map<string, Console> | null = null;
     private windowHints: Record<string, WindowOpenOptions> = {};
     private nextZ       = 10;
@@ -282,23 +272,16 @@ export class WindowManager {
     }
 
     /**
-     * Parse a Mudlet `.dat` buffer and apply it to this session's map state:
-     * hashes go onto the manager, user data goes onto the MapStore, and the
-     * renderer-ready payload is cached for MapPanel to consume. Throws on
-     * parse failure so callers can surface the error (the file-upload path in
-     * MapPanel turns it into status='error'; bootstrap logs and moves on).
+     * Parse a Mudlet `.dat` buffer and apply it to this session's MapStore.
+     * Rooms / areas / hashes / labels / env colours / map-level user data all
+     * land in {@link MapStore} via {@link MapStore.loadFromBinary}; the
+     * renderer reads it back through the live {@link MudixMapReader}. Throws
+     * on parse failure so callers can surface the error (the file-upload path
+     * in MapPanel turns it into status='error'; bootstrap logs and moves on).
      */
-    ingestMapBuffer(buf: ArrayBuffer): CachedMapData {
+    ingestMapBuffer(buf: ArrayBuffer): void {
         const mudletMap = readMapFromBuffer(Buffer.from(buf));
-        const { mapData, colors } = readerExport(mudletMap);
-        this.setHashMap(mudletMap.mpRoomDbHashToRoomId ?? {});
-        this.mapStore.loadMapUserData(mudletMap.mUserData);
-        this.cachedMapData = { mapData, colors };
-        return this.cachedMapData;
-    }
-
-    getCachedMapData(): CachedMapData | null {
-        return this.cachedMapData;
+        this.mapStore.loadFromBinary(mudletMap);
     }
 
     /**
@@ -372,12 +355,8 @@ export class WindowManager {
         return this.miniConsoles.has(id);
     }
 
-    setHashMap(map: Record<string, number>): void {
-        this.hashToRoomId = map;
-    }
-
     getRoomIDbyHash(hash: string): number | undefined {
-        return this.hashToRoomId[hash] ?? this.mapStore.getRoomIDbyHash(hash);
+        return this.mapStore.getRoomIDbyHash(hash);
     }
 
     // ── Floating window drag / resize ─────────────────────────────────────────

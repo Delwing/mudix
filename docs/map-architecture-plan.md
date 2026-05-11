@@ -11,25 +11,13 @@ What still isn't right: the data layer and the view layer are entangled. Two lea
 
 Mudlet's shape: `TMap` is the data source-of-truth, owned by `Host`. `T2DMap` is a view that draws from the data model. You can `loadMap()` without ever opening the map widget; scripts query rooms either way.
 
-## Why this isn't fixed yet
+## Upstream patch — delivered
 
-`mudlet-map-renderer` exposes `MapReader` as a concrete class, not an interface. `MapRenderer`'s constructor:
+`mudlet-map-renderer` now exposes `IMapReader`, `IArea`, `IPlane`, `IExit`, and `IExplorationArea` as public TypeScript interfaces. `MapRenderer`'s constructor accepts `IMapReader`; the concrete `MapReader` / `Area` / `Plane` / `ExplorationArea` classes implement the corresponding interfaces, so existing call sites (`new MapReader(mapData, envs)`) keep working unchanged. The package also exposes a `mudlet-map-renderer/binary` subpath with `BinaryMapReader` — an `IMapReader` implementation that takes a parsed `MudletMap` directly. The binary-reader dependency is a peer dep, so apps that don't use it pay zero bundle cost.
 
-```ts
-constructor(mapReader: MapReader, settings?: Settings, container?: HTMLDivElement, ...)
-```
+That unblocks the live-reader approach: Mudix can implement `MudixMapReader` against `MapStore` and hand it to the renderer with no translation step.
 
-The same goes for what `MapReader` returns — `Area`, `Plane`, `Exit` are concrete classes with private state, used internally by the renderer's draw path. There is no public interface to implement.
-
-That leaves three shapes for a downstream like Mudix:
-
-- **Translate-on-render.** Keep `MapReader` as-is; rebuild it from `mapStore.toRendererData()` whenever the store changes. Memoize by a store version counter; for large maps, scope the rebuild to dirty areas. Contained complexity but real translation cost on every mutation.
-- **Patch the renderer upstream.** Extract an interface from `MapReader`'s public surface and have `MapRenderer` accept that interface. Downstream apps can then hand the renderer a live reader that queries their own data model — no translation, no rebuilds. Architecturally correct.
-- **Hacky subclass.** TS-private fields are runtime-plain, so `MudixMapReader extends MapReader` and override the public methods. But the renderer reaches through to `Area` → `Plane` → `Exit`, each with internal state of its own. Fragile against renderer upgrades; not worth the maintenance tax.
-
-`mudlet-map-renderer` is ours (see the `-konva` versioned package). The upstream patch is the right path.
-
-## Future work in Mudix (blocked on the upstream patch)
+## Future work in Mudix
 
 Once `MapRenderer` accepts a reader interface:
 
@@ -41,9 +29,11 @@ Once `MapRenderer` accepts a reader interface:
 
 After this, room queries from scripts behave like Mudlet's: any room — programmatic or binary — is uniformly visible to `getRoomName`, `getRoomCoordinates`, `getRoomArea`, etc.
 
-## Upstream task — `mudlet-map-renderer`
+## Upstream task — `mudlet-map-renderer` (done)
 
 **Goal.** Let downstream apps supply a live reader instead of a `MapData.Map` blob.
+
+**Status.** Shipped — `IMapReader` / `IArea` / `IPlane` / `IExit` / `IExplorationArea` are exported from `mudlet-map-renderer`; the concrete classes implement them. A `BinaryMapReader` lives in the `mudlet-map-renderer/binary` subpath (peer-dep on `mudlet-map-binary-reader`, no bundle cost for apps that don't use it). A `tests/custom-map-reader.test.ts` exercises `MapRenderer` driven by a hand-rolled `IMapReader` that does not extend any concrete class.
 
 **Scope.**
 

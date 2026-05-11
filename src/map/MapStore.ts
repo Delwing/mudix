@@ -1,4 +1,4 @@
-import type {MudletArea, MudletColor, MudletFont, MudletMap, MudletRoom} from 'mudlet-map-binary-reader';
+import type {MudletArea, MudletColor, MudletFont, MudletLabel, MudletMap, MudletRoom} from 'mudlet-map-binary-reader';
 import {readerExport} from 'mudlet-map-binary-reader';
 
 export type MapRendererData = ReturnType<typeof readerExport>;
@@ -89,8 +89,11 @@ export class MapStore {
     private areas = new Map<number, MudletArea>();
     private areaNames = new Map<number, string>();
     private hashToRoom = new Map<string, number>();
+    private labels = new Map<number, MudletLabel[]>();
+    private envColors = new Map<number, number>();
     private nextRoomId = 1;
     private nextAreaId = 1;
+    private version = 0;
     private subscribers = new Set<() => void>();
     private notifyPending = false;
     private mapEvents = new Map<string, MapEventEntry>();
@@ -106,6 +109,7 @@ export class MapStore {
     }
 
     private notify(): void {
+        this.version++;
         if (this.notifyPending) return;
         this.notifyPending = true;
         queueMicrotask(() => {
@@ -113,6 +117,10 @@ export class MapStore {
             for (const cb of this.subscribers) cb();
         });
     }
+
+    /** Monotonic counter incremented on every mutation. Live readers compare
+     *  the snapshot they cached against this to decide whether to rebuild. */
+    getVersion(): number { return this.version; }
 
     isEmpty(): boolean { return this.rooms.size === 0; }
 
@@ -127,6 +135,9 @@ export class MapStore {
         this.areas.clear();
         this.areaNames.clear();
         this.hashToRoom.clear();
+        this.labels.clear();
+        this.envColors.clear();
+        this.customEnvColors.clear();
         this.mapUserData = {};
         this.nextRoomId = 1;
         this.nextAreaId = 2;        // -1 is reserved below
@@ -138,12 +149,62 @@ export class MapStore {
         this.notify();
     }
 
+    /**
+     * Replace the store's contents with a parsed Mudlet binary map. Loads
+     * rooms, areas, area names, hashes, labels, custom env colors, env color
+     * palette, and map-level user data. Bumps the id cursors past any binary
+     * ids so subsequent {@link createRoomID} / {@link addAreaName} calls don't
+     * collide. One notification fires at the end of the batch.
+     */
+    loadFromBinary(mudletMap: MudletMap): void {
+        this.rooms.clear();
+        this.areas.clear();
+        this.areaNames.clear();
+        this.hashToRoom.clear();
+        this.labels.clear();
+        this.envColors.clear();
+        this.customEnvColors.clear();
+
+        for (const [k, room] of Object.entries(mudletMap.rooms ?? {})) {
+            const id = Number(k);
+            this.rooms.set(id, room);
+            if (room.hash) this.hashToRoom.set(room.hash, id);
+            if (id >= this.nextRoomId) this.nextRoomId = id + 1;
+        }
+        // Binary may carry hashes for rooms that haven't been parsed into
+        // `rooms` (legacy maps with orphan hash entries). Trust the explicit
+        // hash→id table as authoritative when it disagrees.
+        for (const [hash, id] of Object.entries(mudletMap.mpRoomDbHashToRoomId ?? {})) {
+            this.hashToRoom.set(hash, id);
+        }
+        for (const [k, area] of Object.entries(mudletMap.areas ?? {})) {
+            const id = Number(k);
+            this.areas.set(id, area);
+            if (id >= this.nextAreaId) this.nextAreaId = id + 1;
+        }
+        for (const [k, name] of Object.entries(mudletMap.areaNames ?? {})) {
+            this.areaNames.set(Number(k), name);
+        }
+        for (const [k, labels] of Object.entries(mudletMap.labels ?? {})) {
+            this.labels.set(Number(k), labels);
+        }
+        for (const [k, c] of Object.entries(mudletMap.mCustomEnvColors ?? {})) {
+            this.customEnvColors.set(Number(k), c);
+        }
+        for (const [k, v] of Object.entries(mudletMap.envColors ?? {})) {
+            this.envColors.set(Number(k), v);
+        }
+        this.mapUserData = { ...(mudletMap.mUserData ?? {}) };
+        this.initialized = true;
+        this.notify();
+    }
+
     toRendererData(): MapRendererData | null {
         if (this.rooms.size === 0) return null;
         try { return readerExport(this.toMudletMap()); } catch { return null; }
     }
 
-    private toMudletMap(): MudletMap {
+    toMudletMap(): MudletMap {
         const areas: Record<number, MudletArea> = {};
         for (const [id, a] of this.areas) areas[id] = a;
         const rooms: Record<number, MudletRoom> = {};
@@ -154,11 +215,15 @@ export class MapStore {
         for (const [h, id] of this.hashToRoom) hashes[h] = id;
         const mCustomEnvColors: Record<number, MudletColor> = {};
         for (const [id, c] of this.customEnvColors) mCustomEnvColors[id] = c;
+        const envColors: Record<number, number> = {};
+        for (const [id, v] of this.envColors) envColors[id] = v;
+        const labels: Record<number, MudletLabel[]> = {};
+        for (const [id, ls] of this.labels) labels[id] = ls;
         return {
-            version: 1, envColors: {}, areaNames, mCustomEnvColors,
+            version: 1, envColors, areaNames, mCustomEnvColors,
             mpRoomDbHashToRoomId: hashes, mUserData: { ...this.mapUserData },
             mapSymbolFont: DEFAULT_FONT, mapFontFudgeFactor: 1, useOnlyMapFont: false,
-            areas, mRoomIdHash: {}, labels: {}, rooms,
+            areas, mRoomIdHash: {}, labels, rooms,
         };
     }
 

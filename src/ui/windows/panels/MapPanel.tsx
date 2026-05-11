@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MapReader, MapRenderer, createSettings } from 'mudlet-map-renderer';
+import { MapRenderer, createSettings } from 'mudlet-map-renderer';
 import type { RoomContextMenuEventDetail } from 'mudlet-map-renderer';
 import type { WindowManager } from '../WindowManager';
 import type { MapEventEntry } from '../../../map/MapStore';
+import { MudixMapReader } from '../../../map/MudixMapReader';
 
 type MapStatus = 'loading' | 'empty' | 'ready' | 'error';
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyArea = any;
 
 interface MapPanelProps {
     id: string;
@@ -18,7 +16,7 @@ interface MapPanelProps {
 export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<MapRenderer | null>(null);
-    const readerRef = useRef<MapReader | null>(null);
+    const readerRef = useRef<MudixMapReader | null>(null);
     const prevWidthRef = useRef<number>(0);
     const needsFitRef = useRef<boolean>(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -39,23 +37,62 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         items: MapEventEntry[];
     } | null>(null);
 
-    const initRenderer = useCallback((
-        mapData: AnyArea[],
-        colors: { envId: number; colors: number[] }[],
-        keepAreaId?: number,
-        keepLevel?: number,
-    ) => {
-        if (!containerRef.current) return;
-        rendererRef.current?.destroy();
+    // Refs mirror the latest area/level so callbacks captured at mount time
+    // can see the current selection (state values would be stale captures).
+    const currentAreaRef = useRef<number | null>(null);
+    const currentLevelRef = useRef<number>(0);
+    currentAreaRef.current = currentArea;
+    currentLevelRef.current = currentLevel;
 
-        const reader = new MapReader(mapData, colors);
-        readerRef.current = reader;
+    // Refresh the live reader from MapStore and pick an area/level to display.
+    // Used both on initial sync and on every store-change tick. Returns true
+    // when the renderer was driven to a ready state; false when the store is
+    // still empty (overlay stays up).
+    const syncFromStore = useCallback((opts?: { keepArea?: number; keepLevel?: number }): boolean => {
+        const reader = readerRef.current;
+        const renderer = rendererRef.current;
+        if (!reader || !renderer) return false;
+        reader.refresh();
 
         const areaList = reader.getAreas()
             .map(a => ({ id: a.getAreaId(), name: a.getAreaName() }))
             .sort((a, b) => a.name.localeCompare(b.name));
         setAreas(areaList);
 
+        if (areaList.length === 0) {
+            setStatus('empty');
+            return false;
+        }
+
+        const keepArea = opts?.keepArea ?? currentAreaRef.current ?? undefined;
+        const keepLevel = opts?.keepLevel ?? currentLevelRef.current;
+        const restoredArea = keepArea != null && areaList.some(a => a.id === keepArea)
+            ? keepArea
+            : areaList[0].id;
+        const areaLevels = reader.getArea(restoredArea).getZLevels().sort((a, b) => a - b);
+        const restoredLevel =
+            keepLevel != null && areaLevels.includes(keepLevel) ? keepLevel
+            : areaLevels.includes(0) ? 0 : (areaLevels[0] ?? 0);
+        setLevels(areaLevels);
+        setCurrentLevel(restoredLevel);
+        setCurrentArea(restoredArea);
+        renderer.drawArea(restoredArea, restoredLevel);
+        // Only fit on the first successful render; afterwards preserve user pan/zoom.
+        if (!needsFitRef.current) {
+            needsFitRef.current = true;
+            renderer.fitArea();
+        }
+        setStatus('ready');
+        return true;
+    }, []);
+
+    // Construct the renderer + live reader exactly once. Subsequent store
+    // mutations flow through `reader.refresh()` + `renderer.drawArea(...)` —
+    // the Konva stage and event listeners stay alive across map reloads.
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const reader = new MudixMapReader(manager.mapStore);
+        readerRef.current = reader;
         const settings = createSettings();
         settings.areaName = false;
         const renderer = new MapRenderer(reader, settings, containerRef.current);
@@ -65,8 +102,6 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         renderer.backend.events.on('roomcontextmenu', (detail: RoomContextMenuEventDetail) => {
             const items = manager.mapStore.getMapEvents();
             if (items.length === 0) return;
-            // Renderer emits container-relative coords; the menu uses position:fixed,
-            // so add the container's viewport offset to land on the clicked room.
             const rect = containerRef.current?.getBoundingClientRect();
             setContextMenu({
                 x: (rect?.left ?? 0) + detail.position.x,
@@ -76,58 +111,29 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             });
         });
 
-        if (areaList.length > 0) {
-            // Restore previous area/level if still available, otherwise pick first.
-            const restoredArea = keepAreaId != null && areaList.some(a => a.id === keepAreaId)
-                ? keepAreaId
-                : areaList[0].id;
-            const areaLevels = reader.getArea(restoredArea).getZLevels().sort((a, b) => a - b);
-            const restoredLevel =
-                keepLevel != null && areaLevels.includes(keepLevel) ? keepLevel
-                : areaLevels.includes(0) ? 0 : (areaLevels[0] ?? 0);
-            setLevels(areaLevels);
-            setCurrentLevel(restoredLevel);
-            renderer.drawArea(restoredArea, restoredLevel);
-            needsFitRef.current = true;
-            renderer.fitArea();
-            setCurrentArea(restoredArea);
-        }
-
-        setStatus('ready');
+        return () => {
+            renderer.destroy();
+            rendererRef.current = null;
+            readerRef.current = null;
+        };
     }, [manager]);
-
-    // Render whatever buffer the manager has already parsed. The binary parse
-    // itself lives on WindowManager — bootstrap runs it once at session start
-    // (before scripts), and Lua loadMap(...) re-ingests through the manager.
-    // The panel just consumes the cached renderer-ready payload.
-    const renderCached = useCallback((opts?: { keepArea?: number; keepLevel?: number }): boolean => {
-        const cached = manager.getCachedMapData();
-        if (!cached) {
-            setStatus('empty');
-            return false;
-        }
-        try {
-            initRenderer(cached.mapData as AnyArea[], cached.colors, opts?.keepArea, opts?.keepLevel);
-            return true;
-        } catch (e) {
-            setErrorMsg(e instanceof Error ? e.message : String(e));
-            setStatus('error');
-            return false;
-        }
-    }, [initRenderer, manager]);
 
     // Boot path: ScriptingEngine and this panel both call bootstrapMap; the
     // manager dedupes to a single IndexedDB fetch + parse. Once it resolves
-    // we render from the cache (or fall into 'empty' when no map is stored).
+    // (or fails) we sync from the now-populated MapStore.
     useEffect(() => {
         let cancelled = false;
         setStatus('loading');
         manager.bootstrapMap().then(() => {
             if (cancelled) return;
-            renderCached();
+            try { syncFromStore(); }
+            catch (e) {
+                setErrorMsg(e instanceof Error ? e.message : String(e));
+                setStatus('error');
+            }
         });
         return () => { cancelled = true; };
-    }, [manager, renderCached]);
+    }, [manager, syncFromStore]);
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -184,7 +190,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 const cy = (bounds.minY + bounds.maxY) / 2;
                 el.dispatchEvent(new Event('resize'));
                 renderer.setZoom(zoom * scale);
-                renderer.backend.viewport.panToMapPoint(cx, cy);
+                renderer.camera.panToMapPoint(cx, cy);
             } else {
                 el.dispatchEvent(new Event('resize'));
                 if (renderer && newWidth > 0 && needsFitRef.current) {
@@ -198,49 +204,30 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         return () => ro.disconnect();
     }, []);
 
-    // Cleanup renderer on unmount
-    useEffect(() => {
-        return () => { rendererRef.current?.destroy(); };
-    }, []);
-
-    // Subscribe to MapStore changes (scripting-built maps). Re-init renderer when
-    // the store gains rooms, preserving the current area/level across updates.
-    const currentAreaRef = useRef<number | null>(null);
-    const currentLevelRef = useRef<number>(0);
-    currentAreaRef.current = currentArea;
-    currentLevelRef.current = currentLevel;
+    // Subscribe to MapStore changes (script-built rooms, binary load, etc.).
+    // Each tick: refresh the live reader's snapshot, then ask the renderer to
+    // redraw the current area. The Konva stage stays alive across all updates.
     useEffect(() => {
         const unsub = manager.mapStore.subscribe(() => {
-            const data = manager.mapStore.toRendererData();
-            if (!data) return;
-            initRenderer(
-                data.mapData as AnyArea[],
-                data.colors,
-                currentAreaRef.current ?? undefined,
-                currentLevelRef.current,
-            );
+            try { syncFromStore(); }
+            catch (e) {
+                setErrorMsg(e instanceof Error ? e.message : String(e));
+                setStatus('error');
+            }
         });
-        // If MapStore already has rooms when we mount (e.g. re-opening the panel), render immediately.
-        const data = manager.mapStore.toRendererData();
-        if (data) {
-            initRenderer(data.mapData as AnyArea[], data.colors);
-        }
         return unsub;
-    }, [manager, initRenderer]);
+    }, [manager, syncFromStore]);
 
-    // Lua loadMap() routes through WindowManager which ingests the buffer and
-    // calls back here to re-render. The manager has already updated the cache
-    // by the time this fires — preserve the current area/level so the user's
-    // view doesn't reset to area #1 on every reload.
+    // Lua loadMap() routes through WindowManager → MapStore. The store's notify
+    // will trigger the subscribe handler above; this callback only needs to
+    // report whether the renderer reached a ready state.
     useEffect(() => {
-        manager.registerMapLoadCallback(() => {
-            return renderCached({
-                keepArea: currentAreaRef.current ?? undefined,
-                keepLevel: currentLevelRef.current,
-            });
-        });
+        manager.registerMapLoadCallback(() => syncFromStore({
+            keepArea: currentAreaRef.current ?? undefined,
+            keepLevel: currentLevelRef.current,
+        }));
         return () => manager.unregisterMapLoadCallback();
-    }, [manager, renderCached]);
+    }, [manager, syncFromStore]);
 
     // centerview: switch to the room's area/level, mark player position, and center.
     // The callback is stored in a ref so it always captures the latest renderer state.
@@ -276,8 +263,8 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         try {
             const buf = await file.arrayBuffer();
             // Routes through WindowManager: persists to IndexedDB, parses into
-            // MapStore + cache, raises sysMapLoadEvent, and fires the registered
-            // callback (renderCached) which sets status='ready' on success.
+            // MapStore, raises sysMapLoadEvent, and the store's notify drives
+            // the panel back to status='ready' via the subscribe handler.
             if (!manager.loadMap(buf)) {
                 setErrorMsg('Failed to parse map file');
                 setStatus('error');
