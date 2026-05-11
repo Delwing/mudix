@@ -734,23 +734,38 @@ export class ScriptingEngine {
     }
 
     /**
-     * Mudlet `exists(name, type)`. Returns the number of items with the given
-     * name in the named collection. Type aliases follow Mudlet: "key" and
-     * "keybind" both target keybindings. Unknown types return 0.
+     * Mudlet `exists(nameOrId, type)`. With a name string, returns the count of
+     * items matching the name in the named collection. With a numeric id, looks
+     * up the perm item by its monotonic id (the one permScript/permRegexTrigger
+     * etc. return) and reports 1 if it lives in the matching collection, else 0.
+     * Type aliases follow Mudlet: "key" and "keybind" both target keybindings.
+     * Unknown types return 0.
      */
-    existsByName(name: string, type: string): number {
+    existsByName(nameOrId: string | number, type: string): number {
         const store = useAppStore.getState();
         const id = this.connectionId;
-        switch (type) {
-            case 'alias':   return (store.connectionAliases[id]      ?? []).filter(i => i.name === name).length;
-            case 'trigger': return (store.connectionTriggers[id]     ?? []).filter(i => i.name === name).length;
-            case 'timer':   return (store.connectionTimers[id]       ?? []).filter(i => i.name === name).length;
-            case 'key':
-            case 'keybind': return (store.connectionKeybindings[id]  ?? []).filter(i => i.name === name).length;
-            case 'button':  return (store.connectionButtons[id]      ?? []).filter(i => i.name === name).length;
-            case 'script':  return (store.connectionScripts[id]      ?? []).filter(i => i.name === name).length;
-            default:        return 0;
+        const list = ((): { id: string; name: string }[] => {
+            switch (type) {
+                case 'alias':   return store.connectionAliases[id]      ?? [];
+                case 'trigger': return store.connectionTriggers[id]     ?? [];
+                case 'timer':   return store.connectionTimers[id]       ?? [];
+                case 'key':
+                case 'keybind': return store.connectionKeybindings[id]  ?? [];
+                case 'button':  return store.connectionButtons[id]      ?? [];
+                case 'script':  return store.connectionScripts[id]      ?? [];
+                default:        return [];
+            }
+        })();
+        if (typeof nameOrId === 'number' && Number.isFinite(nameOrId)) {
+            const wanted = nameOrId;
+            for (const item of list) {
+                const n = this.uuidToNumericId.get(item.id);
+                if (n !== undefined && n === wanted) return 1;
+            }
+            return 0;
         }
+        const name = String(nameOrId);
+        return list.filter(i => i.name === name).length;
     }
 
     /**

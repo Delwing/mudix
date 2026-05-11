@@ -76,8 +76,14 @@ export class HttpService {
         void this.runRequest('DELETE', url, undefined, headers, 'sysDeleteHttpDone', 'sysDeleteHttpError');
     }
 
-    customHTTP(method: string, data: string | null, url: string, headers?: Record<string, string>): void {
-        const body = data == null ? undefined : data;
+    customHTTP(method: string, data: string | null, url: string, headers?: Record<string, string>, file?: string): void {
+        let body: BodyInit | undefined;
+        try {
+            body = this.bodyForUpload(data, file);
+        } catch (err) {
+            this.emit('sysCustomHttpError', [errorMessage(err), url, method]);
+            return;
+        }
         void this.runRequest(method, url, body, headers, 'sysCustomHttpDone', 'sysCustomHttpError', [method], [method]);
     }
 

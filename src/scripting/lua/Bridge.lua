@@ -18,11 +18,36 @@ function getUserWindowSize(name)
     return t[0], t[1]
 end
 
--- Mudlet getBackgroundColor([windowName]). JS returns the rgba channels as a
--- 0-indexed array; unpack to four return values to match the C++ API.
+-- Mudlet getBackgroundColor([windowName]) → r, g, b, a on success;
+-- (nil, errMsg) when the named window doesn't exist. JS hands back a
+-- 0-indexed [r, g, b, a] array or `nil` for the miss case.
 function getBackgroundColor(windowName)
     local t = __getBackgroundColor(windowName)
+    if t == nil then
+        return nil, "window \"" .. tostring(windowName) .. "\" not found"
+    end
     return t[0], t[1], t[2], t[3]
+end
+
+-- Mudlet windowType(name) → "main"/"label"/"miniconsole"/"userwindow", or
+-- (nil, errMsg) when the named window doesn't resolve.
+function windowType(name)
+    local k = __windowType(name)
+    if k == nil then
+        return nil, "window/label \"" .. tostring(name) .. "\" not found"
+    end
+    return k
+end
+
+-- Mudlet getCurrentLine([window]) → line text, or (nil, errMsg) when the named
+-- window doesn't exist. JS returns `nil` only for that miss case (the main
+-- window always resolves, may simply have an empty current line).
+function getCurrentLine(windowName)
+    local v = __getCurrentLine(windowName)
+    if v == nil then
+        return nil, "window \"" .. tostring(windowName) .. "\" not found"
+    end
+    return v
 end
 
 -- Mudlet getCustomEnvColor(envID). JS returns nil for unknown IDs (matches
@@ -34,11 +59,95 @@ function getCustomEnvColor(envId)
 end
 
 -- Mudlet getSelection([windowName]) → text, start, length on success;
--- false, "no selection" otherwise. JS hands back a 0-indexed array or nil.
+-- nil, "no selection" otherwise. JS hands back a 0-indexed array or nil.
 function getSelection(windowName)
     local t = __getSelection(windowName)
-    if t == nil then return false, "no selection" end
+    if t == nil then return nil, "no selection" end
     return t[0], t[1], t[2]
+end
+
+-- Mudlet getMapUserData(key). Returns the stored value on success or
+-- (false, errMsg) when the key isn't set.
+function getMapUserData(key)
+    local v = __getMapUserData(key)
+    if v == nil then return false, "no such map user data key" end
+    return v
+end
+
+-- Mudlet getRoomUserData(id, key [, fullErr]). Default form returns "" when
+-- either the room or the key is missing (so scripts can safely concatenate
+-- the result). With `fullErr=true` the two miss cases are distinguishable:
+--   room missing → (false, "room with given id not found")
+--   key missing  → (false, "no such room user data key")
+function getRoomUserData(id, key, fullErr)
+    local r = __getRoomUserData(id, key)
+    if type(r) == 'table' then
+        if r.value ~= nil then return r.value end
+        if fullErr then
+            if r.miss == 'room' then
+                return false, "room with given id ('" .. tostring(r.id or id) .. "') not found"
+            end
+            return false, "no such room user data key ('" .. tostring(r.key or key) .. "')"
+        end
+        return ""
+    end
+    return r or ""
+end
+
+-- Mudlet getRoomName(id) → name string on success, (false, errMsg) on miss.
+function getRoomName(id)
+    local n = __getRoomName(id)
+    if n == nil then return false, "room with given id not found" end
+    return n
+end
+
+-- Mudlet getRoomHashByID(id) → hash string on success, (false, errMsg) when
+-- the room is missing or has no hash assigned.
+function getRoomHashByID(id)
+    local h = __getRoomHashByID(id)
+    if h == nil then return false, "no hash for given room id" end
+    return h
+end
+
+-- Mudlet deleteLabel(name) → true on success, (false, errMsg) when the label
+-- doesn't exist.
+function deleteLabel(name)
+    if __deleteLabel(name) then return true end
+    return false, "label \"" .. tostring(name) .. "\" does not exist"
+end
+
+-- Mudlet HTTP APIs: every call dispatches a fire-and-forget background
+-- request and immediately returns (true, url). Completion/failure is
+-- reported via sysXxxHttp* events. The wrappers below add the (true, url)
+-- tuple over the `__`-prefixed JS primitives.
+function downloadFile(saveTo, url)
+    __downloadFile(saveTo, url)
+    return true, url
+end
+
+function getHTTP(url, headers)
+    __getHTTP(url, headers)
+    return true, url
+end
+
+function postHTTP(data, url, headers, file)
+    __postHTTP(data, url, headers, file)
+    return true, url
+end
+
+function putHTTP(data, url, headers, file)
+    __putHTTP(data, url, headers, file)
+    return true, url
+end
+
+function deleteHTTP(url, headers)
+    __deleteHTTP(url, headers)
+    return true, url
+end
+
+function customHTTP(method, data, url, headers, file)
+    __customHTTP(method, data, url, headers, file)
+    return true, url
 end
 
 -- Mudlet getMapEvents() → { [uniqueName] = { ["event name"]=..., ["parent"]=...,

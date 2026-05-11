@@ -381,7 +381,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('setDoor',              '(id, dir, val)',                    'Set a door (0=none,1=open,2=closed,3=locked)'),
     fn('getRoomUserData',      '(id, key) → value',                'Get custom room data'),
     fn('setRoomUserData',      '(id, key, value)',                  'Set custom room data'),
-    fn('getMapUserData',       '(key) → value',                    "Get a value from the map's free-form user-data dict (returns '' if unset)"),
+    fn('getMapUserData',       '(key) → value | (false, errMsg)',  "Get a value from the map's free-form user-data dict; (false, errMsg) when the key isn't set"),
     fn('setMapUserData',       '(key, value) → true',              "Set a value in the map's free-form user-data dict"),
     fn('clearMapUserData',     '() → bool',                        'Wipe the entire map user-data dict; returns true if anything was cleared'),
     fn('clearMapUserDataItem', '(key) → bool',                     'Remove a single key from map user-data; returns true if it existed'),

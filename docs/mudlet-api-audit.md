@@ -9,10 +9,10 @@ Scope: ~200 native bindings. Pure-Lua wrappers in bundled `mudlet-lua/` (cecho, 
 | Severity | Count | Meaning |
 |---|---|---|
 | OK | 58 | No meaningful discrepancy. |
-| minor | 84 | Same calls accepted, edge-case behavior or return shape differs. |
+| minor | 44 | Same calls accepted, edge-case behavior or return shape differs. |
 | major | 0 | Wrong arg count/order, missing required arg, broken overload, wrong return type. |
 | missing | 0 | Declared as a stub but Mudlet has real behavior scripts depend on. |
-| fixed | 56 | Top-priority items #1–#28 plus 5 follow-up minor items: `setFgColor`/`setBgColor` channel validation + alpha, `deselect` window arg, `replace` keepcolor, `echoLink` useCurrentFormat. |
+| fixed | 96 | Top-priority items #1–#28, 5 earlier follow-ups (`setFgColor`/`setBgColor` channel validation + alpha, `deselect` window arg, `replace` keepcolor, `echoLink` useCurrentFormat), and 40 more minor parity items: 8 mapper writes now return bool, 3 mapper reads use Mudlet miss-shapes (`-1` / `(false, errMsg)`), `showWindow` / `setUserWindowTitle` / `setBackgroundColor` / `deleteLabel` / `setLabelToolTip` return bool, `clearUserWindow()` no-arg clears main, full HTTP family returns `(true, url)`, and `customHTTP` gained the optional `file` arg. **Latest pass (minor → fixed × 20):** `printError` accepts `showStackTrace`/`haltExecution`, `getSelection` returns `nil, msg`, `getCurrentLine` / `windowType` / `getBackgroundColor` report `nil, errMsg` on missing window, `getRoomArea` / `getRoomEnv` return `-1` on miss, `getMapUserData` and `getRoomUserData` (with `fullErr`) emit `(false, errMsg)`, `enableScript` / `disableScript` raise on miss, `uninstallPackage` returns `nil` on miss, `raiseEvent` / `send` return `true`, `sendGMCP` gained the optional `what` arg, `openWebPage` returns bool, `openMapWidget` accepts the `(x, y)` form and returns `true`, `openUserWindow` returns `true`, `createRoomID` accepts the `minimum` arg, `exists` accepts numeric id lookup, and `expandAlias`'s default `echo` is now `false` (Mudlet shape). |
 
 ---
 
@@ -221,7 +221,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | echoLink | `echoLink([win,] text, cmd, hint, [useCurrentFmt])` | matches | Default styles the link with Mudlet's built-in blue + underline; `useCurrentFormat=true` preserves the current pen instead | fixed |
 | echoPopup | `echoPopup([win,] text, {cmds}, {hints}, [useCurrentFmt])` | argc-based detection in Bridge.lua wrapper | Auto-detects no-window form (3-arg) and disambiguates 4-arg via `type(arg2)` | fixed |
 | selectCaptureGroup | `(groupNum|groupName)` | resolved | (see #6 in Top priorities) | fixed |
-| printError | `printError(msg, [showStack], [haltExec])` | `(text)` only | Drops `showStackTrace` and `haltExecution` | minor |
+| printError | `printError(msg, [showStack], [haltExec])` | matches | `showStackTrace` accepted (no JS stack to render); `haltExecution=true` raises a Lua error so the calling script aborts | fixed |
 | feedTriggers | `feedTriggers(text, [utf8=true])` | `(text)` only | Drops encoding flag (irrelevant in JS) | OK |
 
 ### Selection / cursor / line
@@ -230,9 +230,9 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 |---|---|---|---|---|
 | selectString | `([win,] text, occurrence) → start col or -1` | same | OK | OK |
 | selectSection | `([win,] from, length) → bool` | matches | Validates from/length ≥ 0 and that the buffer exists; returns bool | fixed |
-| getSelection | `([win]) → text, start, length OR nil, errMsg` | `false, "no selection"` | Mudlet returns `nil, msg`; mudix returns `false, msg` | minor |
+| getSelection | `([win]) → text, start, length OR nil, errMsg` | matches | Bridge.lua wrapper now hands back `nil, "no selection"` (Mudlet shape) instead of `false, msg` | fixed |
 | isPrompt | reflects `promptBuffer[userCursorY]` | cached `_isPrompt` for last line only | Can't query historical lines via moveCursor + isPrompt | minor |
-| getCurrentLine | `([win]) → string, [bad_window_value]` | string; `''` on missing | No error tuple | minor |
+| getCurrentLine | `([win]) → string OR nil, errMsg` | matches | Bridge.lua wrapper returns `nil, errMsg` when the named window doesn't exist; main always resolves (empty string when no current line) | fixed |
 | getLineNumber | `([win]) → 0-indexed cursor.y` | resolved (see #1 in Top priorities) | — | fixed |
 | getLineCount | `([win]) → size - 1` (last index) | resolved (see #1) | — | fixed |
 | getLastLineNumber | `([win]) → size - 1`; -1 if missing | resolved (see #1) | — | fixed |
@@ -249,24 +249,24 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 
 | Function | Mudlet signature | mudix accepts | Discrepancy | Severity |
 |---|---|---|---|---|
-| windowType | string kind or `nil, errMsg` | "main"/"label"/"miniconsole"/"userwindow"/null | Missing "buffer", "commandline", "textedit"; null instead of `nil, msg` | minor |
-| openUserWindow | `(name, [restoreLayout, autoDock, dockingArea]) → true` | returns WindowHandle object | Returns handle not `true`; force-defaults dockingArea to `'r'` | minor |
-| openMapWidget | `([area\|x,y,w,h]) → true` | returns WindowHandle | 2-arg `(x, y)` form unsupported; missing `true` return | minor |
-| clearUserWindow | `([name])` — defaults to main | requires name | No-arg call passes `undefined` to clear | minor |
+| windowType | string kind or `nil, errMsg` | matches | Bridge.lua wrapper turns the miss case into `nil, errMsg`. mudix has no buffer/commandline/textedit panel kinds, so those kinds are still not reported | fixed |
+| openUserWindow | `(name, [restoreLayout, autoDock, dockingArea]) → true` | matches | The internal `WindowHandle` is no longer leaked across the bridge; binding returns `true` after the panel is registered | fixed |
+| openMapWidget | `([area\|x,y[,w,h]]) → true` | matches | 2-arg `(x, y)` floats the widget at that point (size inherits saved hint); 4-arg form unchanged; always returns `true` | fixed |
+| clearUserWindow | `([name])` — defaults to main | matches | No-arg call now clears the main console (same as `clearWindow`) | fixed |
 | clearWindow | alias of clearUserWindow | OK | OK | OK |
 | createMiniConsole | `([parent,] name, x, y, w, h)` — parent nests inside userwindow | matches | Parent stored on window data; non-main parent portals into the parent's viewport so (x, y) are parent-relative | fixed |
 | hideWindow | `(name)` — labels first, then sub-consoles | matches | OK | OK |
-| showWindow | `(name) → bool` | no return | Missing bool return | minor |
+| showWindow | `(name) → bool` | matches | Routes to label manager first, then `WindowManager.show`; returns true when the target exists | fixed |
 | moveWindow | `(name, x, y)` — labels first | matches | OK | OK |
 | resizeWindow | `(name, w, h)` — labels first | matches | OK | OK |
-| setUserWindowTitle | `(name, [title]) → bool` — empty resets | requires title; no return | Title required; no bool | minor |
-| setBackgroundColor | `([name,] r, g, b, [a]) → bool` | overload by first-arg type | No 0–255 validation; no bool return | minor |
-| getBackgroundColor | `([name]) → r, g, b, a OR nil, errMsg` | always returns 4 ints (zeroes on miss) | Missing windows return zeros instead of `nil, errMsg` | minor |
+| setUserWindowTitle | `(name, [title]) → bool` — empty resets | matches | Missing title resets the panel header to the window id; missing window returns false | fixed |
+| setBackgroundColor | `([name,] r, g, b, [a]) → bool` | matches | Each channel validated as 0–255 int via the shared `channel()` helper; invalid args return false; main/label/userwindow routing returns bool | fixed |
+| getBackgroundColor | `([name]) → r, g, b, a OR nil, errMsg` | matches | Raw JS bridge returns `null` for missing labels/userwindows; Bridge.lua wrapper hands back `nil, errMsg`. Main always resolves to `{0,0,0,255}` when no override is set | fixed |
 | createLabel | `([parent,] name, x, y, w, h, fillBg, [clickThrough])` | overload by 2nd-arg type | OK; `!!` coerces non-bool args (Mudlet errors) | minor |
-| deleteLabel | `(name) → true OR false, errMsg` | returns bool | No errMsg | minor |
+| deleteLabel | `(name) → true OR false, errMsg` | matches | Bridge.lua wrapper turns the JS bool into `(false, errMsg)` on miss | fixed |
 | setLabelStyleSheet | Qt CSS | DOM CSS via cssRewriter | Qt-specific selectors (`QLabel::hover`) need rewriter support | minor |
 | setLabelClickCallback | `(name, fn|nil, [args...])`; fn receives event table | matches | Event table `{button, x, y, globalX, globalY, alt, ctrl, shift, meta}`; `nil` clears; trailing args baked into closure; per-slot cb id tracked + freed on rebind | fixed |
-| setLabelToolTip | `(name, text, [duration]) → bool` | duration ignored | No duration; no bool | minor |
+| setLabelToolTip | `(name, text, [duration]) → bool` | matches | Forwards `LabelManager.setTooltip`'s bool (false when the label is missing); duration arg accepted for parity but the DOM `title` attribute has no per-tip timeout | fixed |
 | resetLabelToolTip | `(name)` | matches | OK | OK |
 | enableClickthrough | `(name)` | matches | OK | OK |
 | disableClickthrough | `(name)` | matches | OK | OK |
@@ -288,28 +288,28 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | Function | Mudlet signature | mudix accepts | Discrepancy | Severity |
 |---|---|---|---|---|
 | centerview | `(roomID)` | matches | OK | OK |
-| getRoomIDbyHash | returns -1 if not found | returns false | `false` vs `-1` | minor |
+| getRoomIDbyHash | returns -1 if not found | matches | Returns the matched id or -1 (Mudlet's "no match" sentinel) | fixed |
 | setRoomIDbyHash | matches | OK | OK | OK |
-| getRoomHashByID | string or `(false, errMsg)` | string or false | No errMsg | minor |
+| getRoomHashByID | string or `(false, errMsg)` | matches | Bridge.lua wrapper turns the JS string/null into the documented multi-return | fixed |
 | loadMap | `([location])` — accepts `.dat`/`.xml` | `.dat` only | No XML import | minor |
-| createRoomID | `([minimum])` | no args | Drops optional `minimum` | minor |
+| createRoomID | `([minimum])` | matches | `minimum` is honored — returns the smallest unused id ≥ `minimum`, advancing the running cursor when it overruns | fixed |
 | addRoom | `(roomID, areaID) → bool` | `(roomID, areaID?)` | Optional `areaID` is honored; the area is created if missing and the room is registered on its `rooms` list | fixed |
-| deleteRoom | `(roomID) → bool` | no return | Missing bool | minor |
+| deleteRoom | `(roomID) → bool` | matches | `MapStore.deleteRoom` returns false when the room doesn't exist, true after removal | fixed |
 | roomExists | `(roomID) → bool` | matches | OK | OK |
-| getRoomName | string or `(false, errMsg)` | string or false | No errMsg | minor |
-| setRoomName | matches; no return | matches | minor |
-| getRoomArea | number | number or false | `false` on miss | minor |
+| getRoomName | string or `(false, errMsg)` | matches | Bridge.lua wrapper turns the JS string/null into the documented multi-return | fixed |
+| setRoomName | matches; no return | matches | `MapStore.setRoomName` now returns true/false so the binding reports whether the room existed | fixed |
+| getRoomArea | number; `-1` on miss | matches | Returns the room's area id, or `-1` when the room doesn't exist | fixed |
 | setRoomArea | `(roomID|{ids}, areaID|areaName) → bool` | accepts both | Single ID and array of IDs supported; area lookup by ID or name; returns bool | fixed |
 | getRoomCoordinates | `x, y, z` (3 returns) | Bridge unpacks JS `[x,y,z]` | OK | minor |
-| setRoomCoordinates | matches; bool | no return | Missing bool | minor |
+| setRoomCoordinates | matches; bool | matches | `MapStore.setRoomCoordinates` returns true on update, false when the room is missing | fixed |
 | getRoomsByPosition | 0-indexed table | 0-indexed via wasmoon | OK | OK |
-| getRoomEnv | number | number (0 on miss) | 0 instead of error | minor |
-| setRoomEnv | matches | matches | minor |
+| getRoomEnv | number; `-1` on miss | matches | Returns the room's environment id, or `-1` when the room doesn't exist (matches Mudlet's "no such room" sentinel) | fixed |
+| setRoomEnv | matches | matches | Returns true on update, false when the room is missing | fixed |
 | getRoomChar | string | `''` on miss | `''` instead of error | minor |
-| setRoomChar | matches | matches | minor |
-| getRoomUserData | `(id, key, [fullErr])` | `(id, key)` | Missing fullErr flag | minor |
-| setRoomUserData | matches; bool | no return | Missing bool | minor |
-| getMapUserData | string or `(false, errMsg)` | `''` on miss | Different miss-shape | minor |
+| setRoomChar | matches | matches | Returns true on update, false when the room is missing | fixed |
+| getRoomUserData | `(id, key, [fullErr])` | matches | Default returns `""` when room or key is missing (Mudlet shape, so concatenation is safe); `fullErr=true` differentiates the cases via `(false, errMsg)` | fixed |
+| setRoomUserData | matches; bool | matches | Returns true on update, false when the room is missing | fixed |
+| getMapUserData | string or `(false, errMsg)` | matches | Bridge.lua wrapper returns `(false, "no such map user data key")` when the key was never set; stored empty strings still return `""` | fixed |
 | setMapUserData | matches | matches | OK | OK |
 | clearMapUserData | no args; clears entire dict | resolved (see #7 in Top priorities) | `clearMapUserData()` wipes all; `clearMapUserDataItem(key)` clears one | fixed |
 | getAllMapUserData | matches | matches | OK | OK |
@@ -317,8 +317,8 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | setExit | `(from, to, dir)` — dir is string OR int | both forms accepted | `parseDirection()` normalizes int 1-12 or name ("north"/"n"); returns bool | fixed |
 | getExitStubs | 0-indexed table | 0-indexed | OK | OK |
 | setExitStub | `(roomID, dir, set)` — dir is string OR int | both forms accepted | Same `parseDirection()` normalization; returns bool | fixed |
-| addSpecialExit | matches; bool | no return | Missing bool | minor |
-| removeSpecialExit | matches; bool | no return | Missing bool | minor |
+| addSpecialExit | matches; bool | matches | Returns true on update, false when the source room is missing | fixed |
+| removeSpecialExit | matches; bool | matches | Returns true when the special-exit was removed, false when the room or cmd entry is missing | fixed |
 | getSpecialExitsSwap | `{[cmd]=toRoomID}` | matches | OK | OK |
 | getDoors | `{[dir]=status}` | matches | OK | OK |
 | setDoor | `(roomID, exitCmd, status) → bool` — validates exit | accepts int or name; falls through to special-exit cmd | Door key normalizes to canonical field name for stock directions; returns bool | fixed |
@@ -349,13 +349,13 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | killTrigger | `(id|name) → bool` | resolved (see #2) | — | fixed |
 | killKey | `(name) → bool` | resolved (see #2) | — | fixed |
 | enableTrigger/disableTrigger/enableTimer/disableTimer | `(name) → bool` | matches | OK | OK |
-| enableScript/disableScript | `(name) → true` (errors if missing) | bool (false if missing) | mudix doesn't raise | minor |
-| exists | `(name|id, type) → count` | name+type only | No id-form lookup; accepts both `key` and `keybind` | minor |
+| enableScript/disableScript | `(name) → true` (errors if missing) | matches | Lua binding raises with `"enableScript: no script named …"` on miss, returns `true` on success | fixed |
+| exists | `(name|id, type) → count` | matches | Numeric id form resolves via the engine's perm-id index; string form unchanged. `key`/`keybind` both accepted | fixed |
 | permScript | `(name, parent, code) → numeric id` | resolved (see #3 in Top priorities) | — | fixed |
 | permRegexTrigger | `(name, parent, regexes, code) → numeric id` | resolved (see #3) | — | fixed |
 | setScript | `(name, code, [pos]) → numeric id` | resolved (see #3) | — | fixed |
 | installPackage | `(location)` — http URLs via Other.lua | VFS path only (Other.lua override may handle URLs) | Verify Other.lua override is loaded | minor |
-| uninstallPackage | `(name) → true | nil` | bool | `false` vs `nil` | minor |
+| uninstallPackage | `(name) → true | nil` | matches | Returns `true` on success, `nil` when no package with that name is installed (Mudlet shape) | fixed |
 | getPackages | 1-indexed table | Bridge rebuilds | OK | OK |
 | installModule | `(location) → true` | bool | minor | minor |
 | uninstallModule | matches | matches | OK | OK |
@@ -367,14 +367,14 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | getModulePriority | number; errors on unknown | 0 on unknown | mudix silent | minor |
 | getModules | 1-indexed | Bridge rebuilds | OK | OK |
 | getModuleInfo | table or string | matches | empty-table vs nil on unknown | minor |
-| raiseEvent | `→ true`; supports tables/functions via registry refs | no return | Loses bool; table args pass through wasmoon conversion | minor |
+| raiseEvent | `→ true`; supports tables/functions via registry refs | matches | Returns `true` once handlers have fired (synchronous dispatch); empty/missing event name returns `false`. Table args still rely on wasmoon conversion | fixed |
 | registerAnonymousEventHandler | `→ numeric id` | stub returns 0; mudlet-lua/Other.lua overrides | OK once Other.lua loads | minor |
 | showHandlerError | logs via host.mLuaInterpreter | `printError("[event \"…\"] …")` | parallel | OK |
-| expandAlias | `(cmd, [echo=true])` (nil echo → false) | `echo ?? true` (nil → true) | nil-echo handling differs; no `true` return | minor |
+| expandAlias | `(cmd, [echo])` — default echo is **false** (nil → false) | matches | `nil`/missing echo now defaults to `false` (Mudlet shape); explicit boolean honored; binding returns `true` | fixed |
 | denyCurrentSend | sets gate flag | matches | OK | OK |
 | sendCmdLine | stages text in cmdbar (no submit) | matches | Emits `script.setcmd` to replace bar contents; App handler focuses + selects all; `cmdLineName` arg accepted and ignored | fixed |
-| send | `(cmd, [echo=true]) → true` | no return | Missing return | minor |
-| sendGMCP | `(message, [what])` | drops 2nd arg | Missing optional `what` | minor |
+| send | `(cmd, [echo=true]) → true` | matches | Returns `true` once the send is dispatched | fixed |
+| sendGMCP | `(message, [what])` | matches | Optional `what` is concatenated to `message` with a space separator before framing (Mudlet behaviour) | fixed |
 | saveProfile | `([location, [filename]]) → (true, filename) | (nil, errMsg)` | always `(true, path)` | Never reports failure; ignores location and filename | minor |
 | unzipAsync | matches | matches | OK | OK |
 | remainingTime | `(id|name) → seconds` | matches | TimerEngine tracks start+intervalMs per entry; numeric→tempTimer, string→perm via id/name index; -1 on miss | fixed |
@@ -385,12 +385,12 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | Function | Mudlet signature | mudix accepts | Discrepancy | Severity |
 |---|---|---|---|---|
 | getNetworkLatency | seconds float | `(ping ?? 0) / 1000` | OK; returns 0 instead of last when not measured | minor |
-| downloadFile | `(saveTo, url) → (true, url)` | no return tuple; `sysDownloadDone` empty 3rd arg | Missing return tuple | minor |
-| getHTTP | `(url, headers) → (true, url)` | no return | Missing return | minor |
-| postHTTP | `(data, url, headers, file) → (true, url)` | matches; file via VFS | Missing return | minor |
-| putHTTP | `(data, url, [headers, file]) → (true, url)` | same | Missing return | minor |
-| deleteHTTP | `(url, headers) → (true, url)` | no return | Missing return | minor |
-| customHTTP | C++: `(method, data, url, headers, file)` | `(method, data, url, headers)` | Missing optional `file` arg; no return | minor |
+| downloadFile | `(saveTo, url) → (true, url)` | matches | Bridge.lua wrapper kicks off the JS primitive and returns `(true, url)`; sysDownloadDone third arg is still empty | fixed |
+| getHTTP | `(url, headers) → (true, url)` | matches | Bridge.lua wrapper returns `(true, url)` | fixed |
+| postHTTP | `(data, url, headers, file) → (true, url)` | matches; file via VFS | Bridge.lua wrapper returns `(true, url)` | fixed |
+| putHTTP | `(data, url, [headers, file]) → (true, url)` | matches | Bridge.lua wrapper returns `(true, url)` | fixed |
+| deleteHTTP | `(url, headers) → (true, url)` | matches | Bridge.lua wrapper returns `(true, url)` | fixed |
+| customHTTP | C++: `(method, data, url, headers, file)` | matches | Optional `file` arg now plumbed through `HttpService.bodyForUpload`; Bridge.lua wrapper returns `(true, url)` | fixed |
 | appendCmdLine | `([name,] text)` | name dropped (single bar) | OK | OK |
 | printCmdLine | `([name,] text)` | name dropped | OK | OK |
 | clearCmdLine | `([name])` | name dropped | OK | OK |
@@ -399,7 +399,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | getCommandLineMenuEvents | not in Mudlet C++ | mudix-only | OK as extension | OK |
 | setCmdLineAction | `(cmdLineName, fn, [args...])` — intercepts Enter | matches | Single-bar form; cmdLineName arg accepted and ignored. fn=nil clears; trailing args baked into closure; cb id freed on rebind | fixed |
 | resetCmdLineAction | `(cmdLineName) → bool` | matches | Clears the action and frees the cb id | fixed |
-| openWebPage | `(url) → bool` | `window.open(url, '_blank')` | Missing bool return | minor |
+| openWebPage | `(url) → bool` | matches | Returns `false` for empty URLs or when the popup is blocked; `true` once `window.open` succeeds | fixed |
 | debugc | single arg, routes to error-info console | variadic, routes to devtools | minor | minor |
 | errorc | `(content, [debugInfo])` | variadic to script log | minor | minor |
 

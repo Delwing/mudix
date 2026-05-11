@@ -181,69 +181,97 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // raiseEvent runs every handler synchronously. JS is single-threaded
         // so handler-A-before-handler-B ordering falls out of the call stack.
+        // Mudlet returns `true` on success (the only failure mode is a missing
+        // event name); mudix matches.
         this.lua.global.set('raiseEvent', (event: string, ...args: unknown[]) => {
+            if (typeof event !== 'string' || event.length === 0) return false;
             this.emitEvent(event, args);
+            return true;
         });
 
-        this.lua.global.set("windowType", (window: string) => {
-            if (window === "main") return "main";
-            if (this.api.labels.has(window)) return "label";
-            if (this.api.windows.isMiniConsole(window)) return "miniconsole";
-            if (this.api.windows.has(window)) return "userwindow";
+        // Mudlet `windowType(name)` → kind string. Returns `(nil, errMsg)` when
+        // the name doesn't resolve. The raw entry point hands JS `null` for the
+        // miss case; the Bridge.lua wrapper re-shapes it into the multi-return.
+        // mudix has no "buffer", "commandline", or "textedit" concepts, so those
+        // kinds are not reported.
+        this.lua.global.set('__windowType', (window: unknown) => {
+            if (typeof window !== 'string') return null;
+            if (window === 'main') return 'main';
+            if (this.api.labels.has(window)) return 'label';
+            if (this.api.windows.isMiniConsole(window)) return 'miniconsole';
+            if (this.api.windows.has(window)) return 'userwindow';
             return null;
         });
-        this.lua.global.set("openUserWindow", (window: string, restoreLayout: boolean = true, autoDock: boolean = true, dockingArea: string = 'r') => {
-            return this.api.windows.open(window, {
+        // Mudlet `openUserWindow(name, [restoreLayout, autoDock, dockingArea]) → true`.
+        // Always returns true once the window registry has the panel. The handle
+        // returned by ScriptingWindowsAPI.open is kept internal — userscripts
+        // address windows by name everywhere else (write/move/resize/etc.), so
+        // returning `true` (Mudlet shape) avoids leaking the handle object.
+        this.lua.global.set('openUserWindow', (window: string, restoreLayout: boolean = true, autoDock: boolean = true, dockingArea: string = 'r') => {
+            this.api.windows.open(window, {
                 autoDock,
                 dockingArea: DOCKMAP[dockingArea] ?? 'right',
-                ignoreHint: restoreLayout
+                ignoreHint: restoreLayout,
             });
+            return true;
         });
-        // openMapWidget([dockingArea | x, y, w, h]) — Mudlet API.
+        // Mudlet `openMapWidget([dockingArea | x, y [, w, h]]) → true`.
         //   no args            → restore saved layout, or right-dock if none
         //   (area)             → "f" floating, or "l"/"r"/"t"/"b" dock side
+        //   (x, y)             → floating at (x, y); width/height inherit the
+        //                        saved hint (or panel defaults if none)
         //   (x, y, w, h)       → floating at given pixel position and size
-        // Explicit args override the saved layout hint.
+        // Explicit args override the saved layout hint. Always returns true.
         this.lua.global.set('openMapWidget', (a?: unknown, b?: unknown, c?: unknown, d?: unknown) => {
-            // 4-arg form: floating at (x, y, w, h)
-            if (typeof a === 'number' && b !== undefined && c !== undefined && d !== undefined) {
-                return this.api.windows.open('map', {
+            // 2- or 4-arg numeric form: floating at (x, y[, w, h])
+            if (typeof a === 'number' && typeof b === 'number') {
+                const hasSize = c !== undefined && d !== undefined;
+                this.api.windows.open('map', {
                     kind: 'map',
                     title: 'Map',
                     autoDock: false,
                     ignoreHint: true,
                     x: Number(a),
                     y: Number(b),
-                    width: Number(c),
-                    height: Number(d),
+                    ...(hasSize ? { width: Number(c), height: Number(d) } : {}),
                 });
+                return true;
             }
             // 0-arg: restore saved layout, fall back to right dock
             if (a === undefined || a === null) {
-                return this.api.windows.open('map', {
+                this.api.windows.open('map', {
                     kind: 'map',
                     title: 'Map',
                     dockingArea: 'right',
                 });
+                return true;
             }
             // 1-arg: dockingArea string
             const area = String(a);
             if (area === 'f') {
-                return this.api.windows.open('map', {
+                this.api.windows.open('map', {
                     kind: 'map',
                     title: 'Map',
                     autoDock: false,
                     ignoreHint: true,
                 });
+                return true;
             }
-            return this.api.windows.open('map', {
+            this.api.windows.open('map', {
                 kind: 'map',
                 title: 'Map',
                 ignoreHint: true,
                 dockingArea: DOCKMAP[area] ?? 'right',
             });
+            return true;
         });
-        this.lua.global.set("clearUserWindow", (window: string) => this.api.windows.clear(window));
+        // Mudlet clearUserWindow([name]) — defaults to clearing the main
+        // console when no name is given (matches `clearWindow` behaviour).
+        this.lua.global.set("clearUserWindow", (window?: unknown) => {
+            const name = typeof window === 'string' ? window : undefined;
+            if (!name || name === 'main') this.api.clearWindow();
+            else this.api.windows.clear(name);
+        });
         // createMiniConsole has two calling conventions:
         //   createMiniConsole(name, x, y, w, h)              — 5 args, parent defaults to main
         //   createMiniConsole(parent, name, x, y, w, h)      — 6 args, miniconsole inside a userwindow
@@ -268,9 +296,12 @@ export class LuaRuntime implements IScriptingRuntime {
             if (this.api.labels.has(name)) this.api.labels.hide(name);
             else this.api.windows.hide(name);
         });
+        // Mudlet showWindow(name) → bool. Returns true when the named label or
+        // userwindow exists and is now visible; false when nothing matches.
         this.lua.global.set('showWindow', (name: string) => {
-            if (this.api.labels.has(name)) this.api.labels.show(name);
-            else this.api.windows.show(name);
+            if (typeof name !== 'string' || !name) return false;
+            if (this.api.labels.has(name)) return this.api.labels.show(name);
+            return this.api.windows.show(name);
         });
         this.lua.global.set('moveWindow', (name: string, x: unknown, y: unknown) => {
             const xn = Number(x), yn = Number(y);
@@ -282,33 +313,46 @@ export class LuaRuntime implements IScriptingRuntime {
             if (this.api.labels.has(name)) this.api.labels.resize(name, wn, hn);
             else if (this.api.windows.has(name)) this.api.windows.resize(name, wn, hn);
         });
-        this.lua.global.set('setUserWindowTitle', (name: string, title: string) => this.api.windows.setTitle(name, title));
+        // Mudlet setUserWindowTitle(name, [title]) → bool. Empty/missing title
+        // resets to the window's id; missing window returns false.
+        this.lua.global.set('setUserWindowTitle', (name: unknown, title?: unknown) => {
+            if (typeof name !== 'string' || !name) return false;
+            const t = title == null ? undefined : String(title);
+            return this.api.windows.setTitle(name, t);
+        });
 
         // Mudlet setBackgroundColor:
         //   setBackgroundColor(r, g, b [, a])           → main window
         //   setBackgroundColor(name, r, g, b [, a])     → named userwindow / miniconsole / label
-        // Numeric coercion because trigger captures arrive as Lua strings.
+        // Each channel is validated as a 0-255 integer (matches setFgColor /
+        // setBgColor); invalid args return false without mutating state.
+        // Returns true on success.
         this.lua.global.set('setBackgroundColor', (a: unknown, b: unknown, c: unknown, d?: unknown, e?: unknown) => {
-            if (typeof a === 'string') {
-                this.api.setBackgroundColor(
-                    a,
-                    Number(b), Number(c), Number(d),
-                    e !== undefined ? Number(e) : 255,
-                );
-            } else {
-                this.api.setBackgroundColor(
-                    undefined,
-                    Number(a), Number(b), Number(c),
-                    d !== undefined ? Number(d) : 255,
-                );
-            }
+            const hasName = typeof a === 'string';
+            const r = channel(hasName ? b : a);
+            const g = channel(hasName ? c : b);
+            const bb = channel(hasName ? d : c);
+            if (r === null || g === null || bb === null) return false;
+            const aRaw = hasName ? e : d;
+            const alpha = aRaw === undefined ? 255 : channel(aRaw);
+            if (alpha === null) return false;
+            return this.api.setBackgroundColor(
+                hasName ? (a as string) : undefined,
+                r, g, bb, alpha,
+            );
         });
 
-        // Mudlet getBackgroundColor([name]). JS returns [r, g, b, a]; the Lua
-        // wrapper in Bridge.lua unpacks that to four return values. Returns
-        // {0,0,0,255} when the target has no explicit background set.
+        // Mudlet `getBackgroundColor([name])`. Returns the rgba channels on
+        // success or `(nil, errMsg)` when the named window doesn't resolve.
+        // The raw entry point hands JS a 0-indexed [r, g, b, a] array, or null
+        // for the miss case; Bridge.lua unpacks both into the documented
+        // multi-return. The main window always resolves (defaults to
+        // {0, 0, 0, 255} when no override is set).
         this.lua.global.set('__getBackgroundColor', (name?: unknown) => {
-            const win = typeof name === 'string' ? name : undefined;
+            const win = typeof name === 'string' && name && name !== 'main' ? name : undefined;
+            if (win && !this.api.labels.has(win) && !this.api.windows.has(win)) {
+                return null;
+            }
             const c = this.api.getBackgroundColor(win) ?? { r: 0, g: 0, b: 0, a: 255 };
             return [c.r, c.g, c.b, c.a];
         });
@@ -331,7 +375,10 @@ export class LuaRuntime implements IScriptingRuntime {
                 clickThrough: !!args[i + 6],
             });
         });
-        this.lua.global.set('deleteLabel', (name: string) => this.api.labels.destroy(name));
+        // Mudlet deleteLabel(name) → true on success, (false, errMsg) when the
+        // label doesn't exist. Bridge.lua wraps the bool into the multi-return.
+        this.lua.global.set('__deleteLabel', (name: unknown) =>
+            typeof name === 'string' && this.api.labels.destroy(name));
         // setLabelStyleSheet(name, css) — Qt-style CSS string, applied to the
         // label DIV. Used by Mudlet's setGaugeStyleSheet via the _back/_front/_text
         // labels.
@@ -379,16 +426,17 @@ export class LuaRuntime implements IScriptingRuntime {
             setLabelCb(name, 'leave', cbId, fn => this.api.labels.setMouseLeaveCallback(name, fn as never)));
         this.lua.global.set('__mudix_setLabelWheelCallback', (name: string, cbId: number) =>
             setLabelCb(name, 'wheel', cbId, fn => this.api.labels.setWheelCallback(name, fn as never)));
-        // setLabelToolTip(name, text [, duration]) — duration arg is accepted for
-        // Mudlet compatibility but ignored: the title attribute has no per-tooltip
-        // duration. resetLabelToolTip clears it.
+        // setLabelToolTip(name, text [, duration]) → bool. Mudlet returns false
+        // when the named label doesn't exist; the duration arg is accepted for
+        // compatibility but ignored — the DOM `title` attribute has no per-tip
+        // duration. resetLabelToolTip clears the tooltip.
         this.lua.global.set('setLabelToolTip', (name: unknown, text?: unknown, _duration?: unknown) => {
-            if (typeof name !== 'string') return;
-            this.api.labels.setTooltip(name, text == null ? undefined : String(text));
+            if (typeof name !== 'string') return false;
+            return this.api.labels.setTooltip(name, text == null ? undefined : String(text));
         });
         this.lua.global.set('resetLabelToolTip', (name: unknown) => {
-            if (typeof name !== 'string') return;
-            this.api.labels.setTooltip(name, undefined);
+            if (typeof name !== 'string') return false;
+            return this.api.labels.setTooltip(name, undefined);
         });
         // Runtime clickthrough toggle. Flips pointer-events live; the click
         // handler set via setLabelClickCallback stays installed either way.
@@ -505,9 +553,13 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // ── Map view ──────────────────────────────────────────────────────────
         this.lua.global.set('centerview',      (id: number)              => this.api.centerView(id));
-        this.lua.global.set('getRoomIDbyHash', (hash: string)            => this.api.getRoomIDbyHash(hash) ?? false);
+        // Mudlet getRoomIDbyHash: returns -1 when no room has the given hash.
+        this.lua.global.set('getRoomIDbyHash', (hash: string)            => this.api.getRoomIDbyHash(hash) ?? -1);
         this.lua.global.set('setRoomIDbyHash', (id: number, hash: string)=> this.api.map.setRoomIDbyHash(id, hash));
-        this.lua.global.set('getRoomHashByID', (id: number)              => this.api.map.getRoomHashByID(id) ?? false);
+        // Mudlet getRoomHashByID: returns the hash string, or (false, errMsg) on
+        // miss / when the room has no hash. JS hands back the string or null;
+        // Bridge.lua unpacks the multi-return.
+        this.lua.global.set('__getRoomHashByID', (id: number)            => this.api.map.getRoomHashByID(id) ?? null);
 
         // Mudlet loadMap([location]). With a path, reads the binary `.dat` map
         // from VFS and hands the bytes to the panel for re-render and IDB
@@ -526,7 +578,12 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         // ── Room CRUD ─────────────────────────────────────────────────────────
-        this.lua.global.set('createRoomID', ()              => this.api.map.createRoomID());
+        // Mudlet `createRoomID([minimum])` — smallest unused room id at or
+        // above `minimum`, or above the running cursor if no floor is given.
+        this.lua.global.set('createRoomID', (minimum?: unknown) => {
+            const m = Number(minimum);
+            return this.api.map.createRoomID(Number.isFinite(m) && m > 0 ? m : undefined);
+        });
         // Mudlet addRoom(roomID [, areaID]) — when an areaID is given the new
         // room is assigned to that area immediately (creating it if it doesn't
         // exist). Without one, the room lives in the default area (0) until a
@@ -541,9 +598,13 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('roomExists',   (id: number)    => this.api.map.roomExists(id));
 
         // ── Room properties ───────────────────────────────────────────────────
-        this.lua.global.set('getRoomName',  (id: number)              => this.api.map.getRoomName(id) ?? false);
+        // Mudlet getRoomName: returns the name string, or (false, errMsg) on
+        // miss. JS hands back the string or null; Bridge.lua unpacks the
+        // multi-return.
+        this.lua.global.set('__getRoomName', (id: number)              => this.api.map.getRoomName(id) ?? null);
         this.lua.global.set('setRoomName',  (id: number, n: string)   => this.api.map.setRoomName(id, n));
-        this.lua.global.set('getRoomArea',  (id: number)              => this.api.map.getRoomArea(id) ?? false);
+        // Mudlet `getRoomArea(id)` — area id, or -1 when the room is missing.
+        this.lua.global.set('getRoomArea',  (id: number)              => this.api.map.getRoomArea(Number(id)));
         // Mudlet setRoomArea(roomID|{ids}, areaID|areaName). wasmoon turns
         // Lua arrays into 0-indexed JS objects/arrays; rebuild numeric IDs
         // from either shape and forward area lookups by string or number.
@@ -574,7 +635,20 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setRoomEnv',   (id: number, e: number)   => this.api.map.setRoomEnv(id, e));
         this.lua.global.set('getRoomChar',  (id: number)              => this.api.map.getRoomChar(id));
         this.lua.global.set('setRoomChar',  (id: number, c: string)   => this.api.map.setRoomChar(id, c));
-        this.lua.global.set('getRoomUserData', (id: number, k: string)           => this.api.map.getRoomUserData(id, k));
+        // Mudlet `getRoomUserData(id, key [, fullErr])`. Default behaviour
+        // returns the string value, or "" if either the room or key is missing.
+        // With `fullErr=true` Mudlet differentiates the miss cases: returns
+        // (false, errMsg). The raw entry point reports which case applied so
+        // the Bridge.lua wrapper can shape the multi-return.
+        this.lua.global.set('__getRoomUserData', (id: unknown, k: unknown) => {
+            const rid = Number(id);
+            const key = String(k ?? '');
+            if (!Number.isFinite(rid) || !this.api.map.roomExists(rid)) {
+                return { miss: 'room', id: rid };
+            }
+            const v = this.api.map.getRoomUserData(rid, key);
+            return v === undefined ? { miss: 'key', key } : { value: v };
+        });
         this.lua.global.set('setRoomUserData', (id: number, k: string, v: string)=> this.api.map.setRoomUserData(id, k, v));
 
         // ── Map-level user data ───────────────────────────────────────────────
@@ -583,7 +657,13 @@ export class LuaRuntime implements IScriptingRuntime {
         // MapStore.mapUserData and serialize into MudletMap.mUserData when
         // toMudletMap() runs; loaded maps push their mUserData in via
         // MapPanel.loadFromBuffer → MapStore.loadMapUserData.
-        this.lua.global.set('getMapUserData',    (k: unknown) => this.api.map.getMapUserData(String(k ?? '')));
+        // Mudlet getMapUserData(key) → value on success, (false, errMsg) when
+        // the key is not present. The raw entry point hands JS `null` for the
+        // miss case; Bridge.lua re-shapes it into the documented multi-return.
+        this.lua.global.set('__getMapUserData', (k: unknown) => {
+            const v = this.api.map.getMapUserData(String(k ?? ''));
+            return v === undefined ? null : v;
+        });
         this.lua.global.set('setMapUserData',    (k: unknown, v: unknown) => {
             this.api.map.setMapUserData(String(k ?? ''), String(v ?? ''));
             return true;
@@ -708,7 +788,17 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('feedTriggers',(text: string)  => this.api.feedTriggers(text));
         this.lua.global.set('deleteLine',  (win?: string)  => this.api.deleteLine(win));
-        this.lua.global.set('printError',  (text: string)  => this.api.printError(text));
+        // Mudlet `printError(msg, [showStackTrace], [haltExecution])`. mudix
+        // routes every script-emitted error through the same logging path so
+        // there's no JS-level stack to render; we accept the optional flags for
+        // signature parity and honour `haltExecution=true` by raising a Lua
+        // error so the calling script aborts (Mudlet's behaviour).
+        this.lua.global.set('printError', (text: unknown, _showStack?: unknown, haltExec?: unknown) => {
+            this.api.printError(String(text ?? ''));
+            if (haltExec) {
+                throw new Error(typeof text === 'string' ? text : String(text));
+            }
+        });
         // echoLink primitive — always string cmd. Function-cmd conversion is done
         // by the Lua wrapper installed later in the doString block.
         this.lua.global.set('echoLink', (a: unknown, b: unknown, c: unknown, d?: unknown, e?: unknown) => {
@@ -737,13 +827,32 @@ export class LuaRuntime implements IScriptingRuntime {
             this.api.echoPopup(textStr, cmdsArr, hintsArr, winStr);
         });
 
-        this.lua.global.set('openWebPage', (url: string) => { window.open(url, '_blank'); });
+        // Mudlet `openWebPage(url) → bool`. Opens the URL in the user's
+        // default browser; returns false when the popup is blocked or the URL
+        // is empty.
+        this.lua.global.set('openWebPage', (url: unknown) => {
+            const u = typeof url === 'string' ? url.trim() : '';
+            if (!u) return false;
+            const w = window.open(u, '_blank');
+            return !!w;
+        });
 
         // ── Send ─────────────────────────────────────────────────────────────
-        this.lua.global.set('send', (text: string, echo?: boolean) => { this.api.send(text, echo ?? true); });
-        // Mudlet's sendGMCP(message): the caller passes a single string body
-        // (e.g. `Core.Supports.Add ["Char 1"]`), framed by IAC SB GMCP … IAC SE.
-        this.lua.global.set('sendGMCP', (message: unknown) => { this.api.sendGmcp(String(message ?? '')); });
+        // Mudlet `send(text, [echo=true]) → true`. Echo defaults to true.
+        this.lua.global.set('send', (text: unknown, echo?: unknown) => {
+            this.api.send(String(text ?? ''), echo == null ? true : !!echo);
+            return true;
+        });
+        // Mudlet `sendGMCP(message, [what])`: the caller passes a single string
+        // body (e.g. `Core.Supports.Add ["Char 1"]`), framed by IAC SB GMCP …
+        // IAC SE. The optional second `what` arg is concatenated with a space
+        // separator (Mudlet behaviour) so scripts can pass the package name
+        // and payload separately.
+        this.lua.global.set('sendGMCP', (message: unknown, what?: unknown) => {
+            const body = String(message ?? '');
+            const tail = what != null ? ' ' + String(what) : '';
+            this.api.sendGmcp(body + tail);
+        });
         // Cancels the in-flight sysDataSendRequest dispatch. Only meaningful while
         // a sysDataSendRequest handler is on the stack — flag is reset before each send.
         this.lua.global.set('denyCurrentSend', () => { this._denyCurrentSend = true; });
@@ -803,7 +912,11 @@ export class LuaRuntime implements IScriptingRuntime {
         // from the profile VFS, commits the parsed nodes to the store, and
         // raises sysInstall(Package).
         this.lua.global.set('installPackage', (path: string) => this.api.installPackage(String(path ?? '')));
-        this.lua.global.set('uninstallPackage', (name: string) => this.api.uninstallPackage(String(name ?? '')));
+        // Mudlet `uninstallPackage(name)` → true on success, nil when no package
+        // with that name is installed.
+        this.lua.global.set('uninstallPackage', (name: string) => {
+            return this.api.uninstallPackage(String(name ?? '')) ? true : null;
+        });
         // Mudlet getPackages() — list of installed package names. JS arrays land
         // in Lua 0-indexed via wasmoon, so a Bridge.lua wrapper rebuilds it to a
         // 1-indexed sequence.
@@ -845,8 +958,23 @@ export class LuaRuntime implements IScriptingRuntime {
         // ── Script enable/disable ─────────────────────────────────────────────
         // Mudlet looks scripts up by name; toggling the flag cascades the
         // store subscription which loads/unloads Lua handlers synchronously.
-        this.lua.global.set('enableScript', (name: string) => this.api.enableScript(String(name ?? '')));
-        this.lua.global.set('disableScript', (name: string) => this.api.disableScript(String(name ?? '')));
+        // Mudlet `enableScript(name)` / `disableScript(name)` raise on miss
+        // instead of silently returning false — scripts that depend on a
+        // particular package being present prefer the loud failure.
+        this.lua.global.set('enableScript', (name: unknown) => {
+            const n = String(name ?? '');
+            if (!this.api.enableScript(n)) {
+                throw new Error(`enableScript: no script named "${n}"`);
+            }
+            return true;
+        });
+        this.lua.global.set('disableScript', (name: unknown) => {
+            const n = String(name ?? '');
+            if (!this.api.disableScript(n)) {
+                throw new Error(`disableScript: no script named "${n}"`);
+            }
+            return true;
+        });
         // Mudlet permScript(name, parent, luaCode) — creates a persisted script
         // under an existing script group (parent="" → root). Returns the new
         // script's id (UUID string) or -1 on failure. The Bridge.lua wrapper
@@ -874,11 +1002,17 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('enableTimer', (name: string) => this.api.enableTimer(String(name ?? '')));
         this.lua.global.set('disableTimer', (name: string) => this.api.disableTimer(String(name ?? '')));
 
-        // Mudlet `exists(name, type)`. Returns the count of items matching name
-        // in the named collection. Type strings: "alias", "trigger", "timer",
-        // "key"/"keybind", "button", "script". Unknown types return 0.
-        this.lua.global.set('exists', (name: unknown, type: unknown) =>
-            this.api.exists(String(name ?? ''), String(type ?? '')));
+        // Mudlet `exists(nameOrId, type)`. With a string, returns the count of
+        // items matching the name; with a number, returns 1 if a perm item
+        // with that monotonic id lives in the named collection (else 0).
+        // Type strings: "alias", "trigger", "timer", "key"/"keybind",
+        // "button", "script". Unknown types return 0.
+        this.lua.global.set('exists', (nameOrId: unknown, type: unknown) => {
+            const key = typeof nameOrId === 'number'
+                ? nameOrId
+                : String(nameOrId ?? '');
+            return this.api.exists(key, String(type ?? ''));
+        });
 
         // ── Async unzip ───────────────────────────────────────────────────────
         // Mudlet's unzipAsync is fire-and-forget: returns immediately, raises
@@ -909,7 +1043,10 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // ── Line / cursor inspection ──────────────────────────────────────────
         this.lua.global.set('isPrompt',       ()            => this._isPrompt);
-        this.lua.global.set('getCurrentLine', (win?: string)=> this.api.getCurrentLine(win));
+        // Mudlet `getCurrentLine([window])` → line text, or `(nil, errMsg)` for
+        // a non-existent named window. The raw entry point hands JS `null` for
+        // the miss case; Bridge.lua re-shapes it into the documented multi-return.
+        this.lua.global.set('__getCurrentLine', (win?: string) => this.api.getCurrentLine(win));
         this.lua.global.set('getLineNumber',  (win?: string)=> this.api.getLineNumber(win));
         this.lua.global.set('getLineCount',   (win?: string)=> this.api.getLineCount(win));
         this.lua.global.set('getLastLineNumber', (win?: string)=> this.api.getLastLineNumber(win));
@@ -1109,9 +1246,14 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         // ── Send / alias ──────────────────────────────────────────────────────
-        this.lua.global.set('expandAlias', (text: string, echo?: boolean) => {
-            this.api.expandAlias(text, echo ?? true);
+        // Mudlet `expandAlias(text, [echo])`. Default for `echo` is **false**
+        // — Mudlet treats both the absent value and an explicit `nil` as "do
+        // not echo". Boolean `true` opts in. Returns true once the expansion
+        // is dispatched.
+        this.lua.global.set('expandAlias', (text: unknown, echo?: unknown) => {
+            this.api.expandAlias(String(text ?? ''), echo == null ? false : !!echo);
             this.api.flushOutput();
+            return true;
         });
         // Mudlet sendCmdLine([cmdLineName,] text) stages text into the command
         // bar (setPlainText + selectAll) without submitting it. Scripts use
@@ -1196,13 +1338,17 @@ export class LuaRuntime implements IScriptingRuntime {
             () => this.vfs,
             this.proxyUrlGetter,
         );
-        this.lua.global.set('downloadFile', (saveTo: unknown, url: unknown) => {
+        // Mudlet HTTP APIs all return (true, url) immediately and then surface
+        // success/error via sysXxxHttp* events. The JS bindings below just kick
+        // off the background request; the (true, url) tuple is added by the
+        // Bridge.lua wrappers that call these `__` primitives.
+        this.lua.global.set('__downloadFile', (saveTo: unknown, url: unknown) => {
             this.http.downloadFile(String(saveTo ?? ''), String(url ?? ''));
         });
-        this.lua.global.set('getHTTP', (url: unknown, headers?: unknown) => {
+        this.lua.global.set('__getHTTP', (url: unknown, headers?: unknown) => {
             this.http.getHTTP(String(url ?? ''), luaTableToHeaders(headers));
         });
-        this.lua.global.set('postHTTP', (data: unknown, url: unknown, headers?: unknown, file?: unknown) => {
+        this.lua.global.set('__postHTTP', (data: unknown, url: unknown, headers?: unknown, file?: unknown) => {
             this.http.postHTTP(
                 data == null ? null : String(data),
                 String(url ?? ''),
@@ -1210,7 +1356,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 file == null ? undefined : String(file),
             );
         });
-        this.lua.global.set('putHTTP', (data: unknown, url: unknown, headers?: unknown, file?: unknown) => {
+        this.lua.global.set('__putHTTP', (data: unknown, url: unknown, headers?: unknown, file?: unknown) => {
             this.http.putHTTP(
                 data == null ? null : String(data),
                 String(url ?? ''),
@@ -1218,15 +1364,18 @@ export class LuaRuntime implements IScriptingRuntime {
                 file == null ? undefined : String(file),
             );
         });
-        this.lua.global.set('deleteHTTP', (url: unknown, headers?: unknown) => {
+        this.lua.global.set('__deleteHTTP', (url: unknown, headers?: unknown) => {
             this.http.deleteHTTP(String(url ?? ''), luaTableToHeaders(headers));
         });
-        this.lua.global.set('customHTTP', (method: unknown, data: unknown, url: unknown, headers?: unknown) => {
+        // Mudlet customHTTP(method, data, url, headers, [file]). The optional
+        // file arg replaces `data` with the bytes read from the VFS path.
+        this.lua.global.set('__customHTTP', (method: unknown, data: unknown, url: unknown, headers?: unknown, file?: unknown) => {
             this.http.customHTTP(
                 String(method ?? ''),
                 data == null ? null : String(data),
                 String(url ?? ''),
                 luaTableToHeaders(headers),
+                file == null ? undefined : String(file),
             );
         });
 

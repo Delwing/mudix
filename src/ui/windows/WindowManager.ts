@@ -765,14 +765,15 @@ export class WindowManager {
         this.notify();
     }
 
-    show(id: string): void {
+    show(id: string): boolean {
         const win = this.windows.get(id);
-        if (!win) return;
-        if (win.visible) return;
+        if (!win) return false;
+        if (win.visible) return true;
         win.visible = true;
         win.zIndex  = ++this.nextZ;
         this.saveHint(id, win);
         this.notify();
+        return true;
     }
 
     isVisible(id: string): boolean {
@@ -815,11 +816,18 @@ export class WindowManager {
         if (el && win.kind === 'html') el.replaceChildren();
     }
 
-    setTitle(id: string, title: string): void {
+    /**
+     * Mudlet setUserWindowTitle(name, [title]) → bool. With a non-empty title
+     * the panel header shows that string; with an empty/missing title the
+     * window's id is used as the title (matches Mudlet's "reset to default"
+     * behaviour). Returns false when the named window doesn't exist.
+     */
+    setTitle(id: string, title?: string): boolean {
         const win = this.windows.get(id);
-        if (!win) return;
-        win.title = title;
+        if (!win) return false;
+        win.title = title && title.length > 0 ? title : id;
         this.notify();
+        return true;
     }
 
     focus(id: string): void { this.bringToFront(id); }

@@ -49,8 +49,8 @@ class ScriptingWindowsAPI {
         this.session.windows.clear(id);
     }
 
-    setTitle(id: string, title: string): void {
-        this.session.windows.setTitle(id, title);
+    setTitle(id: string, title?: string): boolean {
+        return this.session.windows.setTitle(id, title);
     }
 
     focus(id: string): void {
@@ -61,8 +61,8 @@ class ScriptingWindowsAPI {
         this.session.windows.hide(id);
     }
 
-    show(id: string): void {
-        this.session.windows.show(id);
+    show(id: string): boolean {
+        return this.session.windows.show(id);
     }
 
     close(id: string): void {
@@ -256,7 +256,7 @@ export class ScriptingAPI {
     private scriptToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private timerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
-    private existsCallback: ((name: string, type: string) => number) | null = null;
+    private existsCallback: ((nameOrId: string | number, type: string) => number) | null = null;
     // Mudlet returns a numeric script id from permScript/permRegexTrigger/setScript;
     // -1 signals failure (missing parent group, unknown script name, etc.).
     private permScriptCallback: ((name: string, parent: string, code: string) => number) | null = null;
@@ -367,7 +367,7 @@ export class ScriptingAPI {
         this.timerToggler = fn;
     }
 
-    setExistsCallback(fn: ((name: string, type: string) => number) | null): void {
+    setExistsCallback(fn: ((nameOrId: string | number, type: string) => number) | null): void {
         this.existsCallback = fn;
     }
 
@@ -427,8 +427,8 @@ export class ScriptingAPI {
         return this.timerToggler?.(name, false) ?? false;
     }
 
-    exists(name: string, type: string): number {
-        return this.existsCallback?.(name, type) ?? 0;
+    exists(nameOrId: string | number, type: string): number {
+        return this.existsCallback?.(nameOrId, type) ?? 0;
     }
 
     permScript(name: string, parent: string, code: string): number {
@@ -782,7 +782,16 @@ export class ScriptingAPI {
 
     // ── Cursor / line access ──────────────────────────────────────────────────
 
-    getCurrentLine(windowName?: string): string {
+    /**
+     * Mudlet `getCurrentLine([window])`. Returns the text on the cursor's
+     * current line, or `null` when the named window doesn't exist — the Lua
+     * binding turns that into Mudlet's `(nil, errMsg)` 2-tuple. Falls back to
+     * an empty string for the main window (always present, may have no line yet).
+     */
+    getCurrentLine(windowName?: string): string | null {
+        if (windowName && windowName !== 'main' && !this.session.windows.has(windowName)) {
+            return null;
+        }
         return this.getConsole(windowName)?.getLine() ?? '';
     }
 

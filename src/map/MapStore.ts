@@ -164,10 +164,18 @@ export class MapStore {
 
     // ── Room IDs ──────────────────────────────────────────────────────────────
 
-    createRoomID(): number {
-        let id = this.nextRoomId;
+    /**
+     * Mudlet `createRoomID([minimum])` — returns the smallest unused room id
+     * at or above `minimum` (or above the running cursor if not given). The
+     * id isn't reserved; a follow-up `addRoom(id)` is what actually claims it.
+     */
+    createRoomID(minimum?: number): number {
+        const floor = minimum != null && Number.isFinite(minimum) && minimum > 0
+            ? Math.trunc(minimum)
+            : this.nextRoomId;
+        let id = floor;
         while (this.rooms.has(id)) id++;
-        this.nextRoomId = id + 1;
+        if (id >= this.nextRoomId) this.nextRoomId = id + 1;
         return id;
     }
 
@@ -190,9 +198,9 @@ export class MapStore {
         return true;
     }
 
-    deleteRoom(id: number): void {
+    deleteRoom(id: number): boolean {
         const room = this.rooms.get(id);
-        if (!room) return;
+        if (!room) return false;
         const area = this.areas.get(room.area);
         if (area) {
             area.rooms = area.rooms.filter(r => r !== id);
@@ -201,6 +209,7 @@ export class MapStore {
         if (room.hash) this.hashToRoom.delete(room.hash);
         this.rooms.delete(id);
         this.notify();
+        return true;
     }
 
     roomExists(id: number): boolean { return this.rooms.has(id); }
@@ -209,12 +218,16 @@ export class MapStore {
 
     getRoomName(id: number): string | undefined { return this.rooms.get(id)?.name; }
 
-    setRoomName(id: number, name: string): void {
+    setRoomName(id: number, name: string): boolean {
         const r = this.rooms.get(id);
-        if (r) { r.name = name; this.notify(); }
+        if (!r) return false;
+        r.name = name;
+        this.notify();
+        return true;
     }
 
-    getRoomArea(id: number): number | undefined { return this.rooms.get(id)?.area; }
+    /** Mudlet `getRoomArea(id)` — area id of the room, or -1 if the room is missing. */
+    getRoomArea(id: number): number { return this.rooms.get(id)?.area ?? -1; }
 
     /**
      * Mudlet `setRoomArea(roomID|{ids}, areaID|areaName)`. Accepts either a
@@ -267,9 +280,9 @@ export class MapStore {
         return r ? [r.x, r.y, r.z] : undefined;
     }
 
-    setRoomCoordinates(id: number, x: number, y: number, z: number): void {
+    setRoomCoordinates(id: number, x: number, y: number, z: number): boolean {
         const room = this.rooms.get(id);
-        if (!room) return;
+        if (!room) return false;
         room.x = x; room.y = y; room.z = z;
         this.updateAreaBounds(room.area);
         const area = this.areas.get(room.area);
@@ -278,20 +291,33 @@ export class MapStore {
             area.zLevels.sort((a, b) => a - b);
         }
         this.notify();
+        return true;
     }
 
-    getRoomEnv(id: number): number { return this.rooms.get(id)?.environment ?? 0; }
+    /**
+     * Mudlet `getRoomEnv(id)` — environment color id, or -1 if the room is
+     * missing. (Rooms without an env override still report their stored value.)
+     */
+    getRoomEnv(id: number): number {
+        return this.rooms.get(id)?.environment ?? -1;
+    }
 
-    setRoomEnv(id: number, env: number): void {
+    setRoomEnv(id: number, env: number): boolean {
         const r = this.rooms.get(id);
-        if (r) { r.environment = env; this.notify(); }
+        if (!r) return false;
+        r.environment = env;
+        this.notify();
+        return true;
     }
 
     getRoomChar(id: number): string { return this.rooms.get(id)?.symbol ?? ''; }
 
-    setRoomChar(id: number, char: string): void {
+    setRoomChar(id: number, char: string): boolean {
         const r = this.rooms.get(id);
-        if (r) { r.symbol = char; this.notify(); }
+        if (!r) return false;
+        r.symbol = char;
+        this.notify();
+        return true;
     }
 
     // ── Coordinates / position ────────────────────────────────────────────────
@@ -362,14 +388,21 @@ export class MapStore {
         return true;
     }
 
-    addSpecialExit(from: number, to: number, cmd: string): void {
+    addSpecialExit(from: number, to: number, cmd: string): boolean {
         const r = this.rooms.get(from);
-        if (r) { r.mSpecialExits[cmd] = to; this.notify(); }
+        if (!r) return false;
+        r.mSpecialExits[cmd] = to;
+        this.notify();
+        return true;
     }
 
-    removeSpecialExit(from: number, cmd: string): void {
+    removeSpecialExit(from: number, cmd: string): boolean {
         const r = this.rooms.get(from);
-        if (r) { delete r.mSpecialExits[cmd]; this.notify(); }
+        if (!r) return false;
+        if (!(cmd in r.mSpecialExits)) return false;
+        delete r.mSpecialExits[cmd];
+        this.notify();
+        return true;
     }
 
     getSpecialExitsSwap(id: number): Record<string, number> {
@@ -402,13 +435,26 @@ export class MapStore {
 
     // ── User data ─────────────────────────────────────────────────────────────
 
-    getRoomUserData(id: number, key: string): string {
-        return this.rooms.get(id)?.userData[key] ?? '';
+    /**
+     * Mudlet `getRoomUserData(id, key)` — returns the stored value, or
+     * `undefined` when either the room or the key is missing. The Lua binding
+     * differentiates the two cases when the script asks for the full-error
+     * shape (`fullErr=true`).
+     */
+    getRoomUserData(id: number, key: string): string | undefined {
+        const room = this.rooms.get(id);
+        if (!room) return undefined;
+        return Object.prototype.hasOwnProperty.call(room.userData, key)
+            ? room.userData[key]
+            : undefined;
     }
 
-    setRoomUserData(id: number, key: string, value: string): void {
+    setRoomUserData(id: number, key: string, value: string): boolean {
         const r = this.rooms.get(id);
-        if (r) { r.userData[key] = value; this.notify(); }
+        if (!r) return false;
+        r.userData[key] = value;
+        this.notify();
+        return true;
     }
 
     // ── Map-level user data ───────────────────────────────────────────────────
@@ -417,8 +463,15 @@ export class MapStore {
     // loadMapUserData(); scripts use it as free-form key/value storage that
     // survives serialization back to .dat.
 
-    getMapUserData(key: string): string {
-        return this.mapUserData[key] ?? '';
+    /**
+     * Mudlet `getMapUserData(key)` — returns the stored value, or `undefined`
+     * when the key has never been set. The Lua binding turns the missing case
+     * into Mudlet's `(false, errMsg)` 2-tuple.
+     */
+    getMapUserData(key: string): string | undefined {
+        return Object.prototype.hasOwnProperty.call(this.mapUserData, key)
+            ? this.mapUserData[key]
+            : undefined;
     }
 
     setMapUserData(key: string, value: string): void {
