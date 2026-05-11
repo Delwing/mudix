@@ -704,7 +704,8 @@ export class ScriptingAPI {
      * at column 0 by Console.appendLine. Also enables echo deferral so
      * trigger-emitted echoes appear after the rendered line.
      */
-    beginLine(buffer: AnsiAwareBuffer): void {
+    beginLine(buffer: AnsiAwareBuffer, isPrompt = false): void {
+        buffer.isPrompt = isPrompt;
         this.mainConsole.appendLine(buffer);
         this.inTriggerProcessing = true;
         this.selection = null;
@@ -821,6 +822,14 @@ export class ScriptingAPI {
         // current line. Console owns the persistent column cursor for both
         // history and the in-flight matching line.
         return this.getConsole(windowName)?.getCursorColumn() ?? 0;
+    }
+
+    /** Mudlet `isPrompt()` — reports the per-line prompt flag at the current
+     *  cursor position. Lines pushed via beginLine carry the flag, so
+     *  moveCursor + isPrompt can inspect historical lines, not just the most
+     *  recent one. Defaults to false for the main window when no history exists. */
+    isPrompt(windowName?: string): boolean {
+        return this.getConsole(windowName)?.cursorOnPrompt() ?? false;
     }
 
     /**
@@ -1100,22 +1109,43 @@ export class ScriptingAPI {
 
     // ── Misc ──────────────────────────────────────────────────────────────────
 
+    /**
+     * Mudlet `getNetworkLatency()` — round-trip time of the most recent
+     * keep-alive ping. Returns the last measured value (in ms) for as long as
+     * the connection is up; -1 when no measurement has been made yet (mirrors
+     * Mudlet's "not yet measured" sentinel — better than a fake 0 which would
+     * read as "instant" in scripts charting latency).
+     */
     getNetworkLatency(): number {
-        return this.session.ping ?? 0;
+        const fresh = this.session.ping;
+        if (fresh != null) {
+            this.lastPingMs = fresh;
+            return fresh;
+        }
+        return this.lastPingMs ?? -1;
     }
 
+    private lastPingMs: number | null = null;
+
     getMainWindowSize(): [number, number] {
-        // Reports the full viewport (the coordinate space labels live in), not
-        // the console area. Borders carve insets out of this rectangle without
-        // shrinking it — matches Mudlet so scripts that place labels with
-        // `y = h - labelHeight` after setBorderBottom land in the carved zone.
+        // Mudlet reports the main console area only — the viewport minus the
+        // border insets carved by setBorderTop / setBorderBottom / etc. The
+        // outer rectangle is the coordinate space labels live in (so absolute-
+        // positioned labels still address the full area), but `getMainWindowSize`
+        // reflects the *usable* output region so width/height arithmetic stays
+        // sane regardless of how the user configured borders.
         const el = this.session.windows.getMainViewportElement()
                 ?? this.session.windows.getElement('main');
+        const borders = useAppStore.getState().ui.outputBorders ?? { top: 0, right: 0, bottom: 0, left: 0 };
         if (el) {
             const rect = el.getBoundingClientRect();
-            if (rect.width > 0 || rect.height > 0) return [rect.width, rect.height];
+            const w = Math.max(0, rect.width - borders.left - borders.right);
+            const h = Math.max(0, rect.height - borders.top - borders.bottom);
+            if (w > 0 || h > 0) return [w, h];
         }
-        return [window.innerWidth, window.innerHeight];
+        const w = Math.max(0, window.innerWidth - borders.left - borders.right);
+        const h = Math.max(0, window.innerHeight - borders.top - borders.bottom);
+        return [w, h];
     }
 
     /**

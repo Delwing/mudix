@@ -131,6 +131,11 @@ export class Console {
     getLine(): string { return this.history[this.cursor]?.text ?? ''; }
     getBuffer(): AnsiAwareBuffer | null { return this.history[this.cursor] ?? null; }
 
+    /** Per-line prompt flag on the current cursor line. Mirrors Mudlet's TBuffer
+     *  behaviour: `isPrompt()` follows the cursor, so moveCursor + isPrompt can
+     *  inspect any historical line's prompt status, not just the most recent. */
+    cursorOnPrompt(): boolean { return this.history[this.cursor]?.isPrompt ?? false; }
+
     deleteLine(): void {
         const idx = this.cursor;
         const buf = this.history[idx];

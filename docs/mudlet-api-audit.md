@@ -8,11 +8,11 @@ Scope: ~200 native bindings. Pure-Lua wrappers in bundled `mudlet-lua/` (cecho, 
 
 | Severity | Count | Meaning |
 |---|---|---|
-| OK | 58 | No meaningful discrepancy. |
-| minor | 44 | Same calls accepted, edge-case behavior or return shape differs. |
+| OK | 48 | No meaningful discrepancy. |
+| minor | 12 | Same calls accepted, edge-case behavior or return shape differs. |
 | major | 0 | Wrong arg count/order, missing required arg, broken overload, wrong return type. |
 | missing | 0 | Declared as a stub but Mudlet has real behavior scripts depend on. |
-| fixed | 96 | Top-priority items #1–#28, 5 earlier follow-ups (`setFgColor`/`setBgColor` channel validation + alpha, `deselect` window arg, `replace` keepcolor, `echoLink` useCurrentFormat), and 40 more minor parity items: 8 mapper writes now return bool, 3 mapper reads use Mudlet miss-shapes (`-1` / `(false, errMsg)`), `showWindow` / `setUserWindowTitle` / `setBackgroundColor` / `deleteLabel` / `setLabelToolTip` return bool, `clearUserWindow()` no-arg clears main, full HTTP family returns `(true, url)`, and `customHTTP` gained the optional `file` arg. **Latest pass (minor → fixed × 20):** `printError` accepts `showStackTrace`/`haltExecution`, `getSelection` returns `nil, msg`, `getCurrentLine` / `windowType` / `getBackgroundColor` report `nil, errMsg` on missing window, `getRoomArea` / `getRoomEnv` return `-1` on miss, `getMapUserData` and `getRoomUserData` (with `fullErr`) emit `(false, errMsg)`, `enableScript` / `disableScript` raise on miss, `uninstallPackage` returns `nil` on miss, `raiseEvent` / `send` return `true`, `sendGMCP` gained the optional `what` arg, `openWebPage` returns bool, `openMapWidget` accepts the `(x, y)` form and returns `true`, `openUserWindow` returns `true`, `createRoomID` accepts the `minimum` arg, `exists` accepts numeric id lookup, and `expandAlias`'s default `echo` is now `false` (Mudlet shape). |
+| fixed | 124 | Top-priority items #1–#28, 5 earlier follow-ups (`setFgColor`/`setBgColor` channel validation + alpha, `deselect` window arg, `replace` keepcolor, `echoLink` useCurrentFormat), and 40 more minor parity items: 8 mapper writes now return bool, 3 mapper reads use Mudlet miss-shapes (`-1` / `(false, errMsg)`), `showWindow` / `setUserWindowTitle` / `setBackgroundColor` / `deleteLabel` / `setLabelToolTip` return bool, `clearUserWindow()` no-arg clears main, full HTTP family returns `(true, url)`, and `customHTTP` gained the optional `file` arg. **Pass 2 (minor → fixed × 20):** `printError` accepts `showStackTrace`/`haltExecution`, `getSelection` returns `nil, msg`, `getCurrentLine` / `windowType` / `getBackgroundColor` report `nil, errMsg` on missing window, `getRoomArea` / `getRoomEnv` return `-1` on miss, `getMapUserData` and `getRoomUserData` (with `fullErr`) emit `(false, errMsg)`, `enableScript` / `disableScript` raise on miss, `uninstallPackage` returns `nil` on miss, `raiseEvent` / `send` return `true`, `sendGMCP` gained the optional `what` arg, `openWebPage` returns bool, `openMapWidget` accepts the `(x, y)` form and returns `true`, `openUserWindow` returns `true`, `createRoomID` accepts the `minimum` arg, `exists` accepts numeric id lookup, and `expandAlias`'s default `echo` is now `false` (Mudlet shape). **Pass 3 (minor → fixed × 20):** `setFontSize` / `getFontSize` / `setFont` / `getFont` and `getUserWindowSize` shape misses as `(nil, errMsg)`, `setBorderColor` validates 0–255 channels and ignores alpha, `removeCommandLineMenuEvent` returns `(false, errMsg)` on miss, `getModuleSync` / `setModulePriority` / `getModulePriority` / `enableModuleSync` / `disableModuleSync` raise on unknown module, `installModule` keeps the bool but `reloadModule` drops it (Mudlet shape), `getRoomChar` returns `(nil, errMsg)` on missing room, `setLabelCursor` accepts string shape names directly, `createLabel` rejects non-boolean `fillBackground`/`clickThrough`, `setCustomEnvColor` validates 0–255 channels, `addMapEvent`/`removeMapEvent` drop the extra bool return, `getMainWindowSize` reports the inner console area (viewport minus borders), `saveProfile` returns `(nil, errMsg)` on synchronous failure and raises `sysSaveProfileError` for async flush failures, `isPrompt` follows the cursor (Mudlet's per-line `TBuffer.isPrompt`), `debugc`/`errorc` accept Mudlet's single-content shape (`errorc` also accepts the optional `debugInfo`), and `getNetworkLatency` caches the most recent measurement and returns `-1` until one exists. |
 
 ---
 
@@ -231,7 +231,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | selectString | `([win,] text, occurrence) → start col or -1` | same | OK | OK |
 | selectSection | `([win,] from, length) → bool` | matches | Validates from/length ≥ 0 and that the buffer exists; returns bool | fixed |
 | getSelection | `([win]) → text, start, length OR nil, errMsg` | matches | Bridge.lua wrapper now hands back `nil, "no selection"` (Mudlet shape) instead of `false, msg` | fixed |
-| isPrompt | reflects `promptBuffer[userCursorY]` | cached `_isPrompt` for last line only | Can't query historical lines via moveCursor + isPrompt | minor |
+| isPrompt | reflects `promptBuffer[userCursorY]` | per-line flag on `AnsiAwareBuffer` | The prompt flag now travels on the buffer via `ScriptingAPI.beginLine`; `isPrompt([win])` reads `Console.cursorOnPrompt()` so moveCursor + isPrompt inspects historical lines too | fixed |
 | getCurrentLine | `([win]) → string OR nil, errMsg` | matches | Bridge.lua wrapper returns `nil, errMsg` when the named window doesn't exist; main always resolves (empty string when no current line) | fixed |
 | getLineNumber | `([win]) → 0-indexed cursor.y` | resolved (see #1 in Top priorities) | — | fixed |
 | getLineCount | `([win]) → size - 1` (last index) | resolved (see #1) | — | fixed |
@@ -262,7 +262,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | setUserWindowTitle | `(name, [title]) → bool` — empty resets | matches | Missing title resets the panel header to the window id; missing window returns false | fixed |
 | setBackgroundColor | `([name,] r, g, b, [a]) → bool` | matches | Each channel validated as 0–255 int via the shared `channel()` helper; invalid args return false; main/label/userwindow routing returns bool | fixed |
 | getBackgroundColor | `([name]) → r, g, b, a OR nil, errMsg` | matches | Raw JS bridge returns `null` for missing labels/userwindows; Bridge.lua wrapper hands back `nil, errMsg`. Main always resolves to `{0,0,0,255}` when no override is set | fixed |
-| createLabel | `([parent,] name, x, y, w, h, fillBg, [clickThrough])` | overload by 2nd-arg type | OK; `!!` coerces non-bool args (Mudlet errors) | minor |
+| createLabel | `([parent,] name, x, y, w, h, fillBg, [clickThrough])` | overload by 2nd-arg type | `fillBackground` / `clickThrough` are validated as actual booleans — non-bool args throw a bad-argument error (Mudlet shape) instead of silent `!!` coercion | fixed |
 | deleteLabel | `(name) → true OR false, errMsg` | matches | Bridge.lua wrapper turns the JS bool into `(false, errMsg)` on miss | fixed |
 | setLabelStyleSheet | Qt CSS | DOM CSS via cssRewriter | Qt-specific selectors (`QLabel::hover`) need rewriter support | minor |
 | setLabelClickCallback | `(name, fn|nil, [args...])`; fn receives event table | matches | Event table `{button, x, y, globalX, globalY, alt, ctrl, shift, meta}`; `nil` clears; trailing args baked into closure; per-slot cb id tracked + freed on rebind | fixed |
@@ -272,7 +272,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | disableClickthrough | `(name)` | matches | OK | OK |
 | raiseWindow | `(name)` — labels and userwindows | matches | Routes to label manager or `WindowManager.bringToFront`; `raiseLabel` kept as legacy alias | fixed |
 | lowerWindow | `(name)` — labels and userwindows | matches | Same; `WindowManager.sendToBack` computes a fresh below-min zIndex; `lowerLabel` kept as legacy alias | fixed |
-| setLabelCursor | `(name, shapeInt) → bool`; GUIUtils.lua wraps strings | int only | Relies on bundled GUIUtils.lua wrapper for strings | minor |
+| setLabelCursor | `(name, shapeInt|shapeName)`; GUIUtils.lua also wraps strings | int or string | The primitive itself now accepts the string shape names (mirrors `mudlet.cursor` keys) via `QT_CURSOR_NAME_TO_INT`; the bundled GUIUtils.lua wrapper still works on top of it | fixed |
 | resetLabelCursor | `(name)` | matches | OK | OK |
 | setAppStyleSheet | `(css, [tag]) → true`; raises sysAppStyleSheetChange | matches | Installs/replaces `<style id="mudix-app-stylesheet-{tag}">`; raises `sysAppStyleSheetChange` | fixed |
 | setUserWindowStyleSheet | `(name, css) → bool` | matches | Installs/replaces `<style id="mudix-userwindow-stylesheet--{name}">`; panels expose `data-mudix-window` for script-side scoping | fixed |
@@ -305,7 +305,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | getRoomsByPosition | 0-indexed table | 0-indexed via wasmoon | OK | OK |
 | getRoomEnv | number; `-1` on miss | matches | Returns the room's environment id, or `-1` when the room doesn't exist (matches Mudlet's "no such room" sentinel) | fixed |
 | setRoomEnv | matches | matches | Returns true on update, false when the room is missing | fixed |
-| getRoomChar | string | `''` on miss | `''` instead of error | minor |
+| getRoomChar | string or `(nil, errMsg)` | matches | Raw JS returns `null` for missing rooms; Bridge.lua wrapper turns it into `(nil, "no such room id")` and forwards the symbol (may be empty when no symbol set) otherwise | fixed |
 | setRoomChar | matches | matches | Returns true on update, false when the room is missing | fixed |
 | getRoomUserData | `(id, key, [fullErr])` | matches | Default returns `""` when room or key is missing (Mudlet shape, so concatenation is safe); `fullErr=true` differentiates the cases via `(false, errMsg)` | fixed |
 | setRoomUserData | matches; bool | matches | Returns true on update, false when the room is missing | fixed |
@@ -322,10 +322,10 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | getSpecialExitsSwap | `{[cmd]=toRoomID}` | matches | OK | OK |
 | getDoors | `{[dir]=status}` | matches | OK | OK |
 | setDoor | `(roomID, exitCmd, status) → bool` — validates exit | accepts int or name; falls through to special-exit cmd | Door key normalizes to canonical field name for stock directions; returns bool | fixed |
-| addMapEvent | no return | bool | Extra return shouldn't break | minor |
-| removeMapEvent | no return | bool | same | minor |
+| addMapEvent | no return | matches | Lua binding drops the JS bool result — addMapEvent is mutating only | fixed |
+| removeMapEvent | no return | matches | same | fixed |
 | getMapEvents | `{[unique]={["event name"]=, ["parent"]=, ["display name"]=, ["arguments"]={...}}}` | matches | Bridge.lua wrapper builds the literal-key shape and rebuilds args 1-indexed | fixed |
-| setCustomEnvColor | `(envID, r, g, b, a)` | matches; alpha stored, renderer uses RGB | minor |
+| setCustomEnvColor | `(envID, r, g, b, a)` | matches | Channels validated as 0..255 ints via the shared `channel()` helper (mirrors `setFgColor` / `setBgColor`); invalid args silent no-op. Alpha is stored but the map renderer still consumes RGB only | fixed |
 | getCustomEnvColor | not in Mudlet (Mudlet has `getCustomEnvColorTable`) | mudix-only | Non-canonical accessor | minor |
 | addAreaName | `→ areaID OR (false, errMsg)` on dup | matches | Returns numeric ID on success, `(false, errMsg)` on duplicate or empty name (via Bridge.lua wrapper) | fixed |
 | deleteArea | `(areaID|areaName) → bool` | both forms accepted | Returns bool; mudix still deletes contained rooms (Mudlet moves them to default) — flagged as future follow-up | fixed |
@@ -357,14 +357,14 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | installPackage | `(location)` — http URLs via Other.lua | VFS path only (Other.lua override may handle URLs) | Verify Other.lua override is loaded | minor |
 | uninstallPackage | `(name) → true | nil` | matches | Returns `true` on success, `nil` when no package with that name is installed (Mudlet shape) | fixed |
 | getPackages | 1-indexed table | Bridge rebuilds | OK | OK |
-| installModule | `(location) → true` | bool | minor | minor |
+| installModule | `(location) → true` | bool | Returns true on success, false on failure (errors logged via `printError`) | fixed |
 | uninstallModule | matches | matches | OK | OK |
-| reloadModule | no return | bool | extra bool ignored | minor |
+| reloadModule | no return | matches | Binding drops the JS bool result (Mudlet shape); failure still logs via `printError` | fixed |
 | syncModule | not in Mudlet's canonical Lua API | fire-and-forget alias for force-flush | mudix-specific | minor |
-| enableModuleSync/disableModuleSync | `→ true | warn` | void | No return | minor |
-| getModuleSync | `→ bool | warn` | bool (false on missing) | mudix silent on missing | minor |
-| setModulePriority | no return; errors on unknown | bool | mudix silent on unknown | minor |
-| getModulePriority | number; errors on unknown | 0 on unknown | mudix silent | minor |
+| enableModuleSync/disableModuleSync | `→ true`; raises on unknown | matches | Both bindings throw "<name> is not an installed module" on miss and return `true` on success | fixed |
+| getModuleSync | `→ bool`; raises on unknown | matches | Unknown module raises (Mudlet shape) instead of silently returning false | fixed |
+| setModulePriority | `→ true`; raises on unknown | matches | Unknown module raises; truncates the priority to an int and returns `true` on success | fixed |
+| getModulePriority | number; raises on unknown | matches | Unknown module raises (Mudlet shape) | fixed |
 | getModules | 1-indexed | Bridge rebuilds | OK | OK |
 | getModuleInfo | table or string | matches | empty-table vs nil on unknown | minor |
 | raiseEvent | `→ true`; supports tables/functions via registry refs | matches | Returns `true` once handlers have fired (synchronous dispatch); empty/missing event name returns `false`. Table args still rely on wasmoon conversion | fixed |
@@ -375,7 +375,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | sendCmdLine | stages text in cmdbar (no submit) | matches | Emits `script.setcmd` to replace bar contents; App handler focuses + selects all; `cmdLineName` arg accepted and ignored | fixed |
 | send | `(cmd, [echo=true]) → true` | matches | Returns `true` once the send is dispatched | fixed |
 | sendGMCP | `(message, [what])` | matches | Optional `what` is concatenated to `message` with a space separator before framing (Mudlet behaviour) | fixed |
-| saveProfile | `([location, [filename]]) → (true, filename) | (nil, errMsg)` | always `(true, path)` | Never reports failure; ignores location and filename | minor |
+| saveProfile | `([location, [filename]]) → (true, filename) | (nil, errMsg)` | matches | Returns `(nil, errMsg)` synchronously when no profile VFS is available; otherwise returns `(true, path)` and raises `sysSaveProfileError(path, errMsg)` if the async flush fails. `location` and `filename` are accepted for parity but ignored — there is no alternate save target | fixed |
 | unzipAsync | matches | matches | OK | OK |
 | remainingTime | `(id|name) → seconds` | matches | TimerEngine tracks start+intervalMs per entry; numeric→tempTimer, string→perm via id/name index; -1 on miss | fixed |
 | selectCaptureGroup | numeric AND named | resolved (see #6 in Top priorities) | — | fixed |
@@ -384,7 +384,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 
 | Function | Mudlet signature | mudix accepts | Discrepancy | Severity |
 |---|---|---|---|---|
-| getNetworkLatency | seconds float | `(ping ?? 0) / 1000` | OK; returns 0 instead of last when not measured | minor |
+| getNetworkLatency | seconds float; `-1` when no measurement | matches | Caches the most recent measurement; returns `-1` until the first ping completes (was a fake `0`) | fixed |
 | downloadFile | `(saveTo, url) → (true, url)` | matches | Bridge.lua wrapper kicks off the JS primitive and returns `(true, url)`; sysDownloadDone third arg is still empty | fixed |
 | getHTTP | `(url, headers) → (true, url)` | matches | Bridge.lua wrapper returns `(true, url)` | fixed |
 | postHTTP | `(data, url, headers, file) → (true, url)` | matches; file via VFS | Bridge.lua wrapper returns `(true, url)` | fixed |
@@ -395,13 +395,13 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | printCmdLine | `([name,] text)` | name dropped | OK | OK |
 | clearCmdLine | `([name])` | name dropped | OK | OK |
 | addCommandLineMenuEvent | `([cmdLineName,] menuLabel, eventName)` — **no displayName** | matches | 2-arg `(menuLabel, eventName)` and 3-arg `(cmdLineName, menuLabel, eventName)` (cmdLineName dropped) | fixed |
-| removeCommandLineMenuEvent | `([cmdLineName,] menuLabel) → bool` | drops cmdLineName | Mudlet returns `(false, msg)` on missing | minor |
+| removeCommandLineMenuEvent | `([cmdLineName,] menuLabel) → bool` | matches | Bridge.lua wrapper returns `(false, errMsg)` when no entry by that name exists; `cmdLineName` is accepted for parity and ignored | fixed |
 | getCommandLineMenuEvents | not in Mudlet C++ | mudix-only | OK as extension | OK |
 | setCmdLineAction | `(cmdLineName, fn, [args...])` — intercepts Enter | matches | Single-bar form; cmdLineName arg accepted and ignored. fn=nil clears; trailing args baked into closure; cb id freed on rebind | fixed |
 | resetCmdLineAction | `(cmdLineName) → bool` | matches | Clears the action and frees the cb id | fixed |
 | openWebPage | `(url) → bool` | matches | Returns `false` for empty URLs or when the popup is blocked; `true` once `window.open` succeeds | fixed |
-| debugc | single arg, routes to error-info console | variadic, routes to devtools | minor | minor |
-| errorc | `(content, [debugInfo])` | variadic to script log | minor | minor |
+| debugc | single arg, routes to error-info console | single `content` arg → devtools `console.debug` | mudix routes to the browser console (no dedicated "Errors" dock) — Mudlet behaviour, just a different sink | fixed |
+| errorc | `(content, [debugInfo])` | matches | Accepts `content` + optional `debugInfo`; concatenates with a single space before printing through the script log (same destination as `printError`) | fixed |
 
 ### Borders / fonts / sizes / version / misc
 
@@ -410,14 +410,14 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | setBorderTop/Bottom/Left/Right | `(size)` | matches | OK | OK |
 | setBorderSizes | 1/2/3/4 args (uniform / vertical-horizontal / top-h-bottom / TRBL) | matches | All four arities case-split in `ScriptingAPI.setBorderSizes` | fixed |
 | getBorderTop/Bottom/Left/Right/Sizes | matches | matches | OK | OK |
-| setBorderColor | `(r,g,b)` (alpha forced 255) | accepts optional alpha | mudix accepts alpha Mudlet ignores; no 0-255 validation | minor |
+| setBorderColor | `(r,g,b)` (alpha forced 255) | matches | Channels validated as 0..255 ints via the shared `channel()` helper; alpha arg accepted for parity and forced to 255 (Mudlet shape) | fixed |
 | resetBorderColor | doesn't exist in Mudlet | mudix extension | OK | OK |
-| setFontSize | `([name,] size)` size>0; pointSize; `→ true \| nil, errMsg` | clamps 1..99; CSS px; bool | Different unit; `false` vs `(nil, msg)` | minor |
-| getFontSize | `([name])` int pointSize or nil | CSS px; `false` on missing | Unit + miss-shape differ | minor |
-| setFont | `([name,] family)` `→ true \| nil, errMsg` if unavailable | always succeeds on main; bool | No font-availability check | minor |
-| getFont | `([name])` string family | string or false | `false` for missing window | minor |
-| getMainWindowSize | console-only area (excludes toolbars) | viewport rect | Reports viewport, not console area | minor |
-| getUserWindowSize | size or main-console fallback for missing | (0,0) on missing | Different miss-shape | minor |
+| setFontSize | `([name,] size)` size>0; `→ true \| nil, errMsg` | matches | Bridge.lua wrapper shapes the miss case as `(nil, errMsg)`; the unit remains CSS px (Mudlet's pointSize doesn't translate cleanly to a DOM target) | fixed |
+| getFontSize | `([name])` size or `(nil, errMsg)` | matches | Bridge.lua wrapper shapes the miss case as `(nil, errMsg)`; size is reported in CSS px | fixed |
+| setFont | `([name,] family)` `→ true \| nil, errMsg` | matches | Bridge.lua wrapper shapes the miss case as `(nil, errMsg)`. The browser already falls back when the requested family isn't installed; no separate availability check | fixed |
+| getFont | `([name])` family or `(nil, errMsg)` | matches | Bridge.lua wrapper shapes the miss case as `(nil, errMsg)`; main window returns the configured family or `""` when unset | fixed |
+| getMainWindowSize | console-only area (excludes toolbars/borders) | viewport minus borders | Subtracts the configured `outputBorders` insets so the returned `(w, h)` matches the usable console area rather than the full viewport rectangle | fixed |
+| getUserWindowSize | size or `(nil, errMsg)` for missing | matches | Bridge.lua wrapper turns the JS `null` miss-case into `(nil, "userwindow ... not found")` | fixed |
 | getMudletVersion | `"table"` mode → 4 returns `(M, m, r, build)` | 4 returns | Bridge.lua now returns BUILD as the 4th value | fixed |
 | getProfileName | host profile dir name | connection display name | Semantically close, not identical | minor |
 | getEpoch | seconds with sub-second precision | `Date.now()/1000` | OK | OK |

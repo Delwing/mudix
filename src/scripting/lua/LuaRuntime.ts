@@ -14,7 +14,7 @@ import YAJL_LUA from './Yajl.lua?raw';
 import {setupRex} from './rex';
 import {setupYajl} from './yajl';
 import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
-import {QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
+import {QT_CURSOR_NAME_TO_INT, QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
 import {qtKeyToDomCode, qtModifiersToList} from '../../mud/keybindings/qtKeys';
 import {HttpService} from '../http/HttpService';
 
@@ -67,7 +67,6 @@ export class LuaRuntime implements IScriptingRuntime {
     // Mudlet setCmdLineAction installs at most one Enter-interceptor. Track its
     // cb id so a re-bind frees the prior chunk (same leak fix as label cbs).
     private cmdLineActionCbId = 0;
-    private _isPrompt = false;
     private currentMatches: string[] = [];
     // selectCaptureGroup needs the actual offset of each capture in the
     // source line; without these spans it falls back to selectString(text, 1)
@@ -361,18 +360,30 @@ export class LuaRuntime implements IScriptingRuntime {
         // createLabel([window,] name, x, y, w, h, fillBackground [, clickThrough]).
         // Mudlet detects the optional window arg by counting; we use the second-
         // arg type because (string,string) ⇒ window form and (string,number) ⇒
-        // no window. fillBackground/clickThrough accept booleans or 0/1.
+        // no window. fillBackground/clickThrough must be actual booleans —
+        // Mudlet raises a bad-argument error on non-bool inputs; we match by
+        // throwing so the script log carries a clear message instead of silently
+        // coercing 0/1/strings.
+        const boolArg = (v: unknown, who: string, argN: number, optional: boolean): boolean => {
+            if (optional && v === undefined) return false;
+            if (typeof v !== 'boolean') {
+                throw new Error(`${who}: bad argument #${argN} type (boolean expected, got ${typeof v})`);
+            }
+            return v;
+        };
         this.lua.global.set('createLabel', (...args: unknown[]) => {
             const hasWindow = typeof args[0] === 'string' && typeof args[1] === 'string';
             const window = hasWindow ? (args[0] as string) : 'main';
             const i = hasWindow ? 1 : 0;
             const name = args[i] as string;
+            const fill = boolArg(args[i + 5], 'createLabel', hasWindow ? 7 : 6, false);
+            const clickThrough = boolArg(args[i + 6], 'createLabel', hasWindow ? 8 : 7, true);
             return this.api.labels.create(name, {
                 parent: window === 'main' ? 'main' : window,
                 x: Number(args[i + 1]), y: Number(args[i + 2]),
                 width: Number(args[i + 3]), height: Number(args[i + 4]),
-                fillBackground: !!args[i + 5],
-                clickThrough: !!args[i + 6],
+                fillBackground: fill,
+                clickThrough,
             });
         });
         // Mudlet deleteLabel(name) → true on success, (false, errMsg) when the
@@ -469,12 +480,23 @@ export class LuaRuntime implements IScriptingRuntime {
         // as aliases so existing user scripts don't break.
         this.lua.global.set('raiseLabel', raiseAny);
         this.lua.global.set('lowerLabel', lowerAny);
-        // setLabelCursor(name, shapeInt). The Mudlet GUIUtils.lua wrapper
-        // converts string shape names → ints via mudlet.cursor before calling
-        // here, so we only handle the integer case. shape -1 ('Reset') clears.
+        // setLabelCursor(name, shape). The Mudlet GUIUtils.lua wrapper maps
+        // string shape names (e.g. "PointingHand") to ints via mudlet.cursor
+        // before calling here; we accept either form so the primitive works
+        // even before GUIUtils.lua loads. shape -1 ('Reset') clears.
         this.lua.global.set('setLabelCursor', (name: unknown, shape: unknown) => {
             if (typeof name !== 'string') return;
-            const n = Number(shape);
+            let n: number;
+            if (typeof shape === 'string') {
+                const lookup = QT_CURSOR_NAME_TO_INT[shape];
+                if (lookup === undefined) {
+                    this.api.labels.setCursor(name, undefined);
+                    return;
+                }
+                n = lookup;
+            } else {
+                n = Number(shape);
+            }
             if (n === -1 || Number.isNaN(n)) {
                 this.api.labels.setCursor(name, undefined);
                 return;
@@ -633,7 +655,14 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('getRoomsByPosition',   (areaId: number, x: number, y: number, z: number) => this.api.map.getRoomsByPosition(areaId, x, y, z));
         this.lua.global.set('getRoomEnv',   (id: number)              => this.api.map.getRoomEnv(id));
         this.lua.global.set('setRoomEnv',   (id: number, e: number)   => this.api.map.setRoomEnv(id, e));
-        this.lua.global.set('getRoomChar',  (id: number)              => this.api.map.getRoomChar(id));
+        // Mudlet getRoomChar(id) → symbol string, or (nil, errMsg) when the
+        // room doesn't exist. The raw entry point returns the empty string for
+        // an unset symbol and `null` for the miss case; Bridge.lua re-shapes.
+        this.lua.global.set('__getRoomChar', (id: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid) || !this.api.map.roomExists(rid)) return null;
+            return this.api.map.getRoomChar(rid);
+        });
         this.lua.global.set('setRoomChar',  (id: number, c: string)   => this.api.map.setRoomChar(id, c));
         // Mudlet `getRoomUserData(id, key [, fullErr])`. Default behaviour
         // returns the string value, or "" if either the room or key is missing.
@@ -701,11 +730,14 @@ export class LuaRuntime implements IScriptingRuntime {
         // fires raiseEvent(eventName, roomId, ...args) (roomId prepended so handlers
         // know which room was clicked — Mudlet leaves the room implicit).
         this.api.map.setMapEventDispatcher((event, args) => this.emitEvent(event, args));
+        // Mudlet add/removeMapEvent don't return anything (mutating registry
+        // primitives). We drop the JS bool result so Lua callers can't pattern
+        // on a non-canonical extra return.
         this.lua.global.set('addMapEvent', (
             uniqueName: unknown, eventName: unknown,
             parent?: unknown, displayName?: unknown, ...args: unknown[]
         ) => {
-            return this.api.map.addMapEvent(
+            this.api.map.addMapEvent(
                 String(uniqueName ?? ''),
                 String(eventName ?? ''),
                 parent == null ? null : String(parent),
@@ -714,7 +746,7 @@ export class LuaRuntime implements IScriptingRuntime {
             );
         });
         this.lua.global.set('removeMapEvent', (uniqueName: unknown) => {
-            return this.api.map.removeMapEvent(String(uniqueName ?? ''));
+            this.api.map.removeMapEvent(String(uniqueName ?? ''));
         });
         // Mudlet shape:
         //   { [uniqueName] = {
@@ -731,13 +763,18 @@ export class LuaRuntime implements IScriptingRuntime {
         // ── Custom env colors ─────────────────────────────────────────────────
         // Mudlet setCustomEnvColor(envID, r, g, b, a). Updates mCustomEnvColors
         // on the active map; the renderer reads this when painting rooms whose
-        // environment matches envID. Alpha is accepted for API parity but the
-        // map renderer only consumes RGB.
+        // environment matches envID. Channels are validated as 0..255 ints via
+        // the shared `channel()` helper; invalid args silently no-op.
         this.lua.global.set('setCustomEnvColor', (envId: unknown, r: unknown, g: unknown, b: unknown, a?: unknown) => {
-            this.api.map.setCustomEnvColor(
-                Number(envId), Number(r), Number(g), Number(b),
-                a !== undefined ? Number(a) : 255,
-            );
+            const eid = Number(envId);
+            if (!Number.isFinite(eid)) return;
+            const rr = channel(r);
+            const gg = channel(g);
+            const bb = channel(b);
+            if (rr === null || gg === null || bb === null) return;
+            const alpha = a === undefined ? 255 : channel(a);
+            if (alpha === null) return;
+            this.api.map.setCustomEnvColor(Math.trunc(eid), rr, gg, bb, alpha);
         });
         // getCustomEnvColor(envID) → r, g, b, a (4 return values), or nil if
         // the envID has no override. The Lua wrapper unpacks the JS array.
@@ -891,8 +928,10 @@ export class LuaRuntime implements IScriptingRuntime {
                 String(eventName ?? ''),
             );
         });
-        this.lua.global.set('removeCommandLineMenuEvent', (a: unknown, b?: unknown) => {
-            // (uniqueName) or (cmdLineName, uniqueName) — drop cmdLineName.
+        // Mudlet removeCommandLineMenuEvent(uniqueName) → true on success, or
+        // (false, errMsg) when the entry doesn't exist. The optional leading
+        // cmdLineName arg is accepted for parity and ignored.
+        this.lua.global.set('__removeCommandLineMenuEvent', (a: unknown, b?: unknown) => {
             const uniqueName = b !== undefined ? b : a;
             return this.api.cmdLineMenu.remove(String(uniqueName ?? ''));
         });
@@ -927,31 +966,66 @@ export class LuaRuntime implements IScriptingRuntime {
         // takes a VFS path, modules persist their XML on disk, and uninstall
         // unlinks rather than deleting source files. Negative priorities load
         // before profile scripts; non-negative load after.
+        //
+        // Mudlet `installModule(path)` → true on success. The path argument is
+        // accepted; failures log to printError and report false.
         this.lua.global.set('installModule', (path: unknown) =>
             this.api.installModule(String(path ?? '')));
         this.lua.global.set('uninstallModule', (name: unknown) =>
             this.api.uninstallModule(String(name ?? '')));
-        this.lua.global.set('reloadModule', (name: unknown) =>
-            this.api.reloadModule(String(name ?? '')));
+        // Mudlet `reloadModule(name)` doesn't return anything; we still flag
+        // failures via the printError call inside ScriptingEngine.
+        this.lua.global.set('reloadModule', (name: unknown) => {
+            this.api.reloadModule(String(name ?? ''));
+        });
         this.lua.global.set('__mudix_syncModule', (name: unknown) => {
             // Fire-and-forget; Lua callers don't get a promise. The underlying
             // flush is async but the in-app effect (sysSyncOnModule) will fire
             // on success.
             void this.api.syncModule(String(name ?? '')).catch(() => {});
         });
-        this.lua.global.set('enableModuleSync', (name: unknown) =>
-            this.api.enableModuleSync(String(name ?? '')));
-        this.lua.global.set('disableModuleSync', (name: unknown) =>
-            this.api.disableModuleSync(String(name ?? '')));
-        this.lua.global.set('getModuleSync', (name: unknown) =>
-            this.api.getModuleSync(String(name ?? '')));
-        this.lua.global.set('setModulePriority', (name: unknown, priority: unknown) => {
-            const p = Math.trunc(Number(priority ?? 0));
-            return this.api.setModulePriority(String(name ?? ''), Number.isFinite(p) ? p : 0);
+        // Mudlet `enableModuleSync(name)` / `disableModuleSync(name)` → true on
+        // success, (nil, errMsg) when the name isn't an installed module.
+        const requireModule = (name: string, who: string): void => {
+            const info = this.api.getModuleInfo(name);
+            if (!info) throw new Error(`${who}: "${name}" is not an installed module`);
+        };
+        this.lua.global.set('enableModuleSync', (name: unknown) => {
+            const n = String(name ?? '');
+            requireModule(n, 'enableModuleSync');
+            this.api.enableModuleSync(n);
+            return true;
         });
-        this.lua.global.set('getModulePriority', (name: unknown) =>
-            this.api.getModulePriority(String(name ?? '')));
+        this.lua.global.set('disableModuleSync', (name: unknown) => {
+            const n = String(name ?? '');
+            requireModule(n, 'disableModuleSync');
+            this.api.disableModuleSync(n);
+            return true;
+        });
+        // Mudlet `getModuleSync(name)` → bool. Unknown modules raise.
+        this.lua.global.set('getModuleSync', (name: unknown) => {
+            const n = String(name ?? '');
+            requireModule(n, 'getModuleSync');
+            return this.api.getModuleSync(n);
+        });
+        // Mudlet setModulePriority / getModulePriority both raise on unknown
+        // module name — quiet defaults would mask typos.
+        this.lua.global.set('setModulePriority', (name: unknown, priority: unknown) => {
+            const n = String(name ?? '');
+            requireModule(n, 'setModulePriority');
+            const p = Math.trunc(Number(priority ?? 0));
+            this.api.setModulePriority(n, Number.isFinite(p) ? p : 0);
+            return true;
+        });
+        this.lua.global.set('getModulePriority', (name: unknown) => {
+            const n = String(name ?? '');
+            requireModule(n, 'getModulePriority');
+            return this.api.getModulePriority(n);
+        });
         this.lua.global.set('__getModules', () => this.api.getModules());
+        // Mudlet getModuleInfo(name [, key]). The Bridge.lua wrapper handles the
+        // optional `key` projection; here we just return the manifest table or
+        // `nil` when no module by that name exists.
         this.lua.global.set('__getModuleInfo', (name: unknown) =>
             this.api.getModuleInfo(String(name ?? '')));
 
@@ -1032,17 +1106,29 @@ export class LuaRuntime implements IScriptingRuntime {
         // path immediately so the Lua wrapper below can shape it as
         // (true, path). The optional `location` arg is accepted for
         // compatibility but ignored — there is no alternate save target.
-        this.lua.global.set('__mudix_saveProfile', (_location?: unknown): string => {
+        // Returns an [ok, path|errMsg] tuple synchronously. Async flush errors
+        // can't be reported through the return — they raise `sysSaveProfileError`
+        // (eventName, profilePath, errMsg) so user code can subscribe.
+        this.lua.global.set('__mudix_saveProfile', (_location?: unknown): [boolean, string] => {
             this.flushPendingSqlSnapshots();
             const vfs = this.vfs;
-            if (vfs) {
-                vfs.flush().catch(err => console.warn('[saveProfile] vfs flush failed:', err));
-            }
-            return vfs?.profilePath ?? '';
+            if (!vfs) return [false, 'saveProfile: no profile VFS available'];
+            const path = vfs.profilePath ?? '';
+            vfs.flush().catch(err => {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.warn('[saveProfile] vfs flush failed:', err);
+                this.emitEvent('sysSaveProfileError', [path, msg]);
+            });
+            return [true, path];
         });
 
         // ── Line / cursor inspection ──────────────────────────────────────────
-        this.lua.global.set('isPrompt',       ()            => this._isPrompt);
+        // Mudlet `isPrompt([window])` — reports the per-line prompt flag for
+        // the line at the current cursor position. ScriptingAPI tags the buffer
+        // when beginLine() runs the trigger pass, so historical lines remain
+        // queryable via moveCursor + isPrompt (not just the most recent line).
+        this.lua.global.set('isPrompt', (win?: unknown) =>
+            this.api.isPrompt(typeof win === 'string' ? win : undefined));
         // Mudlet `getCurrentLine([window])` → line text, or `(nil, errMsg)` for
         // a non-existent named window. The raw entry point hands JS `null` for
         // the miss case; Bridge.lua re-shapes it into the documented multi-return.
@@ -1238,11 +1324,18 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('showHandlerError', (event: string, error: string) => {
             this.api.printError(`[event "${event}"] ${error}`);
         });
-        this.lua.global.set('debugc', (...args: unknown[]) => {
-            console.debug('[Lua]', ...args.map(a => String(a)));
+        // Mudlet `debugc(content)` and `errorc(content, [debugInfo])` both
+        // accept a single content arg (plus an optional debug-info string on
+        // errorc). They route to Mudlet's "Errors" console; mudix has no
+        // equivalent dock, so debugc lands in devtools and errorc routes
+        // through the script log (same destination as printError).
+        this.lua.global.set('debugc', (content: unknown) => {
+            console.debug('[Lua]', String(content ?? ''));
         });
-        this.lua.global.set('errorc', (...args: unknown[]) => {
-            this.api.printError(args.map(a => String(a)).join(' '));
+        this.lua.global.set('errorc', (content: unknown, debugInfo?: unknown) => {
+            const msg = String(content ?? '');
+            const trailer = debugInfo == null ? '' : ` ${String(debugInfo)}`;
+            this.api.printError(msg + trailer);
         });
 
         // ── Send / alias ──────────────────────────────────────────────────────
@@ -1325,7 +1418,14 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         // ── Network ───────────────────────────────────────────────────────────
-        this.lua.global.set('getNetworkLatency', () => this.api.getNetworkLatency() / 1000);
+        // Mudlet `getNetworkLatency()` returns seconds (float). Our cached
+        // value is in ms — convert to seconds for the script side. The cache
+        // returns -1 when no measurement has been recorded yet; we propagate
+        // that sentinel unchanged.
+        this.lua.global.set('getNetworkLatency', () => {
+            const ms = this.api.getNetworkLatency();
+            return ms < 0 ? -1 : ms / 1000;
+        });
 
         // ── HTTP / downloads ──────────────────────────────────────────────────
         // Mudlet's HTTP API is fire-and-forget. The service runs each request
@@ -1381,40 +1481,44 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // ── Window geometry ───────────────────────────────────────────────────
         // Returns [w, h] from JS; a Lua wrapper below unpacks it to two values.
+        // __getUserWindowSize returns null when the window doesn't exist so
+        // Bridge.lua can shape it as (nil, errMsg) (Mudlet miss-shape).
         this.lua.global.set('__getMainWindowSize', () => this.api.getMainWindowSize());
-        this.lua.global.set('__getUserWindowSize', (name: unknown) =>
-            this.api.getUserWindowSize(String(name ?? '')));
+        this.lua.global.set('__getUserWindowSize', (name: unknown) => {
+            const n = String(name ?? '');
+            if (!n || !this.api.windows.has(n)) return null;
+            return this.api.getUserWindowSize(n);
+        });
 
         // setFontSize([windowName,] size) / getFontSize([windowName]) — Mudlet
-        // overloads by arg count. Distinguish on first-arg type. setFontSize
-        // returns true on success or false on failure (Mudlet returns nil+err;
-        // we use false so Lua callers can `if not setFontSize(...) then` cleanly).
-        this.lua.global.set('setFontSize', (a: unknown, b?: unknown) => {
+        // overloads by arg count. Distinguish on first-arg type. The raw
+        // primitives below return false / null for miss cases; Bridge.lua
+        // re-shapes those into Mudlet's (nil, errMsg) multi-return.
+        this.lua.global.set('__setFontSize', (a: unknown, b?: unknown) => {
             return (typeof a === 'string')
                 ? this.api.setFontSize(Number(b), a)
                 : this.api.setFontSize(Number(a));
         });
-        this.lua.global.set('getFontSize', (a?: unknown) => {
+        this.lua.global.set('__getFontSize', (a?: unknown) => {
             const size = (typeof a === 'string')
                 ? this.api.getFontSize(a)
                 : this.api.getFontSize();
-            return size ?? false;
+            return size ?? null;
         });
 
-        // setFont([windowName,] family) / getFont([windowName]). Mudlet's main-
-        // window setFont returns nil + error when the family isn't installed; we
-        // accept any name (the UI's existing font-availability check renders the
-        // fallback if it's missing) and return true.
-        this.lua.global.set('setFont', (a: unknown, b?: unknown) => {
+        // setFont([windowName,] family) / getFont([windowName]). Mudlet returns
+        // (nil, errMsg) when the named window doesn't exist; Bridge.lua re-
+        // shapes the JS bool/string from the raw primitives below.
+        this.lua.global.set('__setFont', (a: unknown, b?: unknown) => {
             return (typeof b === 'string' || typeof b === 'number')
                 ? this.api.setFont(String(b), String(a ?? ''))
                 : this.api.setFont(String(a ?? ''));
         });
-        this.lua.global.set('getFont', (a?: unknown) => {
+        this.lua.global.set('__getFont', (a?: unknown) => {
             const family = (typeof a === 'string')
                 ? this.api.getFont(a)
                 : this.api.getFont();
-            return family ?? false;
+            return family ?? null;
         });
 
         // ── Borders ───────────────────────────────────────────────────────────
@@ -1446,11 +1550,16 @@ export class LuaRuntime implements IScriptingRuntime {
         // a plain JS object the same way, so a direct return suffices.
         this.lua.global.set('getBorderSizes',  () => this.api.getBorderSizes());
 
-        this.lua.global.set('setBorderColor', (r: unknown, g: unknown, b: unknown, a?: unknown) => {
-            this.api.setBorderColor(
-                Number(r), Number(g), Number(b),
-                a !== undefined ? Number(a) : 255,
-            );
+        // Mudlet setBorderColor(r, g, b). Channels are validated as 0..255 ints
+        // (same `channel()` helper used by setFgColor/setBgColor); invalid args
+        // produce a silent no-op. Mudlet forces alpha to 255 — an alpha arg is
+        // accepted for parity and ignored.
+        this.lua.global.set('setBorderColor', (r: unknown, g: unknown, b: unknown, _a?: unknown) => {
+            const rr = channel(r);
+            const gg = channel(g);
+            const bb = channel(b);
+            if (rr === null || gg === null || bb === null) return;
+            this.api.setBorderColor(rr, gg, bb, 255);
         });
         this.lua.global.set('resetBorderColor', () => this.api.resetBorderColor());
 
@@ -2007,9 +2116,12 @@ export class LuaRuntime implements IScriptingRuntime {
         });
     }
 
-    setCurrentLine(line: string, isPrompt: boolean): void {
+    setCurrentLine(line: string, _isPrompt: boolean): void {
+        // Mudlet exposes the bare ANSI-stripped line as the global `line` so
+        // triggers can read it without going through getCurrentLine. The
+        // per-line prompt flag now travels on the buffer itself via
+        // ScriptingAPI.beginLine, so we no longer need to mirror it here.
         this.lua.global.set('line', line);
-        this._isPrompt = isPrompt;
     }
 
     dispatchSendRequest(text: string): boolean {

@@ -419,6 +419,12 @@ export class AnsiAwareBuffer {
         return this;
     }
 
+    /** Per-line prompt flag. Mudlet's TBuffer tracks isPrompt on each line so
+     *  the matching `isPrompt()` script primitive reflects the prompt status of
+     *  whatever line the cursor is currently on (not just the last). Set by the
+     *  trigger pipeline before triggers run; defaults to false. */
+    isPrompt = false;
+
     removeFromDom(): void {
         const container = this._renderContainer;
         if (!container) return;

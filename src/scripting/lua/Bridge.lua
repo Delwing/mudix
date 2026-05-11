@@ -13,9 +13,61 @@ function getMainWindowSize()
     return t[0], t[1]
 end
 
+-- Mudlet getUserWindowSize(name) → width, height when the window exists, or
+-- (nil, errMsg) when it doesn't. JS returns `nil` for the miss case.
 function getUserWindowSize(name)
     local t = __getUserWindowSize(name)
+    if t == nil then
+        return nil, "userwindow \"" .. tostring(name) .. "\" not found"
+    end
     return t[0], t[1]
+end
+
+-- Mudlet getRoomChar(id) → symbol string on success (may be empty when no
+-- symbol is set), or (nil, errMsg) when the room id doesn't resolve.
+function getRoomChar(id)
+    local v = __getRoomChar(id)
+    if v == nil then return nil, "no such room id" end
+    return v
+end
+
+-- Mudlet setFontSize / getFontSize / setFont / getFont. The raw primitives
+-- return false / nil for the "named window doesn't exist" miss case; here we
+-- re-shape those into Mudlet's (nil, errMsg) multi-return.
+function setFontSize(a, b)
+    if __setFontSize(a, b) then return true end
+    local name = (type(a) == 'string') and a or 'main'
+    return nil, "setFontSize: window \"" .. tostring(name) .. "\" not found or invalid size"
+end
+
+function getFontSize(a)
+    local v = __getFontSize(a)
+    if v == nil then
+        return nil, "getFontSize: window \"" .. tostring(a) .. "\" not found"
+    end
+    return v
+end
+
+function setFont(a, b)
+    if __setFont(a, b) then return true end
+    local name = (b ~= nil) and a or 'main'
+    return nil, "setFont: window \"" .. tostring(name) .. "\" not found"
+end
+
+function getFont(a)
+    local v = __getFont(a)
+    if v == nil then
+        return nil, "getFont: window \"" .. tostring(a) .. "\" not found"
+    end
+    return v
+end
+
+-- Mudlet removeCommandLineMenuEvent([cmdLineName,] uniqueName) → true on
+-- success, (false, errMsg) when no entry exists with that uniqueName.
+function removeCommandLineMenuEvent(a, b)
+    if __removeCommandLineMenuEvent(a, b) then return true end
+    local name = (b ~= nil) and b or a
+    return false, "no command-line menu event named \"" .. tostring(name) .. "\""
 end
 
 -- Mudlet getBackgroundColor([windowName]) → r, g, b, a on success;
@@ -288,12 +340,19 @@ end
 
 -- Mudlet saveProfile([location]). zustand state is already auto-saved on every
 -- mutation; this call additionally forces pending VFS writes (and any debounced
--- SQL snapshots) through to IndexedDB / the linked folder. The flush itself is
--- async fire-and-forget — failures surface in console.warn rather than the
--- return tuple.
+-- SQL snapshots) through to IndexedDB / the linked folder. Synchronous failure
+-- (no VFS available) returns (nil, errMsg). Async flush errors raise the
+-- `sysSaveProfileError` event so callers can subscribe for the failure.
 function saveProfile(location)
-    local path = __mudix_saveProfile(location)
-    return true, path
+    local r = __mudix_saveProfile(location)
+    if type(r) == 'table' then
+        local ok = r[0]; if ok == nil then ok = r[1] end
+        local val = r[1]; if r[0] == nil then val = r[2] end
+        if ok == false then return nil, val end
+        return true, val
+    end
+    -- Fallback for older runtime shape.
+    return true, r or ''
 end
 
 -- Callback registry: stores Lua functions handed to tempTimer/Alias/Trigger/Key

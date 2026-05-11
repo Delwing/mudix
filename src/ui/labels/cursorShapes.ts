@@ -26,3 +26,33 @@ export const QT_CURSOR_TO_CSS: Record<number, string> = {
     20: 'move',           // DragMove
     21: 'alias',          // DragLink
 };
+
+/** Reverse map of Mudlet's `mudlet.cursor` table (CursorShapes.lua). Used so
+ *  setLabelCursor accepts the string name directly without requiring the
+ *  bundled GUIUtils.lua wrapper to be loaded. -1 ('Reset') clears the cursor.
+ */
+export const QT_CURSOR_NAME_TO_INT: Record<string, number> = {
+    Reset: -1,
+    Arrow: 0,
+    UpArrow: 1,
+    Cross: 2,
+    Wait: 3,
+    IBeam: 4,
+    ResizeVertical: 5,
+    ResizeHorizontal: 6,
+    ResizeTopRight: 7,
+    ResizeTopLeft: 8,
+    ResizeAll: 9,
+    Blank: 10,
+    VerticalSplit: 11,
+    HorizontalSplit: 12,
+    PointingHand: 13,
+    Forbidden: 14,
+    WhatsThis: 15,
+    Busy: 16,
+    OpenHand: 17,
+    ClosedHand: 18,
+    DragCopy: 19,
+    DragMove: 20,
+    DragLink: 21,
+};
