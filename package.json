@@ -23,7 +23,7 @@
     "fflate": "^0.8.2",
     "lucide-react": "^1.14.0",
     "mudlet-map-binary-reader": "^0.9.0",
-    "mudlet-map-renderer": "^0.39.0-konva",
+    "mudlet-map-renderer": "^1.1.0",
     "pako": "^2.1.0",
     "pcre2-wasm-universal": "^1.0.0",
     "react": "^18.3.1",
