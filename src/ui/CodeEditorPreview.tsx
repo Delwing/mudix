@@ -107,6 +107,13 @@ export function CodeEditorPreview({ content, filename, path, vfs, onDirtyChange,
     const saveRef = useRef(save);
     saveRef.current = save;
 
+    // Tracks which gotoLine revision the *current* view instance already
+    // consumed. Reset whenever the view is rebuilt (path change or
+    // StrictMode's mount/unmount/remount) so the jump re-fires against the
+    // fresh view; otherwise the dedupe would skip the visible view's jump
+    // after StrictMode tore down the first one.
+    const lastJumpRevisionRef = useRef<number | null>(null);
+
     // Build & destroy the editor when the file path changes — every selection
     // is treated as a fresh document so dirty state can't leak across files.
     useEffect(() => {
@@ -156,6 +163,7 @@ export function CodeEditorPreview({ content, filename, path, vfs, onDirtyChange,
         return () => {
             view.destroy();
             viewRef.current = null;
+            lastJumpRevisionRef.current = null;
         };
         // theme changes are handled separately; re-init only on file switch
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -172,7 +180,6 @@ export function CodeEditorPreview({ content, filename, path, vfs, onDirtyChange,
     // `revision` so the same line can be re-jumped after the user scrolls
     // away. Clamps to the doc range and focuses the editor so the cursor
     // lands where the user can immediately start typing.
-    const lastJumpRevisionRef = useRef<number | null>(null);
     useEffect(() => {
         const view = viewRef.current;
         if (!view || !gotoLine) return;

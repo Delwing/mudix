@@ -100,6 +100,60 @@ function declarationsToStyle(css: string): React.CSSProperties {
     return out as React.CSSProperties;
 }
 
+// Translate a Qt-style stylesheet meant for a userwindow (`QWidget { … }`) into
+// a single scoped CSS string targeting the panel viewport via `scope` (an
+// attribute selector). Mudlet's `setUserWindowStyleSheet` styles the window
+// widget — most commonly the `QWidget` selector with `padding`, `background-*`,
+// etc. We translate Qt units / gradients and rewrite selectors so a script
+// writing the QSS Mudlet expects gets the equivalent DOM effect (e.g. padding
+// pushes the text console inward, while sibling labels can still span the full
+// rect). Rules targeting other widget types are dropped — there's no per-child
+// Qt hierarchy to address in this DOM.
+export function userWindowQssToScopedCss(qss: string, scope: string): string {
+    if (!qss.trim()) return '';
+    const rules: string[] = [];
+    if (qss.indexOf('{') < 0) {
+        const decls = qtDeclarationsToCss(qss);
+        return decls ? `${scope} { ${decls} }` : '';
+    }
+    for (const rule of splitRulesets(qss)) {
+        const pseudo = qtWidgetSelectorToPseudo(rule.selector);
+        if (pseudo === null) continue;
+        const decls = qtDeclarationsToCss(rule.body);
+        if (!decls) continue;
+        rules.push(`${scope}${pseudo} { ${decls} }`);
+    }
+    return rules.join('\n');
+}
+
+// Sibling of qtSelectorToPseudo for the userwindow case: `QWidget`, `*`, or an
+// empty (base-block) selector all map to the scope itself; state pseudos like
+// `QWidget:hover` become scoped `:hover`. Anything else returns null and the
+// caller drops the rule.
+function qtWidgetSelectorToPseudo(sel: string): string | null {
+    const trimmed = sel.trim();
+    if (!trimmed) return '';
+    if (trimmed === '*' || /^QWidget$/i.test(trimmed)) return '';
+    const m = trimmed.match(/^(QWidget)?(:{1,2}!?[\w-]+)$/i);
+    if (!m) return null;
+    let pseudo = m[2];
+    if (pseudo.startsWith('::')) pseudo = pseudo.slice(1);
+    if (pseudo.startsWith(':!')) pseudo = ':not(:' + pseudo.slice(2) + ')';
+    const QT_TO_CSS: Record<string, string> = {
+        ':pressed': ':active',
+        ':!pressed': ':not(:active)',
+    };
+    return QT_TO_CSS[pseudo] ?? pseudo;
+}
+
+// CSS.escape polyfill for attribute selector values — IE/older Safari don't
+// expose it, and window/label names can contain hyphens/spaces/quotes a script
+// writer might choose. Cheap identifier-only fallback when CSS.escape is gone.
+export function cssEscape(s: string): string {
+    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s);
+    return s.replace(/["\\\n\r]/g, '\\$&');
+}
+
 // Translate a flat declaration block into a CSS declaration string (Qt → CSS
 // for values like QLinearGradient and unitless lengths). Used to serialize a
 // scoped pseudo-state ruleset body for injection into a `<style>` element.

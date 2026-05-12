@@ -11,14 +11,16 @@ import type {Lua} from 'wasmoon-lua5.1';
 //   2. JSON `null` would normally collapse to Lua nil, which deletes table
 //      entries. Yajl.lua hands us a sentinel reference (`yajl.null`); we keep
 //      it captured here and splice it back in for every null we encounter.
-export function setupYajl(lua: Lua): void {
+export type LuaValueTransform = (v: unknown) => unknown;
+
+export function setupYajl(lua: Lua): { transform: LuaValueTransform } {
     let nullSentinel: unknown = null;
 
     lua.global.set('__yajl_set_null__', (s: unknown) => {
         nullSentinel = s;
     });
 
-    const transform = (v: unknown): unknown => {
+    const transform: LuaValueTransform = (v) => {
         if (v === null) return nullSentinel;
         if (Array.isArray(v)) {
             // Sparse array starting at index 1: wasmoon's pushTable sees an
@@ -41,4 +43,6 @@ export function setupYajl(lua: Lua): void {
     lua.global.set('__yajl_parse__', (s: unknown): unknown => {
         return transform(JSON.parse(String(s ?? 'null')));
     });
+
+    return { transform };
 }

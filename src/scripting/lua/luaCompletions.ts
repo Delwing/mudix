@@ -60,10 +60,14 @@ const MUDIX_KEYS: Completion[] = [
 // ── io ────────────────────────────────────────────────────────────────────────
 
 const IO_COMPLETIONS: Completion[] = [
-    fn('open',  '(filename, mode?) → file',  'Open a file. mode: "r" (default), "w", "a", "r+", "w+", "a+"'),
-    fn('close', '([file])',                   'Close a file handle'),
-    fn('lines', '(filename, fmt?)',           'Iterate lines of a file'),
-    fn('type',  '(obj) → string|nil',        'Return "file", "closed file", or nil'),
+    fn('open',   '(filename, mode?) → file',  'Open a file. mode: "r" (default), "w", "a", "r+", "w+", "a+"'),
+    fn('close',  '([file])',                   'Close a file handle'),
+    fn('lines',  '(filename, fmt?)',           'Iterate lines of a file'),
+    fn('input',  '([file]) → file',            'Get or set the default input file (filename or handle). io.read uses it.'),
+    fn('output', '([file]) → file',            'Get or set the default output file (filename or handle). io.write uses it.'),
+    fn('read',   '(...) → ...',                'Read from the default input file (set via io.input). stdin is not supported.'),
+    fn('write',  '(...)',                      'Write to the default output file (set via io.output). stdout is not supported; use echo().'),
+    fn('type',   '(obj) → string|nil',         'Return "file", "closed file", or nil'),
 ];
 
 // ── lfs ───────────────────────────────────────────────────────────────────────
@@ -95,7 +99,7 @@ const MUDIX_TOP: Completion[] = [
     fn('printCmdLine', '(text)',        'Set the command bar contents'),
     fn('clearCmdLine', '()',            'Clear the command bar'),
     fn('printerror',   '(text)',        'Print an error message'),
-    fn('on',           '(event, fn)',   "Register event handler. Events: 'connect' 'disconnect' 'output' 'gmcp'"),
+    fn('on',           '(event, fn)',   "Register event handler. Events: 'connect' 'disconnect' 'output'"),
     fn('off',          '(event, fn)',   'Remove a previously registered event handler'),
     ns('windows',  'Window management API'),
     ns('timers',   'Timer API'),
@@ -235,7 +239,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('createMiniConsole', '([parent,] name, x, y, w, h) → bool', 'Create a positioned floating text panel; calling again repositions it'),
     fn('clearWindow',     '([name])',      'Clear window contents'),
     fn('setUserWindowTitle', '(name, title)', 'Set user window title'),
-    fn('setUserWindowStyleSheet', '(name, css)', 'Apply Qt-style CSS to a userwindow. Not yet implemented; calls are ignored with a console warning.'),
+    fn('setUserWindowStyleSheet', '(name, css)', 'Apply Qt-style CSS to a userwindow viewport. `QWidget { … }` (and bare declarations) auto-scope to that window so padding/background actually affect it; non-QWidget selectors are dropped.'),
     fn('hideWindow',      '(name)',        'Hide a userwindow or label'),
     fn('showWindow',      '(name)',        'Show a userwindow or label'),
     fn('moveWindow',      '(name, x, y)',  'Move a userwindow or label to a pixel position'),
@@ -315,6 +319,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('moveCursor',      '([window,] x, y)',              'Move cursor to position'),
     fn('selectString',    '([window,] text, occurrence)', 'Select Nth occurrence of text on current line; returns column index or -1'),
     fn('selectSection',   '([window,] from, length)',     'Select text by column position and length'),
+    fn('selectCurrentLine','([window])',                   'Select the entire current line. Equivalent to selectSection(0, #getCurrentLine())'),
     fn('deselect',        '([window])',                   'Clear the current selection'),
     fn('getSelection',    '([window]) → text, start, length',
         'Returns the current selection: text, 0-based start column, and length. Returns false, "no selection" when nothing is selected.'),
@@ -339,6 +344,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('getMudletHomeDir',   '() → string',        'Mudlet-compatible alias for getMudixProfilePath()'),
     fn('getMudletVersion',   '([mode]) → version', 'Mudlet version. No arg → {major, minor, revision, build} table. "string" → "X.Y.Z". "major"/"minor"/"revision"/"build" → field. "table" → major, minor, revision as 3 return values'),
     fn('getEpoch',           '() → number',        'Seconds since the Unix epoch (1970-01-01 UTC) with millisecond precision'),
+    fn('getTime',            '([asString [, format]]) → table|string', 'Current local time. Default → table {year,month,day,hour,min,sec,msec}. With asString=true → string formatted via Qt-style tokens (default "hh:mm:ss.zzz"): yyyy/yy, MMMM/MMM/MM/M, dddd/ddd/dd/d, HH/H (24h), hh/h (12h when AP/ap in format), mm/m, ss/s, zzz/z, AP/A/ap/a.'),
     fn('saveProfile',        '([location]) → true, path', 'Force pending profile data (VFS files, SQL snapshots) through to durable storage. zustand state auto-saves on every change so this is a no-op for triggers/aliases/scripts; useful after io.open/db: writes. The optional location arg is accepted for Mudlet compatibility but ignored.'),
     fn('loadRawFile',        '(path) → string',    'Read entire file from VFS and return its contents'),
     fn('loadfile',           '(filename)',          'Load a Lua file from VFS'),
@@ -354,6 +360,7 @@ const MUDLET_GLOBALS: Completion[] = [
     // Links
     fn('echoLink',          '([window,] text, cmd, tooltip [, useCurrentFmt])', 'Echo clickable link text'),
     fn('cechoLink',         '([window,] colorText, cmd, tooltip [, useCurrentFmt])', 'Echo colored clickable link text'),
+    fn('setLink',           '([window,] cmd, tooltip)',         'Apply a clickable link to the current selection. cmd is Lua code or a function.'),
     // Map
     fn('centerview',           '(roomId)',                         'Center map on a room'),
     fn('loadMap',              '([location]) → bool',              'Load a Mudlet binary `.dat` map from a VFS path; persists to IndexedDB and re-renders the panel. With no path, reloads from already-stored bytes. Returns false on a missing/unreadable/unparseable file.'),

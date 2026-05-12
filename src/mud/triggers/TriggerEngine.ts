@@ -6,7 +6,11 @@ export type { TriggerNode };
 
 type TempFn = (
     matches: string[],
-    spans?: { captureSpans: CaptureSpan[]; namedSpans?: Record<string, CaptureSpan> },
+    spans?: {
+        captureSpans: CaptureSpan[];
+        namedSpans?: Record<string, CaptureSpan>;
+        matchSpan?: CaptureSpan;
+    },
 ) => void;
 
 /**
@@ -362,6 +366,9 @@ export class TriggerEngine {
                 {
                     captureSpans: result.captureSpans ?? [],
                     namedSpans: result.namedSpans,
+                    matchSpan: result.matchStart !== undefined
+                        ? { start: result.matchStart, length: result.matchedText.length }
+                        : undefined,
                 },
             );
         }

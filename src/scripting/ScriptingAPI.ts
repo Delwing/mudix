@@ -5,6 +5,7 @@ import type { TimerEngine } from '../mud/timers/TimerEngine';
 import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
+import { userWindowQssToScopedCss, cssEscape } from '../ui/labels/qtCss';
 import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
 import { Console } from '../mud/text/Console';
@@ -201,7 +202,6 @@ export class ScriptingAPI {
     readonly labels: ScriptingLabelsAPI;
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
-    readonly gmcp: Record<string, unknown> = {};
     profileName = '';
     readonly timers: TimerEngine;
     readonly keys: KeyEngine;
@@ -412,6 +412,7 @@ export class ScriptingAPI {
     }
 
     enableTrigger(name: string): boolean {
+        console.debug(`Enabling trigger: ${name}`);
         return this.triggerToggler?.(name, true) ?? false;
     }
 
@@ -664,6 +665,21 @@ export class ScriptingAPI {
     }
 
     /**
+     * Mudlet `selectCurrentLine([window])`. Selects the entire cursor line —
+     * equivalent to `selectSection(0, #getCurrentLine())`. Returns false when
+     * the named window doesn't exist; true otherwise (the main window always
+     * exists, even with no history yet).
+     */
+    selectCurrentLine(windowName?: string): boolean {
+        if (windowName && windowName !== 'main' && !this.session.windows.has(windowName)) {
+            return false;
+        }
+        const line = this.getConsole(windowName)?.getLine() ?? '';
+        this.selection = { windowName, start: 0, length: line.length };
+        return true;
+    }
+
+    /**
      * Mudlet `deselect([windowName])`. With a window name, only clears the
      * selection if it belongs to that window — selections in other consoles
      * remain intact. Without an arg, clears unconditionally.
@@ -691,6 +707,29 @@ export class ScriptingAPI {
 
     applyFormatToSelection(state: FormatStateSnapshot): void {
         this.applyStateToSelection(state);
+    }
+
+    /**
+     * Mudlet `setLink([windowName], command, hint)`. Applies a clickable
+     * hyperlink to the current selection — preserves existing colors/attributes
+     * on each segment (unlike setFgColor & friends which homogenize). `command`
+     * is the Lua code run on click; the Bridge.lua wrapper converts function
+     * arguments into a `__mudix_call_link(id)` string before reaching here.
+     * Returns false if there is no selection (or it doesn't belong to `win`).
+     */
+    setLink(cmd: string, tooltip: string, win?: string): boolean {
+        if (!this.selection) return false;
+        if (win !== undefined && !this.selectionMatches(win)) return false;
+        const sel = this.selection;
+        const buf = this.resolveBuffer(sel.windowName);
+        if (!buf) return false;
+        const hyperlink: FormatHyperlink = {
+            onClick: () => { this.executeScript?.(cmd); },
+            title: tooltip || undefined,
+        };
+        buf.setHyperlink([sel.start, sel.start + sel.length], hyperlink);
+        if (!this.inTriggerProcessing) buf.rerender();
+        return true;
     }
 
     // ── Trigger pipeline hooks (called by ScriptingEngine) ────────────────────
@@ -1036,10 +1075,13 @@ export class ScriptingAPI {
     // Real Mudlet APIs that scripts (theme switchers, package CSS) depend on.
     // Browser equivalent: install or replace a `<style>` tag in document.head
     // keyed by `tag` (app-wide) or window name (per-window). Per-window CSS is
-    // not auto-scoped — scripts that want true window-local rules must qualify
-    // their selectors with `[data-mudix-window="name"]` (added to text/html
-    // panels). After a successful app-level install we raise
-    // sysAppStyleSheetChange via `eventRaiser` so themes can hook re-applies.
+    // translated through `userWindowQssToScopedCss`: `QWidget { … }` (the
+    // canonical Mudlet selector) auto-scopes to `[data-mudix-window="name"]`,
+    // so a stylesheet like `QWidget { padding: 15 20; }` actually pads the
+    // window viewport. Scripts can still write the attribute selector
+    // explicitly for non-`QWidget` rules. After a successful app-level install
+    // we raise sysAppStyleSheetChange via `eventRaiser` so themes can hook
+    // re-applies.
 
     private eventRaiser: ((event: string, args: unknown[]) => void) | null = null;
 
@@ -1072,7 +1114,8 @@ export class ScriptingAPI {
             el.dataset.mudixUserwindowStylesheet = name;
             document.head.appendChild(el);
         }
-        el.textContent = css ?? '';
+        const scope = `[data-mudix-window="${cssEscape(name)}"]`;
+        el.textContent = userWindowQssToScopedCss(css ?? '', scope);
         return true;
     }
 
@@ -1108,6 +1151,26 @@ export class ScriptingAPI {
     }
 
     // ── Misc ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Mudlet `getTime()` — current local time as a record. The Bridge.lua wrapper
+     * picks fields off this object for the `{year, month, day, hour, min, sec,
+     * msec}` table form, and uses `wday` (0=Sun..6=Sat) to format `ddd`/`dddd`
+     * tokens when the script asks for a formatted string.
+     */
+    getTime(): { year: number; month: number; day: number; hour: number; min: number; sec: number; msec: number; wday: number } {
+        const d = new Date();
+        return {
+            year: d.getFullYear(),
+            month: d.getMonth() + 1,
+            day: d.getDate(),
+            hour: d.getHours(),
+            min: d.getMinutes(),
+            sec: d.getSeconds(),
+            msec: d.getMilliseconds(),
+            wday: d.getDay(),
+        };
+    }
 
     /**
      * Mudlet `getNetworkLatency()` — round-trip time of the most recent
@@ -1330,19 +1393,6 @@ export class ScriptingAPI {
 
     printError(text: string, source?: ScriptLogSource): void {
         this.session.events.emit('script.log', text, 'error', source);
-    }
-
-    updateGmcp(path: string, value: unknown): void {
-        const parts = path.split('.');
-        let node = this.gmcp as Record<string, unknown>;
-        for (let i = 0; i < parts.length - 1; i++) {
-            const key = parts[i];
-            if (typeof node[key] !== 'object' || node[key] === null) {
-                node[key] = {};
-            }
-            node = node[key] as Record<string, unknown>;
-        }
-        node[parts[parts.length - 1]] = value;
     }
 
     destroy(): void {

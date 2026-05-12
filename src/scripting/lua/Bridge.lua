@@ -329,6 +329,96 @@ function getModuleInfo(name, key)
     return info[key]
 end
 
+-- Mudlet getTime([asString, format]) → table or string.
+--   getTime()                    → { year, month, day, hour, min, sec, msec }
+--   getTime(true)                → string formatted with "hh:mm:ss.zzz"
+--   getTime(true, fmt)           → string formatted with QDateTime tokens:
+--     yyyy/yy, MMMM/MMM/MM/M, dddd/ddd/dd/d, HH/H (24h), hh/h (12h if AP present
+--     in format, otherwise 24h), mm/m, ss/s, zzz/z (ms), AP/A (uppercase) and
+--     ap/a (lowercase) for AM/PM. Unrecognized characters pass through literally.
+do
+    local DAYS_SHORT   = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"}
+    local DAYS_LONG    = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"}
+    local MONTHS_SHORT = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"}
+    local MONTHS_LONG  = {"January","February","March","April","May","June","July","August","September","October","November","December"}
+    -- Tokens scanned longest-first so "yyyy" beats "yy", "MMMM" beats "MM", etc.
+    local TOKENS = {
+        "yyyy","yy",
+        "MMMM","MMM","MM","M",
+        "dddd","ddd","dd","d",
+        "HH","H","hh","h",
+        "mm","m",
+        "ss","s",
+        "zzz","z",
+        "AP","ap","A","a",
+    }
+
+    local function formatTime(t, fmt)
+        local wdayIdx = (t.wday or 0) + 1
+        local isPM = t.hour >= 12
+        local h12 = t.hour % 12; if h12 == 0 then h12 = 12 end
+        -- h/hh switch to 12-hour when an AM/PM token is present in the format
+        -- (Qt QDateTime semantics). H/HH are always 24-hour regardless.
+        local hasAP = fmt:find("AP") or fmt:find("ap") or fmt:find("A") or fmt:find("a")
+        local R = {
+            yyyy = string.format("%04d", t.year),
+            yy   = string.format("%02d", t.year % 100),
+            MMMM = MONTHS_LONG[t.month] or "",
+            MMM  = MONTHS_SHORT[t.month] or "",
+            MM   = string.format("%02d", t.month),
+            M    = tostring(t.month),
+            dddd = DAYS_LONG[wdayIdx] or "",
+            ddd  = DAYS_SHORT[wdayIdx] or "",
+            dd   = string.format("%02d", t.day),
+            d    = tostring(t.day),
+            HH   = string.format("%02d", t.hour),
+            H    = tostring(t.hour),
+            hh   = string.format("%02d", hasAP and h12 or t.hour),
+            h    = tostring(hasAP and h12 or t.hour),
+            mm   = string.format("%02d", t.min),
+            m    = tostring(t.min),
+            ss   = string.format("%02d", t.sec),
+            s    = tostring(t.sec),
+            zzz  = string.format("%03d", t.msec),
+            z    = tostring(t.msec),
+            AP   = isPM and "PM" or "AM",
+            A    = isPM and "PM" or "AM",
+            ap   = isPM and "pm" or "am",
+            a    = isPM and "pm" or "am",
+        }
+        local out, i, n = {}, 1, #fmt
+        while i <= n do
+            local matched = false
+            for _, tok in ipairs(TOKENS) do
+                local len = #tok
+                if fmt:sub(i, i + len - 1) == tok then
+                    out[#out+1] = R[tok]
+                    i = i + len
+                    matched = true
+                    break
+                end
+            end
+            if not matched then
+                out[#out+1] = fmt:sub(i, i)
+                i = i + 1
+            end
+        end
+        return table.concat(out)
+    end
+
+    function getTime(asString, format)
+        local t = __getTime()
+        if not asString then
+            return {
+                year = t.year, month = t.month, day = t.day,
+                hour = t.hour, min   = t.min,   sec = t.sec,
+                msec = t.msec,
+            }
+        end
+        return formatTime(t, format or "hh:mm:ss.zzz")
+    end
+end
+
 -- Mudlet-compatible getMudletVersion. Behaviour:
 --   no arg / nil      → table { major, minor, revision, build }
 --   "string"          → "major.minor.revision[-build]"
@@ -393,6 +483,23 @@ end
 function __mudix_dispatch_cb_arg(id)
     local fn = __mudix_cb[id]
     if fn then return fn(__mudix_cb_arg) end
+end
+
+-- Mirrors Mudlet's TLuaInterpreter::parseJSON gmcp-table walk: descend
+-- gmcp.<part1>.<part2>... creating intermediate tables on demand and
+-- replace only the leaf, so siblings under the same parent survive.
+function __mudix_set_gmcp(key, value)
+    if type(gmcp) ~= 'table' then gmcp = {} end
+    local parts = {}
+    for part in string.gmatch(key, '[^.]+') do parts[#parts + 1] = part end
+    if #parts == 0 then return end
+    local node = gmcp
+    for i = 1, #parts - 1 do
+        local k = parts[i]
+        if type(node[k]) ~= 'table' then node[k] = {} end
+        node = node[k]
+    end
+    node[parts[#parts]] = value
 end
 
 -- JS event bridge. emitEvent() sets __mudix_evt_name + __mudix_evt_args
@@ -642,6 +749,22 @@ do
             args[ci] = '__mudix_call_link(' .. id .. ')'
         end
         return _raw(unpack(args))
+    end
+
+    -- setLink: same function→callback-id conversion; cmd is arg 2 with a window
+    -- prefix (3 args), arg 1 without (2 args).
+    local _rawSetLink = setLink
+    setLink = function(...)
+        local args = {...}
+        local n = #args
+        local ci = (n >= 3) and 2 or 1
+        if type(args[ci]) == 'function' then
+            _id = _id + 1
+            local id = _id
+            _fns[id] = args[ci]
+            args[ci] = '__mudix_call_link(' .. id .. ')'
+        end
+        return _rawSetLink(unpack(args))
     end
 end
 

@@ -83,6 +83,16 @@ do
         return f
     end
 
+    local _default_output, _default_input
+
+    local function _is_handle(obj)
+        if type(obj) ~= 'table' then return false end
+        for _, h in pairs(_handles) do
+            if h == obj then return true end
+        end
+        return false
+    end
+
     io = {
         open = function(filename, mode)
             local id = _open(tostring(filename), mode or 'r')
@@ -108,20 +118,50 @@ do
             end
         end,
 
-        read = function()
-            error('io.read (stdin) not supported', 2)
+        output = function(file)
+            if file == nil then return _default_output end
+            if type(file) == 'string' then
+                local f, e = io.open(file, 'w')
+                if not f then error(e, 2) end
+                _default_output = f
+            elseif _is_handle(file) then
+                _default_output = file
+            else
+                error('bad argument to io.output (file expected)', 2)
+            end
+            return _default_output
         end,
 
-        write = function()
-            error('io.write (stdout) not supported; use echo()', 2)
+        input = function(file)
+            if file == nil then return _default_input end
+            if type(file) == 'string' then
+                local f, e = io.open(file, 'r')
+                if not f then error(e, 2) end
+                _default_input = f
+            elseif _is_handle(file) then
+                _default_input = file
+            else
+                error('bad argument to io.input (file expected)', 2)
+            end
+            return _default_input
+        end,
+
+        read = function(...)
+            if _default_input then return _default_input:read(...) end
+            error('io.read (stdin) not supported; set io.input(file) first', 2)
+        end,
+
+        write = function(...)
+            if _default_output then return _default_output:write(...) end
+            error('io.write (stdout) not supported; use echo() or set io.output(file) first', 2)
         end,
 
         type = function(obj)
-            if type(obj) ~= 'table' then return nil end
-            for _, h in pairs(_handles) do
-                if h == obj then return 'file' end
+            if not _is_handle(obj) then
+                if type(obj) == 'table' then return 'closed file' end
+                return nil
             end
-            return 'closed file'
+            return 'file'
         end,
     }
 

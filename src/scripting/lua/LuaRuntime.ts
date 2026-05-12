@@ -12,7 +12,7 @@ import LUA_GLOBAL_SETUP from './LuaGlobalSetup.lua?raw';
 import LUASQL_LUA from './Luasql.lua?raw';
 import YAJL_LUA from './Yajl.lua?raw';
 import {setupRex} from './rex';
-import {setupYajl} from './yajl';
+import {setupYajl, type LuaValueTransform} from './yajl';
 import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
 import {QT_CURSOR_NAME_TO_INT, QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
 import {qtKeyToDomCode, qtModifiersToList} from '../../mud/keybindings/qtKeys';
@@ -71,10 +71,15 @@ export class LuaRuntime implements IScriptingRuntime {
     // selectCaptureGroup needs the actual offset of each capture in the
     // source line; without these spans it falls back to selectString(text, 1)
     // which picks the wrong occurrence when the captured text repeats.
-    // Indexed parallel to currentMatches: spans[0] = full match, spans[i] =
-    // capture group i. Empty when matches come from a non-PCRE source.
+    // Indexed as [cap1Span, cap2Span, ...] — explicit captures only, no
+    // full-match entry. Empty when matches come from a non-PCRE source.
     private currentCaptureSpans: CaptureSpan[] = [];
     private currentNamedSpans: Record<string, CaptureSpan> = {};
+    // Span of the whole regex match (Mudlet's `selectCaptureGroup(1)` target).
+    // Null when the matcher can't produce one (e.g. a perm substring trigger
+    // doesn't report a position) — selectCaptureGroup(1) then falls back to
+    // selectString on currentMatches[0].
+    private currentFullMatchSpan: CaptureSpan | null = null;
     private _denyCurrentSend = false;
     private destroyed = false;
     private http!: HttpService;
@@ -82,6 +87,10 @@ export class LuaRuntime implements IScriptingRuntime {
     // immediately. Called from saveProfile() so user code can ensure SQL state
     // is durable before the default 500 ms debounce window elapses.
     private flushPendingSqlSnapshots: () => void = () => {};
+    // Same JSON→Lua remap yajl uses (1-indexed arrays, null sentinel).
+    // Captured here so setGmcpValue can shape incoming GMCP payloads
+    // identically to Mudlet's `gmcp` global.
+    private toLuaValue: LuaValueTransform = v => v;
 
     private constructor(
         private readonly lua: Lua,
@@ -170,6 +179,11 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('getProfileName', () => this.api.profileName);
 
         this.lua.global.set('getEpoch', () => Date.now() / 1000);
+
+        // Mudlet `getTime([asString, format])`. The Bridge.lua wrapper handles
+        // the table-vs-string dispatch and Qt-style format token expansion on
+        // top of this raw time record.
+        this.lua.global.set('__getTime', () => this.api.getTime());
 
         // Stub primitive — Other.lua calls registerAnonymousEventHandler("*",
         // "dispatchEventToFunctions") at module load to wire up the global event
@@ -519,10 +533,11 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         // Mudlet setUserWindowStyleSheet(name, css) — install or replace a
-        // per-window CSS block. Selectors aren't auto-scoped — script authors
-        // can qualify with `[data-mudix-window="name"]` for true per-window
-        // rules, or use class selectors when they only apply that style to
-        // one panel anyway.
+        // per-window CSS block. `QWidget { … }` (the canonical Mudlet selector)
+        // and bare declarations auto-scope to `[data-mudix-window="name"]`, so
+        // a stylesheet like `QWidget { padding: 15 20; }` actually pads the
+        // panel viewport. Script authors can also write the attribute selector
+        // explicitly for rules that wouldn't be a plain QWidget block.
         this.lua.global.set('setUserWindowStyleSheet', (name: unknown, css: unknown) => {
             return this.api.setUserWindowStyleSheet(String(name ?? ''), String(css ?? ''));
         });
@@ -856,6 +871,17 @@ export class LuaRuntime implements IScriptingRuntime {
             const tooltip = hasWindow ? (d as string) : (c as string);
             const useCurrentFormat = !!(hasWindow ? e : d);
             this.api.echoLink(text, cmd, tooltip, win, useCurrentFormat);
+        });
+
+        // Mudlet `setLink([window,] cmd, hint)` — applies the link to the current
+        // selection. Function-cmd conversion is done in Bridge.lua (same pattern
+        // as echoLink). Disambiguate by argc: 3 strings → with-window, 2 → main.
+        this.lua.global.set('setLink', (a: unknown, b: unknown, c?: unknown) => {
+            const hasWindow = typeof c === 'string';
+            const win = hasWindow ? (a as string) : undefined;
+            const cmd = hasWindow ? (b as string) : (a as string);
+            const hint = hasWindow ? (c as string) : (b as string);
+            return this.api.setLink(cmd ?? '', hint ?? '', win);
         });
 
         // Lua wrapper converts cmds/hints tables to \x01-delimited strings before calling here.
@@ -1201,6 +1227,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 ? this.api.selectSection(b, c, a as string)
                 : this.api.selectSection(a as number, b);
         });
+        this.lua.global.set('selectCurrentLine', (win?: string) => this.api.selectCurrentLine(win));
         // Mudlet getSelection([window]) → text, start, length (3 returns) or
         // false, errMsg. The wasmoon → Lua boundary returns one value, so we
         // hand back a 0-indexed [text, start, length] array (or null) and let
@@ -1282,9 +1309,11 @@ export class LuaRuntime implements IScriptingRuntime {
                 const prevSpans = this.currentCaptureSpans;
                 const prevNamed = this.currentNamedSpans;
                 const prevMatches = this.currentMatches;
+                const prevFullMatchSpan = this.currentFullMatchSpan;
                 this.currentMatches = matches;
                 this.currentCaptureSpans = spans?.captureSpans ?? [];
                 this.currentNamedSpans = spans?.namedSpans ?? {};
+                this.currentFullMatchSpan = spans?.matchSpan ?? null;
                 this.setMatches(matches);
                 try {
                     dispatchCb(cbId, label);
@@ -1292,6 +1321,7 @@ export class LuaRuntime implements IScriptingRuntime {
                     this.currentMatches = prevMatches;
                     this.currentCaptureSpans = prevSpans;
                     this.currentNamedSpans = prevNamed;
+                    this.currentFullMatchSpan = prevFullMatchSpan;
                 }
                 fires++;
                 if (max > 0 && fires >= max) kill();
@@ -1396,36 +1426,43 @@ export class LuaRuntime implements IScriptingRuntime {
             this.api.replace(text, win, keepColor);
         });
         // Mudlet `selectCaptureGroup(groupNumber|groupName)`. Numeric form
-        // selects capture group N (1-indexed; N=0 is invalid in Mudlet).
+        // selects group N (1-indexed; N=0 is invalid). Mudlet's convention:
+        //   N=1 → full regex match (NOT the first capture)
+        //   N=2 → first explicit capture
+        //   N=k → (k-1)th explicit capture
         // Named form selects the (?<name>...) capture by name. Returns the
         // start column of the selection, or -1 if no such capture / unmatched.
         this.lua.global.set('selectCaptureGroup', (groupOrName: number | string) => {
-            const selectSpan = (span: { start: number; length: number }, fallbackText: string): number => {
-                if (span.length === 0) return -1;          // unmatched optional group
-                this.api.selectSection(span.start, span.length);
-                // Fall back to selectString if spans are absent (substring/exactMatch
-                // temp triggers). We still record the selection above, but it's
-                // bogus when start/length come from a non-PCRE source.
-                if (this.currentCaptureSpans.length === 0 && fallbackText) {
-                    return this.api.selectString(fallbackText, 1);
-                }
-                return span.start;
-            };
             if (typeof groupOrName === 'number') {
-                // currentMatches is [fullMatch, cap1, cap2, ...]; capture group N
-                // (Mudlet's numbering) maps to currentMatches[N], but our
-                // currentCaptureSpans is stored as [cap1Span, cap2Span, ...] (no
-                // full-match span), so capture N sits at spans[N - 1].
-                const matchIdx = groupOrName;
-                if (matchIdx < 1 || matchIdx >= this.currentMatches.length) return -1;
-                const text = this.currentMatches[matchIdx];
-                const span = this.currentCaptureSpans[matchIdx - 1];
+                if (groupOrName < 1) return -1;
+                if (groupOrName === 1) {
+                    if (this.currentFullMatchSpan) {
+                        if (this.currentFullMatchSpan.length === 0) return -1;
+                        this.api.selectSection(this.currentFullMatchSpan.start, this.currentFullMatchSpan.length);
+                        return this.currentFullMatchSpan.start;
+                    }
+                    // No span (substring/startOfLine perm trigger): pick the
+                    // first textual occurrence of the matched text.
+                    const text = this.currentMatches[0] ?? '';
+                    return text ? this.api.selectString(text, 1) : -1;
+                }
+                // Group N>1 is the (N-1)th explicit capture. currentMatches is
+                // [fullLine, cap1, cap2, ...], so the text sits at index N-1
+                // and the span at N-2 in currentCaptureSpans (which holds only
+                // explicit captures).
+                const captureIdx = groupOrName - 1;
+                if (captureIdx >= this.currentMatches.length) return -1;
+                const text = this.currentMatches[captureIdx];
+                const span = this.currentCaptureSpans[captureIdx - 1];
                 if (!span) return text ? this.api.selectString(text, 1) : -1;
-                return selectSpan(span, text);
+                if (span.length === 0) return -1;
+                this.api.selectSection(span.start, span.length);
+                return span.start;
             }
             const span = this.currentNamedSpans[groupOrName];
-            if (!span) return -1;
-            return selectSpan(span, '');
+            if (!span || span.length === 0) return -1;
+            this.api.selectSection(span.start, span.length);
+            return span.start;
         });
 
         // ── Network ───────────────────────────────────────────────────────────
@@ -1606,7 +1643,7 @@ export class LuaRuntime implements IScriptingRuntime {
         await sqliteReady;
         this.setupSqlBridge();
         this.exec(LUASQL_LUA, 'Luasql');
-        setupYajl(this.lua);
+        this.toLuaValue = setupYajl(this.lua).transform;
         this.exec(YAJL_LUA, 'Yajl');
         this.exec(LUAGLOBAL, 'LuaGlobal');
     }
@@ -1956,13 +1993,16 @@ export class LuaRuntime implements IScriptingRuntime {
         namedGroups?: Record<string, string>,
         captureSpans?: CaptureSpan[],
         namedSpans?: Record<string, CaptureSpan>,
+        fullMatchSpan?: CaptureSpan,
     ): void {
         const prevMatches = this.currentMatches;
         const prevSpans = this.currentCaptureSpans;
         const prevNamedSpans = this.currentNamedSpans;
+        const prevFullMatchSpan = this.currentFullMatchSpan;
         this.currentMatches = matches;
         this.currentCaptureSpans = captureSpans ?? [];
         this.currentNamedSpans = namedSpans ?? {};
+        this.currentFullMatchSpan = fullMatchSpan ?? null;
         this.setMatches(matches, multimatches, namedGroups);
         try {
             this.execInner(code, name);
@@ -1970,6 +2010,7 @@ export class LuaRuntime implements IScriptingRuntime {
             this.currentMatches = prevMatches;
             this.currentCaptureSpans = prevSpans;
             this.currentNamedSpans = prevNamedSpans;
+            this.currentFullMatchSpan = prevFullMatchSpan;
         }
     }
 
@@ -2082,6 +2123,16 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__mudix_evt_name', event);
         this.runChunk('__mudix_dispatch_event()', `event "${event}"`);
         this.api.flushOutput();
+    }
+
+    // Bridges a single GMCP message into the Lua `gmcp` global. Path is the
+    // dotted server key (e.g. "Char.Vitals"); value is the JSON-decoded payload.
+    // The leaf is replaced; siblings under shared parents are preserved.
+    setGmcpValue(path: string, value: unknown): void {
+        if (this.destroyed || !path) return;
+        this.lua.global.set('__mudix_gmcp_path', path);
+        this.lua.global.set('__mudix_gmcp_val', this.toLuaValue(value));
+        this.runChunk('__mudix_set_gmcp(__mudix_gmcp_path, __mudix_gmcp_val)', `set-gmcp "${path}"`);
     }
 
     /**

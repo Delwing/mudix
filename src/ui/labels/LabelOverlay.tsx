@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
 import type { LabelManager, LabelMouseEvent, LabelState, LabelWheelEvent } from './LabelManager';
-import { cssTextToParts, qtDeclarationsToCss } from './qtCss';
+import { cssTextToParts, qtDeclarationsToCss, cssEscape } from './qtCss';
 import './LabelOverlay.css';
 
 // Mudlet uses Qt::MouseButton flags (1=left, 2=right, 4=middle); DOM `button`
@@ -126,10 +126,3 @@ function Label({ l }: { l: LabelState }) {
     );
 }
 
-// CSS.escape polyfill for attribute selector values — IE/older Safari don't
-// expose it, and label names can contain hyphens/spaces/quotes a script writer
-// might choose. Cheap, identifier-only fallback when CSS.escape is unavailable.
-function cssEscape(s: string): string {
-    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s);
-    return s.replace(/["\\\n\r]/g, '\\$&');
-}

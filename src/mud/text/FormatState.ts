@@ -681,6 +681,38 @@ export class AnsiAwareBuffer {
         return this;
     }
 
+    /**
+     * Overlays a hyperlink on every segment in `range`, preserving each
+     * segment's existing colors/attributes. Pass `undefined` to clear any
+     * hyperlinks in the range. Unlike `applyFormat` (which homogenizes
+     * formatting across the range), this is segment-wise — used by Mudlet
+     * `setLink` so coloured selections remain coloured after becoming clickable.
+     */
+    setHyperlink(range: TextRange, hyperlink?: FormatHyperlink): this {
+        const [start, end] = range;
+        if (start >= end) return this;
+        this.assertRange(start, end);
+
+        const startPos = this.resolveIndex(start, true);
+        if (startPos.segmentIndex < this.segments.length) {
+            this.splitSegment(startPos.segmentIndex, startPos.offset);
+        }
+        const endPos = this.resolveIndex(end, true);
+        if (endPos.segmentIndex < this.segments.length) {
+            this.splitSegment(endPos.segmentIndex, endPos.offset);
+        }
+        const startIndex = this.resolveBoundaryIndex(start);
+        const endIndex = this.resolveBoundaryIndex(end);
+        for (let i = startIndex; i < endIndex; i++) {
+            const seg = this.segments[i];
+            const base = cloneState(seg.state) ?? {};
+            base.hyperlink = hyperlink ? {...hyperlink} : undefined;
+            seg.state = base;
+        }
+        this.normalizeSegments();
+        return this;
+    }
+
     colorWords(
         words: string | string[],
         color: number | FormatStateSnapshot,

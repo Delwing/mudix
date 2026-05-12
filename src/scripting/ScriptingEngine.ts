@@ -1096,6 +1096,7 @@ export class ScriptingEngine {
         namedGroups?: Record<string, string>,
         captureSpans?: { start: number; length: number }[],
         namedSpans?: Record<string, { start: number; length: number }>,
+        matchStart?: number,
     ): void {
         // Built-in command send
         if (trigger.command) {
@@ -1128,8 +1129,12 @@ export class ScriptingEngine {
         // User code
         if (trigger.code && trigger.language === 'lua') {
             try {
+                const fullMatchSpan = matchStart !== undefined && matchedText
+                    ? { start: matchStart, length: matchedText.length }
+                    : undefined;
                 this.runtimes.lua?.runWithMatches(
-                    trigger.code, trigger.name, matches, multimatches, namedGroups, captureSpans, namedSpans);
+                    trigger.code, trigger.name, matches, multimatches, namedGroups,
+                    captureSpans, namedSpans, fullMatchSpan);
             } catch (err) {
                 this.reportEntityError('trigger', trigger.id, trigger.name, err);
             }
@@ -1234,6 +1239,7 @@ export class ScriptingEngine {
                     m.namedGroups,
                     m.captureSpans,
                     m.namedSpans,
+                    m.matchStart,
                 );
             }
         } finally {
@@ -1264,9 +1270,19 @@ export class ScriptingEngine {
             session.events.on('client.connect', () => this.emit('connect', [])),
             session.events.on('client.disconnect', () => this.emit('disconnect', [])),
             session.events.on('gmcp', ({ path, value }) => {
-                console.log('[gmcp]', path, value);
-                this.api.updateGmcp(path, value);
-                this.emit('gmcp', [path, value]);
+                // Mirrors Mudlet TLuaInterpreter::parseJSON: write into the
+                // Lua `gmcp` global first (additively — only the leaf is
+                // replaced, siblings survive), then raise gmcp.Char,
+                // gmcp.Char.Items, gmcp.Char.Items.List for an incoming
+                // "Char.Items.List", each with args (eventName, fullKey).
+                if (!path) return;
+                this.runtimes.lua?.setGmcpValue(path, value);
+                const fullKey = `gmcp.${path}`;
+                let token = 'gmcp';
+                for (const segment of path.split('.')) {
+                    token += `.${segment}`;
+                    this.emit(token, [token, fullKey]);
+                }
             }),
             // Package install/uninstall events are dispatched by callers via
             // notifyPackageInstalled / notifyPackageUninstalled (not the
