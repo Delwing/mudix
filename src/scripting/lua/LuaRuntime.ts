@@ -186,12 +186,11 @@ export class LuaRuntime implements IScriptingRuntime {
         // top of this raw time record.
         this.lua.global.set('__getTime', () => this.api.getTime());
 
-        // Stub primitive — Other.lua calls registerAnonymousEventHandler("*",
-        // "dispatchEventToFunctions") at module load to wire up the global event
-        // bridge, then immediately overwrites this with its own Lua implementation.
-        // Our emitEvent calls dispatchEventToFunctions directly, so this stub
-        // only needs to satisfy that one bootstrap call.
-        this.lua.global.set('registerAnonymousEventHandler', () => 0);
+        // registerAnonymousEventHandler is provided by Bridge.lua — it mirrors
+        // Mudlet's C++ TLuaInterpreter::registerAnonymousEventHandler so module-
+        // load-time registrations (Geyser etc.) made before Other.lua's Lua-side
+        // override land in the native handler table dispatched from
+        // __mudix_dispatch_event.
 
         // raiseEvent runs every handler synchronously. JS is single-threaded
         // so handler-A-before-handler-B ordering falls out of the call stack.

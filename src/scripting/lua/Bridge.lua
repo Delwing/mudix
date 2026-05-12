@@ -502,6 +502,22 @@ function __mudix_set_gmcp(key, value)
     node[parts[#parts]] = value
 end
 
+-- Mirrors Mudlet's C++ TLuaInterpreter::registerAnonymousEventHandler: stores
+-- (event name → list of Lua function names) keyed registrations made by scripts
+-- loaded before Other.lua's Lua-side override takes effect (notably
+-- GeyserReposition). __mudix_dispatch_event reads from here and from
+-- dispatchEventToFunctions, just like Mudlet's C++ raiseEvent dispatches both
+-- C-side anonymous handlers and the wildcard ("*") Lua dispatcher.
+__mudix_native_handlers = __mudix_native_handlers or {}
+function registerAnonymousEventHandler(event, func)
+    if type(event) ~= 'string' or type(func) ~= 'string' then return 0 end
+    local list = __mudix_native_handlers[event]
+    if not list then list = {}; __mudix_native_handlers[event] = list end
+    for _, existing in ipairs(list) do if existing == func then return 0 end end
+    list[#list + 1] = func
+    return 0
+end
+
 -- JS event bridge. emitEvent() sets __mudix_evt_name + __mudix_evt_args
 -- (a JS array, so its keys are 0-indexed) and runs this dispatcher.
 function __mudix_dispatch_event()
@@ -521,6 +537,18 @@ function __mudix_dispatch_event()
     if type(_G[event]) == 'function' then
         local ok, err = pcall(_G[event], unpack(args))
         if not ok and type(showHandlerError) == 'function' then showHandlerError(event, err) end
+    end
+    -- Native handlers registered before Other.lua overrode registerAnonymousEventHandler.
+    -- Mudlet's C++ raiseEvent passes `event` as the first argument followed by event args.
+    local nativeList = __mudix_native_handlers[event]
+    if nativeList then
+        for _, funcName in ipairs(nativeList) do
+            local f = _G[funcName]
+            if type(f) == 'function' then
+                local ok, err = pcall(f, event, unpack(args))
+                if not ok and type(showHandlerError) == 'function' then showHandlerError(event, err) end
+            end
+        end
     end
     if type(dispatchEventToFunctions) == 'function' then
         dispatchEventToFunctions(event, unpack(args))
