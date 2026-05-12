@@ -1749,6 +1749,33 @@ html, body, #root {
     flex-shrink: 0;
 }
 
+/* ── Audio preview ──────────────────────────────────────────────────────── */
+
+.vfs-audio-preview {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 16px;
+    overflow: auto;
+}
+
+.vfs-audio {
+    width: min(440px, 100%);
+}
+
+.vfs-audio-meta {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    font-family: var(--font-mono), monospace;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
+
 /* ── SQLite preview ─────────────────────────────────────────────────────── */
 
 .vfs-sql-list {

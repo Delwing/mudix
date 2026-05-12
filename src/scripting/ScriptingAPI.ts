@@ -1133,6 +1133,8 @@ export class ScriptingAPI {
 
     get cmdLineMenu() { return this.session.cmdLineMenu; }
 
+    get sounds() { return this.session.sounds; }
+
     /**
      * Mudlet `loadMap([location])`. Persists the bytes (when given) to the
      * connection's binary-map IndexedDB slot and re-renders any open MapPanel.

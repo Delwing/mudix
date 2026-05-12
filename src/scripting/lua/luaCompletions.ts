@@ -438,6 +438,14 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('lowerLabel',          '(name)',                              'Lower a label below all other labels (z-index).'),
     fn('setLabelCursor',      '(name, shape)',                       'Set the mouse cursor over a label. shape is a Qt::CursorShape int (or string name; see mudlet.cursor). -1 resets.'),
     fn('resetLabelCursor',    '(name)',                              'Restore the default cursor on a label.'),
+    // Sounds
+    fn('playSoundFile',       '(filename [, volume]) | ({name=..., volume=..., fadein=..., fadeout=..., start=..., loops=..., key=..., tag=...})',
+       'Play a sound effect. Filename resolves against the profile VFS (e.g. "media/hit.wav") or may be an absolute http(s):// URL. Volume 0..100; loops -1=infinite; fadein/fadeout/start in ms. Browser audio unlocks after the first user gesture; before that, playback is queued until unlock.'),
+    fn('playMusicFile',       '({name=..., volume=..., fadein=..., fadeout=..., start=..., loops=..., key=..., tag=..., ["continue"]=bool})',
+       'Play a music track. One track per key (or per name when no key) — a second call replaces it. With continue=true the call is a no-op if a matching track is already playing.'),
+    fn('stopSounds',          '()',                                  'Stop all currently playing sound effects (does not stop music).'),
+    fn('stopMusic',           '([{name=..., key=..., tag=..., fadeout=...}])',
+       'Stop matching music tracks. With no args, stops all music. fadeout (ms) overrides the per-track fadeout for this call.'),
     // rex
     ns('rex', 'PCRE-compatible regex module: rex.match(), rex.find(), rex.new()'),
     // Globals / tables

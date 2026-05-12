@@ -1527,6 +1527,67 @@ export class LuaRuntime implements IScriptingRuntime {
             );
         });
 
+        // ── Sounds (Mudlet playSoundFile / playMusicFile / stopSounds / stopMusic) ─
+        // Web Audio backend lives on session.sounds. Lua passes either a positional
+        // (filename [, volume]) form for playSoundFile, or a Mudlet-style options
+        // table for both play* and stopMusic. Bridge.lua normalises positional →
+        // table before reaching these primitives.
+        const sounds = this.api.sounds;
+        const detachOpts = (t: unknown): Record<string, unknown> => {
+            if (!t || typeof t !== 'object') return {};
+            const proxy = t as { $detach?: (dt: number) => Record<string, unknown> };
+            return typeof proxy.$detach === 'function' ? proxy.$detach(1) : (t as Record<string, unknown>);
+        };
+        const numOpt = (v: unknown): number | undefined => {
+            if (v === undefined || v === null) return undefined;
+            const n = Number(v);
+            return Number.isFinite(n) ? n : undefined;
+        };
+        const strOpt = (v: unknown): string | undefined => {
+            if (v === undefined || v === null) return undefined;
+            const s = String(v);
+            return s.length > 0 ? s : undefined;
+        };
+        this.lua.global.set('__playSoundFile', (t: unknown) => {
+            const o = detachOpts(t);
+            void sounds.playSound({
+                name: String(o.name ?? ''),
+                volume: numOpt(o.volume),
+                fadein: numOpt(o.fadein),
+                fadeout: numOpt(o.fadeout),
+                start: numOpt(o.start),
+                loops: numOpt(o.loops),
+                key: strOpt(o.key),
+                tag: strOpt(o.tag),
+            });
+            return true;
+        });
+        this.lua.global.set('__playMusicFile', (t: unknown) => {
+            const o = detachOpts(t);
+            void sounds.playMusic({
+                name: String(o.name ?? ''),
+                volume: numOpt(o.volume),
+                fadein: numOpt(o.fadein),
+                fadeout: numOpt(o.fadeout),
+                start: numOpt(o.start),
+                loops: numOpt(o.loops),
+                key: strOpt(o.key),
+                tag: strOpt(o.tag),
+                continue: o.continue === true || o['continue'] === true,
+            });
+            return true;
+        });
+        this.lua.global.set('stopSounds', () => { sounds.stopSounds(); });
+        this.lua.global.set('__stopMusic', (t?: unknown) => {
+            const o = detachOpts(t);
+            sounds.stopMusic({
+                name: strOpt(o.name),
+                key: strOpt(o.key),
+                tag: strOpt(o.tag),
+                fadeout: numOpt(o.fadeout),
+            });
+        });
+
         // ── Window geometry ───────────────────────────────────────────────────
         // Returns [w, h] from JS; a Lua wrapper below unpacks it to two values.
         // __getUserWindowSize returns null when the window doesn't exist so

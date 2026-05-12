@@ -372,6 +372,87 @@ function ImagePreview({ filename, path, vfs }: PreviewProps) {
     );
 }
 
+const AUDIO_MIME: Record<string, string> = {
+    mp3: 'audio/mpeg',
+    ogg: 'audio/ogg',
+    oga: 'audio/ogg',
+    opus: 'audio/ogg',
+    wav: 'audio/wav',
+    flac: 'audio/flac',
+    m4a: 'audio/mp4',
+    aac: 'audio/aac',
+    webm: 'audio/webm',
+};
+
+function getAudioMime(filename: string): string | null {
+    const dot = filename.lastIndexOf('.');
+    if (dot < 0) return null;
+    return AUDIO_MIME[filename.substring(dot + 1).toLowerCase()] ?? null;
+}
+
+function formatDuration(seconds: number): string {
+    if (!Number.isFinite(seconds) || seconds < 0) return '–:––';
+    const total = Math.round(seconds);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function AudioPreview({ filename, path, vfs }: PreviewProps) {
+    const [url, setUrl]       = useState<string | null>(null);
+    const [error, setError]   = useState<string | null>(null);
+    const [size, setSize]     = useState(0);
+    const [duration, setDuration] = useState<number | null>(null);
+
+    useEffect(() => {
+        setUrl(null);
+        setError(null);
+        setDuration(null);
+        let objectUrl: string | null = null;
+        try {
+            const raw = vfs.readBinaryFile(path);
+            const bytes = new Uint8Array(raw.byteLength);
+            bytes.set(raw);
+            const mime = getAudioMime(filename) ?? 'application/octet-stream';
+            const blob = new Blob([bytes], { type: mime });
+            objectUrl = URL.createObjectURL(blob);
+            setUrl(objectUrl);
+            setSize(bytes.byteLength);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+        return () => {
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+        };
+    }, [path, filename, vfs]);
+
+    if (error) {
+        return (
+            <div className="vfs-preview-error">
+                <span className="vfs-preview-error-label">Cannot read audio</span>
+                <span>{error}</span>
+            </div>
+        );
+    }
+    if (!url) return null;
+    return (
+        <div className="vfs-audio-preview">
+            <audio
+                className="vfs-audio"
+                controls
+                preload="metadata"
+                src={url}
+                onLoadedMetadata={e => setDuration(e.currentTarget.duration)}
+                onError={() => setError('Failed to decode audio')}
+            />
+            <div className="vfs-audio-meta">
+                {duration !== null && <span>{formatDuration(duration)}</span>}
+                <span>{formatSize(size)}</span>
+            </div>
+        </div>
+    );
+}
+
 function fileExtLower(filename: string): string {
     const i = filename.lastIndexOf('.');
     return i >= 0 ? filename.substring(i + 1).toLowerCase() : '';
@@ -388,13 +469,18 @@ const imageStrategy: FilePreviewStrategy = {
     isBinary: true,
     Preview: ImagePreview,
 };
+const audioStrategy: FilePreviewStrategy = {
+    canPreview: (n) => getAudioMime(n) !== null,
+    isBinary: true,
+    Preview: AudioPreview,
+};
 const codeEditorStrategy: FilePreviewStrategy = {
     canPreview: (n) => EDITABLE_EXTENSIONS.has(fileExtLower(n)),
     Preview: CodeEditorPreview,
 };
 
 // Add new strategies here — order matters, first match wins
-const previewStrategies: FilePreviewStrategy[] = [sqliteStrategy, imageStrategy, codeEditorStrategy, plainTextStrategy];
+const previewStrategies: FilePreviewStrategy[] = [sqliteStrategy, imageStrategy, audioStrategy, codeEditorStrategy, plainTextStrategy];
 
 function getPreviewStrategy(filename: string): FilePreviewStrategy {
     return previewStrategies.find(s => s.canPreview(filename)) ?? plainTextStrategy;

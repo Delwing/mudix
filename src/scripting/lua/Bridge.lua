@@ -840,3 +840,34 @@ do
         return _raw(win, text, table.concat(cs, SEP), table.concat(hs, SEP), fmt)
     end
 end
+
+-- Mudlet `playSoundFile`. Accepts either:
+--   playSoundFile(filename [, volume])     -- positional
+--   playSoundFile({name=..., volume=..., fadein=..., fadeout=..., start=...,
+--                  loops=..., key=..., tag=...})
+-- Volume is 0..100. Filename resolves against the profile VFS (e.g.
+-- "media/hit.wav") or may be an absolute http(s):// URL.
+function playSoundFile(a, b)
+    if type(a) == 'table' then
+        return __playSoundFile(a)
+    end
+    return __playSoundFile({ name = tostring(a or ''), volume = b })
+end
+
+-- Mudlet `playMusicFile`. Table-arg only:
+--   playMusicFile({name=..., volume=..., fadein=..., fadeout=..., start=...,
+--                  loops=..., key=..., tag=..., ["continue"]=true|false})
+-- When `continue=true` and a track with the same key (or name when no key) is
+-- already playing, the call is a no-op. Otherwise the previous matching track
+-- is stopped and the new one starts.
+function playMusicFile(opts)
+    if type(opts) ~= 'table' then return false end
+    return __playMusicFile(opts)
+end
+
+-- Mudlet `stopMusic([{name=..., key=..., tag=..., fadeout=...}])`.
+-- With no filters, stops every music track. fadeout (ms) overrides the
+-- per-track fadeout for this stop call.
+function stopMusic(opts)
+    __stopMusic(opts)
+end

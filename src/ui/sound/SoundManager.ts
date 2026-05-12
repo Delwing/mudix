@@ -1,0 +1,388 @@
+// Web Audio backend for Mudlet's playSoundFile / playMusicFile / stopSounds /
+// stopMusic. One AudioContext shared across managers (browsers cap them at a
+// handful), one gesture-unlock listener for the whole document, and one
+// AudioBuffer cache keyed by resolved path — decoding an mp3 is the slow part,
+// so caching it lets repeated trigger fires sound instant.
+//
+// Background-tab reliability:
+//   • Pure Web Audio survives tab backgrounding on every desktop browser; the
+//     AudioContext's clock keeps running even when setTimeout is throttled.
+//   • iOS Safari and some mobile Chrome variants suspend the context on hide.
+//     A `visibilitychange` resume() handler covers those.
+//   • Music tracks register MediaSession metadata so the OS sees this as a
+//     media app — required on iOS for continued background audio and gives
+//     OS-level transport controls for free.
+//   • A persistent silent oscillator (gain 0) is kept running whenever any
+//     sound is active. Chromium throttles "silent" contexts; this keeps the
+//     output stream busy so timing stays sample-accurate across visibility
+//     changes.
+
+type LoaderFn = (path: string) => Promise<ArrayBuffer | null>;
+
+export interface PlaySoundOptions {
+    name: string;
+    /** 0..100 — Mudlet scale. Default 50. */
+    volume?: number;
+    /** Fade-in duration in milliseconds. */
+    fadein?: number;
+    /** Fade-out duration in milliseconds (on natural end or stop). */
+    fadeout?: number;
+    /** Start offset within the buffer, in milliseconds. */
+    start?: number;
+    /** Loop count. 1 = play once (default). -1 = infinite. N>1 = N total plays. */
+    loops?: number;
+    /** Dedupe key — calling again with same key replaces the previous one. */
+    key?: string;
+    /** Group tag — stopMusic({tag=...}) and stopSounds() filter on this. */
+    tag?: string;
+}
+
+export interface PlayMusicOptions extends PlaySoundOptions {
+    /** If true and a music track with the same name+key is already playing, do nothing. */
+    continue?: boolean;
+}
+
+export interface StopMusicOptions {
+    name?: string;
+    key?: string;
+    tag?: string;
+    /** Fade-out duration in milliseconds. Overrides the source's own fadeout. */
+    fadeout?: number;
+}
+
+interface ActiveSource {
+    id: number;
+    kind: 'sound' | 'music';
+    name: string;
+    key?: string;
+    tag?: string;
+    source: AudioBufferSourceNode;
+    gain: GainNode;
+    fadeout: number;
+    volume: number;
+    /** Set once stop() has been called so the onended handler doesn't try to fade a stopped source. */
+    stopping: boolean;
+}
+
+let sharedContext: AudioContext | null = null;
+let sharedKeepAlive: OscillatorNode | null = null;
+let unlockInstalled = false;
+const decodeCache = new Map<string, Promise<AudioBuffer>>();
+
+function getContext(): AudioContext | null {
+    if (sharedContext) return sharedContext;
+    const Ctor: typeof AudioContext | undefined =
+        typeof window !== 'undefined'
+            ? (window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)
+            : undefined;
+    if (!Ctor) return null;
+    sharedContext = new Ctor({ latencyHint: 'interactive' });
+    installUnlock();
+    installVisibilityResume();
+    return sharedContext;
+}
+
+function installUnlock(): void {
+    if (unlockInstalled || typeof document === 'undefined') return;
+    unlockInstalled = true;
+    const unlock = () => {
+        const ctx = sharedContext;
+        if (!ctx) return;
+        if (ctx.state === 'suspended') void ctx.resume();
+        // iOS Safari only fully unlocks after a no-op buffer plays inside the gesture.
+        try {
+            const src = ctx.createBufferSource();
+            src.buffer = ctx.createBuffer(1, 1, 22050);
+            src.connect(ctx.destination);
+            src.start(0);
+            src.stop(ctx.currentTime + 0.001);
+        } catch { /* ignore */ }
+    };
+    const opts = { capture: true, passive: true } as AddEventListenerOptions;
+    document.addEventListener('pointerdown', unlock, opts);
+    document.addEventListener('keydown', unlock, opts);
+    document.addEventListener('touchstart', unlock, opts);
+}
+
+function installVisibilityResume(): void {
+    if (typeof document === 'undefined') return;
+    document.addEventListener('visibilitychange', () => {
+        const ctx = sharedContext;
+        if (!ctx) return;
+        if (document.visibilityState === 'visible' && ctx.state === 'suspended') {
+            void ctx.resume();
+        }
+    });
+}
+
+function ensureKeepAlive(): void {
+    const ctx = sharedContext;
+    if (!ctx || sharedKeepAlive) return;
+    try {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        g.gain.value = 0;
+        osc.connect(g).connect(ctx.destination);
+        osc.start();
+        sharedKeepAlive = osc;
+    } catch { /* ignore — some browsers reject pre-gesture */ }
+}
+
+function decodeBuffer(ctx: AudioContext, path: string, loader: LoaderFn): Promise<AudioBuffer> {
+    let pending = decodeCache.get(path);
+    if (pending) return pending;
+    pending = (async () => {
+        const bytes = await loader(path);
+        if (!bytes) throw new Error(`sound: failed to load "${path}"`);
+        // decodeAudioData detaches the buffer on some engines; pass a copy so a
+        // cache miss followed by a hit doesn't surprise the second caller.
+        const copy = bytes.slice(0);
+        return await ctx.decodeAudioData(copy);
+    })();
+    pending.catch(() => decodeCache.delete(path));
+    decodeCache.set(path, pending);
+    return pending;
+}
+
+async function defaultLoader(path: string): Promise<ArrayBuffer | null> {
+    if (/^https?:|^data:|^blob:/.test(path)) {
+        const res = await fetch(path);
+        if (!res.ok) return null;
+        return await res.arrayBuffer();
+    }
+    return null;
+}
+
+export class SoundManager {
+    private nextId = 1;
+    private active = new Map<number, ActiveSource>();
+    private loader: LoaderFn = defaultLoader;
+    /** 0..1, applied as an extra multiplier on every source's gain. */
+    private masterVolume = 1;
+
+    setLoader(fn: LoaderFn | null): void {
+        // Different profiles can resolve the same VFS-relative path (e.g.
+        // "media/hit.wav") to different bytes — clear the decoded-buffer cache
+        // on every loader swap so cross-profile contamination is impossible.
+        decodeCache.clear();
+        this.loader = fn ?? defaultLoader;
+    }
+
+    setMasterVolume(value: number): void {
+        const v = Number(value);
+        this.masterVolume = Number.isFinite(v) ? Math.max(0, Math.min(1, v / 100)) : 1;
+        const ctx = sharedContext;
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        for (const a of this.active.values()) {
+            a.gain.gain.cancelScheduledValues(now);
+            a.gain.gain.setValueAtTime(a.volume * this.masterVolume, now);
+        }
+    }
+
+    async playSound(opts: PlaySoundOptions): Promise<number> {
+        return this.play('sound', opts);
+    }
+
+    async playMusic(opts: PlayMusicOptions): Promise<number> {
+        if (opts.continue && this.isMusicPlaying(opts.name, opts.key)) return -1;
+        // Mudlet music semantics: a new music track replaces the previous one
+        // matching the same key (or, when no key, the same name).
+        this.stopMusicMatching(opts.name, opts.key);
+        return this.play('music', opts);
+    }
+
+    stopSounds(): void {
+        const ctx = sharedContext;
+        if (!ctx) return;
+        for (const a of [...this.active.values()]) {
+            if (a.kind === 'sound') this.fadeAndStop(ctx, a, a.fadeout);
+        }
+    }
+
+    stopMusic(opts: StopMusicOptions = {}): void {
+        const ctx = sharedContext;
+        if (!ctx) return;
+        for (const a of [...this.active.values()]) {
+            if (a.kind !== 'music') continue;
+            if (opts.name && a.name !== opts.name) continue;
+            if (opts.key && a.key !== opts.key) continue;
+            if (opts.tag && a.tag !== opts.tag) continue;
+            const fade = opts.fadeout !== undefined ? opts.fadeout : a.fadeout;
+            this.fadeAndStop(ctx, a, fade);
+        }
+        this.updateMediaSessionState();
+    }
+
+    /** Stop everything this manager owns. Call on engine teardown. */
+    stopAll(): void {
+        const ctx = sharedContext;
+        if (!ctx) return;
+        for (const a of [...this.active.values()]) {
+            try { a.source.onended = null; a.source.stop(); } catch { /* already stopped */ }
+        }
+        this.active.clear();
+        this.updateMediaSessionState();
+    }
+
+    destroy(): void {
+        this.stopAll();
+    }
+
+    // ── internal ──────────────────────────────────────────────────────────────
+
+    private async play(kind: 'sound' | 'music', opts: PlaySoundOptions): Promise<number> {
+        const ctx = getContext();
+        if (!ctx) return -1;
+        const name = opts.name;
+        if (!name) return -1;
+
+        // Replace any source with the same explicit key in this kind.
+        if (opts.key) {
+            for (const a of [...this.active.values()]) {
+                if (a.kind === kind && a.key === opts.key) this.fadeAndStop(ctx, a, 0);
+            }
+        }
+
+        if (ctx.state === 'suspended') {
+            // Resume is async but cheap. If the gesture hasn't happened yet the
+            // resume will just stay pending; the play below will still queue and
+            // start automatically once unlock fires.
+            void ctx.resume();
+        }
+
+        let buffer: AudioBuffer;
+        try {
+            buffer = await decodeBuffer(ctx, name, this.loader);
+        } catch (e) {
+            console.warn(`[sound] decode failed for "${name}":`, e);
+            return -1;
+        }
+
+        const volume = clamp01((opts.volume ?? 50) / 100);
+        const fadein = Math.max(0, opts.fadein ?? 0);
+        const fadeout = Math.max(0, opts.fadeout ?? 0);
+        const loops = opts.loops ?? 1;
+        const startOffset = Math.max(0, (opts.start ?? 0) / 1000);
+
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        const gain = ctx.createGain();
+        source.connect(gain).connect(ctx.destination);
+
+        const target = volume * this.masterVolume;
+        const now = ctx.currentTime;
+        if (fadein > 0) {
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(target, now + fadein / 1000);
+        } else {
+            gain.gain.setValueAtTime(target, now);
+        }
+
+        // Loops: -1 → infinite, 1 → one-shot, N>1 → repeat (N-1) more times.
+        // Web Audio loop is binary; for finite N>1 we set loop=true and stop
+        // the source after N*duration. Source.duration accounts for sampleRate
+        // mismatches between buffer and context.
+        if (loops === -1) {
+            source.loop = true;
+        } else if (loops > 1) {
+            source.loop = true;
+            const stopAt = now + (buffer.duration - startOffset) * loops;
+            try { source.stop(stopAt); } catch { /* offset out of range, ignore */ }
+        }
+
+        try {
+            source.start(now, startOffset);
+        } catch (e) {
+            console.warn(`[sound] start failed for "${name}":`, e);
+            return -1;
+        }
+
+        const id = this.nextId++;
+        const record: ActiveSource = {
+            id,
+            kind,
+            name,
+            key: opts.key,
+            tag: opts.tag,
+            source,
+            gain,
+            fadeout,
+            volume,
+            stopping: false,
+        };
+        this.active.set(id, record);
+        ensureKeepAlive();
+
+        source.onended = () => {
+            this.active.delete(id);
+            if (kind === 'music') this.updateMediaSessionState();
+        };
+
+        if (kind === 'music') this.updateMediaSessionState(name);
+        return id;
+    }
+
+    private fadeAndStop(ctx: AudioContext, a: ActiveSource, fadeMs: number): void {
+        if (a.stopping) return;
+        a.stopping = true;
+        const now = ctx.currentTime;
+        if (fadeMs > 0) {
+            const cur = a.gain.gain.value;
+            a.gain.gain.cancelScheduledValues(now);
+            a.gain.gain.setValueAtTime(cur, now);
+            a.gain.gain.linearRampToValueAtTime(0, now + fadeMs / 1000);
+            try { a.source.stop(now + fadeMs / 1000); } catch { /* already stopped */ }
+        } else {
+            try { a.source.stop(); } catch { /* already stopped */ }
+        }
+    }
+
+    private isMusicPlaying(name: string, key: string | undefined): boolean {
+        for (const a of this.active.values()) {
+            if (a.kind !== 'music') continue;
+            if (key !== undefined) { if (a.key === key) return true; }
+            else if (a.name === name) return true;
+        }
+        return false;
+    }
+
+    private stopMusicMatching(name: string, key: string | undefined): void {
+        const ctx = sharedContext;
+        if (!ctx) return;
+        for (const a of [...this.active.values()]) {
+            if (a.kind !== 'music') continue;
+            const match = key !== undefined ? a.key === key : a.name === name;
+            if (match) this.fadeAndStop(ctx, a, 0);
+        }
+    }
+
+    private updateMediaSessionState(playingTitle?: string): void {
+        if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+        const ms = navigator.mediaSession;
+        const anyMusic = playingTitle ?? this.firstActiveMusicName();
+        if (anyMusic) {
+            try {
+                ms.metadata = new MediaMetadata({
+                    title: anyMusic.split('/').pop() ?? anyMusic,
+                    artist: 'Mudix',
+                });
+            } catch { /* MediaMetadata missing on older Safari */ }
+            ms.playbackState = 'playing';
+        } else {
+            ms.playbackState = 'none';
+        }
+    }
+
+    private firstActiveMusicName(): string | null {
+        for (const a of this.active.values()) {
+            if (a.kind === 'music' && !a.stopping) return a.name;
+        }
+        return null;
+    }
+}
+
+function clamp01(v: number): number {
+    if (!Number.isFinite(v)) return 0;
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+}

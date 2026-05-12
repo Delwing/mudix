@@ -596,6 +596,27 @@ export class ScriptingEngine {
                 if (!v) return css;
                 return rewriteVfsUrlsInCss(css, this.connectionId, v);
             });
+            // Sound loader: absolute URLs hit the network; everything else is
+            // resolved against the mounted profile VFS so package-bundled sounds
+            // work out of the box.
+            this.session.sounds.setLoader(async (path) => {
+                if (/^https?:|^data:|^blob:/.test(path)) {
+                    const res = await fetch(path);
+                    if (!res.ok) return null;
+                    return await res.arrayBuffer();
+                }
+                const v = this.vfs;
+                if (!v) return null;
+                const abs = path.startsWith('/') ? `${v.profilePath}${path}` : `${v.profilePath}/${path}`;
+                try {
+                    const bytes = v.readBinaryFile(abs);
+                    const out = new ArrayBuffer(bytes.byteLength);
+                    new Uint8Array(out).set(bytes);
+                    return out;
+                } catch {
+                    return null;
+                }
+            });
             this.triggerEngine.setLuaEval((code) => {
                 const lua = this.runtimes.lua;
                 return lua ? lua.evalTriggerPattern(code) : false;
@@ -1016,6 +1037,8 @@ export class ScriptingEngine {
         this.api.setExpandAlias(null);
         this.api.setSendRequestDispatcher(null);
         this.api.setCssRewriter(null);
+        this.session.sounds.stopAll();
+        this.session.sounds.setLoader(null);
         this.api.destroy();
         const oldVfs = this.vfs;
         this.vfs = null;

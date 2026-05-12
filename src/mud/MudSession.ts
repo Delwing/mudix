@@ -1,6 +1,7 @@
 import { EventBus } from '../core/EventBus';
 import { WindowManager } from '../ui/windows/WindowManager';
 import { LabelManager } from '../ui/labels/LabelManager';
+import { SoundManager } from '../ui/sound/SoundManager';
 import { CmdLineMenuRegistry } from '../ui/CmdLineMenuRegistry';
 import { MudClient, type MudClientOptions } from './connection/MudClient';
 import { PingTracker } from './connection/PingTracker';
@@ -31,6 +32,7 @@ export class MudSession {
     readonly events = new EventBus<MudEvents>();
     readonly windows = new WindowManager();
     readonly labels = new LabelManager();
+    readonly sounds = new SoundManager();
     readonly cmdLineMenu = new CmdLineMenuRegistry();
     /** Per-window Console instances. 'main' registered by ScriptingAPI; named windows by WindowManager. */
     readonly consoles = new Map<string, Console>();
