@@ -96,7 +96,7 @@ export function StickyOutputPanel({
 
     const wrapStyle: React.CSSProperties | undefined = (background || fontSize || fontFamily || (wrapAt && wrapAt > 0)) ? {
         ...(background ? { background } : {}),
-        ...(fontSize ? { fontSize: `${fontSize}px` } : {}),
+        ...(fontSize ? { fontSize: `${fontSize}pt` } : {}),
         ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),
         ...(wrapAt && wrapAt > 0 ? { ['--wrap-cols' as string]: `${wrapAt}ch` } : {}),
     } : undefined;
@@ -126,7 +126,7 @@ export function StickyOutputPanel({
                 style={{
                     height: stickyHeight,
                     ...(background ? { background } : {}),
-                    ...(fontSize ? { fontSize: `${fontSize}px` } : {}),
+                    ...(fontSize ? { fontSize: `${fontSize}pt` } : {}),
                     ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),
                     ...(wrapAt && wrapAt > 0 ? { ['--wrap-cols' as string]: `${wrapAt}ch` } : {}),
                 }}
