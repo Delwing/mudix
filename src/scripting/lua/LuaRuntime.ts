@@ -742,8 +742,10 @@ export class LuaRuntime implements IScriptingRuntime {
         // ── Map context-menu events ───────────────────────────────────────────
         // Mudlet addMapEvent(uniqueName, eventName [, parent [, displayName [, ...args]]]).
         // Right-click on a room → context menu of registered entries; clicking one
-        // fires raiseEvent(eventName, roomId, ...args) (roomId prepended so handlers
-        // know which room was clicked — Mudlet leaves the room implicit).
+        // fires raiseEvent(eventName, uniqueName, roomId) — matching Mudlet's
+        // T2DMap::slot_userAction selection branch. mudix treats the right-clicked
+        // room as the selection (we don't have multi-select); the extra args
+        // registered with addMapEvent are dropped, same as Mudlet does here.
         this.api.map.setMapEventDispatcher((event, args) => this.emitEvent(event, args));
         // Mudlet add/removeMapEvent don't return anything (mutating registry
         // primitives). We drop the JS bool result so Lua callers can't pattern

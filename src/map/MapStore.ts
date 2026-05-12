@@ -80,7 +80,9 @@ export interface MapEventEntry {
     parent: string | null;
     /** Label rendered in the context menu. Defaults to uniqueName when unspecified. */
     displayName: string;
-    /** Extra arguments passed to raiseEvent after the right-clicked roomId. */
+    /** Extra arguments captured by addMapEvent. Mudlet's "selection" branch
+     *  (the one mudix mirrors, since the right-clicked room is treated as the
+     *  selection) discards these — kept for parity with the registration API. */
     args: unknown[];
 }
 
@@ -700,12 +702,15 @@ export class MapStore {
         return [...this.mapEvents.values()];
     }
 
-    /** Fire the registered event for a context-menu entry. The right-clicked
-     *  roomId is prepended to the entry's stored args before raising. */
+    /** Fire the registered event for a context-menu entry. Matches Mudlet's
+     *  T2DMap::slot_userAction selection branch: raiseEvent(eventName,
+     *  uniqueName, roomId). The right-clicked room stands in for Mudlet's
+     *  multi-room selection; the entry's stored extra args are discarded
+     *  (Mudlet does the same in this branch). */
     dispatchMapEvent(uniqueName: string, roomId: number): void {
         const entry = this.mapEvents.get(uniqueName);
         if (!entry) return;
-        this.mapEventDispatcher?.(entry.eventName, [roomId, ...entry.args]);
+        this.mapEventDispatcher?.(entry.eventName, [uniqueName, roomId]);
     }
 
     // ── Custom env colors (Mudlet setCustomEnvColor) ──────────────────────────
