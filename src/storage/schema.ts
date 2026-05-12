@@ -224,6 +224,35 @@ export function isEffectivelyEnabled<T extends { id: string; enabled: boolean; p
     return true;
 }
 
+/**
+ * One-pass build of the set of ids whose item and every ancestor is enabled.
+ * Engines iterating large trees should call this once per loadPerm rather than
+ * isEffectivelyEnabled per item — that path is O(N²) (rebuilds the id map on
+ * every call); this is O(N) amortized via memoization.
+ */
+export function buildEffectivelyEnabledIds<T extends { id: string; enabled: boolean; parentId: string | null }>(
+    items: T[],
+): Set<string> {
+    const byId = new Map<string, T>(items.map(i => [i.id, i]));
+    const memo = new Map<string, boolean>();
+    const visit = (item: T): boolean => {
+        const cached = memo.get(item.id);
+        if (cached !== undefined) return cached;
+        // Tentatively mark enabled so a malformed cycle resolves rather than
+        // recursing forever; overwritten below with the real answer.
+        memo.set(item.id, true);
+        if (!item.enabled) { memo.set(item.id, false); return false; }
+        if (!item.parentId) return true;
+        const parent = byId.get(item.parentId);
+        const ok = !parent || visit(parent);
+        memo.set(item.id, ok);
+        return ok;
+    };
+    const out = new Set<string>();
+    for (const item of items) if (visit(item)) out.add(item.id);
+    return out;
+}
+
 export interface ModalBounds {
     x: number;
     y: number;

@@ -1,5 +1,5 @@
 import type { TimerNode } from '../../storage/schema';
-import { isEffectivelyEnabled } from '../../storage/schema';
+import { buildEffectivelyEnabledIds } from '../../storage/schema';
 
 export type { TimerNode };
 
@@ -53,8 +53,9 @@ export class TimerEngine {
 
     loadPerm(timers: TimerNode[], executeFn: ExecuteFn): void {
         this.stopPerm();
+        const enabledIds = buildEffectivelyEnabledIds(timers);
         for (const timer of timers) {
-            if (!isEffectivelyEnabled(timer, timers)) continue;
+            if (!enabledIds.has(timer.id)) continue;
             if (timer.isGroup && !timer.code) continue;
             const fire = () => executeFn(timer);
             const intervalMs = timer.seconds * 1000;

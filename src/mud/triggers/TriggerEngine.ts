@@ -1,6 +1,6 @@
 import PCRE from 'pcre2-wasm-universal';
 import type { TriggerNode, TriggerPattern } from '../../storage/schema';
-import { isEffectivelyEnabled } from '../../storage/schema';
+import { buildEffectivelyEnabledIds } from '../../storage/schema';
 
 export type { TriggerNode };
 
@@ -99,6 +99,31 @@ type CompiledAndEntry = {
 };
 
 type CompiledEntry = CompiledOrEntry | CompiledAndEntry;
+
+/**
+ * Cached compile result for a single trigger node, keyed by item.id in
+ * TriggerEngine.cache. The `signature` captures the fields that determine the
+ * compiled shape (patterns + flags that switch AND/OR/testAll). On loadPerm,
+ * entries whose signature matches are reused — their PCRE instances stay
+ * alive, and only `item` ref + `depth` are updated in place. This is what
+ * makes enable/disable churn cheap: flipping the enabled bit doesn't touch
+ * the signature, so no PCRE recompiles. `compiled === null` records that
+ * the item has no compilable tests (so we don't retry on every load).
+ */
+type CachedEntry = {
+    signature: string;
+    compiled: CompiledEntry | null;
+    pcreInstances: PcreInstance[];
+};
+
+function signatureOf(item: TriggerNode): string {
+    return JSON.stringify({
+        p: item.patterns,
+        ml: !!item.multiline,
+        mm: !!item.multipleMatches,
+        g: !!item.isGroup,
+    });
+}
 
 type AndState = {
     nextIdx: number;
@@ -201,10 +226,11 @@ export class TriggerEngine {
     private permCompiled: CompiledEntry[] = [];
     private allById = new Map<string, TriggerNode>();
 
-    // Compiled PCRE instances for the current permCompiled set; destroyed and
-    // rebuilt on each loadPerm. Tracked here (not on individual entries) so the
-    // matcher closures stay simple — they don't need to know about lifecycle.
-    private pcreInstances: PcreInstance[] = [];
+    // Per-item compile cache. Surviving items between loadPerm calls keep their
+    // compiled state (and PCRE instances) here; only items whose signature
+    // changed are recompiled, and only items removed entirely have their PCREs
+    // freed. Items currently disabled stay cached so re-enabling is free.
+    private cache = new Map<string, CachedEntry>();
 
     // Chain state: maps group-trigger ID → last line number on which chain is open.
     private lineCounter = 0;
@@ -259,87 +285,126 @@ export class TriggerEngine {
 
     loadPerm(items: TriggerNode[]): void {
         this.allById = new Map(items.map(i => [i.id, i]));
-        this.permCompiled = [];
-        // Free previous PCRE instances before rebuilding.
-        for (const re of this.pcreInstances) re.destroy();
-        this.pcreInstances = [];
-        const register = (re: PcreInstance) => { this.pcreInstances.push(re); };
-
-        // Collect IDs that will be compiled (for and-state cleanup)
+        const enabledIds = buildEffectivelyEnabledIds(items);
         const compiledIds = new Set<string>();
+        const nextCache = new Map<string, CachedEntry>();
+        const newCompiled: CompiledEntry[] = [];
 
         for (const item of items) {
-            if (!isEffectivelyEnabled(item, items)) continue;
             if (!item.patterns || item.patterns.length === 0) continue;
 
+            const sig = signatureOf(item);
             const depth = this.computeDepth(item);
+            let entry = this.cache.get(item.id);
 
-            if (!item.isGroup && item.multiline) {
-                // AND trigger: compile as a sequence of conditions
-                const conditions: Array<{ test: Matcher | null; spacer: number }> = [];
-                for (const p of item.patterns) {
-                    if (p.type === 'lineSpacer') {
-                        const n = parseInt(p.text, 10);
-                        conditions.push({ test: null, spacer: isNaN(n) || n < 1 ? 1 : n });
-                    } else {
-                        const test = buildMatcher(p, register);
-                        conditions.push({ test, spacer: 0 });
-                    }
-                }
-                if (conditions.length > 0) {
-                    compiledIds.add(item.id);
-                    this.permCompiled.push({ kind: 'and', item, conditions, depth });
+            if (entry && entry.signature === sig) {
+                // Reuse: same compile shape. Update mutable bits in place so
+                // matchPerm sees the latest item ref (for code/name/highlight/
+                // fireLength/delta/isFilter) and the latest depth (parentId
+                // could have changed without touching the signature).
+                this.cache.delete(item.id);
+                if (entry.compiled) {
+                    entry.compiled.item = item;
+                    entry.compiled.depth = depth;
                 }
             } else {
-                // OR trigger (or group): any pattern fires
-                const tests: Matcher[] = [];
-                let testAll: ((line: string) => MatchResult[]) | null = null;
-
-                for (const pattern of item.patterns) {
-                    const test = buildMatcher(pattern, register);
-                    if (test) tests.push(test);
-
-                    // multipleMatches only for non-group regex patterns
-                    if (!item.isGroup && item.multipleMatches && pattern.type === 'regex' && pattern.text) {
-                        const re = compilePcre(pattern.text);
-                        if (re) {
-                            register(re);
-                            const triggerName = item.name;
-                            const patternText = pattern.text;
-                            testAll = (line: string) => {
-                                const results: MatchResult[] = [];
-                                let pcreMatches: PcreMatch[];
-                                try {
-                                    pcreMatches = re.matchAll(line) as PcreMatch[];
-                                } catch (err) {
-                                    if (err instanceof Error && err.message.includes('safety limit exceeded')) {
-                                        logSafetyLimit(`trigger:${triggerName}(multipleMatches)`, patternText, line);
-                                    }
-                                    throw err;
-                                }
-                                for (const m of pcreMatches) {
-                                    results.push(pcreToMatchResult(m));
-                                }
-                                return results;
-                            };
-                        }
-                    }
+                if (entry) {
+                    for (const re of entry.pcreInstances) re.destroy();
+                    this.cache.delete(item.id);
                 }
+                entry = this.compileItem(item, depth, sig);
+            }
 
-                if (tests.length > 0) {
-                    compiledIds.add(item.id);
-                    this.permCompiled.push({ kind: 'or', item, tests, testAll, depth });
-                }
+            nextCache.set(item.id, entry);
+
+            if (entry.compiled && enabledIds.has(item.id)) {
+                newCompiled.push(entry.compiled);
+                compiledIds.add(item.id);
             }
         }
 
+        // Anything still in the old cache map is an item that was removed from
+        // the trigger list entirely — destroy its PCREs.
+        for (const e of this.cache.values()) {
+            for (const re of e.pcreInstances) re.destroy();
+        }
+        this.cache = nextCache;
+
         // Sort by depth so parents (chain heads) are always processed before children.
-        this.permCompiled.sort((a, b) => a.depth - b.depth);
+        newCompiled.sort((a, b) => a.depth - b.depth);
+        this.permCompiled = newCompiled;
 
         // Clean up AND states for triggers no longer compiled
         for (const id of this.andStates.keys()) {
             if (!compiledIds.has(id)) this.andStates.delete(id);
         }
+    }
+
+    /** Fresh compile for an item not present in the cache. Returns a CachedEntry
+     * with `compiled: null` when no patterns produced a usable matcher — that
+     * negative result is cached so we don't retry on every loadPerm. */
+    private compileItem(item: TriggerNode, depth: number, signature: string): CachedEntry {
+        const instances: PcreInstance[] = [];
+        const register = (re: PcreInstance) => { instances.push(re); };
+        let compiled: CompiledEntry | null = null;
+
+        if (!item.isGroup && item.multiline) {
+            // AND trigger: compile as a sequence of conditions
+            const conditions: Array<{ test: Matcher | null; spacer: number }> = [];
+            for (const p of item.patterns) {
+                if (p.type === 'lineSpacer') {
+                    const n = parseInt(p.text, 10);
+                    conditions.push({ test: null, spacer: isNaN(n) || n < 1 ? 1 : n });
+                } else {
+                    const test = buildMatcher(p, register);
+                    conditions.push({ test, spacer: 0 });
+                }
+            }
+            if (conditions.length > 0) {
+                compiled = { kind: 'and', item, conditions, depth };
+            }
+        } else {
+            // OR trigger (or group): any pattern fires
+            const tests: Matcher[] = [];
+            let testAll: ((line: string) => MatchResult[]) | null = null;
+
+            for (const pattern of item.patterns) {
+                const test = buildMatcher(pattern, register);
+                if (test) tests.push(test);
+
+                // multipleMatches only for non-group regex patterns
+                if (!item.isGroup && item.multipleMatches && pattern.type === 'regex' && pattern.text) {
+                    const re = compilePcre(pattern.text);
+                    if (re) {
+                        register(re);
+                        const triggerName = item.name;
+                        const patternText = pattern.text;
+                        testAll = (line: string) => {
+                            const results: MatchResult[] = [];
+                            let pcreMatches: PcreMatch[];
+                            try {
+                                pcreMatches = re.matchAll(line) as PcreMatch[];
+                            } catch (err) {
+                                if (err instanceof Error && err.message.includes('safety limit exceeded')) {
+                                    logSafetyLimit(`trigger:${triggerName}(multipleMatches)`, patternText, line);
+                                }
+                                throw err;
+                            }
+                            for (const m of pcreMatches) {
+                                results.push(pcreToMatchResult(m));
+                            }
+                            return results;
+                        };
+                    }
+                }
+            }
+
+            if (tests.length > 0) {
+                compiled = { kind: 'or', item, tests, testAll, depth };
+            }
+        }
+
+        return { signature, compiled, pcreInstances: instances };
     }
 
     // ── Temp triggers (session-scoped, created by scripts) ────────────────────
@@ -445,8 +510,10 @@ export class TriggerEngine {
         }
         this.temp.clear();
         this.permCompiled = [];
-        for (const re of this.pcreInstances) re.destroy();
-        this.pcreInstances = [];
+        for (const e of this.cache.values()) {
+            for (const re of e.pcreInstances) re.destroy();
+        }
+        this.cache.clear();
         this.allById.clear();
         this.chainOpenUntil.clear();
         this.lineCounter = 0;

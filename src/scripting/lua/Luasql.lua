@@ -56,7 +56,19 @@ local function make_conn(conn_id)
         if result.kind == "error" then
             return nil, result.message
         elseif result.kind == "rows" then
-            return make_cursor(result.rows, result.columns)
+            -- Rows arrive as a Lua source literal (`{{...},{...},...}`) rather
+            -- than a pre-pushed table. Avoids wasmoon's per-cell pushTable cost
+            -- on big fetches — one boundary crossing for the source string, one
+            -- in-wasm Lua parse, no JS round-trip per value.
+            local fn, parse_err = loadstring("return " .. result.rowsSrc, "sql_rows")
+            if not fn then
+                return nil, "sql rows parse error: " .. tostring(parse_err)
+            end
+            local ok, rows = pcall(fn)
+            if not ok then
+                return nil, "sql rows eval error: " .. tostring(rows)
+            end
+            return make_cursor(rows, result.columns)
         else
             return result.changes or 0
         end

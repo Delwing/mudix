@@ -1,5 +1,5 @@
 import type { KeyNode } from '../../storage/schema';
-import { isEffectivelyEnabled } from '../../storage/schema';
+import { buildEffectivelyEnabledIds } from '../../storage/schema';
 
 export type { KeyNode };
 
@@ -47,7 +47,8 @@ export class KeyEngine {
     // ── Perm keybindings (persisted, visible in UI) ────────────────────────────
 
     loadPerm(keybindings: KeyNode[]): void {
-        this.perm = keybindings.filter(k => isEffectivelyEnabled(k, keybindings) && k.key);
+        const enabledIds = buildEffectivelyEnabledIds(keybindings);
+        this.perm = keybindings.filter(k => enabledIds.has(k.id) && k.key);
     }
 
     matchPerm(event: KeyboardEvent): KeyNode | null {

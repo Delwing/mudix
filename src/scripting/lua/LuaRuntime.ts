@@ -10,6 +10,7 @@ import BRIDGE_LUA from './Bridge.lua?raw';
 import EXEC_LUA from './Exec.lua?raw';
 import LUA_GLOBAL_SETUP from './LuaGlobalSetup.lua?raw';
 import LUASQL_LUA from './Luasql.lua?raw';
+import {encodeRowsToLuaSource} from './sqlRowEncoder';
 import YAJL_LUA from './Yajl.lua?raw';
 import {setupRex} from './rex';
 import {setupYajl, type LuaValueTransform} from './yajl';
@@ -1743,9 +1744,16 @@ export class LuaRuntime implements IScriptingRuntime {
             try {
                 const r = sql.exec(id, String(sqlText));
                 if (r.kind === 'rows') {
-                    const rows1 = toLuaArray(r.rows.map(row => toLuaArray(row as unknown[])));
+                    // Return rows as a Lua source literal instead of a nested
+                    // JS array. wasmoon's pushTable crosses the JS↔WASM boundary
+                    // once per cell — for a fetch of N rows × M columns that's
+                    // N*M crossings, which dominates large-result paths. By
+                    // emitting `{{...},{...},...}` and letting Lua's loadstring
+                    // parse it, we replace N*M boundary crossings with one
+                    // string push plus an in-wasm parse.
+                    const rowsSrc = encodeRowsToLuaSource(r.rows as unknown[][]);
                     const cols1 = toLuaArray(r.columns);
-                    return {kind: 'rows', rows: rows1, columns: cols1};
+                    return {kind: 'rows', rowsSrc, columns: cols1};
                 }
                 // Any non-query (INSERT/UPDATE/DELETE/DDL) — schedule a debounced
                 // VFS snapshot. Coalesces a tight db:add loop into one write.

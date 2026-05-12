@@ -1,4 +1,4 @@
-import { isEffectivelyEnabled } from '../storage/schema';
+import { buildEffectivelyEnabledIds } from '../storage/schema';
 
 type TempFn = (matches: RegExpMatchArray) => void;
 
@@ -27,8 +27,9 @@ export class PatternEngine<T extends PatternItem> {
 
     loadPerm(items: T[]): void {
         this.permCompiled = [];
+        const enabledIds = buildEffectivelyEnabledIds(items);
         for (const item of items) {
-            if (!isEffectivelyEnabled(item, items)) continue;
+            if (!enabledIds.has(item.id)) continue;
             if (!item.pattern) continue;
             try {
                 this.permCompiled.push({ item, re: new RegExp(item.pattern) });

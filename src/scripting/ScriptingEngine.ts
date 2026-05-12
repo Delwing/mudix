@@ -4,7 +4,7 @@ import {TriggerEngine, type TriggerNode} from '../mud/triggers/TriggerEngine';
 import type {TimerEngine} from '../mud/timers/TimerEngine';
 import type {KeyEngine, KeyNode} from '../mud/keybindings/KeyEngine';
 import type {ButtonNode, ScriptNode} from '../storage/schema';
-import {isEffectivelyEnabled} from '../storage/schema';
+import {buildEffectivelyEnabledIds} from '../storage/schema';
 import {useAppStore} from '../storage';
 import type {FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer} from '../mud/text/FormatState';
@@ -489,16 +489,18 @@ export class ScriptingEngine {
         this.prevScripts = next;
         if (prev === next) return;
 
+        const prevEnabledIds = buildEffectivelyEnabledIds(prev);
+        const nextEnabledIds = buildEffectivelyEnabledIds(next);
         const prevEnabled = new Map(
-            prev.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, prev))
+            prev.filter(s => s.language === 'lua' && prevEnabledIds.has(s.id))
                 .map(s => [s.id, s] as const),
         );
-        const nextEnabledIds = new Set(
-            next.filter(s => s.language === 'lua' && isEffectivelyEnabled(s, next))
+        const nextEnabledLuaIds = new Set(
+            next.filter(s => s.language === 'lua' && nextEnabledIds.has(s.id))
                 .map(s => s.id),
         );
         for (const id of prevEnabled.keys()) {
-            if (!nextEnabledIds.has(id)) this.unloadScript(id);
+            if (!nextEnabledLuaIds.has(id)) this.unloadScript(id);
         }
         // Mudlet-style module load priority: scripts owned by modules with a
         // negative priority load before profile scripts; non-negative priorities
@@ -510,7 +512,7 @@ export class ScriptingEngine {
             .map((s, idx) => ({ s, idx, prio: priorityFor(s, priorityMap) }))
             .sort((a, b) => a.prio - b.prio || a.idx - b.idx);
         for (const { s } of orderedNext) {
-            if (s.language !== 'lua' || !isEffectivelyEnabled(s, next)) continue;
+            if (s.language !== 'lua' || !nextEnabledIds.has(s.id)) continue;
             const was = prevEnabled.get(s.id);
             const handlersChanged = !!was && was.eventHandlers.join('\n') !== s.eventHandlers.join('\n');
             if (!was || was.code !== s.code || handlersChanged) {
