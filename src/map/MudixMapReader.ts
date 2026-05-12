@@ -1,5 +1,5 @@
 import {MapReader} from 'mudlet-map-renderer';
-import type {IArea, IExplorationArea, IMapReader} from 'mudlet-map-renderer';
+import type {IArea, IMapReader} from 'mudlet-map-renderer';
 import {readerExport} from 'mudlet-map-binary-reader';
 import type {MapStore} from './MapStore';
 
@@ -82,11 +82,6 @@ export class MudixMapReader implements IMapReader {
         return this.inner.getArea(areaId);
     }
 
-    getExplorationArea(areaId: number): IExplorationArea | undefined {
-        this.ensureFresh();
-        return this.inner.getExplorationArea(areaId);
-    }
-
     getAreas(): IArea[] {
         this.ensureFresh();
         return this.inner.getAreas();
@@ -100,46 +95,6 @@ export class MudixMapReader implements IMapReader {
     getRoom(roomId: number): RoomShape {
         this.ensureFresh();
         return this.inner.getRoom(roomId);
-    }
-
-    decorateWithExploration(visitedRooms?: Iterable<number> | Set<number>): Set<number> | undefined {
-        this.ensureFresh();
-        return this.inner.decorateWithExploration(visitedRooms);
-    }
-
-    getVisitedRooms(): Set<number> | undefined {
-        this.ensureFresh();
-        return this.inner.getVisitedRooms();
-    }
-
-    clearExplorationDecoration(): void {
-        this.ensureFresh();
-        this.inner.clearExplorationDecoration();
-    }
-
-    isExplorationEnabled(): boolean {
-        this.ensureFresh();
-        return this.inner.isExplorationEnabled();
-    }
-
-    setVisitedRooms(visitedRooms: Iterable<number> | Set<number>): Set<number> {
-        this.ensureFresh();
-        return this.inner.setVisitedRooms(visitedRooms);
-    }
-
-    addVisitedRoom(roomId: number): boolean {
-        this.ensureFresh();
-        return this.inner.addVisitedRoom(roomId);
-    }
-
-    addVisitedRooms(roomIds: Iterable<number>): number {
-        this.ensureFresh();
-        return this.inner.addVisitedRooms(roomIds);
-    }
-
-    hasVisitedRoom(roomId: number): boolean {
-        this.ensureFresh();
-        return this.inner.hasVisitedRoom(roomId);
     }
 
     getColorValue(envId: number): string {
