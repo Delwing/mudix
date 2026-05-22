@@ -6,6 +6,9 @@ import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
 const DEFAULT_BG = '#090909';
 const DEFAULT_PROMPT_TIMEOUT_MS = 300;
+const DEFAULT_FONT_SIZE = 13;
+const MIN_FONT_SIZE = 6;
+const MAX_FONT_SIZE = 48;
 
 function isHexColor(s: string): boolean {
     return /^#[0-9a-fA-F]{6}$/.test(s);
@@ -34,6 +37,7 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
     const outputBackground = useAppStore(s => s.ui.outputBackground);
     const theme = useAppStore(s => s.ui.theme);
     const outputFont = useAppStore(s => s.ui.outputFont);
+    const fontSize = useAppStore(s => s.ui.fontSize);
     const promptTimeoutMs = useAppStore(s => s.ui.promptTimeoutMs);
     const patchUI = useAppStore(s => s.patchUI);
 
@@ -50,6 +54,7 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
     const [timeoutText, setTimeoutText] = useState(
         promptTimeoutMs !== undefined ? String(promptTimeoutMs) : '',
     );
+    const [fontSizeText, setFontSizeText] = useState(String(fontSize));
 
     const handlePickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const value = e.target.value;
@@ -93,6 +98,22 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
     const handleTimeoutReset = () => {
         setTimeoutText('');
         patchUI({ promptTimeoutMs: undefined });
+    };
+
+    const handleFontSizeBlur = () => {
+        const parsed = parseInt(fontSizeText.trim(), 10);
+        if (!Number.isFinite(parsed)) {
+            setFontSizeText(String(fontSize));
+            return;
+        }
+        const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, parsed));
+        setFontSizeText(String(clamped));
+        patchUI({ fontSize: clamped });
+    };
+
+    const handleFontSizeReset = () => {
+        setFontSizeText(String(DEFAULT_FONT_SIZE));
+        patchUI({ fontSize: DEFAULT_FONT_SIZE });
     };
 
     return (
@@ -157,6 +178,24 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
                                             spellCheck={false}
                                         />
                                         <Button variant="ghost" size="sm" onClick={handleReset}>Reset</Button>
+                                    </div>
+                                </div>
+                                <div className="settings-row">
+                                    <label className="settings-label" htmlFor="output-font-size">Font size</label>
+                                    <div className="settings-color-field">
+                                        <Input
+                                            id="output-font-size"
+                                            type="number"
+                                            min={MIN_FONT_SIZE}
+                                            max={MAX_FONT_SIZE}
+                                            step={1}
+                                            value={fontSizeText}
+                                            placeholder={String(DEFAULT_FONT_SIZE)}
+                                            onChange={e => setFontSizeText(e.target.value)}
+                                            onBlur={handleFontSizeBlur}
+                                        />
+                                        <span className="settings-unit">pt</span>
+                                        <Button variant="ghost" size="sm" onClick={handleFontSizeReset}>Reset</Button>
                                     </div>
                                 </div>
                                 <div className="settings-row settings-row--top">

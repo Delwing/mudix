@@ -1056,6 +1056,26 @@ export class ScriptingAPI {
         this.session.events.emit('script.clearcmd');
     }
 
+    /**
+     * Mudlet `openUrl(url) → bool`. Opens a URL in a new browser tab. Special
+     * case: a `file:` prefix (as in `openUrl("file:" .. getMudletHomeDir())`)
+     * routes to the in-app VFS file browser at the given path, since web pages
+     * can't navigate to `file:` URLs.
+     */
+    openUrl(url: string): boolean {
+        const u = (url ?? '').trim();
+        if (!u) return false;
+        if (u.startsWith('file:')) {
+            // Accept file:, file://, and file:/// prefixes — keep the path's
+            // leading slash so VFS paths like /profiles/<id>/... resolve.
+            const path = u.replace(/^file:(\/\/)?/, '');
+            this.session.events.emit('script.openvfs', path);
+            return true;
+        }
+        const w = window.open(u, '_blank', 'noopener,noreferrer');
+        return !!w;
+    }
+
     // ── Command-line action (Mudlet setCmdLineAction) ─────────────────────────
     // When set, the action receives every Enter-submitted line *before* alias
     // matching and the MUD send. The script fully owns the command bar — it

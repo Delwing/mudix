@@ -30,6 +30,7 @@ export type MudEvents = MudClientEvents & {
     'script.appendcmd': [text: string];
     'script.setcmd': [text: string];
     'script.clearcmd': void;
+    'script.openvfs': [path: string];
     'prompt': void;
     'script.movecursorup': void;
     'script.movecursordown': void;

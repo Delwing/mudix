@@ -83,7 +83,10 @@ export default function App() {
         const unsub3 = session.events.on('script.clearcmd', () => {
             setCommand('');
         });
-        return () => { unsub1(); unsub2(); unsub3(); };
+        const unsub4 = session.events.on('script.openvfs', (path: string) => {
+            setFilesOpen({ initialPath: path, pickedAt: Date.now() });
+        });
+        return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
     }, [session]);
 
     // Drain disk-backed VFS writes before navigation. Folder-linked profiles

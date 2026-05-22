@@ -1,10 +1,17 @@
 # Mudlet API Implementation Checklist
 
 Status legend:
-- ✅ Implemented
+- ✅ Implemented and callable from Lua (either JS-bound or pure Lua whose dependencies are all satisfied)
 - 🚧 Feasible — worth implementing
-- ⚠️ Partial — skeleton exists, needs more work
+- ⚠️ Partial — skeleton exists, signature is incomplete, or pure-Lua impl is bundled but blocked by a missing dependency
 - ❌ N/A — fundamentally inapplicable (multi-profile, subprocess, Discord SDK, IRC, etc.)
+
+> Many APIs become "free" as soon as a single primitive is added. The known blockers right now:
+> - `setMiniConsoleFontSize` — blocks `createConsole` and `Geyser.MiniConsole`.
+> - `createCommandLine` — blocks `Geyser.CommandLine` and the whole overlay command-line widget family.
+> - `insertLink` / `insertPopup` / `setPopup` — block `cinsertLink`/`dinsertLink`/`hinsertLink` and `cinsertPopup`/`dinsertPopup`/`hinsertPopup`.
+> - `getLabelStyleSheet` — blocks `getLabelFormat` returning correct values.
+> - `getPath` — blocks pathfinding-aware speedwalk (the runner itself works).
 
 ---
 
@@ -42,24 +49,24 @@ A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gaug
 | `print(...)` | ✅ | Alias for echo |
 | `display(value)` | ✅ | Pretty-prints tables recursively |
 | `feedTriggers(text)` | ✅ | Feeds text through trigger pipeline + shows in output |
-| `cfeedTriggers(text)` | 🚧 | cecho-formatted feedTriggers |
-| `dfeedTriggers(text)` | 🚧 | decho-formatted feedTriggers |
-| `hfeedTriggers(text)` | 🚧 | hecho-formatted feedTriggers |
+| `cfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua, wraps `feedTriggers` |
+| `dfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `deleteLine()` | ✅ | Removes last output element |
-| `prefix(text)` | 🚧 | Prepend text to current trigger line |
-| `suffix(text)` | 🚧 | Append text to current trigger line |
-| `replace(text)` | 🚧 | Replace selected text |
-| `replaceLine(text)` | 🚧 | Replace entire current line |
-| `creplace(text)` | 🚧 | replace() with cecho format |
-| `dreplace(text)` | 🚧 | replace() with decho format |
-| `hreplace(text)` | 🚧 | replace() with hecho format |
-| `insertText([window,] text)` | 🚧 | Insert at cursor position |
-| `cinsertText([window,] text)` | 🚧 | insertText() with cecho format |
+| `prefix(text)` | ✅ | Pure Lua via GUIUtils.lua (moveCursor + insertText) |
+| `suffix(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `replace(text)` | ✅ | JS-exposed |
+| `replaceLine(text)` | ✅ | Pure Lua via GUIUtils.lua (selectCurrentLine + replace) |
+| `creplace(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `dreplace(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hreplace(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `insertText([window,] text)` | ✅ | JS-exposed |
+| `cinsertText([window,] text)` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → insertText) |
 | `wrapLine([window,] linenum)` | 🚧 | Re-wrap a line |
-| `scrollUp([window,] lines)` | 🚧 | Scroll output up |
-| `scrollDown([window,] lines)` | 🚧 | Scroll output down |
-| `showColors([columns])` | 🚧 | Print all named colors |
-| `showCaptureGroups()` | 🚧 | Print current trigger match captures |
+| `scrollUp([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
+| `scrollDown([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
+| `showColors([columns])` | ✅ | Pure Lua via GUIUtils.lua |
+| `showCaptureGroups()` | ✅ | Pure Lua via DebugTools.lua (uses `matches` global) |
 | `announce(text)` | 🚧 | `aria-live` region or Web Speech API |
 
 ---
@@ -68,22 +75,22 @@ A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gaug
 
 | Function | Status | Notes |
 |---|---|---|
-| `selectString([window,] text, n)` | 🚧 | Select Nth occurrence in current line |
-| `selectSection([window,] col, len)` | 🚧 | Select by column + length |
-| `selectCaptureGroup(n)` | 🚧 | Select Nth regex capture from last match |
-| `selectCurrentLine([window])` | 🚧 | Select entire current line |
-| `deselect([window])` | 🚧 | Clear selection |
-| `getSelection([window])` | 🚧 | Return selected text |
-| `moveCursor([window,] x, y)` | 🚧 | Move cursor to position |
-| `moveCursorEnd([window])` | 🚧 | Move cursor to end of buffer |
-| `getLineNumber([window])` | 🚧 | Current absolute line number |
-| `getColumnNumber([window])` | 🚧 | Current column |
-| `getLineCount([window])` | 🚧 | Total lines in console buffer |
-| `getLastLineNumber([window])` | 🚧 | Number of last line |
-| `getCurrentLine([window])` | 🚧 | Content of current trigger line (`line` global already set) |
-| `getLines([window,] from, to)` | 🚧 | Return table of lines between two indices |
-| `getRowCount([window])` | 🚧 | Number of visible rows |
-| `getColumnCount([window])` | 🚧 | Number of visible columns |
+| `selectString([window,] text, n)` | ✅ | JS-exposed |
+| `selectSection([window,] col, len)` | ✅ | JS-exposed |
+| `selectCaptureGroup(n)` | ✅ | JS-exposed |
+| `selectCurrentLine([window])` | ✅ | JS-exposed |
+| `deselect([window])` | ✅ | JS-exposed |
+| `getSelection([window])` | ✅ | Bridge.lua wraps `__getSelection` |
+| `moveCursor([window,] x, y)` | ✅ | JS-exposed |
+| `moveCursorEnd([window])` | ✅ | JS-exposed (plus `moveCursorUp`/`Down` in GUIUtils.lua) |
+| `getLineNumber([window])` | ✅ | JS-exposed |
+| `getColumnNumber([window])` | ✅ | JS-exposed |
+| `getLineCount([window])` | ✅ | JS-exposed |
+| `getLastLineNumber([window])` | ✅ | JS-exposed |
+| `getCurrentLine([window])` | ✅ | Bridge.lua wraps `__getCurrentLine` |
+| `getLines([window,] from, to)` | ✅ | Bridge.lua wraps `__getLines` |
+| `getRowCount([window])` | ✅ | JS-exposed |
+| `getColumnCount([window])` | ✅ | JS-exposed |
 
 ---
 
@@ -94,20 +101,20 @@ A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gaug
 | `fg([window,] colorname)` | ✅ | Set foreground color by name |
 | `bg([window,] colorname)` | ✅ | Set background color by name |
 | `resetFormat([window])` | ✅ | Reset all formatting |
-| `setFgColor([window,] r, g, b)` | 🚧 | Set foreground by RGB |
-| `setBgColor([window,] r, g, b)` | 🚧 | Set background by RGB |
-| `setHexFgColor([window,] hex)` | 🚧 | Set foreground by hex string |
-| `setHexBgColor([window,] hex)` | 🚧 | Set background by hex string |
-| `setBold([window,] bool)` | 🚧 | Toggle bold |
-| `setItalics([window,] bool)` | 🚧 | Toggle italics |
-| `setUnderline([window,] bool)` | 🚧 | Toggle underline |
-| `setStrikeOut([window,] bool)` | 🚧 | Toggle strikethrough |
+| `setFgColor([window,] r, g, b)` | ✅ | JS-exposed |
+| `setBgColor([window,] r, g, b)` | ✅ | JS-exposed |
+| `setHexFgColor([window,] hex)` | ✅ | Pure Lua via GUIUtils.lua → setFgColor |
+| `setHexBgColor([window,] hex)` | ✅ | Pure Lua via GUIUtils.lua → setBgColor |
+| `setBold([window,] bool)` | ✅ | JS-exposed |
+| `setItalics([window,] bool)` | ✅ | JS-exposed |
+| `setUnderline([window,] bool)` | ✅ | JS-exposed |
+| `setStrikeOut([window,] bool)` | ✅ | JS-exposed |
 | `setReverse([window,] bool)` | 🚧 | Toggle reverse video |
 | `setTextFormat([window,] ...)` | 🚧 | Set all formatting in one call |
 | `getTextFormat([window])` | 🚧 | Get current formatting |
 | `setCommandBackgroundColor(r,g,b,a)` | 🚧 | CSS on main command bar |
 | `setCommandForegroundColor(r,g,b,a)` | 🚧 | CSS on main command bar |
-| `setBackgroundColor([window,] r,g,b,a)` | 🚧 | Set window/overlay background color |
+| `setBackgroundColor([window,] r,g,b,a)` | ✅ | JS-exposed |
 
 ---
 
@@ -117,27 +124,27 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `cecho2ansi(text)` | 🚧 | cecho → ANSI escape codes |
-| `cecho2decho(text)` | 🚧 | cecho → decho |
-| `cecho2hecho(text)` | 🚧 | cecho → hecho |
-| `cecho2string(text)` | 🚧 | Strip cecho tags, return plain text |
-| `cecho2html(text)` | 🚧 | cecho → HTML spans |
-| `decho2ansi(text)` | 🚧 | decho → ANSI |
-| `decho2cecho(text)` | 🚧 | decho → cecho |
-| `decho2hecho(text)` | 🚧 | decho → hecho |
-| `decho2string(text)` | 🚧 | Strip decho, return plain text |
-| `decho2html(text)` | 🚧 | decho → HTML |
-| `hecho2ansi(text)` | 🚧 | hecho → ANSI |
-| `hecho2cecho(text)` | 🚧 | hecho → cecho |
-| `hecho2decho(text)` | 🚧 | hecho → decho |
-| `hecho2string(text)` | 🚧 | Strip hecho, return plain text |
-| `hecho2html(text)` | 🚧 | hecho → HTML |
-| `ansi2decho(text)` | 🚧 | ANSI → decho |
-| `ansi2string(text)` | 🚧 | Strip ANSI, return plain text |
-| `closestColor(r, g, b)` | 🚧 | Find nearest named color in color_table |
+| `cecho2ansi(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `cecho2decho(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `cecho2hecho(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `cecho2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `cecho2html(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `decho2ansi(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `decho2cecho(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `decho2hecho(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `decho2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `decho2html(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hecho2ansi(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hecho2cecho(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hecho2decho(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hecho2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hecho2html(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `ansi2decho(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `ansi2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `closestColor(r, g, b)` | ✅ | Pure Lua via GUIUtils.lua |
 | `getFgColor([window])` | 🚧 | Get foreground RGB of selection |
-| `getBgColor([window])` | 🚧 | Get background RGB of selection |
-| `color_table` | ✅ | Named color → {r,g,b} table |
+| `getBgColor([window])` | 🚧 | Get background RGB of selection (note: JS `__getBackgroundColor` is a stylesheet hash, not the Mudlet semantic) |
+| `color_table` | ✅ | Named color → {r,g,b} table (GUIUtils.lua) |
 
 ---
 
@@ -145,17 +152,17 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `echoLink([window,] text, cmd, hint)` | 🚧 | `<a>` element running a send() on click |
-| `cechoLink([window,] text, cmd, hint)` | 🚧 | cecho-formatted link |
-| `dechoLink([window,] text, cmd, hint)` | 🚧 | decho-formatted link |
-| `hechoLink([window,] text, cmd, hint)` | 🚧 | hecho-formatted link |
-| `insertLink([window,] text, cmd, hint)` | 🚧 | Insert link at cursor |
-| `echoPopup([window,] text, cmds, hints)` | 🚧 | Right-click context menu via HTML/CSS |
-| `cechoPopup(...)` | 🚧 | cecho-formatted popup |
-| `dechoPopup(...)` | 🚧 | decho-formatted popup |
-| `hechoPopup(...)` | 🚧 | hecho-formatted popup |
-| `insertPopup([window,] text, cmds, hints)` | 🚧 | Insert popup at cursor |
-| `setLink([window,] cmd, hint)` | 🚧 | Make selection a link |
+| `echoLink([window,] text, cmd, hint)` | ✅ | JS-exposed; Bridge.lua maps function `cmd` to a callback id |
+| `cechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → echoLink) |
+| `dechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
+| `insertLink([window,] text, cmd, hint)` | 🚧 | Insert link at cursor — primitive missing (blocks `cinsertLink`/`dinsertLink`/`hinsertLink`) |
+| `echoPopup([window,] text, cmds, hints)` | ✅ | JS-exposed; Bridge.lua flattens cmds/hints tables |
+| `cechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
+| `dechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
+| `insertPopup([window,] text, cmds, hints)` | 🚧 | Insert popup at cursor — primitive missing (blocks `cinsertPopup`/`dinsertPopup`/`hinsertPopup`) |
+| `setLink([window,] cmd, hint)` | ✅ | JS-exposed; Bridge.lua maps function `cmd` to a callback id |
 | `setPopup([window,] cmds, hints)` | 🚧 | Make selection a popup |
 
 ---
@@ -165,13 +172,13 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | Function | Status | Notes |
 |---|---|---|
 | `send(text [, echo])` | ✅ | Send command to MUD |
-| `sendAll(text1, text2, ...)` | ✅ | Send multiple commands at once |
-| `expandAlias(text [, echo])` | 🚧 | Run text through alias engine without sending |
-| `denyCurrentSend()` | 🚧 | Cancel current outgoing command |
+| `sendAll(text1, text2, ...)` | ✅ | Send multiple commands at once (Other.lua) |
+| `expandAlias(text [, echo])` | ✅ | JS-exposed (`ScriptingAPI.expandAlias`) |
+| `denyCurrentSend()` | ✅ | JS-exposed; cancels the currently-dispatched send |
 | `appendCmdLine(text)` | ✅ | Append text to main command bar |
-| `setCmdLine(text)` | ✅ | Set main command bar text |
+| `setCmdLine(text)` | ✅ | Set main command bar text (`sendCmdLine`/`printCmdLine`) |
 | `getCmdLine([name])` | 🚧 | Read current command bar text |
-| `clearCmdLine([name])` | 🚧 | Clear command bar |
+| `clearCmdLine([name])` | ⚠️ | JS-exposed but only operates on the main command bar; named overlay widgets not yet wired |
 | `feedTelnet(data)` | 🚧 | Feed raw telnet bytes into pipeline |
 
 ---
@@ -185,7 +192,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `permAlias(name, parent, pattern, code)` | ⚠️ | Permanent aliases exist in store; no Lua creation API yet |
 | `enableAlias(name)` | 🚧 | Enable permanent alias by name |
 | `disableAlias(name)` | 🚧 | Disable permanent alias by name |
-| `exists(name, type)` | 🚧 | Check if item with given name exists |
+| `exists(name, type)` | ✅ | JS-exposed (`ScriptingAPI.exists`) |
 | `isActive(name, type)` | 🚧 | Check if item is currently enabled |
 
 ---
@@ -196,17 +203,17 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 |---|---|---|
 | `tempTrigger(pattern, code)` | ✅ | Temporary substring/regex trigger |
 | `killTrigger(id)` | ✅ | Delete temp trigger by ID |
-| `tempRegexTrigger(pattern, code)` | 🚧 | Explicit regex variant |
+| `tempRegexTrigger(pattern, code)` | ✅ | Bridge.lua wraps `__mudix_tempRegexTrigger` |
 | `tempBeginOfLineTrigger(pattern, code)` | 🚧 | Anchored `^` trigger |
 | `tempExactMatchTrigger(pattern, code)` | ✅ | Full-line exact match |
 | `tempColorTrigger(fg, bg, code)` | 🚧 | Match on ANSI color in line |
 | `tempLineTrigger(from, count, code)` | 🚧 | Fire on N consecutive lines |
 | `tempPromptTrigger(code)` | 🚧 | Fire on MUD prompt detection |
-| `permRegexTrigger(name, parent, pattern, code)` | ⚠️ | Permanent triggers exist; no Lua creation API yet |
+| `permRegexTrigger(name, parent, pattern, code)` | ⚠️ | `__mudix_permRegexTrigger`/`permRegexTrigger` exist; full Lua API still limited |
 | `permSubstringTrigger(name, parent, pattern, code)` | ⚠️ | Same |
-| `enableTrigger(name)` | 🚧 | Enable permanent trigger by name |
-| `disableTrigger(name)` | 🚧 | Disable permanent trigger by name |
-| `killTrigger(name)` | 🚧 | Delete named permanent trigger |
+| `enableTrigger(name)` | ✅ | JS-exposed |
+| `disableTrigger(name)` | ✅ | JS-exposed |
+| `killTrigger(name)` | 🚧 | Delete named permanent trigger (numeric-ID form ✅) |
 | `setTriggerStayOpen(name, lines)` | 🚧 | Keep trigger active for N extra lines |
 
 ---
@@ -218,9 +225,9 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `tempTimer(delay, code [, repeat])` | ✅ | One-shot or repeating timer |
 | `killTimer(id)` | ✅ | Delete timer by ID |
 | `permTimer(name, parent, delay, code)` | ⚠️ | Permanent timers exist; no Lua creation API yet |
-| `enableTimer(name)` | 🚧 | Enable permanent timer by name |
-| `disableTimer(name)` | 🚧 | Disable permanent timer by name |
-| `remainingTime(id)` | 🚧 | Seconds left on a timer |
+| `enableTimer(name)` | ✅ | JS-exposed |
+| `disableTimer(name)` | ✅ | JS-exposed |
+| `remainingTime(id)` | ✅ | JS-exposed |
 
 ---
 
@@ -256,14 +263,14 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | Function | Status | Notes |
 |---|---|---|
 | `raiseEvent(name, ...)` | ✅ | Fire custom Lua event |
-| `registerAnonymousEventHandler(name, fn)` | ✅ | Register handler; ID return not yet tracked |
-| `killAnonymousEventHandler(id)` | 🚧 | Needs ID tracking in registerAnonymousEventHandler |
+| `registerAnonymousEventHandler(name, fn)` | ✅ | Other.lua override tracks IDs in `handlerIdsToHandlers` |
+| `killAnonymousEventHandler(id)` | ✅ | Other.lua: removes handler by ID |
 | `mudix.on(event, fn)` | ✅ | Mudix-native registration |
 | `mudix.off(event, fn)` | ✅ | Mudix-native deregistration |
-| `registerNamedEventHandler(name, event, code)` | 🚧 | Named manageable handler |
-| `deleteNamedEventHandler(name)` | 🚧 | |
-| `stopNamedEventHandler(name)` | 🚧 | |
-| `resumeNamedEventHandler(name)` | 🚧 | |
+| `registerNamedEventHandler(name, event, code)` | ✅ | IDManager.lua (built on `registerAnonymousEventHandler`) |
+| `deleteNamedEventHandler(name)` | ✅ | IDManager.lua |
+| `stopNamedEventHandler(name)` | ✅ | IDManager.lua |
+| `resumeNamedEventHandler(name)` | ✅ | IDManager.lua |
 | `raiseGlobalEvent(name, ...)` | ❌ | Multi-profile only |
 
 ### System Events (fired to Lua by the client)
@@ -297,13 +304,13 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | Function | Status | Notes |
 |---|---|---|
 | `gmcp` table | ✅ | Auto-populated from incoming GMCP packets |
-| `sendGMCP(message)` | 🚧 | Send outbound GMCP message |
+| `sendGMCP(message)` | ✅ | JS-exposed (frames as IAC SB GMCP …) |
 | `sendMSDP(var, ...)` | 🚧 | MSDP variable request |
 | `sendSocket(data)` | 🚧 | Send raw bytes over socket |
 | `getConnectionInfo()` | 🚧 | Return host/port/ssl |
-| `getNetworkLatency()` | 🚧 | Last ping duration (`ping` event already exists) |
+| `getNetworkLatency()` | ✅ | JS-exposed |
 | `connectToServer(host, port)` | 🚧 | Connect from Lua |
-| `disconnect()` | ✅ | Via session |
+| `disconnect()` | ⚠️ | JS-side method exists on `ScriptingAPI`; not bound as a top-level Lua global yet |
 | `addSupportedTelnetOption(option)` | 🚧 | Advertise a custom telnet option via the WebSocket proxy |
 | `sendATCP(msg)` | ❌ | Legacy protocol, no plans |
 
@@ -313,11 +320,11 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `getHTTP(url [, headers])` | 🚧 | `fetch` GET; fires `sysGetHttpDone` event |
-| `postHTTP(url, data [, headers])` | 🚧 | `fetch` POST |
-| `putHTTP(url, data [, headers])` | 🚧 | `fetch` PUT |
-| `deleteHTTP(url [, headers])` | 🚧 | `fetch` DELETE |
-| `downloadFile(url, path)` | 🚧 | `fetch` + write to virtual filesystem |
+| `getHTTP(url [, headers])` | ✅ | Bridge.lua → `HttpService.getHTTP`; fires `sysGetHttpDone`/`sysGetHttpError` |
+| `postHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.postHTTP` |
+| `putHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.putHTTP` |
+| `deleteHTTP(url [, headers])` | ✅ | Bridge.lua → `HttpService.deleteHTTP` |
+| `downloadFile(url, path)` | ✅ | Bridge.lua → `HttpService.downloadFile`, writes to profile VFS |
 
 ---
 
@@ -332,29 +339,29 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `mudix.windows.setTitle(id, title)` | ✅ | Set panel tab title |
 | `mudix.windows.has(id)` | ✅ | Check if panel exists |
 | `mudix.windows.focus(id)` | ✅ | Focus a panel |
-| `showWindow(name)` | 🚧 | Show panel or overlay element |
-| `hideWindow(name)` | 🚧 | Hide panel or overlay element |
-| `raiseWindow(name)` | 🚧 | Bring overlay to front (CSS `z-index`) |
-| `lowerWindow(name)` | 🚧 | Send overlay to back |
-| `moveWindow(name, x, y)` | 🚧 | Move overlay element (CSS `left`/`top`) — dockview panels not affected |
-| `resizeWindow(name, w, h)` | 🚧 | Resize overlay element (CSS `width`/`height`) — dockview panels not affected |
-| `createMiniConsole(name, x, y, w, h)` | 🚧 | Absolutely-positioned scrollable text console |
-| `createLabel(name, x, y, w, h, passthrough)` | 🚧 | Absolutely-positioned HTML/image overlay |
-| `createGauge(name, x, y, w, h, parent)` | 🚧 | Absolutely-positioned progress-bar overlay |
+| `showWindow(name)` | ✅ | JS-exposed |
+| `hideWindow(name)` | ✅ | JS-exposed |
+| `raiseWindow(name)` | ✅ | JS-exposed (CSS `z-index` on labels via `raiseLabel`/`lowerLabel`) |
+| `lowerWindow(name)` | ✅ | JS-exposed |
+| `moveWindow(name, x, y)` | ✅ | JS-exposed |
+| `resizeWindow(name, w, h)` | ✅ | JS-exposed |
+| `createMiniConsole(name, x, y, w, h)` | ✅ | JS-exposed |
+| `createLabel(name, x, y, w, h, passthrough)` | ✅ | JS-exposed |
+| `createGauge(name, x, y, w, h, parent)` | ✅ | Pure Lua via GUIUtils.lua (3× `createLabel` + `setBackgroundColor`) |
 | `createCommandLine(name, x, y, w, h)` | 🚧 | Absolutely-positioned extra input widget |
 | `createBuffer(name)` | 🚧 | Off-screen text buffer (no position) |
 | `appendBuffer(name)` | 🚧 | Paste buffer content into a window |
 | `echoUserWindow(name, text)` | ✅ | Alias for `mudix.windows.write` |
 | `deleteMiniConsole(name)` | 🚧 | Remove overlay mini-console |
-| `deleteLabel(name)` | 🚧 | Remove overlay label |
+| `deleteLabel(name)` | ✅ | Bridge.lua → `__deleteLabel` |
 | `deleteCommandLine(name)` | 🚧 | Remove overlay command line |
 | `setConsoleBufferSize(name, lines)` | 🚧 | Scrollback size limit |
 | `getConsoleBufferSize([window])` | 🚧 | |
 | `getMainWindowSize()` | ✅ | Returns `window.innerWidth, window.innerHeight` |
-| `getUserWindowSize(name)` | 🚧 | `element.getBoundingClientRect()` |
+| `getUserWindowSize(name)` | ✅ | Bridge.lua → `__getUserWindowSize` |
 | `getMainConsoleWidth()` | 🚧 | Character width of main console |
-| `setWindowWrap(name, col)` | 🚧 | Word-wrap column |
-| `windowType(name)` | 🚧 | Return element type string |
+| `setWindowWrap(name, col)` | ✅ | JS-exposed |
+| `windowType(name)` | ✅ | Bridge.lua → `__windowType` |
 | `disableScrollBar(name)` | 🚧 | |
 | `enableScrollBar(name)` | 🚧 | |
 | `hasFocus([window])` | 🚧 | `document.activeElement` check |
@@ -365,23 +372,23 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `setLabelClickCallback(name, fn)` | 🚧 | `addEventListener('click', ...)` on overlay |
-| `setLabelDoubleClickCallback(name, fn)` | 🚧 | `dblclick` |
-| `setLabelReleaseCallback(name, fn)` | 🚧 | `mouseup` |
-| `setLabelMoveCallback(name, fn)` | 🚧 | `mousemove` |
-| `setLabelWheelCallback(name, fn)` | 🚧 | `wheel` |
-| `setLabelOnEnter(name, fn)` | 🚧 | `mouseenter` |
-| `setLabelOnLeave(name, fn)` | 🚧 | `mouseleave` |
-| `setLabelStyleSheet(name, css)` | 🚧 | CSS string applied to the element |
-| `getLabelStyleSheet(name)` | 🚧 | Read current CSS |
-| `getLabelFormat(name)` | 🚧 | Return formatting table |
+| `setLabelClickCallback(name, fn)` | ✅ | Bridge.lua + JS callback registry (`__mudix_setLabelClickCallback`) |
+| `setLabelDoubleClickCallback(name, fn)` | ✅ | Bridge.lua |
+| `setLabelReleaseCallback(name, fn)` | ✅ | Bridge.lua |
+| `setLabelMoveCallback(name, fn)` | ✅ | Bridge.lua |
+| `setLabelWheelCallback(name, fn)` | ✅ | Bridge.lua |
+| `setLabelOnEnter(name, fn)` | ✅ | Bridge.lua |
+| `setLabelOnLeave(name, fn)` | ✅ | Bridge.lua |
+| `setLabelStyleSheet(name, css)` | ✅ | JS-exposed |
+| `getLabelStyleSheet(name)` | 🚧 | Read current CSS — also blocks `getLabelFormat` |
+| `getLabelFormat(name)` | ⚠️ | GUIUtils.lua defines it but depends on missing `getLabelStyleSheet` |
 | `getLabelSizeHint(name)` | 🚧 | Return preferred size |
-| `setLabelCursor(name, shape)` | 🚧 | CSS `cursor` property |
+| `setLabelCursor(name, shape)` | ✅ | JS-exposed |
 | `setLabelCustomCursor(name, path, x, y)` | 🚧 | CSS `cursor: url(...)` |
-| `resetLabelCursor(name)` | 🚧 | |
-| `setLabelToolTip(name, text, delay)` | 🚧 | HTML `title` attribute or tooltip overlay |
-| `resetLabelToolTip(name)` | 🚧 | |
-| `setBackgroundImage(name, path)` | 🚧 | CSS `background-image`; path from virtual FS |
+| `resetLabelCursor(name)` | ✅ | JS-exposed |
+| `setLabelToolTip(name, text, delay)` | ✅ | JS-exposed |
+| `resetLabelToolTip(name)` | ✅ | JS-exposed |
+| `setBackgroundImage(name, path)` | ✅ | Pure Lua via GUIUtils.lua → `setLabelStyleSheet` |
 | `resetBackgroundImage(name)` | 🚧 | |
 
 ---
@@ -390,12 +397,12 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `setGauge(name, current, max [, text])` | 🚧 | Update gauge fill and label |
-| `moveGauge(name, x, y)` | 🚧 | Alias for `moveWindow` |
-| `showGauge(name)` | 🚧 | Alias for `showWindow` |
-| `hideGauge(name)` | 🚧 | Alias for `hideWindow` |
-| `setGaugeText(name, text [, r, g, b])` | 🚧 | Set text inside gauge |
-| `setGaugeStyleSheet(name, css [, textcss])` | 🚧 | CSS on gauge element |
+| `setGauge(name, current, max [, text])` | ✅ | Pure Lua via GUIUtils.lua (resizeWindow + moveWindow) |
+| `moveGauge(name, x, y)` | ✅ | Pure Lua via GUIUtils.lua |
+| `showGauge(name)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hideGauge(name)` | ✅ | Pure Lua via GUIUtils.lua |
+| `setGaugeText(name, text [, r, g, b])` | ✅ | Pure Lua via GUIUtils.lua (`echo` + RGB2Hex) |
+| `setGaugeStyleSheet(name, css [, textcss])` | ✅ | Pure Lua via GUIUtils.lua → `setLabelStyleSheet` |
 
 ---
 
@@ -403,12 +410,12 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `clearCmdLine(name)` | 🚧 | Clear overlay command input |
+| `clearCmdLine(name)` | ⚠️ | JS-exposed for main bar; named overlay widgets 🚧 |
 | `getCmdLine(name)` | 🚧 | Read overlay command input |
-| `appendCmdLine(name, text)` | ✅ | Main bar only right now; named widgets 🚧 |
-| `printCmdLine(name, text)` | 🚧 | Set text in overlay command input |
-| `setCmdLineAction(name, fn)` | 🚧 | Callback when overlay input is submitted |
-| `resetCmdLineAction(name)` | 🚧 | |
+| `appendCmdLine(name, text)` | ⚠️ | Main bar only; named widgets 🚧 |
+| `printCmdLine(name, text)` | ⚠️ | JS-exposed for main bar; named widgets 🚧 |
+| `setCmdLineAction(name, fn)` | ⚠️ | Bridge.lua wraps it for the main bar; named widgets 🚧 |
+| `resetCmdLineAction(name)` | ⚠️ | Bridge.lua wraps it for the main bar; named widgets 🚧 |
 | `selectCmdLineText(name)` | 🚧 | Select all text in input |
 | `enableCommandLine(name)` | 🚧 | |
 | `disableCommandLine(name)` | 🚧 | |
@@ -423,24 +430,24 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `setFont([window,] font)` | 🚧 | CSS `font-family` on overlay or window |
-| `getFont([window])` | 🚧 | |
-| `setFontSize([window,] size)` | 🚧 | CSS `font-size` |
-| `getFontSize([window])` | 🚧 | |
+| `setFont([window,] font)` | ✅ | Bridge.lua → `__setFont` |
+| `getFont([window])` | ✅ | Bridge.lua → `__getFont` |
+| `setFontSize([window,] size)` | ✅ | Bridge.lua → `__setFontSize` |
+| `getFontSize([window])` | ✅ | Bridge.lua → `__getFontSize` |
 | `getAvailableFonts()` | 🚧 | `document.fonts` API |
-| `setMiniConsoleFontSize(name, size)` | 🚧 | Font size on mini-console overlay |
-| `setAppStyleSheet(css)` | ❌ | Qt application-wide CSS — not applicable |
-| `setUserWindowStyleSheet(name, css)` | 🚧 | CSS on dockview user window container |
-| `getBorderTop()` | 🚧 | Returns top padding of main output area |
-| `getBorderBottom()` | 🚧 | Returns bottom padding |
-| `getBorderLeft()` | 🚧 | Returns left padding |
-| `getBorderRight()` | 🚧 | Returns right padding |
-| `getBorderSizes()` | 🚧 | Returns all four as a table |
-| `setBorderTop(px)` | 🚧 | CSS padding-top on main output — creates space for overlays |
-| `setBorderBottom(px)` | 🚧 | CSS padding-bottom |
-| `setBorderLeft(px)` | 🚧 | CSS padding-left |
-| `setBorderRight(px)` | 🚧 | CSS padding-right |
-| `setBorderColor(r,g,b)` | 🚧 | Background color of the border/padding area |
+| `setMiniConsoleFontSize(name, size)` | 🚧 | Font size on mini-console overlay (blocks `createConsole`/`Geyser.MiniConsole` which both call it) |
+| `setAppStyleSheet(css)` | ✅ | JS-exposed — installs/replaces a CSS block in `document.head`, raises `sysAppStyleSheetChange` |
+| `setUserWindowStyleSheet(name, css)` | ✅ | JS-exposed |
+| `getBorderTop()` | ✅ | JS-exposed |
+| `getBorderBottom()` | ✅ | JS-exposed |
+| `getBorderLeft()` | ✅ | JS-exposed |
+| `getBorderRight()` | ✅ | JS-exposed |
+| `getBorderSizes()` | ✅ | JS-exposed |
+| `setBorderTop(px)` | ✅ | JS-exposed |
+| `setBorderBottom(px)` | ✅ | JS-exposed |
+| `setBorderLeft(px)` | ✅ | JS-exposed |
+| `setBorderRight(px)` | ✅ | JS-exposed |
+| `setBorderColor(r,g,b)` | ✅ | JS-exposed (also `resetBorderColor`) |
 
 ---
 
@@ -464,39 +471,40 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `centerview(roomID)` | 🚧 | Center map view, set player position |
+| `centerview(roomID)` | ✅ | JS-exposed |
 | `getPath(fromID, toID)` | 🚧 | Pathfinding; populates `speedWalkDir`/`speedWalkPath` |
-| `speedwalk(roomID [, walkcmd, delay])` | 🚧 | Execute path step by step |
-| `pauseSpeedwalk()` | 🚧 | |
-| `resumeSpeedwalk()` | 🚧 | |
-| `stopSpeedwalk()` | 🚧 | |
-| `getRoomName(roomID)` | 🚧 | |
-| `getRoomCoordinates(roomID)` | 🚧 | |
-| `getRoomExits(roomID)` | 🚧 | |
-| `getRoomArea(roomID)` | 🚧 | |
-| `getRoomEnv(roomID)` | 🚧 | |
-| `getRooms()` | 🚧 | Table of all rooms |
-| `getAreaTable()` | 🚧 | Table of all areas |
-| `getAreaRooms(areaID)` | 🚧 | |
+| `speedwalk(roomID [, walkcmd, delay])` | ✅ | Pure Lua via Other.lua (uses `send` + `tempTimer`) |
+| `pauseSpeedwalk()` | ✅ | Pure Lua via Other.lua |
+| `resumeSpeedwalk()` | ✅ | Pure Lua via Other.lua |
+| `stopSpeedwalk()` | ✅ | Pure Lua via Other.lua |
+| `getRoomName(roomID)` | ✅ | Bridge.lua → `__getRoomName` |
+| `getRoomCoordinates(roomID)` | ✅ | Bridge.lua → `__getRoomCoordinates` |
+| `getRoomExits(roomID)` | ✅ | JS-exposed |
+| `getRoomArea(roomID)` | ✅ | JS-exposed |
+| `getRoomEnv(roomID)` | ✅ | JS-exposed |
+| `getRooms()` | ✅ | JS-exposed |
+| `getAreaTable()` | ✅ | JS-exposed |
+| `getAreaRooms(areaID)` | ✅ | JS-exposed |
 | `highlightRoom(roomID, ...)` | 🚧 | Color highlight on map |
 | `unHighlightRoom(roomID)` | 🚧 | |
-| `roomExists(roomID)` | 🚧 | |
-| `addRoom(roomID)` | 🚧 | |
-| `deleteRoom(roomID)` | 🚧 | |
-| `setRoomName(roomID, name)` | 🚧 | |
-| `setRoomCoordinates(roomID, x, y, z)` | 🚧 | |
-| `setRoomArea(roomID, areaID)` | 🚧 | |
-| `setExit(fromID, toID, dir)` | 🚧 | |
-| `addSpecialExit(fromID, toID, cmd)` | 🚧 | |
-| `removeSpecialExit(fromID, cmd)` | 🚧 | |
-| `getSpecialExits(roomID)` | 🚧 | |
+| `roomExists(roomID)` | ✅ | JS-exposed |
+| `addRoom(roomID)` | ✅ | JS-exposed |
+| `deleteRoom(roomID)` | ✅ | JS-exposed |
+| `setRoomName(roomID, name)` | ✅ | JS-exposed |
+| `setRoomCoordinates(roomID, x, y, z)` | ✅ | JS-exposed |
+| `setRoomArea(roomID, areaID)` | ✅ | JS-exposed |
+| `setExit(fromID, toID, dir)` | ✅ | JS-exposed |
+| `addSpecialExit(fromID, toID, cmd)` | ✅ | JS-exposed |
+| `removeSpecialExit(fromID, cmd)` | ✅ | JS-exposed |
+| `getSpecialExits(roomID)` | ⚠️ | Only `getSpecialExitsSwap` is exposed today; the unswapped form is missing |
 | `lockRoom(roomID, bool)` | 🚧 | |
-| `lockExit(roomID, dir, bool)` | 🚧 | |
+| `lockExit(roomID, dir, bool)` | ⚠️ | Pure-Lua wrapper in Other.lua stores into room user-data; not honoured by pathfinding (no `getPath` yet) |
 | `setRoomWeight(roomID, weight)` | 🚧 | |
 | `getRoomWeight(roomID)` | 🚧 | |
-| `getRoomUserData(roomID, key)` | 🚧 | |
-| `setRoomUserData(roomID, key, value)` | 🚧 | |
-| `saveMap(path)` / `loadMap(path)` | 🚧 | Via virtual filesystem |
+| `getRoomUserData(roomID, key)` | ✅ | Bridge.lua → `__getRoomUserData` |
+| `setRoomUserData(roomID, key, value)` | ✅ | JS-exposed |
+| `loadMap(path)` | ✅ | JS-exposed |
+| `saveMap(path)` | 🚧 | Via virtual filesystem |
 | `saveJsonMap(path)` / `loadJsonMap(path)` | 🚧 | JSON map format |
 | `updateMap()` | 🚧 | Force redraw |
 | `getMapZoom()` / `setMapZoom(level)` | 🚧 | |
@@ -513,11 +521,11 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `string.trim(s)` | ✅ | |
 | `string.split(s, sep)` | ✅ | |
 | `string.contains(s, sub)` | ✅ | |
-| `string.title(s)` | 🚧 | Capitalize first letter |
-| `string.cut(s, maxlen)` | 🚧 | Truncate to max length |
-| `string.patternEscape(s)` | 🚧 | Escape Lua pattern magic chars |
-| `string.genNocasePattern(s)` | 🚧 | Case-insensitive pattern generator |
-| `f(str)` | 🚧 | String interpolation: `{expr}` inside strings |
+| `string.title(s)` | ✅ | StringUtils.lua |
+| `string.cut(s, maxlen)` | ✅ | StringUtils.lua |
+| `string.patternEscape(s)` | ✅ | StringUtils.lua |
+| `string.genNocasePattern(s)` | ✅ | StringUtils.lua |
+| `f(str)` | ✅ | StringUtils.lua — string interpolation: `{expr}` inside strings |
 
 ---
 
@@ -527,20 +535,20 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 |---|---|---|
 | `table.contains(t, val)` | ✅ | |
 | `table.size(t)` | ✅ | Count all keys including non-integer |
-| `table.deepcopy(t)` | 🚧 | Full recursive copy |
-| `table.keys(t)` | 🚧 | Return all keys as a list |
-| `table.index_of(t, val)` | 🚧 | Numeric index of value |
-| `table.union(t1, t2, ...)` | 🚧 | Merge tables |
-| `table.complement(t1, t2)` | 🚧 | Elements in t1 absent from t2 |
-| `table.intersection(t1, t2)` | 🚧 | Elements common to all tables |
-| `table.is_empty(t)` | 🚧 | True if no elements |
-| `table.update(t1, t2)` | 🚧 | Merge t2 into t1 recursively |
-| `table.collect(t, fn)` | 🚧 | Filter key-value pairs |
-| `table.n_flatten(t)` | 🚧 | Flatten nested table |
-| `table.save(filename, t)` | 🚧 | Serialize to virtual filesystem |
-| `table.load(filename)` | 🚧 | Deserialize from virtual filesystem |
-| `spairs(t [, fn])` | 🚧 | Sorted-key iterator |
-| `printTable(t)` | 🚧 | Print keys and values (cf. `display`) |
+| `table.deepcopy(t)` | ✅ | TableUtils.lua |
+| `table.keys(t)` | ✅ | TableUtils.lua |
+| `table.index_of(t, val)` | ✅ | TableUtils.lua |
+| `table.union(t1, t2, ...)` | ✅ | TableUtils.lua |
+| `table.complement(t1, t2)` | ✅ | TableUtils.lua |
+| `table.intersection(t1, t2)` | ✅ | TableUtils.lua |
+| `table.is_empty(t)` | ✅ | TableUtils.lua |
+| `table.update(t1, t2)` | ✅ | TableUtils.lua |
+| `table.collect(t, fn)` | ✅ | TableUtils.lua |
+| `table.n_flatten(t)` | ✅ | TableUtils.lua |
+| `table.save(filename, t)` | ✅ | Other.lua, uses `io.open`/VFS (works once VFS is mounted) |
+| `table.load(filename)` | ✅ | Other.lua, uses `dofile`/VFS |
+| `spairs(t [, fn])` | ✅ | TableUtils.lua — sorted-key iterator |
+| `printTable(t)` | ✅ | TableUtils.lua |
 
 ---
 
@@ -548,8 +556,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `getTime([returnAsTable, format])` | 🚧 | `new Date()` |
-| `getEpoch()` | 🚧 | `Date.now() / 1000` |
+| `getTime([returnAsTable, format])` | ✅ | Bridge.lua — full Qt QDateTime token formatting |
+| `getEpoch()` | ✅ | JS-exposed (`Date.now() / 1000`) |
 | `getTimestamp([linenum])` | 🚧 | Timestamp stored per output line |
 
 ---
@@ -558,14 +566,14 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `io.exists(path)` | 🚧 | Check if path exists in virtual FS |
-| `io.open(path, mode)` | 🚧 | Open a file handle (read/write/append) |
+| `io.exists(path)` | ✅ | Other.lua (uses `io.open`) backed by ProfileVFS |
+| `io.open(path, mode)` | ✅ | LuaRuntime VFS bridge (`__vfs_io_open__` etc.) |
 | `addFileWatch(path)` | 🚧 | Watch VFS path for changes |
 | `removeFileWatch(path)` | 🚧 | |
-| `getMudletHomeDir()` | 🚧 | Returns VFS root (e.g. `/mudix`) |
+| `getMudletHomeDir()` | ✅ | VFS.lua — alias for `getMudixProfilePath()` |
 | `invokeFileDialog(type, title)` | 🚧 | Native `<input type="file">` picker |
-| `table.save(filename, t)` | 🚧 | See Table Utilities |
-| `table.load(filename)` | 🚧 | See Table Utilities |
+| `table.save(filename, t)` | ✅ | See Table Utilities |
+| `table.load(filename)` | ✅ | See Table Utilities |
 
 ---
 
@@ -573,18 +581,18 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `getProfileName()` | 🚧 | Active connection name |
-| `getNetworkLatency()` | 🚧 | Last ping ms |
+| `getProfileName()` | ✅ | JS-exposed |
+| `getNetworkLatency()` | ✅ | JS-exposed |
 | `getOS()` | 🚧 | Returns `"web"` |
-| `getMudletVersion()` | 🚧 | Returns mudix version string |
-| `debug(text)` | 🚧 | `console.log` |
-| `remember(varname)` | 🚧 | Persist global via localStorage |
-| `saveVars()` / `loadVars()` | 🚧 | Persist `remember()`-flagged vars |
-| `shms(seconds)` | 🚧 | Seconds → `h:m:s` string, pure Lua |
-| `xor(a, b)` | 🚧 | Boolean XOR, pure Lua |
+| `getMudletVersion()` | ✅ | Bridge.lua — supports `nil`/`"string"`/`"major"`/`"minor"`/`"revision"`/`"build"`/`"table"` modes |
+| `debug(text)` | ⚠️ | `debugc` is JS-exposed (`console.log`); Mudlet name `debug` not aliased |
+| `remember(varname)` | ✅ | Other.lua (persists into `SavedVariables.lua` via VFS) |
+| `saveVars()` / `loadVars()` | ✅ | Other.lua |
+| `shms(seconds)` | ✅ | DateTime.lua |
+| `xor(a, b)` | ✅ | Other.lua |
 | `compare(a, b)` | 🚧 | Deep equality, pure Lua |
-| `f(str)` | 🚧 | String interpolation (see String section) |
-| `openUrl(url)` | 🚧 | `window.open(url)` |
+| `f(str)` | ✅ | StringUtils.lua (see String section) |
+| `openUrl(url)` | ✅ | JS-exposed — `window.open(url, '_blank')`; a `file:` prefix routes to the VFS file browser (matches Mudlet's `openMudletHomeDir`) |
 | `showNotification(title, text)` | 🚧 | Web Notifications API |
 | `alert(secs)` | 🚧 | `document.title` flash or favicon badge |
 | `loadReplay(path)` | 🚧 | Replay a recorded session from VFS |
@@ -600,13 +608,13 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `playSoundFile(path [, vol, loops, ch])` | 🚧 | Web Audio API; path from virtual FS or URL |
+| `playSoundFile(path [, vol, loops, ch])` | ✅ | Bridge.lua → `SoundManager` (Web Audio + VFS or http(s) URL) |
 | `loadSoundFile(path)` | 🚧 | Preload audio |
 | `pauseSounds([channel])` | 🚧 | |
-| `stopSounds([channel])` | 🚧 | |
+| `stopSounds([channel])` | ✅ | JS-exposed |
 | `getPlayingSounds()` | 🚧 | |
-| `playMusicFile(path [, vol, loops, ch])` | 🚧 | Web Audio API |
-| `stopMusic([channel])` | 🚧 | |
+| `playMusicFile(path [, vol, loops, ch])` | ✅ | Bridge.lua → `SoundManager` |
+| `stopMusic([channel])` | ✅ | Bridge.lua → `SoundManager` |
 | `playVideoFile(path)` | 🚧 | HTML `<video>` element in overlay |
 | `pauseVideos()` | 🚧 | |
 | `stopVideos()` | 🚧 | |
@@ -638,15 +646,15 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Class | Status | Notes |
 |---|---|---|
-| `Geyser.Container` | 🚧 | Invisible layout organizer |
-| `Geyser.Label` | 🚧 | Overlay label; wraps `createLabel` |
-| `Geyser.MiniConsole` | 🚧 | Overlay console; wraps `createMiniConsole` |
-| `Geyser.Gauge` | 🚧 | Progress bar; wraps `createGauge` |
-| `Geyser.HBox` | 🚧 | Horizontal auto-layout |
-| `Geyser.VBox` | 🚧 | Vertical auto-layout |
-| `Geyser.CommandLine` | 🚧 | Overlay input; wraps `createCommandLine` |
-| `Geyser.UserWindow` | 🚧 | Wraps dockview `openWindow` |
-| `Geyser.ReflowContainer` | 🚧 | Wrapping layout |
+| `Geyser.Container` | ✅ | Bundled Lua file is loaded; pure layout, no missing deps |
+| `Geyser.Label` | ⚠️ | Bundled and mostly working; `getLabelFormat` is partial because `getLabelStyleSheet` is missing |
+| `Geyser.MiniConsole` | ⚠️ | Bundled but calls the unimplemented `setMiniConsoleFontSize` (constructor blows up) |
+| `Geyser.Gauge` | ✅ | Bundled; wraps GUIUtils `createGauge`/`setGauge` (both ✅) |
+| `Geyser.HBox` | ✅ | Bundled |
+| `Geyser.VBox` | ✅ | Bundled |
+| `Geyser.CommandLine` | ⚠️ | Bundled but `createCommandLine` is missing |
+| `Geyser.UserWindow` | ✅ | Bundled; uses `openUserWindow` ✅ |
+| `Geyser.ReflowContainer` | 🚧 | Not bundled in `LuaGlobal.lua` load list |
 
 ---
 

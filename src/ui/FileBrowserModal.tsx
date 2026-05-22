@@ -793,11 +793,28 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
     useEffect(() => {
         if (!initialPath || !vfs) return;
         const root = vfs.profilePath;
-        const abs = initialPath.startsWith(root + '/')
+        const abs = initialPath.startsWith(root + '/') || initialPath === root
             ? initialPath
             : `${root}/${initialPath.replace(/^\/+/, '')}`;
         const info = vfs.stat(abs);
-        if (!info || info.type !== 'file') return;
+        if (!info) return;
+        // Directory targets (e.g. openUrl("file:" .. getMudletHomeDir()))
+        // just expand the tree down to the dir so the user can browse it.
+        if (info.type === 'dir') {
+            if (abs === root) return;
+            const rel = abs.substring(root.length + 1);
+            const parts = rel.split('/');
+            setExpanded(prev => {
+                const next = new Set(prev);
+                let cur = root;
+                for (const part of parts) {
+                    cur = `${cur}/${part}`;
+                    next.add(cur);
+                }
+                return next;
+            });
+            return;
+        }
         const rel = abs.substring(root.length + 1);
         const parts = rel.split('/');
         if (parts.length > 1) {

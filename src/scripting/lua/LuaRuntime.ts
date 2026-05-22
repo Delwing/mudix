@@ -908,6 +908,13 @@ export class LuaRuntime implements IScriptingRuntime {
             return !!w;
         });
 
+        // Mudlet `openUrl(url)`. Like openWebPage for http(s) URLs, but a
+        // `file:` prefix routes to the VFS file browser — that's how Mudlet
+        // scripts expose VFS paths to the user (`openUrl("file:" .. getMudletHomeDir())`).
+        this.lua.global.set('openUrl', (url: unknown) => {
+            return this.api.openUrl(typeof url === 'string' ? url : '');
+        });
+
         // ── Send ─────────────────────────────────────────────────────────────
         // Mudlet `send(text, [echo=true]) → true`. Echo defaults to true.
         this.lua.global.set('send', (text: unknown, echo?: unknown) => {
@@ -1742,6 +1749,12 @@ export class LuaRuntime implements IScriptingRuntime {
             if (!path || !this.vfs) return;
             try {
                 const bytes = sql.exportFile(dbId);
+                // sqlite3_js_db_export returns an empty Uint8Array for an
+                // in-memory DB with no committed pages (a bare connect+close
+                // with no DDL/DML). Writing 0 bytes would poison the VFS path:
+                // the next __sql_open would read it back and reject it as too
+                // small for a SQLite header. Skip the write instead.
+                if (bytes.byteLength === 0) return;
                 this.vfs.writeBinaryFile(path, bytes);
             } catch (e) {
                 console.warn('[sql snapshot]', path, e);
@@ -1782,19 +1795,26 @@ export class LuaRuntime implements IScriptingRuntime {
                 // underlying ArrayBuffer.
                 const fresh = new Uint8Array(raw.byteLength);
                 fresh.set(raw);
-                if (fresh.byteLength < 512) {
+                // 0-byte file: treat as if the DB doesn't exist yet. snapshotNow
+                // now skips empty exports, but older sessions or interrupted runs
+                // may have left a 0-byte file behind that would otherwise jam
+                // every future open of this path.
+                if (fresh.byteLength === 0) {
+                    console.warn(`[__sql_open] '${p}' exists as 0 bytes — opening as fresh database`);
+                } else if (fresh.byteLength < 512) {
                     throw new Error(`VFS file '${p}' is ${fresh.byteLength} bytes, too small to be a SQLite database`);
+                } else {
+                    // Quick header sniff — SQLite files start with "SQLite format 3\0".
+                    const HDR = 'SQLite format 3\0';
+                    let headerOk = true;
+                    for (let i = 0; i < HDR.length; i++) {
+                        if (fresh[i] !== HDR.charCodeAt(i)) { headerOk = false; break; }
+                    }
+                    if (!headerOk) {
+                        throw new Error(`VFS file '${p}' is not a SQLite database (bad header). First bytes: ${Array.from(fresh.subarray(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+                    }
+                    preload = fresh;
                 }
-                // Quick header sniff — SQLite files start with "SQLite format 3\0".
-                const HDR = 'SQLite format 3\0';
-                let headerOk = true;
-                for (let i = 0; i < HDR.length; i++) {
-                    if (fresh[i] !== HDR.charCodeAt(i)) { headerOk = false; break; }
-                }
-                if (!headerOk) {
-                    throw new Error(`VFS file '${p}' is not a SQLite database (bad header). First bytes: ${Array.from(fresh.subarray(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
-                }
-                preload = fresh;
             }
             const dbId = sql.open(p, preload);
             dbPaths.set(dbId, p);
