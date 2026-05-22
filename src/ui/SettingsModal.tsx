@@ -9,6 +9,9 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 300;
 const DEFAULT_FONT_SIZE = 13;
 const MIN_FONT_SIZE = 6;
 const MAX_FONT_SIZE = 48;
+const MAX_BORDER_PX = 1000;
+const EMPTY_BORDERS = { top: 0, right: 0, bottom: 0, left: 0 } as const;
+type BorderSide = 'top' | 'right' | 'bottom' | 'left';
 
 function isHexColor(s: string): boolean {
     return /^#[0-9a-fA-F]{6}$/.test(s);
@@ -42,6 +45,8 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const outputFont = useAppStore(s => selectProfileField(s, connectionId, 'outputFont'));
     const fontSize = useAppStore(s => selectProfileField(s, connectionId, 'fontSize'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connectionId, 'promptTimeoutMs'));
+    const outputBorders = useAppStore(s => selectProfileField(s, connectionId, 'outputBorders'));
+    const borders = outputBorders ?? EMPTY_BORDERS;
     const patchConnectionProfile = useAppStore(s => s.patchConnectionProfile);
     // Profile-scoped fields are only writable when a profile is active. On the
     // connection screen the modal hides those rows entirely.
@@ -122,6 +127,24 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const handleFontSizeReset = () => {
         setFontSizeText(String(DEFAULT_FONT_SIZE));
         patchProfile({ fontSize: DEFAULT_FONT_SIZE });
+    };
+
+    const handleBorderChange = (side: BorderSide, raw: string) => {
+        // Empty input clears that side back to 0 (Mudlet's no-border state).
+        // Negative or non-numeric input is ignored so the field's display value
+        // (controlled by `borders`) snaps back on next render.
+        const parsed = raw === '' ? 0 : parseInt(raw, 10);
+        if (!Number.isFinite(parsed) || parsed < 0) return;
+        const clamped = Math.min(parsed, MAX_BORDER_PX);
+        const next = { ...borders, [side]: clamped };
+        // When all four sides are 0, drop the override entirely so the field
+        // falls back to PROFILE_DEFAULTS (no border).
+        const allZero = next.top === 0 && next.right === 0 && next.bottom === 0 && next.left === 0;
+        patchProfile({ outputBorders: allZero ? undefined : next });
+    };
+
+    const handleBordersReset = () => {
+        patchProfile({ outputBorders: undefined });
     };
 
     return (
@@ -212,6 +235,25 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                 <div className="settings-row settings-row--top">
                                     <label className="settings-label">Font</label>
                                     <FontPicker value={outputFont} onChange={handleFontChange} vfs={vfs} />
+                                </div>
+                                <div className="settings-row settings-row--top">
+                                    <label className="settings-label">Borders</label>
+                                    <div className="settings-borders">
+                                        {(['top', 'right', 'bottom', 'left'] as BorderSide[]).map(side => (
+                                            <label key={side} className="settings-border-field">
+                                                <span className="settings-border-side">{side}</span>
+                                                <Input
+                                                    type="number"
+                                                    min={0}
+                                                    max={MAX_BORDER_PX}
+                                                    step={1}
+                                                    value={String(borders[side])}
+                                                    onChange={e => handleBorderChange(side, e.target.value)}
+                                                />
+                                            </label>
+                                        ))}
+                                        <Button variant="ghost" size="sm" onClick={handleBordersReset}>Reset</Button>
+                                    </div>
                                 </div>
                             </section>
                             )}

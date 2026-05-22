@@ -2038,6 +2038,33 @@ html, body, #root {
     min-width: 0;
 }
 
+.settings-borders {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.settings-border-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.settings-border-field input {
+    width: 64px;
+}
+
+.settings-border-side {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: capitalize;
+}
+
 .settings-tabs {
     display: flex;
     gap: 2px;
