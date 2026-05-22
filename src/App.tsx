@@ -10,7 +10,7 @@ export default function App() {
     const [settingsOpen, setSettingsOpen] = useState(false);
 
     const deepLinkProfileId = useRef(new URLSearchParams(window.location.search).get('profile'));
-    const theme = useAppStore(s => s.ui.theme);
+    const theme = useAppStore(s => s.client.theme);
     useEffect(() => {
         document.documentElement.dataset.theme = theme;
     }, [theme]);
@@ -80,6 +80,7 @@ export default function App() {
             {settingsOpen && (
                 <SettingsModal
                     onClose={handleToggleSettings}
+                    connectionId={null}
                     vfs={null}
                 />
             )}

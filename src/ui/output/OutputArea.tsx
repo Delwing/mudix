@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { MudSession } from '../../mud/MudSession';
 import { useStickyOutput, DEFAULT_STICKY_LINES } from '../../hooks/useOutput';
-import { useAppStore } from '../../storage';
+import { useAppStore, useProfileField, useConnectionId } from '../../storage';
 import { StickyOutputPanel } from './StickyOutputPanel';
 import { LabelOverlay } from '../labels/LabelOverlay';
 
@@ -13,17 +13,18 @@ interface OutputAreaProps {
 }
 
 export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, commandInputRef }: OutputAreaProps) {
-    const outputBackgroundString = useAppStore(s => s.ui.outputBackground);
-    const outputBackgroundColor = useAppStore(s => s.ui.outputBackgroundColor);
+    const connectionId = useConnectionId();
+    const outputBackgroundString = useProfileField('outputBackground');
+    const outputBackgroundColor = useProfileField('outputBackgroundColor');
     const outputBackground = outputBackgroundColor
         ? `rgba(${outputBackgroundColor.r}, ${outputBackgroundColor.g}, ${outputBackgroundColor.b}, ${outputBackgroundColor.a / 255})`
         : outputBackgroundString;
-    const showTimestamps = useAppStore(s => s.ui.showTimestamps);
-    const fontSize = useAppStore(s => s.ui.fontSize);
-    const wrapAt = useAppStore(s => s.ui.outputWrapAt);
-    const borders = useAppStore(s => s.ui.outputBorders);
-    const borderColor = useAppStore(s => s.ui.outputBorderColor);
-    const patchUI = useAppStore(s => s.patchUI);
+    const showTimestamps = useProfileField('showTimestamps');
+    const fontSize = useProfileField('fontSize');
+    const wrapAt = useProfileField('outputWrapAt');
+    const borders = useProfileField('outputBorders');
+    const borderColor = useProfileField('outputBorderColor');
+    const patchConnectionProfile = useAppStore(s => s.patchConnectionProfile);
 
     const { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom } =
         useStickyOutput(session.events, { stickyLines, showTimestamps });
@@ -66,7 +67,7 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
                     scrollToBottom={scrollToBottom}
                     background={outputBackground}
                     showTimestamps={showTimestamps}
-                    onToggleTimestamps={() => patchUI({ showTimestamps: !showTimestamps })}
+                    onToggleTimestamps={() => connectionId && patchConnectionProfile(connectionId, { showTimestamps: !showTimestamps })}
                     commandInputRef={commandInputRef}
                     fontSize={fontSize}
                     wrapAt={wrapAt}

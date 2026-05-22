@@ -9,7 +9,7 @@ import { userWindowQssToScopedCss, cssEscape } from '../ui/labels/qtCss';
 import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
 import { Console } from '../mud/text/Console';
-import { useAppStore } from '../storage';
+import { useAppStore, selectProfileField } from '../storage';
 
 /**
  * Returns how many monospace characters fit horizontally inside `el`. Used by
@@ -275,6 +275,7 @@ export class ScriptingAPI {
         triggerEngine: TriggerEngine,
         timerEngine: TimerEngine,
         keyEngine: KeyEngine,
+        private readonly connectionId: string,
     ) {
         this.windows = new ScriptingWindowsAPI(session);
         this.labels = new ScriptingLabelsAPI(session.labels, () => this.cssRewriter);
@@ -880,7 +881,7 @@ export class ScriptingAPI {
     getColumnCount(windowName?: string): number {
         const isMain = !windowName || windowName === 'main';
         const wrap = isMain
-            ? useAppStore.getState().ui.outputWrapAt
+            ? selectProfileField(useAppStore.getState(), this.connectionId, 'outputWrapAt')
             : this.session.windows.getWrap(windowName!);
         if (wrap && wrap > 0) return wrap;
 
@@ -894,13 +895,13 @@ export class ScriptingAPI {
      * Mudlet setWindowWrap(name, charsPerLine). Sets the visual wrap width
      * (in monospace columns) for the named window or "main". 0 clears the
      * setting. Returns false when the named window does not exist; main always
-     * succeeds (persisted via ui.outputWrapAt).
+     * succeeds (persisted on the active profile).
      */
     setWindowWrap(name: string, wrapAt: number): boolean {
         if (!Number.isFinite(wrapAt)) return false;
         const v = Math.max(0, Math.round(wrapAt));
         if (!name || name === 'main') {
-            useAppStore.getState().patchUI({ outputWrapAt: v > 0 ? v : undefined });
+            useAppStore.getState().patchConnectionProfile(this.connectionId, { outputWrapAt: v > 0 ? v : undefined });
             return true;
         }
         return this.session.windows.setWrap(name, v);
@@ -1240,15 +1241,15 @@ export class ScriptingAPI {
     }
 
     /**
-     * Mudlet setFontSize. Without `win` (or "main"), persists ui.fontSize so the
-     * main output picks it up. With a window name, sets the per-window output
-     * font size on WindowManager (saved into the window's hint).
+     * Mudlet setFontSize. Without `win` (or "main"), persists the size on the
+     * active profile so the main output picks it up. With a window name, sets
+     * the per-window output font size on WindowManager (saved into the hint).
      */
     setFontSize(size: number, win?: string): boolean {
         if (!Number.isFinite(size) || size < 1 || size > 99) return false;
         const rounded = Math.round(size);
         if (!win || win === 'main') {
-            useAppStore.getState().patchUI({ fontSize: rounded });
+            useAppStore.getState().patchConnectionProfile(this.connectionId, { fontSize: rounded });
             return true;
         }
         return this.session.windows.setFontSize(win, rounded);
@@ -1260,9 +1261,9 @@ export class ScriptingAPI {
      * if a named window doesn't exist or has no override.
      */
     getFontSize(win?: string): number | null {
-        if (!win || win === 'main') return useAppStore.getState().ui.fontSize;
+        if (!win || win === 'main') return selectProfileField(useAppStore.getState(), this.connectionId, 'fontSize');
         if (!this.session.windows.has(win)) return null;
-        return this.session.windows.getFontSize(win) ?? useAppStore.getState().ui.fontSize;
+        return this.session.windows.getFontSize(win) ?? selectProfileField(useAppStore.getState(), this.connectionId, 'fontSize');
     }
 
     /**
@@ -1272,7 +1273,7 @@ export class ScriptingAPI {
      */
     setBackgroundColor(name: string | undefined, r: number, g: number, b: number, a = 255): boolean {
         if (!name || name === 'main') {
-            useAppStore.getState().patchUI({ outputBackgroundColor: { r, g, b, a } });
+            useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBackgroundColor: { r, g, b, a } });
             return true;
         }
         if (this.session.labels.has(name)) {
@@ -1290,7 +1291,7 @@ export class ScriptingAPI {
      */
     getBackgroundColor(name?: string): { r: number; g: number; b: number; a: number } | null {
         if (!name || name === 'main') {
-            return useAppStore.getState().ui.outputBackgroundColor ?? null;
+            return selectProfileField(useAppStore.getState(), this.connectionId, 'outputBackgroundColor') ?? null;
         }
         if (this.session.labels.has(name)) {
             return this.session.labels.getBackgroundColor(name);
@@ -1301,7 +1302,8 @@ export class ScriptingAPI {
     // ── Borders ───────────────────────────────────────────────────────────────
     // Mudlet setBorderTop/Bottom/Left/Right carve pixel insets out of the main
     // window so labels can sit in the freed space. Sizes are clamped to >= 0
-    // and rounded; non-finite input is rejected. Reads/writes ui.outputBorders.
+    // and rounded; non-finite input is rejected. Reads/writes the active
+    // profile's outputBorders override.
 
     setBorderTop(size: number): void { this.patchBorders('top', size); }
     setBorderBottom(size: number): void { this.patchBorders('bottom', size); }
@@ -1333,33 +1335,33 @@ export class ScriptingAPI {
             t = A; r = B; bo = C; l = D;
         }
         if (t == null || r == null || bo == null || l == null) return;
-        useAppStore.getState().patchUI({ outputBorders: { top: t, right: r, bottom: bo, left: l } });
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBorders: { top: t, right: r, bottom: bo, left: l } });
     }
 
-    getBorderTop(): number { return useAppStore.getState().ui.outputBorders?.top ?? 0; }
-    getBorderBottom(): number { return useAppStore.getState().ui.outputBorders?.bottom ?? 0; }
-    getBorderLeft(): number { return useAppStore.getState().ui.outputBorders?.left ?? 0; }
-    getBorderRight(): number { return useAppStore.getState().ui.outputBorders?.right ?? 0; }
+    getBorderTop(): number { return selectProfileField(useAppStore.getState(), this.connectionId, 'outputBorders')?.top ?? 0; }
+    getBorderBottom(): number { return selectProfileField(useAppStore.getState(), this.connectionId, 'outputBorders')?.bottom ?? 0; }
+    getBorderLeft(): number { return selectProfileField(useAppStore.getState(), this.connectionId, 'outputBorders')?.left ?? 0; }
+    getBorderRight(): number { return selectProfileField(useAppStore.getState(), this.connectionId, 'outputBorders')?.right ?? 0; }
 
     getBorderSizes(): { top: number; right: number; bottom: number; left: number } {
-        return useAppStore.getState().ui.outputBorders ?? { top: 0, right: 0, bottom: 0, left: 0 };
+        return selectProfileField(useAppStore.getState(), this.connectionId, 'outputBorders') ?? { top: 0, right: 0, bottom: 0, left: 0 };
     }
 
     /** Mudlet setBorderColor. Channels are 0..255; alpha defaults to 255. */
     setBorderColor(r: number, g: number, b: number, a = 255): void {
-        useAppStore.getState().patchUI({ outputBorderColor: { r, g, b, a } });
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBorderColor: { r, g, b, a } });
     }
 
     /** Mudlet resetBorderColor — clears the override so the border tracks the page background again. */
     resetBorderColor(): void {
-        useAppStore.getState().patchUI({ outputBorderColor: undefined });
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBorderColor: undefined });
     }
 
     private patchBorders(side: 'top' | 'right' | 'bottom' | 'left', size: number): void {
         const v = this.normalizeBorder(size);
         if (v == null) return;
-        const cur = useAppStore.getState().ui.outputBorders ?? { top: 0, right: 0, bottom: 0, left: 0 };
-        useAppStore.getState().patchUI({ outputBorders: { ...cur, [side]: v } });
+        const cur = selectProfileField(useAppStore.getState(), this.connectionId, 'outputBorders') ?? { top: 0, right: 0, bottom: 0, left: 0 };
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBorders: { ...cur, [side]: v } });
     }
 
     private normalizeBorder(n: unknown): number | null {
@@ -1369,8 +1371,9 @@ export class ScriptingAPI {
     }
 
     /**
-     * Mudlet setFont. Without `win` (or "main"), updates ui.outputFont so the
-     * App-level applyOutputFont effect re-applies the --font-output CSS variable.
+     * Mudlet setFont. Without `win` (or "main"), updates the active profile's
+     * outputFont so the App-level applyOutputFont effect re-applies the
+     * --font-output CSS variable.
      * With a window name, sets the per-window override on WindowManager.
      * Empty `family` clears the override (main → unset, window → inherit).
      */
@@ -1378,7 +1381,7 @@ export class ScriptingAPI {
         const fam = (family ?? '').trim();
         if (!win || win === 'main') {
             const next = fam ? { kind: 'system' as const, family: fam } : undefined;
-            useAppStore.getState().patchUI({ outputFont: next });
+            useAppStore.getState().patchConnectionProfile(this.connectionId, { outputFont: next });
             return true;
         }
         return this.session.windows.setFont(win, fam);
@@ -1391,12 +1394,12 @@ export class ScriptingAPI {
      */
     getFont(win?: string): string | null {
         if (!win || win === 'main') {
-            return useAppStore.getState().ui.outputFont?.family ?? '';
+            return selectProfileField(useAppStore.getState(), this.connectionId, 'outputFont')?.family ?? '';
         }
         if (!this.session.windows.has(win)) return null;
         const own = this.session.windows.getFont(win);
         if (own != null) return own;
-        return useAppStore.getState().ui.outputFont?.family ?? '';
+        return selectProfileField(useAppStore.getState(), this.connectionId, 'outputFont')?.family ?? '';
     }
 
     /** Flush any buffered partial lines to the main output and all open windows. Called after each event dispatch. */

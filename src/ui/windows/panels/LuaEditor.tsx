@@ -148,7 +148,7 @@ export function LuaEditor({ value, onChange, onSave, gotoLine }: Props) {
     onChangeRef.current = onChange;
     const onSaveRef    = useRef(onSave);
     onSaveRef.current  = onSave;
-    const theme = useAppStore(s => s.ui.theme);
+    const theme = useAppStore(s => s.client.theme);
     const themeRef = useRef(theme);
     themeRef.current = theme;
 

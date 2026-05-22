@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type ButtonNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type UISettings, type PackageManifest } from './schema';
+import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type ButtonNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type ClientSettings, type ProfileSettings, type PackageManifest } from './schema';
 import type { MudletImportResult } from '../import/mudletXmlImport';
 import type { WindowOpenOptions } from '../ui/windows/types';
 
@@ -40,7 +40,8 @@ interface AppStore extends AppSchema {
     addConnection: (data: Omit<MudConnection, 'id'>) => void;
     updateConnection: (id: string, data: Omit<MudConnection, 'id'>) => void;
     removeConnection: (id: string) => void;
-    patchUI: (patch: Partial<UISettings>) => void;
+    patchClient: (patch: Partial<ClientSettings>) => void;
+    patchConnectionProfile: (connectionId: string, patch: Partial<ProfileSettings>) => void;
     saveWindowHint: (connectionId: string, panelId: string, hint: WindowOpenOptions) => void;
     clearWindowHints: (connectionId: string) => void;
     saveDockExtents: (connectionId: string, extents: Record<string, number>) => void;
@@ -97,8 +98,10 @@ export const useAppStore = create<AppStore>()(
                 const { [id]: _bt, ...restButtons } = s.connectionButtons;
                 const { [id]: _sb, ...restBounds } = s.connectionScriptEditorBounds;
                 const { [id]: _mb, ...restModalBounds } = s.connectionModalBounds;
+                const { [id]: _ui, ...restProfile } = s.connectionProfile;
                 return {
                     connections: s.connections.filter(c => c.id !== id),
+                    connectionProfile: restProfile,
                     connectionWindowHints: restHints,
                     connectionDockExtents: restExtents,
                     connectionScripts: restScripts,
@@ -115,7 +118,18 @@ export const useAppStore = create<AppStore>()(
                     })(),
                 };
             }),
-            patchUI: patch => set(s => ({ ui: { ...s.ui, ...patch } })),
+            patchClient: patch => set(s => ({ client: { ...s.client, ...patch } })),
+            patchConnectionProfile: (connectionId, patch) => set(s => {
+                // Treat `undefined` as "remove the override" so callers can
+                // restore fall-through to PROFILE_DEFAULTS (e.g. Mudlet's
+                // resetBorderColor clearing outputBorderColor).
+                const prev = s.connectionProfile[connectionId] ?? {};
+                const next: Partial<ProfileSettings> = { ...prev, ...patch };
+                for (const k of Object.keys(patch) as (keyof ProfileSettings)[]) {
+                    if (patch[k] === undefined) delete next[k];
+                }
+                return { connectionProfile: { ...s.connectionProfile, [connectionId]: next } };
+            }),
             saveWindowHint: (connectionId, panelId, hint) => set(s => ({
                 connectionWindowHints: {
                     ...s.connectionWindowHints,
@@ -401,12 +415,12 @@ export const useAppStore = create<AppStore>()(
         }),
         {
             name: 'mudix_v1',
-            version: 17,
-            partialize: ({ connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages }) => ({
-                connections, ui, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages,
+            version: 18,
+            partialize: ({ connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages }) => ({
+                connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages,
             }),
             migrate: (saved, version) => {
-                const s = saved as Partial<AppSchema> & { connections?: any[] };
+                const s = saved as Partial<AppSchema> & { connections?: any[]; ui?: any };
                 type V1Connection = { id: string; name: string; host: string; port: number; ssl: boolean };
                 const connections: MudConnection[] = (s.connections ?? []).map(c => {
                     if (version < 2 && !('url' in c)) {
@@ -440,10 +454,29 @@ export const useAppStore = create<AppStore>()(
                     ])
                 );
 
+                // v18: split legacy `ui` (one shared UISettings) into client (theme only)
+                // and per-connection profile overrides. Theme moves up to client; every
+                // other field is copied verbatim into every existing connection's
+                // override so users don't lose their current font/border/etc. settings.
+                const legacyUi = s.ui ?? {};
+                const client = { theme: (legacyUi.theme ?? APP_DEFAULTS.client.theme) };
+                const persisted = (s as any).connectionProfile as Record<string, Partial<ProfileSettings>> | undefined;
+                let connectionProfile: Record<string, Partial<ProfileSettings>>;
+                if (persisted) {
+                    connectionProfile = persisted;
+                } else {
+                    const seed: Partial<ProfileSettings> = {};
+                    for (const k of ['showTimestamps','fontSize','outputBackground','outputFont','outputWrapAt','outputBackgroundColor','outputBorders','outputBorderColor','promptTimeoutMs'] as const) {
+                        if (legacyUi[k] !== undefined) (seed as any)[k] = legacyUi[k];
+                    }
+                    connectionProfile = Object.fromEntries(connections.map(c => [c.id, { ...seed }]));
+                }
+
                 return {
                     ...APP_DEFAULTS,
                     connections,
-                    ui: { ...APP_DEFAULTS.ui, ...(s.ui ?? {}) },
+                    client,
+                    connectionProfile,
                     connectionWindowHints: s.connectionWindowHints ?? {},
                     connectionDockExtents: s.connectionDockExtents ?? {},
                     // For version >= 10 preserve all tree data (tree structure was already correct).

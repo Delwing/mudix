@@ -136,7 +136,7 @@ export class ScriptingEngine {
         connectionName = '',
         private readonly proxyUrlGetter: () => string | undefined = () => undefined,
     ) {
-        this.api = new ScriptingAPI(session, aliasEngine, triggerEngine, timerEngine, keyEngine);
+        this.api = new ScriptingAPI(session, aliasEngine, triggerEngine, timerEngine, keyEngine, connectionId);
         this.api.profileName = connectionName;
         this.connectionId = connectionId;
         this.bridgeEvents(session);

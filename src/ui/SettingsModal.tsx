@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type React from 'react';
-import { useAppStore, type Theme, type OutputFontSource } from '../storage';
+import { useAppStore, selectProfileField, PROFILE_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings } from '../storage';
 import { Button, Input, FontPicker } from './components';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
@@ -30,21 +30,29 @@ const TABS: { value: SettingsTab; label: string }[] = [
 
 interface SettingsModalProps {
     onClose: () => void;
+    /** Active profile id; null on the connection screen (only theme is editable). */
+    connectionId: string | null;
     vfs?: ProfileVFS | null;
 }
 
-export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
-    const outputBackground = useAppStore(s => s.ui.outputBackground);
-    const theme = useAppStore(s => s.ui.theme);
-    const outputFont = useAppStore(s => s.ui.outputFont);
-    const fontSize = useAppStore(s => s.ui.fontSize);
-    const promptTimeoutMs = useAppStore(s => s.ui.promptTimeoutMs);
-    const patchUI = useAppStore(s => s.patchUI);
+export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsModalProps) {
+    const theme = useAppStore(s => s.client.theme);
+    const patchClient = useAppStore(s => s.patchClient);
+    const outputBackground = useAppStore(s => selectProfileField(s, connectionId, 'outputBackground'));
+    const outputFont = useAppStore(s => selectProfileField(s, connectionId, 'outputFont'));
+    const fontSize = useAppStore(s => selectProfileField(s, connectionId, 'fontSize'));
+    const promptTimeoutMs = useAppStore(s => selectProfileField(s, connectionId, 'promptTimeoutMs'));
+    const patchConnectionProfile = useAppStore(s => s.patchConnectionProfile);
+    // Profile-scoped fields are only writable when a profile is active. On the
+    // connection screen the modal hides those rows entirely.
+    const patchProfile = (patch: Partial<ProfileSettings>) => {
+        if (connectionId) patchConnectionProfile(connectionId, patch);
+    };
 
     const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
 
     const handleFontChange = (next: OutputFontSource | undefined) => {
-        patchUI({ outputFont: next });
+        patchProfile({ outputFont: next });
     };
 
     const [text, setText] = useState(outputBackground);
@@ -60,7 +68,7 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
         const value = e.target.value;
         setText(value);
         setPickerColor(value);
-        patchUI({ outputBackground: value });
+        patchProfile({ outputBackground: value });
     };
 
     const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -68,20 +76,20 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
     };
 
     const handleTextBlur = () => {
-        patchUI({ outputBackground: text });
+        patchProfile({ outputBackground: text });
         if (isHexColor(text)) setPickerColor(text);
     };
 
     const handleReset = () => {
-        setText('');
+        setText(PROFILE_DEFAULTS.outputBackground);
         setPickerColor(DEFAULT_BG);
-        patchUI({ outputBackground: '' });
+        patchProfile({ outputBackground: PROFILE_DEFAULTS.outputBackground });
     };
 
     const handleTimeoutBlur = () => {
         const trimmed = timeoutText.trim();
         if (trimmed === '') {
-            patchUI({ promptTimeoutMs: undefined });
+            patchProfile({ promptTimeoutMs: undefined });
             return;
         }
         const parsed = parseInt(trimmed, 10);
@@ -92,12 +100,12 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
         }
         const clamped = Math.min(parsed, 5000);
         setTimeoutText(String(clamped));
-        patchUI({ promptTimeoutMs: clamped });
+        patchProfile({ promptTimeoutMs: clamped });
     };
 
     const handleTimeoutReset = () => {
         setTimeoutText('');
-        patchUI({ promptTimeoutMs: undefined });
+        patchProfile({ promptTimeoutMs: undefined });
     };
 
     const handleFontSizeBlur = () => {
@@ -108,12 +116,12 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
         }
         const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, parsed));
         setFontSizeText(String(clamped));
-        patchUI({ fontSize: clamped });
+        patchProfile({ fontSize: clamped });
     };
 
     const handleFontSizeReset = () => {
         setFontSizeText(String(DEFAULT_FONT_SIZE));
-        patchUI({ fontSize: DEFAULT_FONT_SIZE });
+        patchProfile({ fontSize: DEFAULT_FONT_SIZE });
     };
 
     return (
@@ -124,22 +132,24 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
                     <span className="modal-title">Settings</span>
                     <button className="modal-close" onClick={onClose} type="button" aria-label="Close">✕</button>
                 </div>
-                <div className="settings-tabs" role="tablist" aria-label="Settings categories">
-                    {TABS.map(tab => (
-                        <button
-                            key={tab.value}
-                            type="button"
-                            role="tab"
-                            aria-selected={activeTab === tab.value}
-                            className={`settings-tab${activeTab === tab.value ? ' settings-tab--active' : ''}`}
-                            onClick={() => setActiveTab(tab.value)}
-                        >
-                            {tab.label}
-                        </button>
-                    ))}
-                </div>
+                {connectionId && (
+                    <div className="settings-tabs" role="tablist" aria-label="Settings categories">
+                        {TABS.map(tab => (
+                            <button
+                                key={tab.value}
+                                type="button"
+                                role="tab"
+                                aria-selected={activeTab === tab.value}
+                                className={`settings-tab${activeTab === tab.value ? ' settings-tab--active' : ''}`}
+                                onClick={() => setActiveTab(tab.value)}
+                            >
+                                {tab.label}
+                            </button>
+                        ))}
+                    </div>
+                )}
                 <div className="modal-body">
-                    {activeTab === 'appearance' && (
+                    {(activeTab === 'appearance' || !connectionId) && (
                         <>
                             <section className="settings-section">
                                 <h3 className="settings-section-title">Appearance</h3>
@@ -149,7 +159,7 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
                                         id="theme-select"
                                         className="settings-select"
                                         value={theme}
-                                        onChange={e => patchUI({ theme: e.target.value as Theme })}
+                                        onChange={e => patchClient({ theme: e.target.value as Theme })}
                                     >
                                         {THEME_OPTIONS.map(opt => (
                                             <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -157,6 +167,7 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
                                     </select>
                                 </div>
                             </section>
+                            {connectionId && (
                             <section className="settings-section">
                                 <h3 className="settings-section-title">Output</h3>
                                 <div className="settings-row">
@@ -203,9 +214,10 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
                                     <FontPicker value={outputFont} onChange={handleFontChange} vfs={vfs} />
                                 </div>
                             </section>
+                            )}
                         </>
                     )}
-                    {activeTab === 'network' && (
+                    {activeTab === 'network' && connectionId && (
                         <section className="settings-section">
                             <h3 className="settings-section-title">Network</h3>
                             <div className="settings-row settings-row--top">

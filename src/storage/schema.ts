@@ -30,12 +30,18 @@ export type OutputFontSource =
     | { kind: 'url'; family: string; url: string }
     | { kind: 'vfs'; family: string; path: string };
 
-export interface UISettings {
+/** App-wide preferences that apply regardless of which profile is active. */
+export interface ClientSettings {
+    theme: Theme;
+}
+
+/** Per-profile settings. Scripts (setBorder, setFont, setBackgroundColor, …) and
+ *  the in-profile settings modal write here. Each field's value falls through to
+ *  PROFILE_DEFAULTS when the profile hasn't overridden it. */
+export interface ProfileSettings {
     showTimestamps: boolean;
     fontSize: number;
-    stickyLines: number;
     outputBackground: string;
-    theme: Theme;
     outputFont?: OutputFontSource;
     /** Mudlet setWindowWrap("main", N). 0/undefined disables character-based wrap. */
     outputWrapAt?: number;
@@ -51,6 +57,14 @@ export interface UISettings {
      *  fragmented. `undefined` = use MudClient's built-in default (300ms). */
     promptTimeoutMs?: number;
 }
+
+/** Defaults for profile settings. Reads fall through to these whenever a
+ *  profile hasn't set the field. */
+export const PROFILE_DEFAULTS: ProfileSettings = {
+    showTimestamps: false,
+    fontSize: 13,
+    outputBackground: '',
+};
 
 // ── Tree node base ────────────────────────────────────────────────────────────
 
@@ -272,7 +286,14 @@ export interface ScriptEditorBounds extends ModalBounds {
 
 export interface AppSchema {
     connections: MudConnection[];
-    ui: UISettings;
+    /** App-wide preferences that apply regardless of which profile is active
+     *  (currently just theme). Settable from both the connection screen and
+     *  in-profile settings modal. */
+    client: ClientSettings;
+    /** Per-profile setting overrides. Scripts (setBorderBottom, setFont, …)
+     *  and the in-profile settings modal write here; unset fields fall through
+     *  to PROFILE_DEFAULTS so script mutations stay scoped to one profile. */
+    connectionProfile: Record<string, Partial<ProfileSettings>>;
     connectionWindowHints: Record<string, Record<string, WindowOpenOptions>>;
     /** Per-connection dock area extents: { left, right, top, bottom } in pixels. */
     connectionDockExtents: Record<string, Record<string, number>>;
@@ -289,13 +310,8 @@ export interface AppSchema {
 
 export const APP_DEFAULTS: AppSchema = {
     connections: [],
-    ui: {
-        showTimestamps: false,
-        fontSize: 13,
-        stickyLines: 5,
-        outputBackground: '',
-        theme: 'dark',
-    },
+    client: { theme: 'dark' },
+    connectionProfile: {},
     connectionWindowHints: {},
     connectionDockExtents: {},
     connectionScripts: {},
@@ -308,6 +324,24 @@ export const APP_DEFAULTS: AppSchema = {
     connectionModalBounds: {},
     connectionPackages: {},
 };
+
+/**
+ * Reads a single ProfileSettings field for `connectionId`, falling through to
+ * PROFILE_DEFAULTS when the profile hasn't set it. Returns the default when
+ * `connectionId` is null (no active profile). Designed as a Zustand selector:
+ * `useAppStore(s => selectProfileField(s, id, 'fontSize'))`.
+ */
+export function selectProfileField<K extends keyof ProfileSettings>(
+    s: Pick<AppSchema, 'connectionProfile'>,
+    connectionId: string | null,
+    key: K,
+): ProfileSettings[K] {
+    if (connectionId) {
+        const v = s.connectionProfile[connectionId]?.[key];
+        if (v !== undefined) return v as ProfileSettings[K];
+    }
+    return PROFILE_DEFAULTS[key];
+}
 
 export function connectionUrl(c: MudConnection): string {
     if (c.mode === 'mud') {

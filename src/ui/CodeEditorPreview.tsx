@@ -61,7 +61,7 @@ export function CodeEditorPreview({ content, filename, path, vfs, onDirtyChange,
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
 
-    const theme = useAppStore(s => s.ui.theme);
+    const theme = useAppStore(s => s.client.theme);
 
     // Latest-callback refs so the editor keymap closure stays stable.
     const onDirtyRef = useRef(onDirtyChange);

@@ -8,7 +8,7 @@ import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
 import { FileBrowserModal } from './ui/FileBrowserModal';
 import { QuickOpenPalette } from './ui/QuickOpenPalette';
-import { useAppStore, connectionUrl, type MudConnection } from './storage';
+import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, type MudConnection } from './storage';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont } from './utils/fontLoader';
 import type { MudSession } from './mud/MudSession';
@@ -32,8 +32,8 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const commandInputRef = useRef<HTMLInputElement>(null);
     const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
 
-    const outputFont = useAppStore(s => s.ui.outputFont);
-    const promptTimeoutMs = useAppStore(s => s.ui.promptTimeoutMs);
+    const outputFont = useAppStore(s => selectProfileField(s, connection.id, 'outputFont'));
+    const promptTimeoutMs = useAppStore(s => selectProfileField(s, connection.id, 'promptTimeoutMs'));
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
     const connectionDockExtents = useAppStore(s => s.connectionDockExtents);
     const saveWindowHint = useAppStore(s => s.saveWindowHint);
@@ -187,6 +187,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     };
 
     return (
+        <ConnectionIdContext.Provider value={connection.id}>
         <div className="app">
             <Toolbar
                 connectionName={connection.name}
@@ -204,6 +205,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             {settingsOpen && (
                 <SettingsModal
                     onClose={onToggleSettings}
+                    connectionId={connection.id}
                     vfs={engineRef.current?.currentVFS ?? null}
                 />
             )}
@@ -257,5 +259,6 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                 />
             )}
         </div>
+        </ConnectionIdContext.Provider>
     );
 }
