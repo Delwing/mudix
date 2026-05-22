@@ -48,7 +48,10 @@ export class MudSession {
     private static readonly SCRIPT_LOG_LIMIT = 500;
     private _scriptLog: ScriptLogEntry[] = [];
 
-    constructor(private readonly options: MudSessionOptions = {}) {
+    private readonly options: MudSessionOptions;
+
+    constructor(options: MudSessionOptions = {}) {
+        this.options = { ...options };
         this.windows.setConsoleRegistry(this.consoles);
         this.events.on('script.log', (text, level, source) => {
             this._scriptLog.push({
@@ -120,6 +123,17 @@ export class MudSession {
 
     sendGmcpRaw(message: string): void {
         this.client?.sendGmcpRaw(message);
+    }
+
+    /** Updates both the active client (if any) and the stored options so the
+     *  setting survives a reconnect. */
+    setPromptTimeoutMs(ms: number): void {
+        this.options.promptTimeoutMs = ms;
+        this.client?.setPromptTimeoutMs(ms);
+    }
+
+    getPromptTimeoutMs(): number | null {
+        return this.client?.getPromptTimeoutMs() ?? this.options.promptTimeoutMs ?? null;
     }
 
     private teardownClient(): void {

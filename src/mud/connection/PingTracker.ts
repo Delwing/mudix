@@ -1,4 +1,5 @@
 const PING_INTERVAL_MS = 3000;
+const PING_PROBE_TIMEOUT_MS = 10000;
 
 export interface PingEventSource {
     on(event: 'gmcp.negotiated', handler: () => void): () => void;
@@ -8,8 +9,10 @@ export interface PingEventSource {
 
 export class PingTracker {
     private timer: number | null = null;
+    private probeTimer: number | null = null;
     private lastSentAt: number | null = null;
     private lastDuration: number | null = null;
+    private supported = false;
     private readonly unsubs: Array<() => void>;
 
     constructor(
@@ -18,7 +21,7 @@ export class PingTracker {
         source: PingEventSource,
     ) {
         this.unsubs = [
-            source.on('gmcp.negotiated', () => this.start()),
+            source.on('gmcp.negotiated', () => this.probe()),
             source.on('client.disconnect', () => this.stop()),
             source.on('gmcp.core.ping', () => this.handlePingResponse()),
         ];
@@ -30,9 +33,17 @@ export class PingTracker {
         this.unsubs.length = 0;
     }
 
+    private probe() {
+        if (this.supported || this.timer !== null || this.probeTimer !== null) return;
+        this.sendPing();
+        this.probeTimer = window.setTimeout(() => {
+            this.probeTimer = null;
+            this.lastSentAt = null;
+        }, PING_PROBE_TIMEOUT_MS);
+    }
+
     private start() {
         if (this.timer !== null) return;
-        this.sendPing();
         this.timer = window.setInterval(() => this.sendPing(), PING_INTERVAL_MS);
     }
 
@@ -41,6 +52,11 @@ export class PingTracker {
             clearInterval(this.timer);
             this.timer = null;
         }
+        if (this.probeTimer !== null) {
+            clearTimeout(this.probeTimer);
+            this.probeTimer = null;
+        }
+        this.supported = false;
         this.lastSentAt = null;
         if (this.lastDuration !== null) {
             this.lastDuration = null;
@@ -59,5 +75,14 @@ export class PingTracker {
         this.lastSentAt = null;
         this.lastDuration = duration;
         this.onPing(duration);
+
+        if (!this.supported) {
+            this.supported = true;
+            if (this.probeTimer !== null) {
+                clearTimeout(this.probeTimer);
+                this.probeTimer = null;
+            }
+            this.start();
+        }
     }
 }

@@ -45,6 +45,11 @@ export interface UISettings {
     outputBorders?: { top: number; right: number; bottom: number; left: number };
     /** Mudlet setBorderColor — fill color for the carved border area. rgba 0..255; undefined = inherit page background. */
     outputBorderColor?: { r: number; g: number; b: number; a: number };
+    /** Mudlet "Network packet timeout": how long (ms) to buffer a partial line
+     *  (text after the last `\n` of a WebSocket frame) before flushing it as a
+     *  prompt. Mitigates spurious mid-line breaks when long MUD lines arrive
+     *  fragmented. `undefined` = use MudClient's built-in default (300ms). */
+    promptTimeoutMs?: number;
 }
 
 // ── Tree node base ────────────────────────────────────────────────────────────

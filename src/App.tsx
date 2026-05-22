@@ -32,6 +32,12 @@ export default function App() {
         document.documentElement.dataset.theme = theme;
     }, [theme]);
     const outputFont = useAppStore(s => s.ui.outputFont);
+    const promptTimeoutMs = useAppStore(s => s.ui.promptTimeoutMs);
+    useEffect(() => {
+        if (typeof promptTimeoutMs === 'number') {
+            session.setPromptTimeoutMs(promptTimeoutMs);
+        }
+    }, [promptTimeoutMs, session]);
     const connections = useAppStore(s => s.connections);
     const addConnection = useAppStore(s => s.addConnection);
     const updateConnection = useAppStore(s => s.updateConnection);

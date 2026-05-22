@@ -2038,6 +2038,59 @@ html, body, #root {
     min-width: 0;
 }
 
+.settings-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.settings-tab {
+    appearance: none;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 10px 14px;
+    margin-bottom: -1px;
+    font: inherit;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: color 0.1s ease, border-color 0.1s ease;
+}
+
+.settings-tab:hover {
+    color: var(--text);
+}
+
+.settings-tab--active {
+    color: var(--text);
+    border-bottom-color: var(--accent, var(--text));
+}
+
+.settings-field-with-help {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+
+.settings-unit {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.settings-help {
+    margin: 0;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-dim);
+}
+
 .color-picker {
     width: 28px;
     height: 28px;

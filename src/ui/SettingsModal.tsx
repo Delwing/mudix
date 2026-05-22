@@ -5,6 +5,7 @@ import { Button, Input, FontPicker } from './components';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
 const DEFAULT_BG = '#090909';
+const DEFAULT_PROMPT_TIMEOUT_MS = 300;
 
 function isHexColor(s: string): boolean {
     return /^#[0-9a-fA-F]{6}$/.test(s);
@@ -17,6 +18,13 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
     { value: 'light', label: 'Light (Qt)' },
 ];
 
+type SettingsTab = 'appearance' | 'network';
+
+const TABS: { value: SettingsTab; label: string }[] = [
+    { value: 'appearance', label: 'Appearance' },
+    { value: 'network',    label: 'Network' },
+];
+
 interface SettingsModalProps {
     onClose: () => void;
     vfs?: ProfileVFS | null;
@@ -26,7 +34,10 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
     const outputBackground = useAppStore(s => s.ui.outputBackground);
     const theme = useAppStore(s => s.ui.theme);
     const outputFont = useAppStore(s => s.ui.outputFont);
+    const promptTimeoutMs = useAppStore(s => s.ui.promptTimeoutMs);
     const patchUI = useAppStore(s => s.patchUI);
+
+    const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
 
     const handleFontChange = (next: OutputFontSource | undefined) => {
         patchUI({ outputFont: next });
@@ -35,6 +46,9 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
     const [text, setText] = useState(outputBackground);
     const [pickerColor, setPickerColor] = useState(
         isHexColor(outputBackground) ? outputBackground : DEFAULT_BG,
+    );
+    const [timeoutText, setTimeoutText] = useState(
+        promptTimeoutMs !== undefined ? String(promptTimeoutMs) : '',
     );
 
     const handlePickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -59,6 +73,28 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
         patchUI({ outputBackground: '' });
     };
 
+    const handleTimeoutBlur = () => {
+        const trimmed = timeoutText.trim();
+        if (trimmed === '') {
+            patchUI({ promptTimeoutMs: undefined });
+            return;
+        }
+        const parsed = parseInt(trimmed, 10);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            // Invalid input — revert display to stored value.
+            setTimeoutText(promptTimeoutMs !== undefined ? String(promptTimeoutMs) : '');
+            return;
+        }
+        const clamped = Math.min(parsed, 5000);
+        setTimeoutText(String(clamped));
+        patchUI({ promptTimeoutMs: clamped });
+    };
+
+    const handleTimeoutReset = () => {
+        setTimeoutText('');
+        patchUI({ promptTimeoutMs: undefined });
+    };
+
     return (
         <>
             <div className="modal-overlay" onClick={onClose} />
@@ -67,51 +103,100 @@ export function SettingsModal({ onClose, vfs = null }: SettingsModalProps) {
                     <span className="modal-title">Settings</span>
                     <button className="modal-close" onClick={onClose} type="button" aria-label="Close">✕</button>
                 </div>
+                <div className="settings-tabs" role="tablist" aria-label="Settings categories">
+                    {TABS.map(tab => (
+                        <button
+                            key={tab.value}
+                            type="button"
+                            role="tab"
+                            aria-selected={activeTab === tab.value}
+                            className={`settings-tab${activeTab === tab.value ? ' settings-tab--active' : ''}`}
+                            onClick={() => setActiveTab(tab.value)}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
                 <div className="modal-body">
-                    <section className="settings-section">
-                        <h3 className="settings-section-title">Appearance</h3>
-                        <div className="settings-row">
-                            <label className="settings-label" htmlFor="theme-select">Theme</label>
-                            <select
-                                id="theme-select"
-                                className="settings-select"
-                                value={theme}
-                                onChange={e => patchUI({ theme: e.target.value as Theme })}
-                            >
-                                {THEME_OPTIONS.map(opt => (
-                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                ))}
-                            </select>
-                        </div>
-                    </section>
-                    <section className="settings-section">
-                        <h3 className="settings-section-title">Output</h3>
-                        <div className="settings-row">
-                            <label className="settings-label" htmlFor="output-bg">Background</label>
-                            <div className="settings-color-field">
-                                <input
-                                    type="color"
-                                    className="color-picker"
-                                    value={pickerColor}
-                                    onChange={handlePickerChange}
-                                    aria-label="Pick background color"
-                                />
-                                <Input
-                                    id="output-bg"
-                                    value={text}
-                                    placeholder={DEFAULT_BG}
-                                    onChange={handleTextChange}
-                                    onBlur={handleTextBlur}
-                                    spellCheck={false}
-                                />
-                                <Button variant="ghost" size="sm" onClick={handleReset}>Reset</Button>
+                    {activeTab === 'appearance' && (
+                        <>
+                            <section className="settings-section">
+                                <h3 className="settings-section-title">Appearance</h3>
+                                <div className="settings-row">
+                                    <label className="settings-label" htmlFor="theme-select">Theme</label>
+                                    <select
+                                        id="theme-select"
+                                        className="settings-select"
+                                        value={theme}
+                                        onChange={e => patchUI({ theme: e.target.value as Theme })}
+                                    >
+                                        {THEME_OPTIONS.map(opt => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </section>
+                            <section className="settings-section">
+                                <h3 className="settings-section-title">Output</h3>
+                                <div className="settings-row">
+                                    <label className="settings-label" htmlFor="output-bg">Background</label>
+                                    <div className="settings-color-field">
+                                        <input
+                                            type="color"
+                                            className="color-picker"
+                                            value={pickerColor}
+                                            onChange={handlePickerChange}
+                                            aria-label="Pick background color"
+                                        />
+                                        <Input
+                                            id="output-bg"
+                                            value={text}
+                                            placeholder={DEFAULT_BG}
+                                            onChange={handleTextChange}
+                                            onBlur={handleTextBlur}
+                                            spellCheck={false}
+                                        />
+                                        <Button variant="ghost" size="sm" onClick={handleReset}>Reset</Button>
+                                    </div>
+                                </div>
+                                <div className="settings-row settings-row--top">
+                                    <label className="settings-label">Font</label>
+                                    <FontPicker value={outputFont} onChange={handleFontChange} vfs={vfs} />
+                                </div>
+                            </section>
+                        </>
+                    )}
+                    {activeTab === 'network' && (
+                        <section className="settings-section">
+                            <h3 className="settings-section-title">Network</h3>
+                            <div className="settings-row settings-row--top">
+                                <label className="settings-label" htmlFor="prompt-timeout">Prompt timeout</label>
+                                <div className="settings-field-with-help">
+                                    <div className="settings-color-field">
+                                        <Input
+                                            id="prompt-timeout"
+                                            type="number"
+                                            min={0}
+                                            max={5000}
+                                            step={50}
+                                            value={timeoutText}
+                                            placeholder={String(DEFAULT_PROMPT_TIMEOUT_MS)}
+                                            onChange={e => setTimeoutText(e.target.value)}
+                                            onBlur={handleTimeoutBlur}
+                                        />
+                                        <span className="settings-unit">ms</span>
+                                        <Button variant="ghost" size="sm" onClick={handleTimeoutReset}>Reset</Button>
+                                    </div>
+                                    <p className="settings-help">
+                                        How long to wait for the rest of a line before treating a partial chunk as a prompt.
+                                        Raise this if you see spurious mid-line breaks on a slow connection; lower it if
+                                        prompts on MUDs without IAC GA feel sluggish. Default {DEFAULT_PROMPT_TIMEOUT_MS}ms,
+                                        matching Mudlet's "Network packet timeout".
+                                    </p>
+                                </div>
                             </div>
-                        </div>
-                        <div className="settings-row settings-row--top">
-                            <label className="settings-label">Font</label>
-                            <FontPicker value={outputFont} onChange={handleFontChange} vfs={vfs} />
-                        </div>
-                    </section>
+                        </section>
+                    )}
                 </div>
             </div>
         </>
