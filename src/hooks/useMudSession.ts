@@ -1,22 +1,29 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { MudSession, type SessionStatus, type MudSessionOptions } from '../mud/MudSession';
 
 export function useMudSession(options?: MudSessionOptions) {
-    const sessionRef = useRef<MudSession | null>(null);
-    if (!sessionRef.current) {
-        sessionRef.current = new MudSession(options);
-    }
-    const session = sessionRef.current;
+    const [session, setSession] = useState(() => new MudSession(options));
 
     const [status, setStatus] = useState<SessionStatus>('disconnected');
     const [ping, setPing] = useState<number | null>(null);
     const [passwordMode, setPasswordMode] = useState(false);
 
     useEffect(() => {
+        // StrictMode dev re-runs the effect cleanup-then-setup on mount. Our
+        // cleanup destroys the session, so on the synthetic remount the session
+        // is dead — swap in a fresh one. In production this branch never fires.
+        if (session.destroyed) {
+            setSession(new MudSession(options));
+            return;
+        }
         const offStatus = session.events.on('status', setStatus);
-        const offPing = session.events.on('ping', setPing);
-        const offEcho = session.events.on('telnet.echo', setPasswordMode);
-        return () => { offStatus(); offPing(); offEcho(); };
+        const offPing   = session.events.on('ping', setPing);
+        const offEcho   = session.events.on('telnet.echo', setPasswordMode);
+        return () => {
+            offStatus(); offPing(); offEcho();
+            session.destroy();
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [session]);
 
     const connect = useCallback((url: string) => session.connect(url), [session]);

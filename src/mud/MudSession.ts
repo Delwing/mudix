@@ -42,6 +42,7 @@ export class MudSession {
     private _status: SessionStatus = 'disconnected';
     private _ping: number | null = null;
     private _outputReady = false;
+    private _destroyed = false;
 
     /** Bounded script.log buffer so the editor panel can backfill entries that
      *  arrived before it was first opened (e.g. errors during initial load). */
@@ -143,6 +144,21 @@ export class MudSession {
         this.pingTracker = null;
         this.client?.disconnect();
         this.client = null;
+    }
+
+    get destroyed(): boolean { return this._destroyed; }
+
+    /** Release resources that live outside the JS heap. In-memory state (maps,
+     *  arrays, sub-managers) is reclaimed by GC once the instance is dropped, so
+     *  this only handles the three things that don't self-clean: the WebSocket
+     *  + ping timer (via `teardownClient`), Web Audio nodes, and any EventBus
+     *  listeners with an AbortSignal cleanup still pending. Idempotent. */
+    destroy(): void {
+        if (this._destroyed) return;
+        this._destroyed = true;
+        this.teardownClient();
+        this.sounds.destroy();
+        this.events.clear();
     }
 
     private setStatus(status: SessionStatus): void {

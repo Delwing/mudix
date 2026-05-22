@@ -16,6 +16,7 @@ import {registerVfs, unregisterVfs} from './vfs/vfsBridge';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
 import {installModuleFromVfsPath, installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
+import {ensureDefaultPackages} from '../import/defaultPackages';
 import {serializeMudletXml} from '../import/mudletXmlExport';
 import type {PackageManifest} from '../storage/schema';
 
@@ -165,6 +166,20 @@ export class ScriptingEngine {
      */
     private attachToStore(session: MudSession): void {
         const start = async () => {
+            // Wait for the VFS mount before touching disk-backed install paths.
+            // In practice initRuntime resolves long before output.ready fires,
+            // but the await is what guarantees this.vfs is non-null below.
+            await this.runtimeReady.catch(() => { /* runtime failure already surfaced */ });
+
+            // Install Mudlet's default packages (run-lua-code, …) into fresh profiles.
+            // Idempotent: skips packages already in the store, so existing profiles
+            // also pick up newly-added defaults on next open. Runs before
+            // applyScriptsFromStore so the alias/script nodes participate in the
+            // very first runtime load.
+            if (this.vfs) {
+                await ensureDefaultPackages(this.connectionId, this.vfs);
+            }
+
             // Modules are loaded from disk on every profile open — XML on disk is the
             // source of truth, so we re-read each module's XML and replace its nodes
             // before any script/alias/trigger load runs against the store. This

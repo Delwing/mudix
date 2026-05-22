@@ -2,6 +2,7 @@ import {
     configure,
     InMemory,
     mount,
+    mounts,
     umount,
     resolveMountConfig,
     readFileSync,
@@ -28,6 +29,10 @@ function ensureRoot(): Promise<void> {
     }
     return rootReady;
 }
+
+// Per-connection serialization chain for ProfileVFS.mount() — see comment on
+// ProfileVFS.mount for why this is needed.
+const mountChain = new Map<string, Promise<unknown>>();
 
 export type VFSSource = 'folder' | 'idb';
 
@@ -56,9 +61,36 @@ export class ProfileVFS {
         this.folderName = handle?.name;
     }
 
-    static async mount(connectionId: string): Promise<ProfileVFS> {
+    static mount(connectionId: string): Promise<ProfileVFS> {
+        // Serialize concurrent mounts for the same connectionId. Without this,
+        // two in-flight mount() calls (StrictMode synthetic remount, quick
+        // profile re-open) race past the `mounts.has()` check and both reach
+        // the synchronous `mount(path, fs)` — one wins, the other throws
+        // "Mount point is already in use". Chaining them ensures the second
+        // call observes the first's mount and tears it down before claiming.
+        const prev = mountChain.get(connectionId) ?? Promise.resolve();
+        const next = prev
+            .catch(() => { /* prior mount failed — proceed anyway */ })
+            .then(() => ProfileVFS.doMount(connectionId));
+        mountChain.set(connectionId, next.then(() => undefined, () => undefined));
+        return next;
+    }
+
+    private static async doMount(connectionId: string): Promise<ProfileVFS> {
         await ensureRoot();
         const profilePath = `/profiles/${connectionId}`;
+
+        // A previous mount at this path may still be present if the prior
+        // session's destroy() kicked off `flush().finally(unmount)` and the
+        // new mount races ahead of it. Tear it down right before claiming
+        // the slot so the fresh mount succeeds; the older flush still
+        // resolves against its captured fs ref, and its scheduled unmount
+        // is a no-op thanks to the ownership check in unmount().
+        const claimSlot = () => {
+            if (mounts.has(profilePath)) {
+                try { umount(profilePath); } catch { /* not mounted */ }
+            }
+        };
 
         // Prefer a linked folder if the user previously picked one and the
         // browser still grants us readwrite permission without a fresh prompt.
@@ -71,6 +103,7 @@ export class ProfileVFS {
             if (perm === 'granted') {
                 try {
                     const fs = await resolveMountConfig({ backend: WebAccess, handle }) as Syncable;
+                    claimSlot();
                     mount(profilePath, fs);
                     return new ProfileVFS(connectionId, fs, 'folder', handle);
                 } catch (err) {
@@ -80,6 +113,7 @@ export class ProfileVFS {
         }
 
         const fs = await resolveMountConfig({ backend: IndexedDB, storeName: `mudix_vfs_${connectionId}` }) as Syncable;
+        claimSlot();
         mount(profilePath, fs);
         if (!existsSync(profilePath)) {
             mkdirSync(profilePath, { recursive: true });
@@ -203,6 +237,10 @@ export class ProfileVFS {
     }
 
     unmount(): void {
+        // Only tear down the mount if we still own it. A fresh ProfileVFS may
+        // have replaced us at this path before our destroy()'s fire-and-forget
+        // flush() resolved; unmounting then would kill the replacement.
+        if (mounts.get(this.profilePath) !== this._fs) return;
         try { umount(this.profilePath); } catch { /* already unmounted */ }
     }
 }
