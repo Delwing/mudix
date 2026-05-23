@@ -82,61 +82,31 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         [connectionId],
     );
 
-    // Debounced per-area camera save. Captured at *schedule* time so flushing
-    // before an area switch writes the outgoing area's coords, not the new
-    // area's. Without this, a quick pan-then-switch sequence would write the
-    // post-switch (often fitArea) values back over the pan we just made.
-    const saveTimerRef = useRef<number | null>(null);
-    const pendingSaveRef = useRef<{
-        areaId: number;
-        level: number;
-        zoom: number;
-        centerX: number;
-        centerY: number;
-    } | null>(null);
-
-    const flushSave = useCallback(() => {
-        if (saveTimerRef.current != null) {
-            window.clearTimeout(saveTimerRef.current);
-            saveTimerRef.current = null;
-        }
-        const pending = pendingSaveRef.current;
-        if (!pending) return;
-        pendingSaveRef.current = null;
-        const store = useAppStore.getState();
-        const existing = store.connectionProfile[connectionId]?.mapViewStates ?? {};
-        store.patchConnectionProfile(connectionId, {
-            mapViewStates: {
-                ...existing,
-                [pending.areaId]: {
-                    level: pending.level,
-                    zoom: pending.zoom,
-                    centerX: pending.centerX,
-                    centerY: pending.centerY,
-                },
-            },
-            mapLastAreaId: pending.areaId,
-        });
-    }, [connectionId]);
-
+    // Persist the camera state for the current area straight to the store.
+    // We don't debounce here: the persist-storage adapter already coalesces
+    // rapid mutations into a single localStorage write (with a pagehide flush),
+    // so an extra in-panel debounce only created a window in which a quick
+    // pan-then-reload would drop the user's last view.
     const saveViewState = useCallback(() => {
         const renderer = rendererRef.current;
         const areaId = currentAreaRef.current;
         if (!renderer || areaId == null) return;
         const bounds = renderer.getViewportBounds();
-        pendingSaveRef.current = {
-            areaId,
-            level: currentLevelRef.current,
-            zoom: renderer.getZoom(),
-            centerX: (bounds.minX + bounds.maxX) / 2,
-            centerY: (bounds.minY + bounds.maxY) / 2,
-        };
-        if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = window.setTimeout(() => {
-            saveTimerRef.current = null;
-            flushSave();
-        }, 400);
-    }, [flushSave]);
+        const store = useAppStore.getState();
+        const existing = store.connectionProfile[connectionId]?.mapViewStates ?? {};
+        store.patchConnectionProfile(connectionId, {
+            mapViewStates: {
+                ...existing,
+                [areaId]: {
+                    level: currentLevelRef.current,
+                    zoom: renderer.getZoom(),
+                    centerX: (bounds.minX + bounds.maxX) / 2,
+                    centerY: (bounds.minY + bounds.maxY) / 2,
+                },
+            },
+            mapLastAreaId: areaId,
+        });
+    }, [connectionId]);
 
     // The renderer's player marker isn't gated by area/z — its onPositionChanged
     // runs after every drawArea and re-draws the marker at the player room's
@@ -313,15 +283,12 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
 
         return () => {
             renderer.camera.off('change', onCameraChange);
-            // Flush any pending camera save so a panel close (or connection
-            // switch) right after a pan doesn't drop the user's last view.
-            flushSave();
             renderer.destroy();
             rendererRef.current = null;
             readerRef.current = null;
             highlightOverlayRef.current = null;
         };
-    }, [manager, saveViewState, flushSave]);
+    }, [manager, saveViewState]);
 
     // Forward Mapper-tab edits onto the live renderer.settings. The settings
     // object is shared and mutable, but the renderer caches some derived
@@ -334,10 +301,6 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         applyMapperSettings(renderer.settings, mapper);
         renderer.refresh();
         renderer.updateBackground();
-        // renderer.refresh() doesn't emit any state event the highlight overlay
-        // listens to, but a change to roomSize moves every highlight circle's
-        // radius. Force the overlay to re-read settings.roomSize.
-        highlightOverlayRef.current?.refresh();
     }, [mapper]);
 
     // Boot path: ScriptingEngine and this panel both call bootstrapMap; the
@@ -516,11 +479,11 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         const areaId: number = room.area;
         const zLevel: number = room.z;
         const areaLevels = reader.getArea(areaId).getZLevels().sort((a, b) => a - b);
-        // Crossing into another area — save the outgoing area's view before
-        // ref flips. centerview itself keeps the current zoom (mapper-script
-        // semantics: follow the player without rescaling on every move).
+        // Crossing into another area — persist the new last-area pointer up
+        // front so a reload before the new area's first camera-change save
+        // still returns to it. centerview itself keeps the current zoom
+        // (mapper-script semantics: follow the player without rescaling).
         if (currentAreaRef.current !== areaId) {
-            flushSave();
             useAppStore.getState().patchConnectionProfile(connectionId, { mapLastAreaId: areaId });
         }
         setLevels(areaLevels);
@@ -529,10 +492,14 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         currentAreaRef.current = areaId;
         currentLevelRef.current = zLevel;
         setDropdownOpen(false);
-        renderer.drawArea(areaId, zLevel);
+        // setPosition() internally calls setArea() only when area/z (or the
+        // area instance/version) actually change, then emits 'position'. On
+        // same-area moves — the speedwalk path — this skips the 'area' event
+        // and therefore the full refresh()/syncPaths/sceneOverlay rebuild
+        // that drawArea would have forced. Cross-area moves still refresh.
         renderer.setPosition(roomId, true);
         recomputeMapInfos();
-    }, [flushSave, connectionId, recomputeMapInfos]);
+    }, [connectionId, recomputeMapInfos]);
 
     useEffect(() => {
         const handler = (roomId: number) => centerViewImplRef.current(roomId);
@@ -562,13 +529,9 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const selectArea = useCallback((id: number) => {
         const renderer = rendererRef.current;
         if (!renderer) return;
-        // Flush the outgoing area's pending camera save BEFORE the area ref
-        // flips — pending captured areaId at schedule time, so flushing now
-        // writes against the old area, not the one we're about to switch to.
-        // Also persist the new mapLastAreaId immediately so a tab close
-        // before the new area's debounced save fires still restores to it.
+        // Persist the new mapLastAreaId immediately so a tab close before the
+        // new area's first camera-change save fires still restores to it.
         if (currentAreaRef.current !== id) {
-            flushSave();
             useAppStore.getState().patchConnectionProfile(connectionId, { mapLastAreaId: id });
         }
         const areaLevels = readerRef.current?.getArea(id).getZLevels().sort((a, b) => a - b) ?? [0];
@@ -591,7 +554,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             renderer.fitArea();
         }
         recomputeMapInfos();
-    }, [flushSave, getSavedView, connectionId, syncPositionMarker, recomputeMapInfos]);
+    }, [getSavedView, connectionId, syncPositionMarker, recomputeMapInfos]);
 
     const handleLevelChange = useCallback((delta: number) => {
         if (!rendererRef.current || !currentArea) return;

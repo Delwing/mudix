@@ -1120,10 +1120,10 @@ mudlet-map-binary-reader@^0.9.0:
     lodash "4.18.0"
     qtdatastream "^1.1.0"
 
-mudlet-map-renderer@^1.2.2:
-  version "1.2.2"
-  resolved "https://registry.yarnpkg.com/mudlet-map-renderer/-/mudlet-map-renderer-1.2.2.tgz#2beabe3eca0f8ed9bb7014a5ae458ccc47d63f99"
-  integrity sha512-CrmApjEYdErz98h8bsiWRnzKxrhLWLmzBPSeEEqqT4oBXxGM2OLbJKV75dIBAzr5RwPoI1vbM41f9EwoSMNrAQ==
+mudlet-map-renderer@^2.0.0:
+  version "2.0.0"
+  resolved "https://registry.yarnpkg.com/mudlet-map-renderer/-/mudlet-map-renderer-2.0.0.tgz#04429f9f6b2f3e362dabcd2dd24c692c2ced732f"
+  integrity sha512-sq/Medf65Iu+hhYHvbqYpQ0Cclu3KnU6Lzav7ctMzYHohzVGoaJK0pjIoSZX6CjfkUN4ulygZF24Prfwh2HpNw==
   dependencies:
     konva "^10.2.4"
     node-dijkstra "^2.5.1"

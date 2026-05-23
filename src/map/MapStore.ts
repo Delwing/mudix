@@ -124,8 +124,10 @@ function labelToInfo(l: MudletLabel): MapLabelInfo {
 }
 
 /** Mudlet room highlight: two-color radial gradient with per-color alpha and
- *  a radius factor. Rendered by MudletHighlightOverlay (LiveEffect) — color1
- *  at the center, color2 at the outer edge, full Mudlet semantics. */
+ *  a radius factor. Rendered by MudletHighlightOverlay. Despite the suffix
+ *  naming, Mudlet's gradient puts color2 at the *centre* and color1 at the
+ *  *outer* ring (T2DMap::drawRoom: setColorAt(0, color2), setColorAt(0.85,
+ *  color1)). */
 export interface RoomHighlight {
     r1: number; g1: number; b1: number;
     r2: number; g2: number; b2: number;
@@ -182,6 +184,15 @@ export class MapStore {
     private version = 0;
     private subscribers = new Set<() => void>();
     private notifyPending = false;
+    // Highlights are a paint-only overlay — they don't affect room/area/exit
+    // data, so they go through their own subscription channel. Routing them
+    // through the general `notify()` would force MudixMapReader to rebuild
+    // its entire snapshot (toMudletMap + readerExport cloneDeep) on every
+    // highlightRoom/unHighlightRoom call, which during a speedwalk (where a
+    // mapper script updates highlights per move) blocks the main thread for
+    // hundreds of ms per step.
+    private highlightSubscribers = new Set<() => void>();
+    private highlightNotifyPending = false;
     private mapEvents = new Map<string, MapEventEntry>();
     private customEnvColors = new Map<number, MudletColor>();
     private roomHighlights = new Map<number, RoomHighlight>();
@@ -209,6 +220,14 @@ export class MapStore {
         return () => this.subscribers.delete(cb);
     }
 
+    /** Subscribe to highlight-set changes only (highlightRoom / unHighlightRoom
+     *  and bulk clears via newEmptyMap / loadFromBinary). MudletHighlightOverlay
+     *  uses this so it re-renders without forcing a full MudixMapReader rebuild. */
+    subscribeHighlights(cb: () => void): () => void {
+        this.highlightSubscribers.add(cb);
+        return () => this.highlightSubscribers.delete(cb);
+    }
+
     private notify(): void {
         this.version++;
         if (this.notifyPending) return;
@@ -216,6 +235,15 @@ export class MapStore {
         queueMicrotask(() => {
             this.notifyPending = false;
             for (const cb of this.subscribers) cb();
+        });
+    }
+
+    private notifyHighlights(): void {
+        if (this.highlightNotifyPending) return;
+        this.highlightNotifyPending = true;
+        queueMicrotask(() => {
+            this.highlightNotifyPending = false;
+            for (const cb of this.highlightSubscribers) cb();
         });
     }
 
@@ -250,6 +278,7 @@ export class MapStore {
         this.areaNames.set(-1, 'Default Area');
         this.initialized = true;
         this.notify();
+        this.notifyHighlights();
     }
 
     /**
@@ -313,6 +342,7 @@ export class MapStore {
         this.mapUserData = { ...(mudletMap.mUserData ?? {}) };
         this.initialized = true;
         this.notify();
+        this.notifyHighlights();
     }
 
     toRendererData(): MapRendererData | null {
@@ -1063,14 +1093,14 @@ export class MapStore {
     ): boolean {
         if (!this.rooms.has(id)) return false;
         this.roomHighlights.set(id, { r1, g1, b1, r2, g2, b2, a1, a2, radius });
-        this.notify();
+        this.notifyHighlights();
         return true;
     }
 
     /** Mudlet unHighlightRoom(roomID). Returns false when the room had no highlight. */
     unHighlightRoom(id: number): boolean {
         if (!this.roomHighlights.delete(id)) return false;
-        this.notify();
+        this.notifyHighlights();
         return true;
     }
 
