@@ -33,6 +33,10 @@ export type OutputFontSource =
 /** App-wide preferences that apply regardless of which profile is active. */
 export interface ClientSettings {
     theme: Theme;
+    /** The user's own deployed proxy URL (from the deploy wizard). When set,
+     *  ConnectionScreen uses this as the placeholder/default instead of
+     *  DEFAULT_PROXY_URL, so new connections route through the user's worker. */
+    userProxyUrl?: string;
 }
 
 /** Per-profile settings. Scripts (setBorder, setFont, setBackgroundColor, …) and
@@ -343,9 +347,10 @@ export function selectProfileField<K extends keyof ProfileSettings>(
     return PROFILE_DEFAULTS[key];
 }
 
-export function connectionUrl(c: MudConnection): string {
+export function connectionUrl(c: MudConnection, userProxyUrl?: string): string {
     if (c.mode === 'mud') {
-        const base = (c.proxyUrl?.trim() || DEFAULT_PROXY_URL).replace(/\/$/, '');
+        // Precedence: connection-level proxy > user's deployed proxy > built-in default.
+        const base = (c.proxyUrl?.trim() || userProxyUrl || DEFAULT_PROXY_URL).replace(/\/$/, '');
         return `${base}?host=${encodeURIComponent(c.host ?? '')}&port=${c.port ?? 23}`;
     }
     return c.url ?? '';

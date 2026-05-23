@@ -25,8 +25,10 @@ export function useEngines(session: MudSession, active: boolean, connection: Mud
         // Read fresh from the store on every HTTP call so live edits to the
         // proxy URL take effect without recreating the runtime.
         const proxyUrlGetter = () => {
-            const c = useAppStore.getState().connections.find(x => x.id === connection.id);
-            return c?.proxyUrl?.trim() || DEFAULT_PROXY_URL;
+            const state = useAppStore.getState();
+            const c = state.connections.find(x => x.id === connection.id);
+            // Precedence: connection-level proxy > user's deployed proxy > built-in default.
+            return c?.proxyUrl?.trim() || state.client.userProxyUrl || DEFAULT_PROXY_URL;
         };
         const engine = new ScriptingEngine(session, alias, trigger, timer, key, connection.id, connection.name, proxyUrlGetter);
         engineRef.current = engine;

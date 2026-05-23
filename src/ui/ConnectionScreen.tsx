@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { Button, Input, FormField, useConfirm } from './components';
 import { ProxyInfoModal } from './ProxyInfoModal';
 import { ProxyWhyModal } from './ProxyWhyModal';
-import { DEFAULT_PROXY_URL, connectionDisplayAddr, type ConnectionMode, type MudConnection } from '../storage';
+import { DEFAULT_PROXY_URL, connectionDisplayAddr, useAppStore, type ConnectionMode, type MudConnection } from '../storage';
 
-function buildPreviewUrl(host: string, port: string, proxyUrl: string): string {
-    const base = (proxyUrl.trim() || DEFAULT_PROXY_URL).replace(/\/$/, '');
+function buildPreviewUrl(host: string, port: string, proxyUrl: string, fallback: string): string {
+    const base = (proxyUrl.trim() || fallback).replace(/\/$/, '');
     const p = parseInt(port, 10);
     return `${base}?host=${encodeURIComponent(host.trim())}&port=${isNaN(p) ? 23 : p}`;
 }
@@ -28,6 +28,10 @@ interface Props {
 
 export function ConnectionScreen({ connections, connecting, connectingId, onConnect, onOpen, onAdd, onUpdate, onDelete, onOpenSettings }: Props) {
     const confirm = useConfirm();
+    // User's own deployed proxy (saved by ProxyWizardModal). When set, it takes
+    // precedence over DEFAULT_PROXY_URL as the suggested default for new connections.
+    const userProxyUrl = useAppStore(s => s.client.userProxyUrl);
+    const effectiveDefaultProxy = userProxyUrl || DEFAULT_PROXY_URL;
     const [editingId, setEditingId] = useState<string | null>(null);
     const [mode, setMode] = useState<ConnectionMode>('mud');
     const [name, setName] = useState('');
@@ -265,7 +269,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                             id="cs-proxy"
                             value={proxyUrl}
                             onChange={e => setProxyUrl(e.target.value)}
-                            placeholder={DEFAULT_PROXY_URL || 'wss://mudix-proxy.yourname.workers.dev'}
+                            placeholder={effectiveDefaultProxy || 'wss://mudix-proxy.yourname.workers.dev'}
                             spellCheck={false}
                             noAutofill
                         />
@@ -274,16 +278,18 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                 ? 'Used for HTTP requests blocked by CORS'
                                 : proxyUrl
                                     ? 'Custom proxy'
-                                    : DEFAULT_PROXY_URL
-                                        ? `Default: ${DEFAULT_PROXY_URL}`
-                                        : 'No default proxy configured'}
+                                    : userProxyUrl
+                                        ? `Your proxy: ${userProxyUrl}`
+                                        : DEFAULT_PROXY_URL
+                                            ? `Default: ${DEFAULT_PROXY_URL}`
+                                            : 'No default proxy configured'}
                         </span>
                     </div>
 
                     {mode === 'mud' && host.trim() && (
                         <div className="proxy-url-preview">
                             <span className="proxy-url-preview-label">Connects via</span>
-                            <code className="proxy-url-preview-url">{buildPreviewUrl(host, port, proxyUrl)}</code>
+                            <code className="proxy-url-preview-url">{buildPreviewUrl(host, port, proxyUrl, effectiveDefaultProxy)}</code>
                         </div>
                     )}
 
@@ -304,7 +310,12 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                 </form>
             </div>
         </div>
-        {proxyModalOpen && <ProxyInfoModal onClose={() => setProxyModalOpen(false)} />}
+        {proxyModalOpen && (
+            <ProxyInfoModal
+                onClose={() => setProxyModalOpen(false)}
+                onUseProxy={(url) => setProxyUrl(url)}
+            />
+        )}
         {proxyWhyOpen && (
             <ProxyWhyModal
                 onClose={() => setProxyWhyOpen(false)}

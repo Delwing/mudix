@@ -61,7 +61,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const autoConnectRef = useRef(autoConnect);
     useEffect(() => {
         if (autoConnectRef.current && !session.destroyed) {
-            session.connect(connectionUrl(connection));
+            session.connect(connectionUrl(connection, useAppStore.getState().client.userProxyUrl));
         }
     }, [session, connection]);
 
@@ -155,7 +155,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     }, [session, connection.id, saveWindowHint, saveDockExtents, engineRef]);
 
     const handleDisconnect = () => disconnect();
-    const handleReconnect  = () => connect(connectionUrl(connection));
+    const handleReconnect  = () => connect(connectionUrl(connection, useAppStore.getState().client.userProxyUrl));
 
     const handleOpenMap = () => {
         if (session.windows.isVisible('map')) {

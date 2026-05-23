@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import WORKER_CODE from '../../worker/index.js?raw';
+import { ProxyWizardModal } from './ProxyWizardModal';
 
 interface Props {
     onClose: () => void;
+    onUseProxy: (wssUrl: string) => void;
 }
 
-export function ProxyInfoModal({ onClose }: Props) {
+export function ProxyInfoModal({ onClose, onUseProxy }: Props) {
     const [copied, setCopied] = useState(false);
+    const [wizardOpen, setWizardOpen] = useState(false);
 
     const handleCopy = () => {
         navigator.clipboard.writeText(WORKER_CODE).then(() => {
@@ -29,6 +32,22 @@ export function ProxyInfoModal({ onClose }: Props) {
                         and forwards HTTP requests around CORS restrictions.
                         Don't have an account? <a className="proxy-info-link" href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noreferrer">Register at Cloudflare</a> — it's free.
                     </p>
+                    <div className="proxy-wizard-cta">
+                        <div className="proxy-wizard-cta-text">
+                            <strong>One-click deploy</strong>
+                            <span>Paste an API token and we'll do the rest.</span>
+                        </div>
+                        <button
+                            type="button"
+                            className="btn btn--primary btn--md"
+                            onClick={() => setWizardOpen(true)}
+                        >
+                            Launch wizard
+                        </button>
+                    </div>
+                    <div className="proxy-manual-divider">
+                        <span>or set it up manually</span>
+                    </div>
                     <ol className="proxy-info-steps">
                         <li>Go to <a className="proxy-info-link" href="https://dash.cloudflare.com/?to=/:account/workers-and-pages/create/workers/new" target="_blank" rel="noreferrer">Create a Worker</a> in the Cloudflare Dashboard</li>
                         <li>Replace the editor contents with the code below</li>
@@ -46,6 +65,16 @@ export function ProxyInfoModal({ onClose }: Props) {
                     </div>
                 </div>
             </div>
+            {wizardOpen && (
+                <ProxyWizardModal
+                    onClose={() => setWizardOpen(false)}
+                    onUseProxy={(url) => {
+                        onUseProxy(url);
+                        // Close the outer "Host your own" modal too — the user is done.
+                        onClose();
+                    }}
+                />
+            )}
         </>
     );
 }
