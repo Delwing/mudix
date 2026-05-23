@@ -193,9 +193,28 @@ export class MudClient {
     }
 
     disconnect(): void {
-        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-            this.socket.close();
+        if (!this.socket) return;
+        const socket = this.socket;
+        // Null handlers first so a delayed onclose (server doesn't ACK the
+        // close frame — happens with Cloudflare tunnels and unresponsive
+        // servers) doesn't re-fire the cleanup after we've already
+        // synthesized it below.
+        socket.onmessage = null;
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.onopen = null;
+        const state = socket.readyState;
+        if (state === WebSocket.CONNECTING || state === WebSocket.OPEN) {
+            socket.close();
         }
+        this.flushPendingLineTail(Date.now());
+        this.eventBus.emit('client.disconnect');
+        this.opened = false;
+        this.mccpHandler.reset();
+        this.echoHandler.reset();
+        this.pendingSubneg = '';
+        this.pendingLineTail = '';
+        this.clearTailTimer();
     }
 
     isSocketOpen(): boolean {
