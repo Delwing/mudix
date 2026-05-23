@@ -454,6 +454,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('loadRawFile',        '(path) → string',    'Read entire file from VFS and return its contents'),
     fn('loadfile',           '(filename)',          'Load a Lua file from VFS'),
     fn('dofile',             '(filename)',          'Load and execute a Lua file from VFS'),
+    fn('addFileWatch',       '(path) → bool',       'Watch a VFS file or directory; sysPathChanged(path) fires when Lua mutates the file (or any descendant of a watched directory). Path must exist. Browser has no native FS notifier, so external changes to a linked folder require ProfileVFS.resync() before they fire.'),
+    fn('removeFileWatch',    '(path) → bool',       'Stop watching a path previously registered with addFileWatch. Returns false if the path was not watched.'),
     // Events
     fn('raiseEvent',                    '(name, ...)',       'Fire a named event'),
     fn('registerAnonymousEventHandler', '(name, fn) → id',  'Register an event handler, returns an ID'),

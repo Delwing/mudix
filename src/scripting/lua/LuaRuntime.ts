@@ -90,6 +90,12 @@ export class LuaRuntime implements IScriptingRuntime {
     private currentFullMatchSpan: CaptureSpan | null = null;
     private _denyCurrentSend = false;
     private destroyed = false;
+    // Mudlet addFileWatch / removeFileWatch — set of resolved absolute VFS
+    // paths. Mutations through the __vfs_* hooks below call
+    // notifyVfsPathChange() which fires sysPathChanged. Browser has no native
+    // FS notifier, so this only catches Lua-driven changes; external edits to
+    // a linked folder still need a ProfileVFS.resync() to be observed.
+    private readonly watchedPaths = new Set<string>();
     private http!: HttpService;
     // Set by setupSqlBridge — forces every debounced SQL VFS snapshot to write
     // immediately. Called from saveProfile() so user code can ensure SQL state
@@ -1374,6 +1380,25 @@ export class LuaRuntime implements IScriptingRuntime {
             this.runUnzipAsync(String(zipPath ?? ''), String(destDir ?? ''));
         });
 
+        // ── File watches ──────────────────────────────────────────────────────
+        // Mudlet addFileWatch(path)/removeFileWatch(path). Watches are matched
+        // by resolved absolute path; the VFS mutation hooks above fire
+        // sysPathChanged(path) when a watched file or any descendant of a
+        // watched directory changes.
+        this.lua.global.set('addFileWatch', (path: unknown): boolean => {
+            const vfs = this.vfs;
+            if (!vfs || typeof path !== 'string' || !path) return false;
+            if (!vfs.exists(path)) return false;
+            this.watchedPaths.add(vfs.resolvePath(path));
+            return true;
+        });
+
+        this.lua.global.set('removeFileWatch', (path: unknown): boolean => {
+            const vfs = this.vfs;
+            if (!vfs || typeof path !== 'string' || !path) return false;
+            return this.watchedPaths.delete(vfs.resolvePath(path));
+        });
+
         // Mudlet saveProfile([location]). zustand state (scripts/aliases/etc.)
         // already auto-syncs to localStorage on every mutation; the work this
         // call adds is forcing pending VFS writes through to IndexedDB / the
@@ -2170,6 +2195,24 @@ export class LuaRuntime implements IScriptingRuntime {
 
     // ── VFS bridge ───────────────────────────────────────────────────────────
 
+    /**
+     * Fire sysPathChanged for any addFileWatch subscription whose path equals
+     * `changedPath` or is an ancestor directory of it. Mudlet's QFileSystemWatcher
+     * reports the *watched* path (not the inner file) for directory watches, so
+     * we do the same — handlers comparing `path == watchedPath` round-trip.
+     */
+    private notifyVfsPathChange(changedPath: string): void {
+        if (this.watchedPaths.size === 0) return;
+        if (this.watchedPaths.has(changedPath)) {
+            this.emitEvent('sysPathChanged', [changedPath]);
+        }
+        for (const watched of this.watchedPaths) {
+            if (watched !== changedPath && changedPath.startsWith(watched + '/')) {
+                this.emitEvent('sysPathChanged', [watched]);
+            }
+        }
+    }
+
     private setupVFS(vfs: ProfileVFS | null, builtins = new Map<string, string>()): void {
         let nextId = 1;
         let lastError = '';
@@ -2306,7 +2349,10 @@ export class LuaRuntime implements IScriptingRuntime {
             const h = handles.get(id);
             if (!h) return 'invalid file handle';
             try {
-                if (h.dirty && vfs) vfs.writeFile(h.path, h.content);
+                if (h.dirty && vfs) {
+                    vfs.writeFile(h.path, h.content);
+                    this.notifyVfsPathChange(h.path);
+                }
                 handles.delete(id);
                 return null;
             } catch (e) {
@@ -2317,13 +2363,21 @@ export class LuaRuntime implements IScriptingRuntime {
 
         this.lua.global.set('__vfs_os_remove__', (path: string): boolean => {
             if (!vfs) { lastError = 'no profile VFS'; return false; }
-            try { vfs.deleteFile(path); return true; }
+            const abs = vfs.resolvePath(path);
+            try { vfs.deleteFile(path); this.notifyVfsPathChange(abs); return true; }
             catch (e) { lastError = e instanceof Error ? e.message : String(e); return false; }
         });
 
         this.lua.global.set('__vfs_os_rename__', (oldPath: string, newPath: string): boolean => {
             if (!vfs) { lastError = 'no profile VFS'; return false; }
-            try { vfs.rename(oldPath, newPath); return true; }
+            const oldAbs = vfs.resolvePath(oldPath);
+            const newAbs = vfs.resolvePath(newPath);
+            try {
+                vfs.rename(oldPath, newPath);
+                this.notifyVfsPathChange(oldAbs);
+                if (oldAbs !== newAbs) this.notifyVfsPathChange(newAbs);
+                return true;
+            }
             catch (e) { lastError = e instanceof Error ? e.message : String(e); return false; }
         });
 
@@ -2338,13 +2392,15 @@ export class LuaRuntime implements IScriptingRuntime {
 
         this.lua.global.set('__vfs_lfs_mkdir__', (path: string): boolean => {
             if (!vfs) { lastError = 'no profile VFS'; return false; }
-            try { vfs.mkdir(path); return true; }
+            const abs = vfs.resolvePath(path);
+            try { vfs.mkdir(path); this.notifyVfsPathChange(abs); return true; }
             catch (e) { lastError = e instanceof Error ? e.message : String(e); return false; }
         });
 
         this.lua.global.set('__vfs_lfs_rmdir__', (path: string): boolean => {
             if (!vfs) { lastError = 'no profile VFS'; return false; }
-            try { vfs.rmdir(path); return true; }
+            const abs = vfs.resolvePath(path);
+            try { vfs.rmdir(path); this.notifyVfsPathChange(abs); return true; }
             catch (e) { lastError = e instanceof Error ? e.message : String(e); return false; }
         });
 
