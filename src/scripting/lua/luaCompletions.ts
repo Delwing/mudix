@@ -15,48 +15,6 @@ function kw(label: string): Completion {
     return { label, type: 'keyword' };
 }
 
-// ── mudix.windows ─────────────────────────────────────────────────────────────
-
-const MUDIX_WINDOWS: Completion[] = [
-    fn('open',     '(id, options?)',   'Open a user window panel'),
-    fn('write',    '(id, text)',       'Write raw ANSI text to a window'),
-    fn('cecho',    '(id, text)',       'Write with Mudlet color tags to a window'),
-    fn('decho',    '(id, text)',       'Write with decimal RGB colors to a window'),
-    fn('hecho',    '(id, text)',       'Write with hex RGB colors to a window'),
-    fn('clear',    '(id)',             'Clear a window'),
-    fn('setTitle', '(id, title)',      'Set the title of a window'),
-    fn('close',    '(id)',             'Close a window'),
-    fn('has',      '(id) → boolean',  'Check if a window exists'),
-];
-
-// ── mudix.timers ──────────────────────────────────────────────────────────────
-
-const MUDIX_TIMERS: Completion[] = [
-    fn('after', '(seconds, fn, repeat?)', 'Create a timer; pass true as 3rd arg to repeat'),
-    fn('kill',  '(id)',                   'Cancel a timer by id'),
-];
-
-// ── mudix.aliases ─────────────────────────────────────────────────────────────
-
-const MUDIX_ALIASES: Completion[] = [
-    fn('add',    '(pattern, fn) → id', 'Register a temporary alias; returns its id'),
-    fn('remove', '(id)',               'Remove a temporary alias'),
-];
-
-// ── mudix.triggers ────────────────────────────────────────────────────────────
-
-const MUDIX_TRIGGERS: Completion[] = [
-    fn('add',    '(pattern, fn) → id', 'Register a temporary trigger; returns its id'),
-    fn('remove', '(id)',               'Remove a temporary trigger'),
-];
-
-// ── mudix.keys ────────────────────────────────────────────────────────────────
-
-const MUDIX_KEYS: Completion[] = [
-    fn('add',    '(key, modifiers?, fn) → id', 'Register a keybinding. key: web code string (e.g. "F1", "KeyA"). modifiers: optional table e.g. {"ctrl","shift"}'),
-    fn('remove', '(id)',                       'Remove a temporary keybinding'),
-];
-
 // ── io ────────────────────────────────────────────────────────────────────────
 
 const IO_COMPLETIONS: Completion[] = [
@@ -288,6 +246,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('openUserWindow',  '(name, restoreLayout?, autoDock?, dockingArea?)', 'Open a user window'),
     fn('openMapWidget',   '([area | x, y, w, h])',                          'Open the map widget. No args: saved layout (right by default). One arg: dock area "f"/"l"/"r"/"t"/"b". Four args: floating at x,y with size w,h.'),
     fn('createMiniConsole', '([parent,] name, x, y, w, h) → bool', 'Create a positioned floating text panel; calling again repositions it'),
+    fn('createMapper',      '([parent,] x, y, w, h) → bool',        'Create a positioned mapper widget embedded in the main window or a userwindow (shares state with the dock widget). Singleton — calling again repositions it.'),
     fn('clearWindow',     '([name])',      'Clear window contents'),
     fn('setUserWindowTitle', '(name, title)', 'Set user window title'),
     fn('setUserWindowStyleSheet', '(name, css)', 'Apply Qt-style CSS to a userwindow viewport. `QWidget { … }` (and bare declarations) auto-scope to that window so padding/background actually affect it; non-QWidget selectors are dropped.'),
@@ -299,7 +258,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('getBackgroundColor', '([name]) → r, g, b, a', 'Get a window background color (rgba 0..255). No name returns the main window color; otherwise targets a userwindow, miniconsole, or label. Returns 0,0,0,255 when no color is set.'),
     fn('setHexFgColor',      '([window,] hexString)',   'Set foreground color from a hex string (e.g. "FF8800")'),
     fn('setHexBgColor',      '([window,] hexString)',   'Set background color from a hex string (e.g. "FF8800")'),
-    fn('setBackgroundImage', '(labelName, imageLocation)', 'Set a label background image from a VFS path'),
+    fn('setBackgroundImage', '([windowName | labelName,] imageLocation [, mode])', 'Set a background image on a label, miniconsole / userwindow, or the main window. mode (1 border/stretched, 2 center, 3 tile, 4 raw stylesheet) only applies to consoles — labels ignore it. Mudlet string modes ("border" / "center" / "tile" / "style") are translated via mudlet.BgImageMode. Image paths are resolved against the active package VFS.'),
+    fn('resetBackgroundImage', '([windowName])', 'Clear the background image set by setBackgroundImage. No name (or "main") clears the main window; otherwise targets a label, miniconsole, or userwindow.'),
     fn('createConsole',      '([userwindow,] name, fontSize, charsPerLine, numberOfLines, x, y)', 'Create a fixed-size text miniconsole'),
     fn('resetUserWindowTitle', '(windowName)',          'Reset a user window title back to its default'),
     fn('scrollUp',           '([window,] [lines])',     'Scroll the window up by N lines (default 1)'),
@@ -308,9 +268,13 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('moveMapWidget',      '(x, y)',                  'Move the floating map widget to screen position (x, y)'),
     fn('resizeMapWidget',    '(width, height)',         'Resize the floating map widget'),
     fn('getMainWindowSize', '() → w, h',   'Main output area pixel size (live element box). Falls back to browser inner size if the main output is not mounted.'),
+    fn('getMousePosition',  '() → x, y',   'Last-known cursor position in main-output-local pixels. Tracked passively via pointermove/mousedown — returns 0,0 before any pointer activity. Negative or out-of-range when the cursor is outside the main viewport.'),
     fn('getUserWindowSize', '(name) → w, h', 'Userwindow / miniconsole pixel size. Reports the live rendered box when mounted, else the stored hint. Returns 0,0 when the window does not exist.'),
     fn('setFontSize',       '([window,] size) → bool',  'Set the output font size (1..99). No window arg targets the main output (persists in settings); a window name targets a userwindow or miniconsole.'),
+    fn('setMiniConsoleFontSize', '(name, size) → bool', 'Set the font size (1..99) of a named miniconsole. Returns (nil, errMsg) when the name is not a miniconsole or the size is out of range.'),
     fn('getFontSize',       '([window]) → number|false','Get the configured output font size in pixels. No window arg returns the main size; a window name returns its override (or the main size if none).'),
+    fn('calcFontSize',      '(size[, family]) | (windowName) → w, h',
+       'Measure the average character cell of the named window or of an explicit size/family combo. Returns pixel width, height — use it to size a miniconsole to fit N cols × M rows. Returns (nil, errMsg) for an unknown window or invalid size.'),
     fn('setFont',           '([window,] family) → bool','Set the output font family. No window arg targets the main output (persists in settings as a system font); a window name targets a userwindow or miniconsole. Empty string clears the override.'),
     fn('getFont',           '([window]) → string|false','Get the configured output font family. No window arg returns the main font; a window name returns its override (or the main font if none).'),
     fn('getAvailableFonts', '() → table',               'Set-style table {[family]=true} of fonts usable from scripts: universal web-safe families, every font registered with the browser FontFaceSet (URL/VFS uploads), the profile output font, and locally-installed system fonts when Local Font Access permission has been granted.'),
@@ -373,6 +337,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('disableTrigger',   '(name)',        'Disable triggers (and groups) matching name; cascades to children'),
     fn('enableTimer',      '(name)',        'Enable timers (and groups) matching name; cascades to children'),
     fn('disableTimer',     '(name)',        'Disable timers (and groups) matching name; cascades to children'),
+    fn('enableAlias',      '(name)',        'Enable aliases (and groups) matching name; cascades to children'),
+    fn('disableAlias',     '(name)',        'Disable aliases (and groups) matching name; cascades to children'),
     fn('exists',           '(name, type) → number', 'Count items with the given name. type: "alias", "trigger", "timer", "key"/"keybind", "button", "script"'),
     // Cursor / line inspection
     fn('getCurrentLine',  '([window])',    'Get current trigger line text'),
@@ -407,6 +373,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('tempTrigger',    '(pattern, fn, expirationCount?) → id', 'Create a temporary trigger. expirationCount: positive N auto-kills after N fires; omitted/<=0 = unlimited'),
     fn('tempRegexTrigger','(regex, fn, expirationCount?) → id', 'Create a temporary regex trigger. expirationCount: positive N auto-kills after N fires; omitted/<=0 = unlimited'),
     fn('tempExactMatchTrigger','(line, fn, expirationCount?) → id', 'Create a temporary trigger that fires when the line is exactly equal to the pattern. expirationCount: positive N auto-kills after N fires; omitted/<=0 = unlimited'),
+    fn('tempBeginOfLineTrigger','(prefix, fn, expirationCount?) → id', 'Create a temporary trigger that fires when the line starts with the given literal prefix (NOT regex — no ^ anchor needed). Fast prefix check. expirationCount: positive N auto-kills after N fires; omitted/<=0 = unlimited'),
     fn('killTrigger',    '(id)',           'Remove a trigger'),
     fn('tempLineTrigger','(linesAhead, count, code)', 'Trigger N lines ahead'),
     // Keys
@@ -493,6 +460,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('setLink',           '([window,] cmd, tooltip)',         'Apply a clickable link to the current selection. cmd is Lua code or a function.'),
     // Map
     fn('centerview',           '(roomId)',                         'Center map on a room'),
+    fn('getPlayerRoom',        '() → id|nil',                      'Get the player\'s current room id (set by centerview); nil when unset or the room no longer exists'),
     fn('loadMap',              '([location]) → bool',              'Load a Mudlet binary `.dat` map from a VFS path; persists to IndexedDB and re-renders the panel. With no path, reloads from already-stored bytes. Returns false on a missing/unreadable/unparseable file.'),
     fn('getRoomIDbyHash',      '(hash) → id|nil',                 'Look up a room ID by its hash string'),
     fn('createRoomID',         '() → id',                         'Get the next available room ID'),
@@ -510,15 +478,19 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('getRoomHashByID',      '(id) → hash|nil',                  'Get the hash for a room'),
     fn('getRoomExits',         '(id) → {dir=toId}',               'Get room exits'),
     fn('setExit',              '(from, to, dir)',                   'Set an exit (dir 1-12, to=-1 removes)'),
-    fn('getExitStubs',         '(id) → {dir,...}',                 'Get stub direction numbers'),
+    fn('getExitStubs',         '(id) → {dir,...}',                 'Get stub direction numbers (0-indexed table)'),
+    fn('getExitStubs1',        '(id) → {dir,...}',                 'Get stub direction numbers (1-indexed table)'),
     fn('setExitStub',          '(id, dir, bool)',                   'Set or clear an exit stub'),
     fn('addSpecialExit',       '(from, to, cmd)',                   'Add a special/portal exit'),
     fn('removeSpecialExit',    '(from, cmd)',                       'Remove a special exit'),
     fn('getSpecialExitsSwap',  '(id) → {cmd=toId}',               'Get special exits (cmd→toId)'),
+    fn('getCustomLines',       '(id) → {dir={attributes={color,style,arrow},points={[0]={x,y,z},...}}} | nil',
+       "Get the room's custom exit lines. Returns nil when the room doesn't exist, an empty table when there are no custom lines. Points are 0-indexed; style is one of 'solid line', 'dash line', 'dot line', 'dash dot line', 'dash dot dot line'."),
     fn('getDoors',             '(id) → {dir=val}',                 'Get doors on a room'),
     fn('setDoor',              '(id, dir, val)',                    'Set a door (0=none,1=open,2=closed,3=locked)'),
     fn('getRoomUserData',      '(id, key) → value',                'Get custom room data'),
     fn('setRoomUserData',      '(id, key, value)',                  'Set custom room data'),
+    fn('getRoomUserDataKeys',  '(id) → {key1, key2, …} | nil',     'Get all user-data keys stored on the room; returns an empty table when the room has no data, or nil when the room does not exist'),
     fn('getMapUserData',       '(key) → value | (false, errMsg)',  "Get a value from the map's free-form user-data dict; (false, errMsg) when the key isn't set"),
     fn('setMapUserData',       '(key, value) → true',              "Set a value in the map's free-form user-data dict"),
     fn('clearMapUserData',     '() → bool',                        'Wipe the entire map user-data dict; returns true if anything was cleared'),
@@ -535,6 +507,9 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('setAreaName',          '(areaId, name)',                    'Rename an area'),
     fn('getAreaRooms',         '(areaId) → {0=id,...}',            'Get all room IDs in an area'),
     fn('getRooms',             '() → {id=name}',                   'Get all rooms in the map (id→name)'),
+    fn('getMapLabels',         '(areaID) → {labelID=labelText}',   'Get all map labels in an area, keyed by label id'),
+    fn('getMapLabel',          '(areaID, labelID|labelText) → info|{labelID=info}',
+       'Get a map label by id (returns a properties table: X,Y,Z,Width,Height,Text,Pixmap,OnTop,Scaling,Temporary,FgColor,BgColor) or by text (returns matches keyed by label id). Returns (false, errMsg) when the area is missing or the labelID is unknown.'),
     fn('addMapEvent',          '(uniqueName, eventName [, parent [, displayName [, ...args]]]) → bool',
        "Add an entry to the map's right-click context menu. On click, raises eventName with the right-clicked roomId as the first arg, followed by your extra args. Pass another entry's uniqueName as `parent` to nest as a submenu."),
     fn('removeMapEvent',       '(uniqueName) → bool',              'Remove a previously registered map context-menu entry. Returns true if the entry existed.'),

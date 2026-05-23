@@ -601,6 +601,7 @@ export class ScriptingEngine {
             this.api.setScriptToggler((name, enabled) => this.toggleScriptByName(name, enabled));
             this.api.setTriggerToggler((name, enabled) => this.toggleTriggerByName(name, enabled));
             this.api.setTimerToggler((name, enabled) => this.toggleTimerByName(name, enabled));
+            this.api.setAliasToggler((name, enabled) => this.toggleAliasByName(name, enabled));
             this.api.setExistsCallback((name, type) => this.existsByName(name, type));
             this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
             this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
@@ -784,6 +785,23 @@ export class ScriptingEngine {
             .filter(t => t.enabled !== enabled)
             .map(t => ({ id: t.id, patch: { enabled } }));
         if (patches.length > 0) store.updateTimers(this.connectionId, patches);
+        return true;
+    }
+
+    /**
+     * Toggle aliases' enabled flag by name (Mudlet enableAlias/disableAlias).
+     * Mirrors trigger/timer batching: flipping a group cascades to children via
+     * isEffectivelyEnabled at compile time, so one set() rebuilds AliasEngine once.
+     */
+    toggleAliasByName(name: string, enabled: boolean): boolean {
+        const store = useAppStore.getState();
+        const aliases = store.connectionAliases[this.connectionId] ?? [];
+        const targets = aliases.filter(a => a.name === name);
+        if (targets.length === 0) return false;
+        const patches = targets
+            .filter(a => a.enabled !== enabled)
+            .map(a => ({ id: a.id, patch: { enabled } }));
+        if (patches.length > 0) store.updateAliases(this.connectionId, patches);
         return true;
     }
 

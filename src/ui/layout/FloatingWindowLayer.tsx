@@ -36,18 +36,33 @@ export function FloatingWindowLayer({ windows, manager, onDragStateChange, onTit
     // Mudlet createMiniConsole(parent, name, ...) nests the miniconsole inside
     // a parent userwindow. We portal those into the parent's viewport so their
     // (x, y) are interpreted relative to the parent, and they follow parent
-    // moves/resizes for free. Parents that haven't mounted yet (or 'main',
-    // which equals the document viewport anyway) fall back to the floating
-    // root — main-parented miniconsoles render correctly there since main
-    // already spans the viewport.
+    // moves/resizes for free. Main-parented miniconsoles portal into the main
+    // output viewport so (0, 0) lands at the top of the gameplay area —
+    // otherwise they'd render against `position: fixed` document coordinates
+    // and overlap the app toolbar. Regular floating windows (no parent) still
+    // render into the document-wide floating root so they can be dragged
+    // freely across the viewport.
     const rootWindows: ScriptWindowRenderData[] = [];
     const nestedByParent = new Map<string, ScriptWindowRenderData[]>();
-    for (const w of floating) {
+    const resolveParent = (w: ScriptWindowRenderData): { id: string; el: HTMLElement } | null => {
+        const isMC = manager.isMiniConsole(w.id);
         const parent = w.parent;
-        if (parent && parent !== 'main' && manager.getViewport(parent)) {
-            const list = nestedByParent.get(parent) ?? [];
+        if (parent && parent !== 'main') {
+            const el = manager.getViewport(parent);
+            return el ? { id: parent, el } : null;
+        }
+        if (isMC) {
+            const el = manager.getMainViewportElement();
+            return el ? { id: 'main', el } : null;
+        }
+        return null;
+    };
+    for (const w of floating) {
+        const resolved = resolveParent(w);
+        if (resolved) {
+            const list = nestedByParent.get(resolved.id) ?? [];
             list.push(w);
-            nestedByParent.set(parent, list);
+            nestedByParent.set(resolved.id, list);
         } else {
             rootWindows.push(w);
         }
@@ -62,7 +77,9 @@ export function FloatingWindowLayer({ windows, manager, onDragStateChange, onTit
                 document.body,
             )}
             {[...nestedByParent.entries()].map(([parent, list]) => {
-                const target = manager.getViewport(parent)!;
+                const target = parent === 'main'
+                    ? manager.getMainViewportElement()!
+                    : manager.getViewport(parent)!;
                 return createPortal(
                     <div className="floating-window-root floating-window-root--nested">
                         {list.map(renderWindow)}

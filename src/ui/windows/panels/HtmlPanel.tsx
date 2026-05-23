@@ -3,15 +3,17 @@ import type React from 'react';
 import type { WindowManager } from '../WindowManager';
 import type { LabelManager } from '../../labels/LabelManager';
 import { LabelOverlay } from '../../labels/LabelOverlay';
+import { backgroundImageStyle } from '../../output/backgroundImageStyle';
 
 interface HtmlPanelProps {
     id: string;
     manager: WindowManager;
     labels?: LabelManager;
     backgroundColor?: { r: number; g: number; b: number; a: number };
+    backgroundImage?: { url: string; mode: number };
 }
 
-export function HtmlPanel({ id, manager, labels, backgroundColor }: HtmlPanelProps) {
+export function HtmlPanel({ id, manager, labels, backgroundColor, backgroundImage }: HtmlPanelProps) {
     const viewportRef = useRef<HTMLDivElement>(null);
     const ref = useRef<HTMLDivElement>(null);
 
@@ -22,8 +24,13 @@ export function HtmlPanel({ id, manager, labels, backgroundColor }: HtmlPanelPro
         return () => manager.unregister(id);
     }, [manager, id]);
 
-    const innerStyle: React.CSSProperties = backgroundColor
-        ? { ...INNER_STYLE, background: `rgba(${backgroundColor.r}, ${backgroundColor.g}, ${backgroundColor.b}, ${backgroundColor.a / 255})` }
+    const bgImage = backgroundImageStyle(backgroundImage);
+    const innerStyle: React.CSSProperties = (backgroundColor || bgImage)
+        ? {
+            ...INNER_STYLE,
+            ...(backgroundColor ? { background: `rgba(${backgroundColor.r}, ${backgroundColor.g}, ${backgroundColor.b}, ${backgroundColor.a / 255})` } : {}),
+            ...(bgImage ?? {}),
+        }
         : INNER_STYLE;
 
     return (

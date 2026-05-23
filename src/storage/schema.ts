@@ -57,6 +57,11 @@ export interface ProfileSettings {
     outputWrapAt?: number;
     /** Mudlet setBackgroundColor for the main window. rgba 0..255. Takes precedence over outputBackground when set. */
     outputBackgroundColor?: { r: number; g: number; b: number; a: number };
+    /** Mudlet setBackgroundImage for the main window. `url` is the resolved
+     *  image href for modes 1-3, or the raw stylesheet body for mode 4 (style).
+     *  `mode` mirrors `mudlet.BgImageMode`: 1=border (stretched), 2=center,
+     *  3=tile, 4=style. Cleared by resetBackgroundImage(). */
+    outputBackgroundImage?: { url: string; mode: number };
     /** Mudlet setBorderTop/Bottom/Left/Right. Pixel insets carved from the main window for label placement; 0 / undefined = no border. */
     outputBorders?: { top: number; right: number; bottom: number; left: number };
     /** Mudlet setBorderColor — fill color for the carved border area. rgba 0..255; undefined = inherit page background. */
@@ -66,6 +71,17 @@ export interface ProfileSettings {
      *  prompt. Mitigates spurious mid-line breaks when long MUD lines arrive
      *  fragmented. `undefined` = use MudClient's built-in default (300ms). */
     promptTimeoutMs?: number;
+    /** Last-saved MapPanel camera state, restored when the panel mounts so
+     *  the user keeps their zoom/pan/area/level across reloads. Cleared
+     *  implicitly when a fresh map is loaded and the saved area no longer
+     *  exists (syncFromStore falls back to the first area + fitArea). */
+    mapViewState?: {
+        areaId: number;
+        level: number;
+        zoom: number;
+        centerX: number;
+        centerY: number;
+    };
 }
 
 /** Defaults for profile settings. Reads fall through to these whenever a

@@ -144,8 +144,8 @@ export function ContentLayout({
                 Each panel renders into a stable portal-target div that shells physically move
                 between dock slots and floating frames without ever unmounting the component. */}
             {windows.map(w => createPortal(
-                w.kind === 'text' ? <TextPanel id={w.id} manager={manager} labels={session.labels} fontSize={w.fontSize} fontFamily={w.fontFamily} wrapAt={w.wrapAt} backgroundColor={w.backgroundColor} />
-              : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} labels={session.labels} backgroundColor={w.backgroundColor} />
+                w.kind === 'text' ? <TextPanel id={w.id} manager={manager} labels={session.labels} fontSize={w.fontSize} fontFamily={w.fontFamily} wrapAt={w.wrapAt} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} />
+              : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} labels={session.labels} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} />
               : <MapPanel id={w.id} manager={manager} connectionId={connectionId} />,
                 manager.getOrCreatePortalTarget(w.id),
                 w.id,

@@ -370,7 +370,7 @@ Always returns `-1`. Mudlet returns seconds remaining on a scheduled timer. `Lua
 | raiseEvent | `→ true`; supports tables/functions via registry refs | matches | Returns `true` once handlers have fired (synchronous dispatch); empty/missing event name returns `false`. Table args still rely on wasmoon conversion | fixed |
 | registerAnonymousEventHandler | `→ numeric id` | stub returns 0; mudlet-lua/Other.lua overrides | Confirmed: bundled `Other.lua` overwrites the JS stub at module load with its own Lua implementation that registers/dispatches handlers; the JS stub only satisfies the one bootstrap call `registerAnonymousEventHandler("*", "dispatchEventToFunctions")` before Other.lua redefines it | OK |
 | showHandlerError | logs via host.mLuaInterpreter | `printError("[event \"…\"] …")` | parallel | OK |
-| expandAlias | `(cmd, [echo])` — default echo is **false** (nil → false) | matches | `nil`/missing echo now defaults to `false` (Mudlet shape); explicit boolean honored; binding returns `true` | fixed |
+| expandAlias | `(cmd, [echo])` — default echo is **true** (Mudlet's `wantPrint = true`) | matches | `nil`/missing echo defaults to `true`; explicit boolean honored; binding returns `true`. Geyser.Button:press relies on this — `clickCommand` fires `expandAlias(cmd)` with no echo arg and Mudlet echoes the command into the main window | fixed |
 | denyCurrentSend | sets gate flag | matches | OK | OK |
 | sendCmdLine | stages text in cmdbar (no submit) | matches | Emits `script.setcmd` to replace bar contents; App handler focuses + selects all; `cmdLineName` arg accepted and ignored | fixed |
 | send | `(cmd, [echo=true]) → true` | matches | Returns `true` once the send is dispatched | fixed |

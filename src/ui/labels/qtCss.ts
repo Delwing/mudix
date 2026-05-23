@@ -35,12 +35,21 @@ export function cssTextToStyle(css: string): React.CSSProperties {
 // CSS pseudo-class for state selectors like `QLabel::hover`, `QLabel:pressed`,
 // etc. Caller is expected to inject scoped rules into a `<style>` element
 // targeting the specific label via a unique selector prefix.
+export interface QtMargin {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+}
+
 export function cssTextToParts(css: string): {
     inline: React.CSSProperties;
     scoped: Array<{ pseudo: string; declarations: string }>;
+    margin?: QtMargin;
 } {
     if (css.indexOf('{') < 0) {
-        return { inline: declarationsToStyle(css), scoped: [] };
+        const { style, margin } = declarationsToStyleWithMargin(css);
+        return { inline: style, scoped: [], margin };
     }
     const inlineDecls: string[] = [];
     const scoped: Array<{ pseudo: string; declarations: string }> = [];
@@ -51,7 +60,8 @@ export function cssTextToParts(css: string): {
         // Unknown selectors (other widget types, descendant rules) are dropped —
         // they wouldn't have applied to a QLabel in Mudlet either.
     }
-    return { inline: declarationsToStyle(inlineDecls.join(';')), scoped };
+    const { style, margin } = declarationsToStyleWithMargin(inlineDecls.join(';'));
+    return { inline: style, scoped, margin };
 }
 
 // Translate a Qt selector ("QLabel", "QLabel:hover", "QLabel::hover",
@@ -82,22 +92,79 @@ function qtSelectorToPseudo(sel: string): string | null {
 // Apply Qt→CSS translations on a flat declaration block and return inline
 // styles. Used for both the base block and `QLabel { … }` rule bodies.
 function declarationsToStyle(css: string): React.CSSProperties {
+    return declarationsToStyleWithMargin(css).style;
+}
+
+// Same as declarationsToStyle but also extracts Qt margin as geometry-inset
+// data. Margin in Qt's QSS insets the visible area within the widget's
+// geometry, but CSS margin on an absolutely-positioned div *offsets* the box —
+// so we pull margin out of the inline style and hand it back as numbers so
+// LabelOverlay can apply it as left/top/width/height adjustments.
+function declarationsToStyleWithMargin(css: string): {
+    style: React.CSSProperties;
+    margin?: QtMargin;
+} {
     const out: Record<string, string> = {};
+    const margin: Partial<QtMargin> = {};
     for (const decl of splitDeclarations(css)) {
         const i = decl.indexOf(':');
         if (i < 0) continue;
-        let key = decl.slice(0, i).trim().toLowerCase();
-        let val = decl.slice(i + 1).trim();
+        const key = decl.slice(0, i).trim().toLowerCase();
+        const val = stripOuterQuotes(decl.slice(i + 1).trim());
         if (!key || !val) continue;
-        if (/QLinearGradient\s*\(/i.test(val)) val = translateLinearGradient(val);
-        // Qt accepts a brush (incl. gradients) for `background-color`; CSS only
-        // allows a solid <color> there. Rename to `background` so gradients paint.
-        if (key === 'background-color' && /-gradient\s*\(/.test(val)) key = 'background';
-        if (LENGTH_PROPS.has(key)) val = ensurePxUnits(val);
-        const camel = key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-        out[camel] = val;
+        if (key === 'qproperty-alignment') {
+            Object.assign(out, qtAlignmentToFlex(val));
+            continue;
+        }
+        if (key === 'margin' || key === 'margin-top' || key === 'margin-right'
+            || key === 'margin-bottom' || key === 'margin-left') {
+            applyMarginDeclaration(margin, key, val);
+            continue;
+        }
+        const [outKey, outVal] = translateDeclaration(key, val);
+        const camel = outKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        out[camel] = outVal;
     }
-    return out as React.CSSProperties;
+    const fullMargin: QtMargin | undefined = (
+        margin.top !== undefined || margin.right !== undefined
+        || margin.bottom !== undefined || margin.left !== undefined
+    ) ? {
+        top: margin.top ?? 0,
+        right: margin.right ?? 0,
+        bottom: margin.bottom ?? 0,
+        left: margin.left ?? 0,
+    } : undefined;
+    return { style: out as React.CSSProperties, margin: fullMargin };
+}
+
+// Parse a single margin declaration into the QtMargin accumulator. Handles
+// shorthand (1–4 values) and the per-side `margin-top` etc. forms.
+function applyMarginDeclaration(out: Partial<QtMargin>, key: string, val: string): void {
+    if (key === 'margin') {
+        const nums = val.split(/\s+/).map(parseMarginToken).filter((n): n is number => n !== null);
+        if (nums.length === 1) {
+            out.top = out.right = out.bottom = out.left = nums[0];
+        } else if (nums.length === 2) {
+            out.top = out.bottom = nums[0];
+            out.left = out.right = nums[1];
+        } else if (nums.length === 3) {
+            out.top = nums[0];
+            out.left = out.right = nums[1];
+            out.bottom = nums[2];
+        } else if (nums.length === 4) {
+            [out.top, out.right, out.bottom, out.left] = nums;
+        }
+        return;
+    }
+    const n = parseMarginToken(val);
+    if (n === null) return;
+    const side = key.slice('margin-'.length) as keyof QtMargin;
+    out[side] = n;
+}
+
+function parseMarginToken(tok: string): number | null {
+    const m = tok.match(/^(-?\d+(?:\.\d+)?)(px)?$/);
+    return m ? parseFloat(m[1]) : null;
 }
 
 // Translate a Qt-style stylesheet meant for a userwindow (`QWidget { … }`) into
@@ -162,15 +229,79 @@ export function qtDeclarationsToCss(css: string): string {
     for (const decl of splitDeclarations(css)) {
         const i = decl.indexOf(':');
         if (i < 0) continue;
-        let key = decl.slice(0, i).trim().toLowerCase();
-        let val = decl.slice(i + 1).trim();
+        const key = decl.slice(0, i).trim().toLowerCase();
+        const val = stripOuterQuotes(decl.slice(i + 1).trim());
         if (!key || !val) continue;
-        if (/QLinearGradient\s*\(/i.test(val)) val = translateLinearGradient(val);
-        if (key === 'background-color' && /-gradient\s*\(/.test(val)) key = 'background';
-        if (LENGTH_PROPS.has(key)) val = ensurePxUnits(val);
-        out.push(`${key}: ${val}`);
+        if (key === 'qproperty-alignment') {
+            for (const [k, v] of Object.entries(qtAlignmentToFlex(val))) {
+                out.push(`${k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}: ${v}`);
+            }
+            continue;
+        }
+        const [outKey, outVal] = translateDeclaration(key, val);
+        out.push(`${outKey}: ${outVal}`);
     }
     return out.join('; ');
+}
+
+// Shared Qt→CSS rewrites that aren't structural (alignment is structural and
+// handled at the call site so it can emit multiple declarations).
+function translateDeclaration(key: string, val: string): [string, string] {
+    if (/QLinearGradient\s*\(/i.test(val)) val = translateLinearGradient(val);
+    // Qt accepts a brush (incl. gradients) for `background-color`; CSS only
+    // allows a solid <color> there. Rename to `background` so gradients paint.
+    if (key === 'background-color' && /-gradient\s*\(/.test(val)) key = 'background';
+    if (LENGTH_PROPS.has(key)) val = ensurePxUnits(val);
+    return [key, val];
+}
+
+// Qt scripts often quote values that CSS expects bare — `background-color:
+// 'red'`, `qproperty-alignment: 'AlignLeft | AlignTop'`. Qt's QSS parser is
+// lenient and unwraps the quotes; the browser drops the declaration entirely
+// when it sees the quoted form for a non-string value. We strip matching outer
+// quotes so the value lands as a real color/keyword. (Values that legitimately
+// need quotes in CSS — font-family lists with spaces, `content` strings — are
+// extremely rare in the QSS scripts we translate, so the conservative trade-off
+// is to always strip rather than maintain a property allowlist.)
+function stripOuterQuotes(val: string): string {
+    if (val.length < 2) return val;
+    const first = val[0];
+    const last = val[val.length - 1];
+    if ((first === "'" || first === '"') && first === last) {
+        return val.slice(1, -1).trim();
+    }
+    return val;
+}
+
+// Translate a Qt `qproperty-alignment` value (`AlignLeft | AlignVCenter`, etc.)
+// into the flexbox properties that produce the same effect on the `.label`
+// flex container.
+//
+// Our `.label` is `display: flex; flex-direction: column`, so main-axis is
+// vertical (controlled by `justify-content`) and cross-axis is horizontal
+// (controlled by `align-items`). Setting a horizontal alignment also un-
+// stretches the cross-axis sizing (the inner echo div shrinks to content
+// width), which mirrors Qt: explicit horizontal alignment pins the document
+// to one edge instead of letting it span the full widget width.
+function qtAlignmentToFlex(val: string): Record<string, string> {
+    const flags = val.split('|').map(s => s.trim().toLowerCase());
+    const has = (name: string) => flags.includes(name.toLowerCase());
+    const out: Record<string, string> = {};
+
+    // Vertical → main axis (column direction).
+    if (has('AlignCenter') || has('AlignVCenter')) out.justifyContent = 'center';
+    else if (has('AlignBottom')) out.justifyContent = 'flex-end';
+    else if (has('AlignTop')) out.justifyContent = 'flex-start';
+
+    // Horizontal → cross axis. When the script names a horizontal anchor we
+    // pin to it (and thus stop stretching); when it doesn't, stretch stays so
+    // HTML alignment (`<center>`, `align="left"`) drives the rendered position
+    // within the full-width inner div.
+    if (has('AlignCenter') || has('AlignHCenter')) out.alignItems = 'center';
+    else if (has('AlignRight')) out.alignItems = 'flex-end';
+    else if (has('AlignLeft')) out.alignItems = 'flex-start';
+
+    return out;
 }
 
 // Pull out base-level declarations from a stylesheet that may also have

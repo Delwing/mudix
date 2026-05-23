@@ -7,7 +7,6 @@ Status legend:
 - ❌ N/A — fundamentally inapplicable (multi-profile, subprocess, Discord SDK, IRC, etc.)
 
 > Many APIs become "free" as soon as a single primitive is added. The known blockers right now:
-> - `setMiniConsoleFontSize` — blocks `createConsole` and `Geyser.MiniConsole`.
 > - `createCommandLine` — blocks `Geyser.CommandLine` and the whole overlay command-line widget family.
 > - `insertPopup` / `setPopup` — block `cinsertPopup`/`dinsertPopup`/`hinsertPopup`.
 > - `getLabelStyleSheet` — blocks `getLabelFormat` returning correct values.
@@ -193,8 +192,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `tempAlias(pattern, code)` | ✅ | Temporary Lua regex alias |
 | `killAlias(id)` | ✅ | Delete temp alias by ID |
 | `permAlias(name, parent, pattern, code)` | ⚠️ | Permanent aliases exist in store; no Lua creation API yet |
-| `enableAlias(name)` | 🚧 | Enable permanent alias by name |
-| `disableAlias(name)` | 🚧 | Disable permanent alias by name |
+| `enableAlias(name)` | ✅ | Enable permanent alias by name |
+| `disableAlias(name)` | ✅ | Disable permanent alias by name |
 | `exists(name, type)` | ✅ | JS-exposed (`ScriptingAPI.exists`) |
 | `isActive(name, type)` | 🚧 | Check if item is currently enabled |
 
@@ -207,7 +206,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `tempTrigger(pattern, code)` | ✅ | Temporary substring/regex trigger |
 | `killTrigger(id)` | ✅ | Delete temp trigger by ID |
 | `tempRegexTrigger(pattern, code)` | ✅ | Bridge.lua wraps `__mudix_tempRegexTrigger` |
-| `tempBeginOfLineTrigger(pattern, code)` | 🚧 | Anchored `^` trigger |
+| `tempBeginOfLineTrigger(pattern, code)` | ✅ | Literal prefix (`String.prototype.startsWith`), NOT regex `^` — matches Mudlet's `match_begin_of_line_substring` |
 | `tempExactMatchTrigger(pattern, code)` | ✅ | Full-line exact match |
 | `tempColorTrigger(fg, bg, code)` | 🚧 | Match on ANSI color in line |
 | `tempLineTrigger(from, count, code)` | 🚧 | Fire on N consecutive lines |
@@ -349,6 +348,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `moveWindow(name, x, y)` | ✅ | JS-exposed |
 | `resizeWindow(name, w, h)` | ✅ | JS-exposed |
 | `createMiniConsole(name, x, y, w, h)` | ✅ | JS-exposed |
+| `createMapper([parent,] x, y, w, h)` | ✅ | JS-exposed; singleton embedded mapper widget that shares MapStore with the dock widget |
 | `createLabel(name, x, y, w, h, passthrough)` | ✅ | JS-exposed |
 | `createGauge(name, x, y, w, h, parent)` | ✅ | Pure Lua via GUIUtils.lua (3× `createLabel` + `setBackgroundColor`) |
 | `createCommandLine(name, x, y, w, h)` | 🚧 | Absolutely-positioned extra input widget |
@@ -437,8 +437,9 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `getFont([window])` | ✅ | Bridge.lua → `__getFont` |
 | `setFontSize([window,] size)` | ✅ | Bridge.lua → `__setFontSize` |
 | `getFontSize([window])` | ✅ | Bridge.lua → `__getFontSize` |
+| `calcFontSize(size[, family]) \| calcFontSize(windowName)` | ✅ | Bridge.lua → `__calcFontSize`; canvas-2D measurement of a monospace cell, falls back to the App.css `--font-mono` stack when no family is set |
 | `getAvailableFonts()` | 🚧 | `document.fonts` API |
-| `setMiniConsoleFontSize(name, size)` | 🚧 | Font size on mini-console overlay (blocks `createConsole`/`Geyser.MiniConsole` which both call it) |
+| `setMiniConsoleFontSize(name, size)` | ✅ | Bridge.lua → `__setMiniConsoleFontSize`; reuses `WindowManager.setFontSize` but rejects non-miniconsole targets to match Mudlet's CONSOLE-only check |
 | `setAppStyleSheet(css)` | ✅ | JS-exposed — installs/replaces a CSS block in `document.head`, raises `sysAppStyleSheetChange` |
 | `setUserWindowStyleSheet(name, css)` | ✅ | JS-exposed |
 | `getBorderTop()` | ✅ | JS-exposed |
@@ -474,7 +475,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `centerview(roomID)` | ✅ | JS-exposed |
+| `centerview(roomID)` | ✅ | JS-exposed; sets the player room as a side effect (matches Mudlet) |
+| `getPlayerRoom()` | ✅ | Returns the id last passed to `centerview`; `nil` when unset or the room was deleted |
 | `getPath(fromID, toID)` | 🚧 | Pathfinding; populates `speedWalkDir`/`speedWalkPath` |
 | `speedwalk(roomID [, walkcmd, delay])` | ✅ | Pure Lua via Other.lua (uses `send` + `tempTimer`) |
 | `pauseSpeedwalk()` | ✅ | Pure Lua via Other.lua |
@@ -500,12 +502,18 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `addSpecialExit(fromID, toID, cmd)` | ✅ | JS-exposed |
 | `removeSpecialExit(fromID, cmd)` | ✅ | JS-exposed |
 | `getSpecialExits(roomID)` | ⚠️ | Only `getSpecialExitsSwap` is exposed today; the unswapped form is missing |
+| `getExitStubs(roomID)` | ✅ | JS-exposed; returns a 0-indexed table of stub direction numbers (wasmoon array convention, matches Mudlet) |
+| `getExitStubs1(roomID)` | ✅ | Bridge.lua wraps `getExitStubs` and re-indexes to a 1-based table |
+| `getCustomLines(roomID)` | ✅ | JS-exposed; `{ dir = { attributes={color,style,arrow}, points={[0]={x,y,z},...} } }`. Returns nil for missing rooms, empty table when none |
 | `lockRoom(roomID, bool)` | 🚧 | |
 | `lockExit(roomID, dir, bool)` | ⚠️ | Pure-Lua wrapper in Other.lua stores into room user-data; not honoured by pathfinding (no `getPath` yet) |
 | `setRoomWeight(roomID, weight)` | 🚧 | |
 | `getRoomWeight(roomID)` | 🚧 | |
 | `getRoomUserData(roomID, key)` | ✅ | Bridge.lua → `__getRoomUserData` |
 | `setRoomUserData(roomID, key, value)` | ✅ | JS-exposed |
+| `getRoomUserDataKeys(roomID)` | ✅ | Bridge.lua → `__getRoomUserDataKeys`; re-indexes JS 0-based array to 1-based Lua table; `nil` when room missing |
+| `getMapLabels(areaID)` | ✅ | Bridge.lua → `__getMapLabels`; re-keys numeric-string keys back to integer label ids |
+| `getMapLabel(areaID, labelID\|labelText)` | ✅ | Bridge.lua → `__getMapLabel`; by-id returns flat properties, by-text returns `{[id]=properties}` matches |
 | `loadMap(path)` | ✅ | JS-exposed |
 | `saveMap(path)` | 🚧 | Via virtual filesystem |
 | `saveJsonMap(path)` / `loadJsonMap(path)` | 🚧 | JSON map format |
@@ -651,7 +659,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 |---|---|---|
 | `Geyser.Container` | ✅ | Bundled Lua file is loaded; pure layout, no missing deps |
 | `Geyser.Label` | ⚠️ | Bundled and mostly working; `getLabelFormat` is partial because `getLabelStyleSheet` is missing |
-| `Geyser.MiniConsole` | ⚠️ | Bundled but calls the unimplemented `setMiniConsoleFontSize` (constructor blows up) |
+| `Geyser.MiniConsole` | ✅ | Bundled; constructor calls `setMiniConsoleFontSize` (now ✅) |
 | `Geyser.Gauge` | ✅ | Bundled; wraps GUIUtils `createGauge`/`setGauge` (both ✅) |
 | `Geyser.HBox` | ✅ | Bundled |
 | `Geyser.VBox` | ✅ | Bundled |

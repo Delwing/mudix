@@ -51,6 +51,7 @@ interface AppStore extends AppSchema {
     removeScript: (connectionId: string, id: string) => void;
     addAlias: (connectionId: string, data: Omit<AliasNode, 'id'>) => string;
     updateAlias: (connectionId: string, id: string, patch: Partial<Omit<AliasNode, 'id'>>) => void;
+    updateAliases: (connectionId: string, patches: ReadonlyArray<{ id: string; patch: Partial<Omit<AliasNode, 'id'>> }>) => void;
     removeAlias: (connectionId: string, id: string) => void;
     addTrigger: (connectionId: string, data: Omit<TriggerNode, 'id'>) => string;
     updateTrigger: (connectionId: string, id: string, patch: Partial<Omit<TriggerNode, 'id'>>) => void;
@@ -200,6 +201,18 @@ export const useAppStore = create<AppStore>()(
                     ),
                 },
             })),
+            updateAliases: (connectionId, patches) => set(s => {
+                if (patches.length === 0) return {};
+                const byId = new Map(patches.map(p => [p.id, p.patch] as const));
+                return {
+                    connectionAliases: {
+                        ...s.connectionAliases,
+                        [connectionId]: (s.connectionAliases[connectionId] ?? []).map(
+                            a => byId.has(a.id) ? { ...a, ...byId.get(a.id) } : a,
+                        ),
+                    },
+                };
+            }),
             removeAlias: (connectionId, id) => set(s => {
                 const current = s.connectionAliases[connectionId] ?? [];
                 const toRemove = new Set([id, ...getDescendantIds(id, current)]);

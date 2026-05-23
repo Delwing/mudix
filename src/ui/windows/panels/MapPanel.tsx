@@ -4,6 +4,7 @@ import type { RoomContextMenuEventDetail } from 'mudlet-map-renderer';
 import type { WindowManager } from '../WindowManager';
 import type { MapEventEntry } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
+import { useAppStore } from '../../../storage';
 
 type MapStatus = 'loading' | 'empty' | 'ready' | 'error';
 
@@ -44,6 +45,40 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     currentAreaRef.current = currentArea;
     currentLevelRef.current = currentLevel;
 
+    // Saved view state snapshot — captured once on mount so the first
+    // syncFromStore can restore area/level + zoom/pan instead of fitting.
+    // Subsequent saves (camera/area/level changes) write back via
+    // patchConnectionProfile; we don't re-read because that would clobber
+    // the user's live pan/zoom whenever the store notifies.
+    const savedViewRef = useRef(
+        useAppStore.getState().connectionProfile[connectionId]?.mapViewState,
+    );
+    const saveTimerRef = useRef<number | null>(null);
+    const saveViewState = useCallback(() => {
+        if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = window.setTimeout(() => {
+            saveTimerRef.current = null;
+            const renderer = rendererRef.current;
+            const areaId = currentAreaRef.current;
+            if (!renderer || areaId == null) return;
+            const bounds = renderer.getViewportBounds();
+            const centerX = (bounds.minX + bounds.maxX) / 2;
+            const centerY = (bounds.minY + bounds.maxY) / 2;
+            const next = {
+                areaId,
+                level: currentLevelRef.current,
+                zoom: renderer.getZoom(),
+                centerX,
+                centerY,
+            };
+            // Keep the live ref in sync so the dock-hide-then-show recovery
+            // path (ResizeObserver else branch when container width transitions
+            // through 0) re-applies the user's current view, not mount-time.
+            savedViewRef.current = next;
+            useAppStore.getState().patchConnectionProfile(connectionId, { mapViewState: next });
+        }, 400);
+    }, [connectionId]);
+
     // Refresh the live reader from MapStore and pick an area/level to display.
     // Used both on initial sync and on every store-change tick. Returns true
     // when the renderer was driven to a ready state; false when the store is
@@ -64,8 +99,12 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             return false;
         }
 
-        const keepArea = opts?.keepArea ?? currentAreaRef.current ?? undefined;
-        const keepLevel = opts?.keepLevel ?? currentLevelRef.current;
+        // On first sync, fall through to the saved view state from a prior
+        // session (if any) so the user keeps their area/level. The hint args
+        // win when explicitly provided (e.g. centerview from script).
+        const saved = needsFitRef.current ? undefined : savedViewRef.current;
+        const keepArea = opts?.keepArea ?? currentAreaRef.current ?? saved?.areaId ?? undefined;
+        const keepLevel = opts?.keepLevel ?? (currentAreaRef.current != null ? currentLevelRef.current : saved?.level);
         const restoredArea = keepArea != null && areaList.some(a => a.id === keepArea)
             ? keepArea
             : areaList[0].id;
@@ -78,9 +117,16 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         setCurrentArea(restoredArea);
         renderer.drawArea(restoredArea, restoredLevel);
         // Only fit on the first successful render; afterwards preserve user pan/zoom.
+        // If we have a saved zoom/center for the same area we restored, apply
+        // those instead of fitting (so the user lands on their last view).
         if (!needsFitRef.current) {
             needsFitRef.current = true;
-            renderer.fitArea();
+            if (saved && saved.areaId === restoredArea && Number.isFinite(saved.zoom)) {
+                renderer.setZoom(saved.zoom);
+                renderer.camera.panToMapPoint(saved.centerX, saved.centerY);
+            } else {
+                renderer.fitArea();
+            }
         }
         setStatus('ready');
         return true;
@@ -111,12 +157,23 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             });
         });
 
+        // Persist zoom/pan back to the profile whenever the camera moves.
+        // Skipped until syncFromStore has applied saved/initial state so the
+        // initial fitArea / restored-zoom doesn't trample a still-loading save.
+        const onCameraChange = () => { if (needsFitRef.current) saveViewState(); };
+        renderer.camera.on('change', onCameraChange);
+
         return () => {
+            renderer.camera.off('change', onCameraChange);
+            if (saveTimerRef.current != null) {
+                window.clearTimeout(saveTimerRef.current);
+                saveTimerRef.current = null;
+            }
             renderer.destroy();
             rendererRef.current = null;
             readerRef.current = null;
         };
-    }, [manager]);
+    }, [manager, saveViewState]);
 
     // Boot path: ScriptingEngine and this panel both call bootstrapMap; the
     // manager dedupes to a single IndexedDB fetch + parse. Once it resolves
@@ -193,9 +250,23 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 renderer.camera.panToMapPoint(cx, cy);
             } else {
                 el.dispatchEvent(new Event('resize'));
+                // First time the canvas reaches non-zero width: re-apply the
+                // initial view. syncFromStore may have already drawn the area
+                // while the container was 0×0, which makes fit/zoom math
+                // useless — redo it now that we have real dimensions. Prefer
+                // the saved view over fitArea so we don't trample restored
+                // zoom/pan when the dock layout settles late. Don't flip
+                // needsFitRef back to false: a later store mutation could then
+                // trigger another saved-state restore and wipe the user's
+                // live pan/zoom.
                 if (renderer && newWidth > 0 && needsFitRef.current) {
-                    renderer.fitArea();
-                    needsFitRef.current = false;
+                    const saved = savedViewRef.current;
+                    if (saved && currentAreaRef.current === saved.areaId && Number.isFinite(saved.zoom)) {
+                        renderer.setZoom(saved.zoom);
+                        renderer.camera.panToMapPoint(saved.centerX, saved.centerY);
+                    } else {
+                        renderer.fitArea();
+                    }
                 }
             }
             prevWidthRef.current = newWidth;
@@ -203,6 +274,15 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         ro.observe(el);
         return () => ro.disconnect();
     }, []);
+
+    // Area/level changes don't always move the camera (e.g. level cycling via
+    // ▲▼ buttons just redraws the same viewport), so the camera-change handler
+    // would miss them. Gate on needsFitRef so we don't save before the first
+    // sync has settled on real values.
+    useEffect(() => {
+        if (!needsFitRef.current || currentArea == null) return;
+        saveViewState();
+    }, [currentArea, currentLevel, saveViewState]);
 
     // Subscribe to MapStore changes (script-built rooms, binary load, etc.).
     // Each tick: refresh the live reader's snapshot, then ask the renderer to

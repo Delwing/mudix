@@ -38,6 +38,17 @@ export function parseDirection(dir: unknown): number | undefined {
     return undefined;
 }
 
+// Qt pen-style enum → Mudlet's getCustomLines style strings. Matches the
+// mapping used by mudlet-map-binary-reader's reader-export (Qt::SolidLine=1
+// through Qt::DashDotDotLine=5).
+const PEN_STYLE_NAMES: Record<number, string> = {
+    1: 'solid line',
+    2: 'dash line',
+    3: 'dot line',
+    4: 'dash dot line',
+    5: 'dash dot dot line',
+};
+
 const DEFAULT_FONT: MudletFont = {
     family: 'Bitstream Vera Sans Mono', style: 'Normal',
     pointSize: 8, pixelSize: -1, styleHint: 5, styleStrategy: 1,
@@ -71,6 +82,44 @@ function makeArea(): MudletArea {
     };
 }
 
+export interface MapLabelInfo {
+    X: number; Y: number; Z: number;
+    Width: number; Height: number;
+    Text: string;
+    Pixmap: string;
+    OnTop: boolean;
+    Scaling: boolean;
+    Temporary: boolean;
+    FgColor: { r: number; g: number; b: number };
+    BgColor: { r: number; g: number; b: number };
+}
+
+export type MapLabelLookup =
+    | { ok: false; err: 'noarea' | 'noid' }
+    | { ok: true; single: MapLabelInfo }
+    | { ok: true; multi: Record<number, MapLabelInfo> };
+
+function labelToInfo(l: MudletLabel): MapLabelInfo {
+    let pixmap = '';
+    const pm = l.pixMap as unknown;
+    if (typeof pm === 'string') pixmap = pm;
+    else if (pm && typeof Buffer !== 'undefined') {
+        try { pixmap = Buffer.from(pm as Uint8Array).toString('base64'); }
+        catch { pixmap = ''; }
+    }
+    return {
+        X: l.pos[0], Y: l.pos[1], Z: Math.round(l.pos[2]),
+        Width: l.size[0], Height: l.size[1],
+        Text: l.text,
+        Pixmap: pixmap,
+        OnTop: l.showOnTop,
+        Scaling: !l.noScaling,
+        Temporary: false,  // Mudlet runtime flag; binary maps never carry it
+        FgColor: { r: l.fgColor.r, g: l.fgColor.g, b: l.fgColor.b },
+        BgColor: { r: l.bgColor.r, g: l.bgColor.g, b: l.bgColor.b },
+    };
+}
+
 export interface MapEventEntry {
     /** Stable id used by removeMapEvent and as a parent reference. */
     uniqueName: string;
@@ -101,6 +150,11 @@ export class MapStore {
     private mapEvents = new Map<string, MapEventEntry>();
     private customEnvColors = new Map<number, MudletColor>();
     private mapUserData: Record<string, string> = {};
+    // Player's current room id, mirrors Mudlet's mRoomIdHash[host.getName()].
+    // Updated by centerview (matching Mudlet's centerview-sets-player-room
+    // behavior). Read by getPlayerRoom; returns null when unset or the room
+    // has since been deleted.
+    private playerRoomId: number | null = null;
     // Set by LuaRuntime so dispatchMapEvent can fire raiseEvent into the runtime.
     // Cleared on runtime teardown to avoid firing into a closed lua_State.
     private mapEventDispatcher: ((eventName: string, args: unknown[]) => void) | null = null;
@@ -141,6 +195,7 @@ export class MapStore {
         this.envColors.clear();
         this.customEnvColors.clear();
         this.mapUserData = {};
+        this.playerRoomId = null;
         this.nextRoomId = 1;
         this.nextAreaId = 2;        // -1 is reserved below
         const defaultArea = makeArea();
@@ -166,6 +221,7 @@ export class MapStore {
         this.labels.clear();
         this.envColors.clear();
         this.customEnvColors.clear();
+        this.playerRoomId = null;
 
         for (const [k, room] of Object.entries(mudletMap.rooms ?? {})) {
             const id = Number(k);
@@ -279,6 +335,22 @@ export class MapStore {
     }
 
     roomExists(id: number): boolean { return this.rooms.has(id); }
+
+    // ── Player position ───────────────────────────────────────────────────────
+
+    /** Mudlet `getPlayerRoom()` — id of the player's current room, or null
+     *  when unset or the room no longer exists. */
+    getPlayerRoom(): number | null {
+        if (this.playerRoomId == null) return null;
+        return this.rooms.has(this.playerRoomId) ? this.playerRoomId : null;
+    }
+
+    /** Mirror of Mudlet's `mRoomIdHash[host.getName()] = roomId` from centerview.
+     *  Stores even unknown ids so a later `addRoom` makes the position valid;
+     *  getPlayerRoom does the existence check on read. */
+    setPlayerRoom(id: number): void {
+        this.playerRoomId = id;
+    }
 
     // ── Room properties ───────────────────────────────────────────────────────
 
@@ -475,6 +547,41 @@ export class MapStore {
         return { ...(this.rooms.get(id)?.mSpecialExits ?? {}) };
     }
 
+    // ── Custom exit lines ─────────────────────────────────────────────────────
+
+    /**
+     * Mudlet `getCustomLines(roomID)` — per-direction custom exit lines drawn
+     * on the map. Returns `undefined` when the room doesn't exist so the Lua
+     * wrapper can hand back `nil`; otherwise a `{ dir = { attributes, points } }`
+     * table (empty when the room has no custom lines). Points carry the room's
+     * Z because Mudlet stores only X/Y per point and uses the owning room's Z
+     * for rendering.
+     */
+    getCustomLines(id: number): Record<string, {
+        attributes: { color: { r: number; g: number; b: number }; style: string; arrow: boolean };
+        points: Array<{ x: number; y: number; z: number }>;
+    }> | undefined {
+        const room = this.rooms.get(id);
+        if (!room) return undefined;
+        const out: Record<string, {
+            attributes: { color: { r: number; g: number; b: number }; style: string; arrow: boolean };
+            points: Array<{ x: number; y: number; z: number }>;
+        }> = {};
+        for (const key of Object.keys(room.customLines ?? {})) {
+            const color = room.customLinesColor?.[key];
+            const styleNum = room.customLinesStyle?.[key] ?? 1;
+            out[key] = {
+                attributes: {
+                    color: color ? { r: color.r, g: color.g, b: color.b } : { r: 255, g: 255, b: 255 },
+                    style: PEN_STYLE_NAMES[styleNum] ?? 'solid line',
+                    arrow: !!room.customLinesArrow?.[key],
+                },
+                points: (room.customLines[key] ?? []).map(([x, y]) => ({ x, y, z: room.z })),
+            };
+        }
+        return out;
+    }
+
     // ── Doors ─────────────────────────────────────────────────────────────────
 
     getDoors(id: number): Record<string, number> {
@@ -521,6 +628,18 @@ export class MapStore {
         r.userData[key] = value;
         this.notify();
         return true;
+    }
+
+    /**
+     * Mudlet `getRoomUserDataKeys(id)` — returns the user-data keys for the
+     * room (possibly empty) or `undefined` when the room itself does not
+     * exist. The Bridge.lua wrapper converts the JS array to a 1-indexed Lua
+     * table and the `undefined` miss to `nil`.
+     */
+    getRoomUserDataKeys(id: number): string[] | undefined {
+        const room = this.rooms.get(id);
+        if (!room) return undefined;
+        return Object.keys(room.userData);
     }
 
     // ── Map-level user data ───────────────────────────────────────────────────
@@ -668,6 +787,46 @@ export class MapStore {
         const out: Record<number, string> = {};
         for (const [id, r] of this.rooms) out[id] = r.name;
         return out;
+    }
+
+    /**
+     * Mudlet `getMapLabels(areaID)` — returns `{ [labelID] = labelText }` for
+     * every label in the area, or an empty object if the area has none / is
+     * unknown. Each `MudletLabel.id` is the QMap key Mudlet uses internally,
+     * which is also what `deleteMapLabel` expects.
+     */
+    getMapLabels(areaId: number): Record<number, string> {
+        const out: Record<number, string> = {};
+        for (const l of this.labels.get(areaId) ?? []) out[l.id] = l.text;
+        return out;
+    }
+
+    /**
+     * Mudlet `getMapLabel(areaID, labelID|labelText)`:
+     *  - by ID (number): single flat properties record, or "noid" sentinel if the
+     *    area has labels but not that ID
+     *  - by text (string): `{[labelID]: properties}` for every label whose text
+     *    matches exactly (possibly empty)
+     *  - if the area has no labels at all: empty `multi: {}` regardless of key form
+     *    (matches Mudlet's early-return)
+     *  - if the area is missing: "noarea" sentinel
+     *
+     * Bridge.lua dispatches the sentinels into Mudlet's `(false, errMsg)` shape.
+     */
+    getMapLabel(areaId: number, key: number | string): MapLabelLookup {
+        if (!this.areas.has(areaId)) return { ok: false, err: 'noarea' };
+        const labels = this.labels.get(areaId) ?? [];
+        if (labels.length === 0) return { ok: true, multi: {} };
+        if (typeof key === 'number') {
+            const hit = labels.find(l => l.id === key);
+            if (!hit) return { ok: false, err: 'noid' };
+            return { ok: true, single: labelToInfo(hit) };
+        }
+        const multi: Record<number, MapLabelInfo> = {};
+        for (const l of labels) {
+            if (l.text === key) multi[l.id] = labelToInfo(l);
+        }
+        return { ok: true, multi };
     }
 
     // ── Map context-menu events (Mudlet addMapEvent) ──────────────────────────

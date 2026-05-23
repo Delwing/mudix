@@ -64,6 +64,55 @@ function measureColumnCapacity(el: HTMLElement | null): number {
     return Math.floor(width / charWidth);
 }
 
+// Default monospace stack used by the output panels — mirrors --font-mono in
+// App.css. Used as the fallback family when the profile has no outputFont set.
+const DEFAULT_MONO_STACK = `'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace`;
+
+// Mudlet's getMousePosition() returns the cursor position relative to the
+// main console widget. There's no equivalent of QCursor::pos() on the web —
+// the browser only exposes the cursor through events — so we passively track
+// the last-known viewport-relative position and transform it into main-output
+// coordinates on read. Initialised to NaN so getMousePosition can return 0,0
+// before any pointer activity (matching Mudlet's "you've never moved" feel
+// rather than reporting a stale pre-load position).
+let lastPointerClientX = Number.NaN;
+let lastPointerClientY = Number.NaN;
+if (typeof document !== 'undefined') {
+    const track = (e: PointerEvent | MouseEvent) => {
+        lastPointerClientX = e.clientX;
+        lastPointerClientY = e.clientY;
+    };
+    document.addEventListener('pointermove', track, { passive: true, capture: true });
+    document.addEventListener('mousedown',   track, { passive: true, capture: true });
+}
+
+/**
+ * Measures the pixel size of an average character cell for `family` at `size`
+ * px. Backs Mudlet's `calcFontSize(...)` — scripts use the returned (w, h) to
+ * pre-size miniconsoles for a column/row count. The width is measured via a
+ * canvas 2D context (monospace fonts have a uniform advance, so any glyph
+ * works); height uses the font bounding box ascent+descent when available,
+ * falling back to 1.2x size which matches the line-height Qt's QFontMetrics
+ * reports for common fonts.
+ */
+function measureMonospaceCell(family: string, size: number): [number, number] {
+    const fallback: [number, number] = [Math.round(size * 0.6), Math.round(size * 1.2)];
+    if (typeof document === 'undefined') return fallback;
+    const ctx = document.createElement('canvas').getContext('2d');
+    if (!ctx) return fallback;
+    const stack = family && family.trim()
+        ? `"${family.trim().replace(/"/g, '\\"')}", ${DEFAULT_MONO_STACK}`
+        : DEFAULT_MONO_STACK;
+    ctx.font = `${size}px ${stack}`;
+    const m = ctx.measureText('M');
+    const ascent = m.fontBoundingBoxAscent;
+    const descent = m.fontBoundingBoxDescent;
+    const height = (typeof ascent === 'number' && typeof descent === 'number')
+        ? ascent + descent
+        : size * 1.2;
+    return [Math.round(m.width), Math.round(height)];
+}
+
 // ── Windows ───────────────────────────────────────────────────────────────────
 
 class ScriptingWindowsAPI {
@@ -287,6 +336,7 @@ export class ScriptingAPI {
     private scriptToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private timerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
+    private aliasToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private existsCallback: ((nameOrId: string | number, type: string) => number) | null = null;
     // Mudlet returns a numeric script id from permScript/permRegexTrigger/setScript;
     // -1 signals failure (missing parent group, unknown script name, etc.).
@@ -399,6 +449,10 @@ export class ScriptingAPI {
         this.timerToggler = fn;
     }
 
+    setAliasToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
+        this.aliasToggler = fn;
+    }
+
     setExistsCallback(fn: ((nameOrId: string | number, type: string) => number) | null): void {
         this.existsCallback = fn;
     }
@@ -458,6 +512,14 @@ export class ScriptingAPI {
 
     disableTimer(name: string): boolean {
         return this.timerToggler?.(name, false) ?? false;
+    }
+
+    enableAlias(name: string): boolean {
+        return this.aliasToggler?.(name, true) ?? false;
+    }
+
+    disableAlias(name: string): boolean {
+        return this.aliasToggler?.(name, false) ?? false;
     }
 
     exists(nameOrId: string | number, type: string): number {
@@ -1120,6 +1182,34 @@ export class ScriptingAPI {
     }
 
     /**
+     * Mudlet `createMapper([parent,] x, y, width, height)`. Creates a positioned
+     * mapper widget inside the given parent (defaults to `main`), or repositions
+     * it if it already exists. Singleton: Mudlet allows only one in-console
+     * mapper at a time, so we reuse a fixed id (`mapper`) — distinct from the
+     * dockable map widget opened by `openMapWidget` (id `map`). Both render the
+     * same MapStore and stay in sync. Returns true on success.
+     */
+    createMapper(x: number, y: number, width: number, height: number, parent?: string): boolean {
+        const wm = this.session.windows;
+        const id = 'mapper';
+        if (!wm.has(id)) {
+            wm.open(id, {
+                kind: 'map',
+                title: 'Mapper',
+                autoDock: false,
+                ignoreHint: true,
+                parent: parent && parent !== 'main' ? parent : undefined,
+            });
+        } else {
+            wm.show(id);
+        }
+        wm.markAsMiniConsole(id);
+        wm.setPosition(id, Math.round(x), Math.round(y));
+        wm.setSize(id, Math.round(width), Math.round(height));
+        return true;
+    }
+
+    /**
      * Mudlet `replace([win,] with, [keepcolor])`. Default (`keepcolor=false`)
      * applies the resolved console's current pen state (set via
      * setFgColor/setBgColor/etc.) to the replacement text. With
@@ -1338,6 +1428,28 @@ export class ScriptingAPI {
     }
 
     /**
+     * Mudlet getMousePosition() → x, y in main-console-local pixels. Tracked
+     * passively via document-level pointermove/mousedown — before any input
+     * has been seen returns 0,0. When the cursor is outside the main viewport
+     * the result is negative or past the viewport bounds (same as Qt's
+     * mapFromGlobal). Falls back to viewport coords if the main element
+     * isn't mounted.
+     */
+    getMousePosition(): [number, number] {
+        if (Number.isNaN(lastPointerClientX) || Number.isNaN(lastPointerClientY)) {
+            return [0, 0];
+        }
+        const el = this.session.windows.getMainViewportElement()
+                ?? this.session.windows.getElement('main');
+        if (el) {
+            const rect = el.getBoundingClientRect();
+            return [Math.round(lastPointerClientX - rect.left),
+                    Math.round(lastPointerClientY - rect.top)];
+        }
+        return [Math.round(lastPointerClientX), Math.round(lastPointerClientY)];
+    }
+
+    /**
      * Mudlet getUserWindowSize(name). Returns the rendered [width, height] of a
      * userwindow / miniconsole in pixels. Reports the live element box when the
      * panel is mounted (so docked panels reflect their actual on-screen size),
@@ -1363,6 +1475,17 @@ export class ScriptingAPI {
             return true;
         }
         return this.session.windows.setFontSize(win, rounded);
+    }
+
+    /**
+     * Mudlet setMiniConsoleFontSize. Strictly targets miniconsoles (created via
+     * createMiniConsole / createConsole) — userwindows and labels are rejected
+     * the same way Mudlet's CONSOLE-only lookup rejects them.
+     */
+    setMiniConsoleFontSize(name: string, size: number): boolean {
+        if (!name || !this.session.windows.isMiniConsole(name)) return false;
+        if (!Number.isFinite(size) || size < 1 || size > 99) return false;
+        return this.session.windows.setFontSize(name, Math.round(size));
     }
 
     /**
@@ -1407,6 +1530,93 @@ export class ScriptingAPI {
             return this.session.labels.getBackgroundColor(name);
         }
         return this.session.windows.getBackgroundColor(name);
+    }
+
+    /**
+     * Mudlet `setBackgroundImage`. Dispatcher across labels, miniconsoles /
+     * userwindows, and the main window — matches Mudlet's overload set:
+     *
+     *   setBackgroundImage(labelName, imageLocation)           → label
+     *   setBackgroundImage(imageLocation, [mode])              → main console
+     *   setBackgroundImage(windowName, imageLocation, [mode])  → miniconsole / userwindow
+     *
+     * Disambiguation matches Mudlet's C++ semantics — label lookup wins when
+     * the named widget is a label; otherwise the call is treated as a console
+     * form. `mode` arrives already coerced to a number by the GUIUtils.lua
+     * wrapper (string mode like "center" → 2 via `mudlet.BgImageMode`). For
+     * label form `imageLocation` is a VFS path, resolved through the same
+     * rewriter that powers setLabelStyleSheet so package-bundled images work
+     * without scripts knowing about the vfs:// scheme.
+     */
+    setBackgroundImage(a: string, b?: string | number, c?: number): boolean {
+        // 1 arg: setBackgroundImage(path) → main, default to border (mode 1).
+        if (b === undefined) {
+            return this.applyBackgroundImage(undefined, a, 1);
+        }
+        // 2 args.
+        if (c === undefined) {
+            // (path, mode) → main window with explicit mode.
+            if (typeof b === 'number') {
+                return this.applyBackgroundImage(undefined, a, b);
+            }
+            // (name, path). Mudlet checks label first; only then the console
+            // path. Fall through to main when the name is literally "main"
+            // (matches setBackgroundColor's special case), default mode 1.
+            if (this.session.labels.has(a)) {
+                return this.session.labels.setBackgroundImage(a, this.resolveImageUrl(b));
+            }
+            if (a === 'main') {
+                return this.applyBackgroundImage(undefined, b, 1);
+            }
+            if (this.session.windows.has(a)) {
+                return this.session.windows.setBackgroundImage(a, this.resolveImageUrl(b), 1);
+            }
+            return false;
+        }
+        // 3 args: (windowName, path, mode).
+        if (typeof b !== 'string') return false;
+        const mode = Number(c) || 1;
+        if (a === 'main') {
+            return this.applyBackgroundImage(undefined, b, mode);
+        }
+        return this.session.windows.setBackgroundImage(a, this.resolveImageUrl(b), mode);
+    }
+
+    /**
+     * Mudlet `resetBackgroundImage([windowName])`. Without a name (or "main")
+     * clears the main window background image; otherwise looks up the named
+     * label or window and clears its image. Returns true on success.
+     */
+    resetBackgroundImage(name?: string): boolean {
+        if (!name || name === 'main') {
+            useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBackgroundImage: undefined });
+            return true;
+        }
+        if (this.session.labels.has(name)) {
+            return this.session.labels.resetBackgroundImage(name);
+        }
+        return this.session.windows.resetBackgroundImage(name);
+    }
+
+    private applyBackgroundImage(_target: undefined, path: string, mode: number): boolean {
+        // Mode 4 is a raw stylesheet body, not an image path — skip the URL
+        // resolver so multi-property strings (with their own url(...) refs)
+        // are handed to the renderer verbatim, where backgroundImageStyle
+        // parses them through the same Qt CSS pipeline as setLabelStyleSheet.
+        const url = mode === 4 ? path : this.resolveImageUrl(path);
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBackgroundImage: { url, mode } });
+        return true;
+    }
+
+    /** Runs `path` through the active VFS-aware CSS rewriter so package paths
+     *  (e.g. `MyPackage/bg.png`) resolve to vfs:// URLs the renderer can load.
+     *  Absolute http(s):/data:/blob: URIs pass through untouched. */
+    private resolveImageUrl(path: string): string {
+        if (!this.cssRewriter || !path) return path;
+        const escaped = path.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const rewritten = this.cssRewriter(`url("${escaped}")`);
+        const m = /url\(\s*"([^"]*)"\s*\)/.exec(rewritten);
+        return m ? m[1] : path;
     }
 
     // ── Borders ───────────────────────────────────────────────────────────────
@@ -1510,6 +1720,44 @@ export class ScriptingAPI {
         const own = this.session.windows.getFont(win);
         if (own != null) return own;
         return selectProfileField(useAppStore.getState(), this.connectionId, 'outputFont')?.family ?? '';
+    }
+
+    /**
+     * Mudlet `calcFontSize(window_or_fontsize [, fontname])` — returns the
+     * `[width, height]` of an average character cell in pixels. Two overloads:
+     *
+     *   • `calcFontSize(size [, family])` — measure `family` (or the main
+     *     output font when omitted) at `size` px.
+     *   • `calcFontSize("WindowName")` — measure the named window/miniconsole
+     *     using its configured font+size. Use `"main"` for the main output.
+     *
+     * Returns `null` when the size is invalid or the named window doesn't
+     * exist; the Lua wrapper turns that into Mudlet's `(nil, errMsg)` shape.
+     */
+    calcFontSize(arg: number | string, fontName?: string): [number, number] | null {
+        const mainFamily = (): string =>
+            selectProfileField(useAppStore.getState(), this.connectionId, 'outputFont')?.family ?? '';
+        const mainSize = (): number =>
+            selectProfileField(useAppStore.getState(), this.connectionId, 'fontSize') ?? 12;
+
+        let size: number;
+        let family: string;
+        if (typeof arg === 'string') {
+            if (arg === '') return null;
+            if (arg === 'main') {
+                size = mainSize();
+                family = mainFamily();
+            } else {
+                if (!this.session.windows.has(arg)) return null;
+                size = this.session.windows.getFontSize(arg) ?? mainSize();
+                family = this.session.windows.getFont(arg) ?? mainFamily();
+            }
+        } else {
+            size = Number(arg);
+            if (!Number.isFinite(size) || size < 1) return null;
+            family = fontName && String(fontName).trim() ? String(fontName) : mainFamily();
+        }
+        return measureMonospaceCell(family, size);
     }
 
     /**

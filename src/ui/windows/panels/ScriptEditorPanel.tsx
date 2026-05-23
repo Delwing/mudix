@@ -8,8 +8,11 @@ import type { MudSession, ScriptLogSource, ScriptLogSourceKind } from '../../../
 import type { ProfileVFS } from '../../../scripting/vfs/ProfileVFS';
 import type { ScriptingEngine } from '../../../scripting/ScriptingEngine';
 import { LuaEditor } from './LuaEditor';
-import { installModuleFromVfsPath, installPackageFromFile, uninstallPackageFiles } from '../../../import/packageInstaller';
+import { installModuleFromVfsPath, installPackageFromBytes, installPackageFromFile, uninstallPackageFiles } from '../../../import/packageInstaller';
 import { VfsModulePickerModal } from './VfsModulePickerModal';
+import { PackageRepositoryModal } from './PackageRepositoryModal';
+import type { PackageRepoEntry } from '../../../import/packageRepository';
+import { DEFAULT_PROXY_URL } from '../../../storage';
 import { strToU8 } from 'fflate';
 import { renderMarkdown } from '../../markdown';
 import './ScriptEditorPanel.css';
@@ -421,7 +424,14 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
     const importModuleRef = useRef<HTMLInputElement>(null);
     const [importError, setImportError] = useState<string | null>(null);
     const [showVfsPicker, setShowVfsPicker] = useState(false);
+    const [showRepository, setShowRepository] = useState(false);
     const updatePackageManifest = useAppStore(s => s.updatePackageManifest);
+    // Read fresh on every install so live edits to the proxy URL take effect.
+    const proxyUrlGetter = useCallback(() => {
+        const state = useAppStore.getState();
+        const c = state.connections.find(x => x.id === connectionId);
+        return c?.proxyUrl?.trim() || state.client.userProxyUrl || DEFAULT_PROXY_URL;
+    }, [connectionId]);
 
     const importAs = useCallback(async (file: File, kind: 'package' | 'module') => {
         if (!vfs) {
@@ -449,6 +459,23 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
         } catch (err) {
             setImportError(err instanceof Error ? err.message : String(err));
         }
+    }, [connectionId, installPackage, scriptingEngineRef, vfs]);
+
+    const handleInstallFromRepository = useCallback(async (entry: PackageRepoEntry, bytes: Uint8Array) => {
+        if (!vfs) throw new Error('VFS not ready — wait for the profile to finish loading');
+        // Re-use the existing install pipeline so repository installs land in the
+        // same store state and emit the same sysInstallPackage event as a file import.
+        const { manifest, data } = installPackageFromBytes(entry.filename, bytes, vfs);
+        await vfs.flush();
+        installPackage(connectionId, manifest, data);
+        scriptingEngineRef?.current?.notifyPackageInstalled(manifest.name);
+        const total = data.scripts.length + data.aliases.length + data.triggers.length + data.timers.length + data.keys.length;
+        const now = new Date();
+        const newEntries: LogEntry[] = [{ text: `Installed package "${manifest.name}" (${total} items) from Mudlet repository`, level: 'info', timestamp: now }];
+        for (const w of data.warnings) newEntries.push({ text: `Warning: ${w}`, level: 'error', timestamp: now });
+        setLogs(prev => [...prev, ...newEntries]);
+        setErrorLog(prev => [...prev, ...newEntries]);
+        if (data.warnings.length > 0) setUnreadErrors(prev => prev + data.warnings.length);
     }, [connectionId, installPackage, scriptingEngineRef, vfs]);
 
     const handleImportFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -669,6 +696,14 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
     const treeEntries = flattenTree(items, null, expanded);
     const selected = items.find(i => i.id === selectedId) ?? null;
 
+    // The inline log under the editor is scoped to the currently opened item:
+    // only entries whose source.id matches the selection are shown. The Errors
+    // tab uses the separate `errorLog` buffer and is unaffected.
+    const visibleLogs = useMemo(
+        () => selectedId ? logs.filter(e => e.source?.id === selectedId) : [],
+        [logs, selectedId],
+    );
+
     // Stable identity prevents the LuaEditor's gotoLine effect from re-firing
     // (yanking the cursor) on every parent re-render — e.g. while the user is
     // typing in the editor and triggering setEditCode.
@@ -696,13 +731,24 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
     // select it. Runs after the [category] effect above, so it re-applies the
     // selection that effect just cleared. Items can be empty during the swap
     // render — guarding on items.length avoids a no-op selection of a missing id.
+    // lastAppliedJumpRevisionRef stops the effect from re-yanking the user back
+    // when they navigate away after a jump: the effect depends on `category` and
+    // `items`, so clicking a different tab would otherwise re-run and force the
+    // category back to the jump target. Each jump bumps revision, so the user's
+    // navigation re-runs of this effect see an already-applied revision and bail.
+    const lastAppliedJumpRevisionRef = useRef(0);
     useEffect(() => {
         if (!pendingJump) return;
+        if (pendingJump.revision === lastAppliedJumpRevisionRef.current) return;
         const targetCategory = KIND_TO_CATEGORY[pendingJump.kind];
         if (category !== targetCategory) {
             setCategory(targetCategory);
             return;
         }
+        // Mark applied as soon as we land on the right category, even if the
+        // target item turns out to be missing — otherwise a stale jump pointing
+        // at a deleted item would still trap the user on this category.
+        lastAppliedJumpRevisionRef.current = pendingJump.revision;
         if (items.length === 0) return;
         const byId = new Map(items.map(i => [i.id, i]));
         let cur = byId.get(pendingJump.id);
@@ -816,7 +862,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
 
     useEffect(() => {
         logEndRef.current?.scrollIntoView({ behavior: 'instant' });
-    }, [logs]);
+    }, [visibleLogs]);
 
     useEffect(() => {
         errorLogEndRef.current?.scrollIntoView({ behavior: 'instant' });
@@ -1231,6 +1277,14 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                 >
                     Module from VFS…
                 </button>
+                <button
+                    className="script-editor__nav-import"
+                    onClick={() => setShowRepository(true)}
+                    title="Browse the Mudlet package repository and install community packages"
+                    disabled={!vfs}
+                >
+                    Browse Repository…
+                </button>
                 <input ref={importFileRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportFile} />
                 <input ref={importModuleRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportModule} />
             </div>
@@ -1239,6 +1293,14 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                     vfs={vfs}
                     onClose={() => setShowVfsPicker(false)}
                     onPick={handleImportModuleFromVfs}
+                />
+            )}
+            {showRepository && (
+                <PackageRepositoryModal
+                    installedNames={new Set(packages.map(p => p.name))}
+                    proxyUrl={proxyUrlGetter()}
+                    onClose={() => setShowRepository(false)}
+                    onInstall={handleInstallFromRepository}
                 />
             )}
 
@@ -1332,12 +1394,21 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                         <span className="script-editor__error-log-title">
                             {packages.length === 0 ? 'No packages installed' : `${packages.length} installed`}
                         </span>
-                        {importError && <span className="script-editor__import-error" title={importError}>Import failed: {importError}</span>}
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            {importError && <span className="script-editor__import-error" title={importError}>Import failed: {importError}</span>}
+                            <Button variant="secondary" size="sm" onClick={() => importFileRef.current?.click()}>
+                                Import file…
+                            </Button>
+                            <Button variant="primary" size="sm" onClick={() => setShowRepository(true)} disabled={!vfs}>
+                                Browse Repository…
+                            </Button>
+                        </div>
                     </div>
                     <div className="script-editor__error-log-entries">
                         {packages.length === 0 ? (
                             <span className="script-editor__log-empty">
-                                Click "Import Package", "Import Module", or "Module from VFS…" above to install a Mudlet package (.mpackage / .zip / .xml).
+                                Click "Browse Repository…" above to install community packages from the Mudlet
+                                repository, or "Import file…" to upload a local .mpackage / .zip / .xml file.
                             </span>
                         ) : (
                             packages.map(pkg => {
@@ -1951,9 +2022,9 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                     )}
 
                     <div className="script-editor__log">
-                        {logs.length === 0
+                        {visibleLogs.length === 0
                             ? <span className="script-editor__log-empty">No output</span>
-                            : logs.map((entry, i) => (
+                            : visibleLogs.map((entry, i) => (
                                 <div key={i} className={`script-editor__log-entry script-editor__log-entry--${entry.level}`}>
                                     {entry.text}
                                 </div>

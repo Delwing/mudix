@@ -12,6 +12,9 @@ interface StickyOutputPanelProps {
     isSplitView: boolean;
     scrollToBottom: () => void;
     background?: string;
+    /** Extra CSS layered on top of `background` — used to add background-image
+     *  / border-image properties from Mudlet setBackgroundImage. */
+    backgroundExtra?: React.CSSProperties;
     foreground?: string;
     showTimestamps?: boolean;
     onToggleTimestamps?: () => void;
@@ -25,7 +28,7 @@ interface StickyOutputPanelProps {
 export function StickyOutputPanel({
     outputRef, sentinelRef, stickyAreaRef,
     isSplitView, scrollToBottom,
-    background, foreground, showTimestamps, onToggleTimestamps,
+    background, backgroundExtra, foreground, showTimestamps, onToggleTimestamps,
     commandInputRef, className, fontSize, fontFamily, wrapAt,
 }: StickyOutputPanelProps) {
     const [stickyHeight, setStickyHeight] = useState(DEFAULT_STICKY_HEIGHT);
@@ -95,8 +98,9 @@ export function StickyOutputPanel({
 
     const containerClass = ['output-container', className].filter(Boolean).join(' ');
 
-    const wrapStyle: React.CSSProperties | undefined = (background || foreground || fontSize || fontFamily || (wrapAt && wrapAt > 0)) ? {
+    const wrapStyle: React.CSSProperties | undefined = (background || backgroundExtra || foreground || fontSize || fontFamily || (wrapAt && wrapAt > 0)) ? {
         ...(background ? { background } : {}),
+        ...(backgroundExtra ?? {}),
         ...(foreground ? { color: foreground } : {}),
         ...(fontSize ? { fontSize: `${fontSize}pt` } : {}),
         ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),
@@ -128,6 +132,7 @@ export function StickyOutputPanel({
                 style={{
                     height: stickyHeight,
                     ...(background ? { background } : {}),
+                    ...(backgroundExtra ?? {}),
                     ...(foreground ? { color: foreground } : {}),
                     ...(fontSize ? { fontSize: `${fontSize}pt` } : {}),
                     ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),

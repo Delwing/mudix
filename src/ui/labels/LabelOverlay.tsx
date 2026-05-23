@@ -87,26 +87,51 @@ function Label({ l }: { l: LabelState }) {
 
     if (!l.visible) return null;
 
-    const style: React.CSSProperties = {
-        left: l.x, top: l.y,
-        width: l.width, height: l.height,
-        pointerEvents: l.clickThrough ? 'none' : 'auto',
-        cursor: l.cursor ?? (l.onClick ? 'pointer' : undefined),
-        zIndex: l.zIndex,
-    };
+    let left = l.x, top = l.y, width = l.width, height = l.height;
     // Qt: once a stylesheet is set, the widget's palette/autoFillBackground are
     // ignored — the QSS governs background entirely, defaulting to transparent
     // when no `background-*` is declared. So skip the fillBackground/setColor
     // fallback whenever a stylesheet is present, otherwise an unrelated CSS
     // (e.g. `border: 0`) would leave a stale white fill hiding the parent
     // label's texture (matches Mudlet's QLabel + QSS behaviour).
+    let inlineFromStylesheet: React.CSSProperties | undefined;
     if (l.styleSheet) {
-        Object.assign(style, cssTextToParts(l.styleSheet).inline);
+        const parts = cssTextToParts(l.styleSheet);
+        inlineFromStylesheet = parts.inline;
+        // Qt's margin insets the visible widget area within its geometry; on
+        // absolutely-positioned DOM elements, CSS margin instead offsets the
+        // box, collapsing gaps between adjacent labels (e.g. gauges that share
+        // an edge). Consume the margin into geometry so the visible rect
+        // shrinks the way Mudlet renders it.
+        if (parts.margin) {
+            const m = parts.margin;
+            left += m.left;
+            top += m.top;
+            width = Math.max(0, width - m.left - m.right);
+            height = Math.max(0, height - m.top - m.bottom);
+        }
+    }
+
+    const style: React.CSSProperties = {
+        left, top, width, height,
+        pointerEvents: l.clickThrough ? 'none' : 'auto',
+        cursor: l.cursor ?? (l.onClick ? 'pointer' : undefined),
+        zIndex: l.zIndex,
+    };
+    if (inlineFromStylesheet) {
+        Object.assign(style, inlineFromStylesheet);
     } else if (l.fillBackground) {
         const bg = l.backgroundColor;
         style.background = bg
             ? `rgba(${bg.r},${bg.g},${bg.b},${bg.a / 255})`
             : '#fff';
+    }
+    // Layer setBackgroundImage on top so it shows over the fillBackground color
+    // (and ignores it when a stylesheet already painted the background).
+    if (l.backgroundImage) {
+        const url = l.backgroundImage.url.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        style.backgroundImage = `url("${url}")`;
+        style.backgroundRepeat = 'no-repeat';
     }
 
     return (

@@ -49,6 +49,10 @@ export interface WindowOpenOptions {
     wrapAt?: number;
     /** Window background fill (Mudlet setBackgroundColor). rgba 0..255. */
     backgroundColor?: { r: number; g: number; b: number; a: number };
+    /** Mudlet setBackgroundImage. `url` is a resolved href for modes 1-3 or the
+     *  raw stylesheet body for mode 4 (style). `mode` mirrors `mudlet.BgImageMode`:
+     *  1=border (stretched), 2=center, 3=tile, 4=style. */
+    backgroundImage?: { url: string; mode: number };
     /** For miniconsoles, the parent userwindow id ('main' or another userwindow's
      *  name). When set to a non-main parent, the miniconsole is rendered inside
      *  that parent's viewport at parent-relative (x, y) coordinates. */
@@ -89,6 +93,7 @@ export interface ScriptWindowRenderData {
     fontFamily?: string;
     wrapAt?: number;
     backgroundColor?: { r: number; g: number; b: number; a: number };
+    backgroundImage?: { url: string; mode: number };
     /** For miniconsoles created with a parent userwindow — see WindowOpenOptions.parent. */
     parent?: string;
 }

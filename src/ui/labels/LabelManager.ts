@@ -25,6 +25,10 @@ export interface LabelState {
     html: string;
     /** rgba 0..255 channels; alpha defaults to 255 when set via setBackgroundColor. */
     backgroundColor?: { r: number; g: number; b: number; a: number };
+    /** Mudlet setBackgroundImage(labelName, imageLocation) — resolved CSS URL.
+     *  Labels have no `mode` (unlike consoles); always rendered as a centered
+     *  no-repeat background, matching Mudlet's QLabel default. */
+    backgroundImage?: { url: string };
     /** Qt-style CSS string set via setLabelStyleSheet; parsed at render time. */
     styleSheet?: string;
     /** Click handler installed by setLabelClickCallback. The event table mirrors
@@ -73,6 +77,15 @@ export interface LabelWheelEvent extends LabelMouseEvent {
 
 type Listener = (labels: LabelState[]) => void;
 
+// Lua callers can pass nil or percentage strings ("12.5%") through createLabel /
+// moveWindow / resizeWindow — `Number(...)` then yields NaN, which React would
+// emit as `left: NaN` and warn about. Coerce non-finite inputs to 0 so the
+// label still renders (matches Mudlet's int-cast behaviour) instead of
+// poisoning the inline style.
+function safeCoord(n: number): number {
+    return Number.isFinite(n) ? n : 0;
+}
+
 export class LabelManager {
     private readonly labels = new Map<string, LabelState>();
     private readonly listeners = new Map<string, Set<Listener>>();
@@ -88,8 +101,8 @@ export class LabelManager {
         const parent = opts.parent ?? 'main';
         const state: LabelState = {
             name, parent,
-            x: opts.x, y: opts.y,
-            width: opts.width, height: opts.height,
+            x: safeCoord(opts.x), y: safeCoord(opts.y),
+            width: safeCoord(opts.width), height: safeCoord(opts.height),
             fillBackground: opts.fillBackground,
             clickThrough: opts.clickThrough ?? false,
             visible: true,
@@ -115,7 +128,7 @@ export class LabelManager {
     move(name: string, x: number, y: number): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
-        lbl.x = x; lbl.y = y;
+        lbl.x = safeCoord(x); lbl.y = safeCoord(y);
         this.notify(lbl.parent);
         return true;
     }
@@ -123,7 +136,7 @@ export class LabelManager {
     resize(name: string, width: number, height: number): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
-        lbl.width = width; lbl.height = height;
+        lbl.width = safeCoord(width); lbl.height = safeCoord(height);
         this.notify(lbl.parent);
         return true;
     }
@@ -162,6 +175,22 @@ export class LabelManager {
 
     getBackgroundColor(name: string): { r: number; g: number; b: number; a: number } | null {
         return this.labels.get(name)?.backgroundColor ?? null;
+    }
+
+    setBackgroundImage(name: string, url: string): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.backgroundImage = { url };
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    resetBackgroundImage(name: string): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.backgroundImage = undefined;
+        this.notify(lbl.parent);
+        return true;
     }
 
     setStyleSheet(name: string, css: string): boolean {

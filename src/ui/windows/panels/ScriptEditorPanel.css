@@ -7,6 +7,13 @@
     font-family: var(--font-ui), sans-serif;
 }
 
+@keyframes package-repo-spin {
+    to { transform: rotate(360deg); }
+}
+.package-repo__spin {
+    animation: package-repo-spin 0.9s linear infinite;
+}
+
 /* ── Category nav ───────────────────────────────────────── */
 .script-editor__nav {
     width: 122px;
@@ -854,6 +861,7 @@
     background: var(--bg-input);
     margin-bottom: 8px;
     align-items: flex-start;
+    width: 100%;
 }
 
 .script-editor__pkg-icon-frame {

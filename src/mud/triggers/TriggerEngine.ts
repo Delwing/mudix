@@ -233,6 +233,7 @@ export class TriggerEngine {
         number,
         | { kind: 'regex'; re: PcreInstance; fn: TempFn }
         | { kind: 'substring'; pattern: string; fn: TempFn }
+        | { kind: 'startOfLine'; pattern: string; fn: TempFn }
         | { kind: 'exactMatch'; pattern: string; fn: TempFn }
     >();
     private nextId = 1;
@@ -270,6 +271,10 @@ export class TriggerEngine {
      *                     `tempTrigger`). The callback receives `[pattern]`
      *                     so capture-group access against the substring is a
      *                     no-op rather than a metacharacter trap.
+     *   - `'startOfLine'`— literal `String.prototype.startsWith` (Mudlet
+     *                     `tempBeginOfLineTrigger`). Not anchored regex —
+     *                     just a prefix check, which is why it's cheap.
+     *                     Callback receives `[pattern]`.
      *   - `'exactMatch'`— full-line equality (Mudlet
      *                     `tempExactMatchTrigger`). Callback receives `[line]`.
      * Invalid regex patterns return a no-op disposer so callers don't need
@@ -278,10 +283,10 @@ export class TriggerEngine {
     addTemp(
         pattern: string,
         fn: TempFn,
-        kind: 'regex' | 'substring' | 'exactMatch' = 'regex',
+        kind: 'regex' | 'substring' | 'startOfLine' | 'exactMatch' = 'regex',
     ): () => void {
         const id = this.nextId++;
-        if (kind === 'substring' || kind === 'exactMatch') {
+        if (kind === 'substring' || kind === 'startOfLine' || kind === 'exactMatch') {
             this.temp.set(id, { kind, pattern, fn });
         } else {
             const re = compilePcre(pattern);
@@ -426,6 +431,12 @@ export class TriggerEngine {
         for (const entry of this.temp.values()) {
             if (entry.kind === 'substring') {
                 if (line.includes(entry.pattern)) {
+                    entry.fn([entry.pattern]);
+                }
+                continue;
+            }
+            if (entry.kind === 'startOfLine') {
+                if (line.startsWith(entry.pattern)) {
                     entry.fn([entry.pattern]);
                 }
                 continue;

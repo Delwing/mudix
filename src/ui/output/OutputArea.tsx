@@ -5,6 +5,7 @@ import { useStickyOutput, DEFAULT_STICKY_LINES } from '../../hooks/useOutput';
 import { useAppStore, useProfileField, useConnectionId } from '../../storage';
 import { StickyOutputPanel } from './StickyOutputPanel';
 import { LabelOverlay } from '../labels/LabelOverlay';
+import { backgroundImageStyle } from './backgroundImageStyle';
 
 interface OutputAreaProps {
     session: MudSession;
@@ -16,9 +17,11 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
     const connectionId = useConnectionId();
     const outputBackgroundString = useProfileField('outputBackground');
     const outputBackgroundColor = useProfileField('outputBackgroundColor');
+    const outputBackgroundImage = useProfileField('outputBackgroundImage');
     const outputBackground = outputBackgroundColor
         ? `rgba(${outputBackgroundColor.r}, ${outputBackgroundColor.g}, ${outputBackgroundColor.b}, ${outputBackgroundColor.a / 255})`
         : outputBackgroundString;
+    const outputBackgroundExtra = backgroundImageStyle(outputBackgroundImage) ?? undefined;
     const outputForeground = useProfileField('outputForeground');
     const showTimestamps = useProfileField('showTimestamps');
     const fontSize = useProfileField('fontSize');
@@ -67,6 +70,7 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
                     isSplitView={isSplitView}
                     scrollToBottom={scrollToBottom}
                     background={outputBackground}
+                    backgroundExtra={outputBackgroundExtra}
                     foreground={outputForeground}
                     showTimestamps={showTimestamps}
                     onToggleTimestamps={() => connectionId && patchConnectionProfile(connectionId, { showTimestamps: !showTimestamps })}

@@ -13,6 +13,11 @@ function getMainWindowSize()
     return t[0], t[1]
 end
 
+function getMousePosition()
+    local t = __getMousePosition()
+    return t[0], t[1]
+end
+
 -- Mudlet getUserWindowSize(name) → width, height when the window exists, or
 -- (nil, errMsg) when it doesn't. JS returns `nil` for the miss case.
 function getUserWindowSize(name)
@@ -54,12 +59,35 @@ function setFont(a, b)
     return nil, "setFont: window \"" .. tostring(name) .. "\" not found"
 end
 
+-- Mudlet setMiniConsoleFontSize(name, size). Mudlet returns (nil, "setting
+-- font size of '<name>' failed") when the miniconsole is missing or the size
+-- is invalid; the raw primitive returns false for both, so we re-shape here.
+function setMiniConsoleFontSize(name, size)
+    if __setMiniConsoleFontSize(name, size) then return true end
+    return nil, "setting font size of '" .. tostring(name) .. "' failed"
+end
+
 function getFont(a)
     local v = __getFont(a)
     if v == nil then
         return nil, "getFont: window \"" .. tostring(a) .. "\" not found"
     end
     return v
+end
+
+-- Mudlet calcFontSize(size [, family]) | calcFontSize(windowName) → width,
+-- height (pixels) of an average character cell. JS returns a 2-element array
+-- (0-indexed under wasmoon) or nil for the miss case; re-shape into Mudlet's
+-- multi-return on success and (nil, errMsg) on failure.
+function calcFontSize(a, b)
+    local t = __calcFontSize(a, b)
+    if t == nil then
+        if type(a) == 'string' then
+            return nil, "calcFontSize: window \"" .. a .. "\" not found"
+        end
+        return nil, "calcFontSize: bad argument #1 (number or window name expected)"
+    end
+    return t[0], t[1]
 end
 
 -- Mudlet removeCommandLineMenuEvent([cmdLineName,] uniqueName) → true on
@@ -140,6 +168,41 @@ function getMapUserData(key)
     local v = __getMapUserData(key)
     if v == nil then return false, "no such map user data key" end
     return v
+end
+
+-- Mudlet getRoomUserDataKeys(id) → sequential Lua table of the user-data keys
+-- stored on the room, or nil when the room does not exist. JS hands back a
+-- 0-indexed array (wasmoon convention) or nil; rebuild as a 1-indexed table.
+function getRoomUserDataKeys(id)
+    local raw = __getRoomUserDataKeys(id)
+    if raw == nil then return nil end
+    local out = {}
+    if type(raw) == 'table' then
+        local i = 0
+        while raw[i] ~= nil do
+            out[#out + 1] = raw[i]
+            i = i + 1
+        end
+        if #out == 0 then
+            for _, v in ipairs(raw) do out[#out + 1] = v end
+        end
+    end
+    return out
+end
+
+-- Mudlet getExitStubs1(id) → 1-indexed variant of getExitStubs. The base
+-- `getExitStubs` binding hands back a wasmoon array (0-indexed in Lua); walk
+-- it and rebuild as a 1-indexed sequence.
+function getExitStubs1(id)
+    local raw = getExitStubs(id)
+    if raw == nil then return nil end
+    local out = {}
+    local i = 0
+    while raw[i] ~= nil do
+        out[i + 1] = raw[i]
+        i = i + 1
+    end
+    return out
 end
 
 -- Mudlet getRoomUserData(id, key [, fullErr]). Default form returns "" when
@@ -269,6 +332,80 @@ function getMapEvents()
         end
     end
     return out
+end
+
+-- Mudlet getMapLabels(areaID) → { [labelID] = labelText }. JS hands the
+-- per-area label record over with stringified numeric keys (wasmoon
+-- convention); re-key via tonumber so scripts can index by integer label id
+-- and pass that same id straight back into deleteMapLabel.
+function getMapLabels(areaId)
+    local raw = __getMapLabels(areaId)
+    local out = {}
+    if type(raw) == 'table' then
+        for k, v in pairs(raw) do
+            local id = tonumber(k)
+            if id then out[id] = v end
+        end
+    end
+    return out
+end
+
+-- Build a fresh Lua table from a JS-side label info proxy so the caller never
+-- touches the wasmoon proxy directly (some proxy operations are flaky once the
+-- bridge has moved on). Mirrors Mudlet's pushMapLabelPropertiesToLua key set.
+local function _buildMapLabelInfo(p)
+    if type(p) ~= 'table' then return nil end
+    local fg = p.FgColor or {}
+    local bg = p.BgColor or {}
+    return {
+        X = p.X, Y = p.Y, Z = p.Z,
+        Width = p.Width, Height = p.Height,
+        Text = p.Text,
+        Pixmap = p.Pixmap,
+        OnTop = p.OnTop,
+        Scaling = p.Scaling,
+        Temporary = p.Temporary,
+        FgColor = { r = fg.r, g = fg.g, b = fg.b },
+        BgColor = { r = bg.r, g = bg.g, b = bg.b },
+    }
+end
+
+-- Mudlet getMapLabel(areaID, labelID|labelText). By-ID returns a flat
+-- properties table; by-text returns { [labelID] = properties, ... } for every
+-- matching label. Missing area or missing labelID → (false, errMsg) — matching
+-- Mudlet's warnArgumentValue convention. An area with no labels at all returns
+-- an empty table regardless of the lookup form.
+function getMapLabel(areaId, key)
+    local kt = type(key)
+    if kt ~= 'number' and kt ~= 'string' then
+        error('getMapLabel: bad argument #2 type (labelID as number or labelText as string expected, got ' .. kt .. '!)', 2)
+    end
+    if kt == 'number' and key < 0 then
+        return false, 'getMapLabel: labelID ' .. tostring(key) .. ' is invalid, it must be zero or greater'
+    end
+    local r = __getMapLabel(areaId, key)
+    if type(r) ~= 'table' then return false, 'getMapLabel: unexpected result' end
+    if r.ok == false then
+        if r.err == 'noarea' then
+            return false, 'getMapLabel: areaID ' .. tostring(areaId) .. ' does not exist'
+        end
+        if r.err == 'noid' then
+            return false, 'getMapLabel: labelID ' .. tostring(key) .. ' does not exist in area with areaID ' .. tostring(areaId)
+        end
+        return false, tostring(r.err or 'getMapLabel: failed')
+    end
+    if r.single then return _buildMapLabelInfo(r.single) end
+    if r.multi then
+        local out = {}
+        if type(r.multi) == 'table' then
+            for k, v in pairs(r.multi) do
+                local id = tonumber(k)
+                if id then out[id] = _buildMapLabelInfo(v) end
+            end
+        end
+        return out
+    end
+    return {}
 end
 
 -- Mudlet addAreaName(name) → areaID on success, or (false, errMsg) on
@@ -629,9 +766,10 @@ end
 
 do
     -- Mudlet:
-    --   tempTrigger(substring, fn[, expirationCount])           — literal substring match
-    --   tempRegexTrigger(regex, fn[, expirationCount])          — PCRE match
-    --   tempExactMatchTrigger(exact, fn[, expirationCount])     — full-line equality
+    --   tempTrigger(substring, fn[, expirationCount])             — literal substring match
+    --   tempRegexTrigger(regex, fn[, expirationCount])            — PCRE match
+    --   tempExactMatchTrigger(exact, fn[, expirationCount])       — full-line equality
+    --   tempBeginOfLineTrigger(prefix, fn[, expirationCount])     — literal prefix (startsWith, not regex ^)
     -- expirationCount: positive N fires N times then auto-kills; -1/0/omitted = unlimited.
     local _sub = __mudix_tempTrigger
     function tempTrigger(pattern, fn, expirationCount)
@@ -644,6 +782,10 @@ do
     local _ex = __mudix_tempExactMatchTrigger
     function tempExactMatchTrigger(pattern, fn, expirationCount)
         return _ex(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempExactMatchTrigger", 2)), expirationCount)
+    end
+    local _bol = __mudix_tempBeginOfLineTrigger
+    function tempBeginOfLineTrigger(pattern, fn, expirationCount)
+        return _bol(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempBeginOfLineTrigger", 2)), expirationCount)
     end
 end
 

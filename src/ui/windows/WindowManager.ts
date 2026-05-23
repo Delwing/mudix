@@ -168,6 +168,9 @@ export class WindowManager {
             this.resizeObservers.delete('main');
             this.lastEmittedSize.delete('main');
         }
+        // Main-parented miniconsoles portal into this element; re-render so the
+        // FloatingWindowLayer picks up the new (or cleared) target.
+        this.notify();
     }
 
     getMainViewportElement(): HTMLElement | null {
@@ -254,6 +257,9 @@ export class WindowManager {
     }
 
     centerView(roomId: number): void {
+        // Mudlet's centerview sets the player room (mRoomIdHash) as a side
+        // effect, so getPlayerRoom() returns this id afterwards.
+        this.mapStore.setPlayerRoom(roomId);
         for (const cb of this.mapCallbacks.values()) cb(roomId);
     }
 
@@ -433,6 +439,26 @@ export class WindowManager {
     getBackgroundColor(id: string): { r: number; g: number; b: number; a: number } | null {
         const win = this.windows.get(id);
         return win?.backgroundColor ?? null;
+    }
+
+    /** Mudlet setBackgroundImage for a userwindow / miniconsole. */
+    setBackgroundImage(id: string, url: string, mode: number): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        win.backgroundImage = { url, mode };
+        this.notify();
+        this.saveHint(id, win);
+        return true;
+    }
+
+    /** Mudlet resetBackgroundImage for a userwindow / miniconsole. */
+    resetBackgroundImage(id: string): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        win.backgroundImage = undefined;
+        this.notify();
+        this.saveHint(id, win);
+        return true;
     }
 
     setSize(id: string, width: number, height: number): void {
@@ -747,7 +773,12 @@ export class WindowManager {
             id,
             title:       options.title ?? (kind === 'map' ? 'Map' : id),
             kind,
-            visible:     hint?.hidden !== true,
+            // Honor `hidden` from options (setWindowHints spreads the saved
+            // hint into options for autoOpen restore) but NOT from the bare
+            // saved hint — an explicit script `openMapWidget()` or toolbar
+            // click should always make the window visible, even when the
+            // user's last action was to hide/close it.
+            visible:     options.hidden !== true,
             x:           hint?.x      ?? this.defaultX(options.position),
             y:           hint?.y      ?? this.defaultY(options.position),
             width:       hint?.width  ?? options.width  ?? def.w,
@@ -765,6 +796,7 @@ export class WindowManager {
             fontFamily: hint?.fontFamily,
             wrapAt: hint?.wrapAt,
             backgroundColor: hint?.backgroundColor,
+            backgroundImage: hint?.backgroundImage,
             parent: options.parent,
             pendingText: [],
         };
@@ -937,10 +969,10 @@ export class WindowManager {
 
     private notify(): void {
         const arr = [...this.windows.values()]
-            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor, parent }) => ({
+            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent }) => ({
                 id, title, kind, visible, x, y, width, height, zIndex,
                 docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex,
-                fontSize, fontFamily, wrapAt, backgroundColor, parent,
+                fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent,
                 isActiveTab: dockGroup ? this.activeTabGroups.get(dockGroup) === id : undefined,
             }))
             .sort((a, b) => a.zIndex - b.zIndex);
@@ -962,6 +994,7 @@ export class WindowManager {
             fontFamily: win.fontFamily,
             wrapAt:    win.wrapAt,
             backgroundColor: win.backgroundColor,
+            backgroundImage: win.backgroundImage,
         };
         this.windowHints[id] = hint;
         this.onWindowHint?.(id, hint);

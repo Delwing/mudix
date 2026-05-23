@@ -15,9 +15,18 @@
     overflow: hidden;
     font-family: var(--font-ui), sans-serif;
     font-size: 12px;
-    /* Mudlet's TLabel defaults: white text, Qt::AlignLeft | Qt::AlignVCenter. */
+    /* Mudlet's TLabel defaults: white text, Qt::AlignLeft | Qt::AlignVCenter.
+       Column direction with stretch on the cross axis means the echo <div>
+       spans the label's full width — which is what Qt's QLabel does
+       (QTextDocument width = widget width). That makes HTML like
+       `<center>foo</center>` actually centre, since the inner div has the
+       full label width to centre within. justify-content centres vertically
+       on the main (vertical) axis; qproperty-alignment overrides this
+       per-label via translated flex declarations from qtCss.ts. */
     color: #fff;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    justify-content: center;
+    align-items: stretch;
     box-sizing: border-box;
 }
