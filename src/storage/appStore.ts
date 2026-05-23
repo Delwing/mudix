@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type ButtonNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type ClientSettings, type ProfileSettings, type PackageManifest } from './schema';
 import type { MudletImportResult } from '../import/mudletXmlImport';
 import type { WindowOpenOptions } from '../ui/windows/types';
+import { createDebouncedLocalStorage } from './debouncedStorage';
 
 function getDescendantIds(id: string, items: { id: string; parentId: string | null }[]): string[] {
     const result: string[] = [];
@@ -416,6 +417,12 @@ export const useAppStore = create<AppStore>()(
         {
             name: 'mudix_v1',
             version: 18,
+            // Coalesce rapid mutations (e.g. an enableTrigger that touches N
+            // matching nodes, or a script edit firing on every keystroke) into
+            // one localStorage write. The persisted blob is large and
+            // stringify+write blocks the main thread; without this, profile
+            // load and trigger-toggle storms paid the cost N times over.
+            storage: createJSONStorage(() => createDebouncedLocalStorage(5000)),
             partialize: ({ connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages }) => ({
                 connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages,
             }),

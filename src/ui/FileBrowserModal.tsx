@@ -17,6 +17,16 @@ import {
     requestFolderPermission,
     type FolderPermissionState,
 } from '../scripting/vfs/folderHandleStore';
+import {
+    walkFolderHandle,
+    walkVfsTree,
+    diffSides,
+    copyVfsToFolder,
+    copyFolderToIdb,
+    type DiffResult,
+    type SideKind,
+} from '../scripting/vfs/folderSync';
+import { MergeConflictModal } from './MergeConflictModal';
 
 // ─── VFS Move Helpers ──────────────────────────────────────────────────────
 
@@ -1061,6 +1071,46 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
 
     useEffect(() => { void refreshLinkState(); }, [refreshLinkState]);
 
+    // Pending link operation: the user picked a folder, but the two sides
+    // overlapped. We hold the handle here while the merge modal is open so
+    // applying / cancelling can finish the link or back out cleanly.
+    const [mergePending, setMergePending] = useState<{
+        handle: FileSystemDirectoryHandle;
+        diff: DiffResult;
+    } | null>(null);
+    const [linkBusy, setLinkBusy] = useState(false);
+
+    // Materialize the user's choices into the folder, then commit the link.
+    // Folder is the next mount's source of truth: anything we want preserved
+    // has to live on disk before we save the handle.
+    const finalizeLink = useCallback(async (
+        handle: FileSystemDirectoryHandle,
+        diff: DiffResult,
+        resolutions: Map<string, SideKind>,
+    ) => {
+        if (!vfs) return;
+        // Paths we need to write into the folder: every local-only file, plus
+        // every conflict the user resolved in local's favor (overwrites the
+        // folder copy). Folder-only files and folder-resolved conflicts are
+        // already on disk — nothing to do for them.
+        const toCopy: string[] = diff.onlyLocal.map(f => f.path);
+        for (const c of diff.conflicts) {
+            if (resolutions.get(c.path) === 'local') toCopy.push(c.path);
+        }
+        let copyNote = '';
+        if (toCopy.length > 0) {
+            const { copied, failed } = await copyVfsToFolder(vfs, handle, toCopy);
+            copyNote = failed.length > 0
+                ? ` Copied ${copied}/${toCopy.length} (${failed.length} failed — see console).`
+                : ` Copied ${copied} local file${copied === 1 ? '' : 's'} into the folder.`;
+            if (failed.length > 0) console.warn('[link] copy failures:', failed);
+        }
+        await saveFolderHandle(connectionId, handle);
+        setLinkedHandle(handle);
+        setLinkedPerm('granted');
+        setLinkNotice(`Linked "${handle.name}".${copyNote} Close and reopen this profile to mount it.`);
+    }, [vfs, connectionId]);
+
     const handleLinkFolder = useCallback(async () => {
         if (!linkSupported || !window.showDirectoryPicker) return;
         let handle: FileSystemDirectoryHandle;
@@ -1074,24 +1124,85 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
             setLinkNotice(`Permission ${perm}. Folder not linked.`);
             return;
         }
-        await saveFolderHandle(connectionId, handle);
-        setLinkedHandle(handle);
-        setLinkedPerm('granted');
-        setLinkNotice(`Linked "${handle.name}". Reconnect to use it.`);
-    }, [connectionId, linkSupported]);
+        setLinkBusy(true);
+        try {
+            // Walk both sides to figure out which case we're in. The folder is
+            // probed via the raw File System Access API — it is not yet mounted
+            // as the profile VFS (and won't be until the user reopens the
+            // profile), so vfs.* still describes the IDB-backed current state.
+            const folderEntries = await walkFolderHandle(handle).catch(err => {
+                console.warn('[link] folder walk failed:', err);
+                return [];
+            });
+            const localEntries = vfs ? walkVfsTree(vfs) : [];
+            const diff = diffSides(localEntries, folderEntries);
+
+            if (diff.conflicts.length === 0) {
+                // Either side may still be non-empty — copy any local-only
+                // files into the folder so they survive the mount switch.
+                await finalizeLink(handle, diff, new Map());
+            } else {
+                // Conflicting paths exist — defer to the merge picker. The
+                // handle isn't saved yet; cancelling leaves the profile in its
+                // current state.
+                setMergePending({ handle, diff });
+            }
+        } finally {
+            setLinkBusy(false);
+        }
+    }, [linkSupported, vfs, finalizeLink]);
+
+    const handleMergeApply = useCallback(async (resolutions: Map<string, SideKind>) => {
+        const pending = mergePending;
+        if (!pending) return;
+        setMergePending(null);
+        setLinkBusy(true);
+        try {
+            await finalizeLink(pending.handle, pending.diff, resolutions);
+        } finally {
+            setLinkBusy(false);
+        }
+    }, [mergePending, finalizeLink]);
+
+    const handleMergeCancel = useCallback(() => {
+        setMergePending(null);
+        setLinkNotice('Link cancelled.');
+    }, []);
 
     const handleUnlinkFolder = useCallback(async () => {
+        // If the active mount is folder-backed, mirror the folder content into
+        // the IDB store first so the next mount (now IDB, since we're clearing
+        // the handle) sees the same files instead of stale pre-link IDB content.
+        let copyNote = '';
+        if (vfs?.source === 'folder' && linkedHandle) {
+            setLinkBusy(true);
+            try {
+                // Flush any pending folder-backed writes so what we walk on disk
+                // matches what the user just edited.
+                await vfs.flush().catch(() => { /* best-effort */ });
+                const { copied, failed } = await copyFolderToIdb(linkedHandle, connectionId);
+                copyNote = failed.length > 0
+                    ? ` Copied ${copied} file${copied === 1 ? '' : 's'} to local storage (${failed.length} failed — see console).`
+                    : ` Copied ${copied} file${copied === 1 ? '' : 's'} to local storage.`;
+                if (failed.length > 0) console.warn('[unlink] copy failures:', failed);
+            } catch (err) {
+                console.error('[unlink] folder→IDB copy failed:', err);
+                copyNote = ' (warning: copy to local storage failed — see console).';
+            } finally {
+                setLinkBusy(false);
+            }
+        }
         await clearFolderHandle(connectionId);
         setLinkedHandle(null);
         setLinkedPerm('prompt');
-        setLinkNotice('Folder unlinked. Reconnect to revert to local storage.');
-    }, [connectionId]);
+        setLinkNotice(`Folder unlinked.${copyNote} Close and reopen this profile to revert to local storage.`);
+    }, [connectionId, vfs, linkedHandle]);
 
     const handleRegrantPermission = useCallback(async () => {
         if (!linkedHandle) return;
         const perm = await requestFolderPermission(linkedHandle);
         setLinkedPerm(perm);
-        if (perm === 'granted') setLinkNotice('Permission granted. Reconnect to mount the folder.');
+        if (perm === 'granted') setLinkNotice('Permission granted. Close and reopen this profile to mount the folder.');
     }, [linkedHandle]);
 
     // ── Derived ───────────────────────────────────────────────────────────
@@ -1149,16 +1260,18 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                                 className="modal-close"
                                 title={`Unlink folder "${linkedHandle.name}"`}
                                 onClick={handleUnlinkFolder}
+                                disabled={linkBusy}
                             >
-                                <Unlink size={13} />
+                                <Unlink size={13} style={linkBusy ? { opacity: 0.4 } : undefined} />
                             </button>
                         ) : (
                             <button
                                 className="modal-close"
                                 title="Link a folder on disk to this profile"
                                 onClick={handleLinkFolder}
+                                disabled={linkBusy}
                             >
-                                <Link size={13} />
+                                <Link size={13} style={linkBusy ? { opacity: 0.4 } : undefined} />
                             </button>
                         ))}
                         <button
@@ -1178,7 +1291,7 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                             <span>
                                 {vfs?.source === 'folder'
                                     ? `Mounted from folder: ${vfs.folderName ?? linkedHandle.name}`
-                                    : `Linked folder: ${linkedHandle.name} (reconnect to mount)`}
+                                    : `Linked folder: ${linkedHandle.name} (close and reopen the profile to mount)`}
                             </span>
                         )}
                         {linkedHandle && linkedPerm !== 'granted' && vfs?.source !== 'folder' && (
@@ -1255,6 +1368,15 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                     </div>
                 </div>
             </ResizableModal>
+
+            {mergePending && (
+                <MergeConflictModal
+                    diff={mergePending.diff}
+                    folderName={mergePending.handle.name}
+                    onApply={handleMergeApply}
+                    onCancel={handleMergeCancel}
+                />
+            )}
 
             {ctxMenu && (
                 <ContextMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)}>

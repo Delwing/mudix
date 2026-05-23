@@ -19,6 +19,7 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
     const outputBackground = outputBackgroundColor
         ? `rgba(${outputBackgroundColor.r}, ${outputBackgroundColor.g}, ${outputBackgroundColor.b}, ${outputBackgroundColor.a / 255})`
         : outputBackgroundString;
+    const outputForeground = useProfileField('outputForeground');
     const showTimestamps = useProfileField('showTimestamps');
     const fontSize = useProfileField('fontSize');
     const wrapAt = useProfileField('outputWrapAt');
@@ -66,6 +67,7 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
                     isSplitView={isSplitView}
                     scrollToBottom={scrollToBottom}
                     background={outputBackground}
+                    foreground={outputForeground}
                     showTimestamps={showTimestamps}
                     onToggleTimestamps={() => connectionId && patchConnectionProfile(connectionId, { showTimestamps: !showTimestamps })}
                     commandInputRef={commandInputRef}

@@ -12,6 +12,7 @@ interface StickyOutputPanelProps {
     isSplitView: boolean;
     scrollToBottom: () => void;
     background?: string;
+    foreground?: string;
     showTimestamps?: boolean;
     onToggleTimestamps?: () => void;
     commandInputRef?: React.RefObject<HTMLInputElement>;
@@ -24,7 +25,7 @@ interface StickyOutputPanelProps {
 export function StickyOutputPanel({
     outputRef, sentinelRef, stickyAreaRef,
     isSplitView, scrollToBottom,
-    background, showTimestamps, onToggleTimestamps,
+    background, foreground, showTimestamps, onToggleTimestamps,
     commandInputRef, className, fontSize, fontFamily, wrapAt,
 }: StickyOutputPanelProps) {
     const [stickyHeight, setStickyHeight] = useState(DEFAULT_STICKY_HEIGHT);
@@ -94,8 +95,9 @@ export function StickyOutputPanel({
 
     const containerClass = ['output-container', className].filter(Boolean).join(' ');
 
-    const wrapStyle: React.CSSProperties | undefined = (background || fontSize || fontFamily || (wrapAt && wrapAt > 0)) ? {
+    const wrapStyle: React.CSSProperties | undefined = (background || foreground || fontSize || fontFamily || (wrapAt && wrapAt > 0)) ? {
         ...(background ? { background } : {}),
+        ...(foreground ? { color: foreground } : {}),
         ...(fontSize ? { fontSize: `${fontSize}pt` } : {}),
         ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),
         ...(wrapAt && wrapAt > 0 ? { ['--wrap-cols' as string]: `${wrapAt}ch` } : {}),
@@ -115,7 +117,7 @@ export function StickyOutputPanel({
             {isSplitView && (
                 <div
                     className="output-sticky-handle"
-                    style={{ bottom: stickyHeight }}
+                    style={{ bottom: stickyHeight + 3 }}
                     onMouseDown={handleResizeStart}
                 />
             )}
@@ -126,6 +128,7 @@ export function StickyOutputPanel({
                 style={{
                     height: stickyHeight,
                     ...(background ? { background } : {}),
+                    ...(foreground ? { color: foreground } : {}),
                     ...(fontSize ? { fontSize: `${fontSize}pt` } : {}),
                     ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),
                     ...(wrapAt && wrapAt > 0 ? { ['--wrap-cols' as string]: `${wrapAt}ch` } : {}),
@@ -137,7 +140,7 @@ export function StickyOutputPanel({
             {isSplitView && (
                 <button
                     className="scroll-to-bottom"
-                    style={{ bottom: stickyHeight + 8 }}
+                    style={{ bottom: stickyHeight + 11 }}
                     onClick={scrollToBottom}
                     type="button"
                     aria-label="Scroll to bottom"

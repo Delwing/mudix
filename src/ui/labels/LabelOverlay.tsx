@@ -94,19 +94,20 @@ function Label({ l }: { l: LabelState }) {
         cursor: l.cursor ?? (l.onClick ? 'pointer' : undefined),
         zIndex: l.zIndex,
     };
-    if (l.fillBackground) {
+    // Qt: once a stylesheet is set, the widget's palette/autoFillBackground are
+    // ignored — the QSS governs background entirely, defaulting to transparent
+    // when no `background-*` is declared. So skip the fillBackground/setColor
+    // fallback whenever a stylesheet is present, otherwise an unrelated CSS
+    // (e.g. `border: 0`) would leave a stale white fill hiding the parent
+    // label's texture (matches Mudlet's QLabel + QSS behaviour).
+    if (l.styleSheet) {
+        Object.assign(style, cssTextToParts(l.styleSheet).inline);
+    } else if (l.fillBackground) {
         const bg = l.backgroundColor;
-        // Mudlet's createLabel with fillBackground=true paints the parent widget's
-        // base color until setBackgroundColor() runs. White is a reasonable
-        // approximation that matches what the docs describe ("display the
-        // background color").
         style.background = bg
             ? `rgba(${bg.r},${bg.g},${bg.b},${bg.a / 255})`
             : '#fff';
     }
-    // Stylesheet wins over computed background when both are set, matching
-    // Mudlet (where setLabelStyleSheet replaces the QLabel's full QSS block).
-    if (l.styleSheet) Object.assign(style, cssTextToParts(l.styleSheet).inline);
 
     return (
         <div

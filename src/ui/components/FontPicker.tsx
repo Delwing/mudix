@@ -161,6 +161,9 @@ function SystemTab({ value, onChange }: SubProps) {
     const [filter, setFilter] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
+    // True until we know whether a prior permission grant lets us auto-query;
+    // prevents the "grant permission" button from flashing before auto-query starts.
+    const [checkingPermission, setCheckingPermission] = useState(supported);
 
     const handleQuery = async () => {
         setLoading(true);
@@ -177,6 +180,23 @@ function SystemTab({ value, onChange }: SubProps) {
         }
     };
 
+    // If the user has already granted local-fonts permission in a previous
+    // session, skip the gesture-gated button and query immediately.
+    useEffect(() => {
+        if (!supported) return;
+        let cancelled = false;
+        const perms = (navigator as Navigator & { permissions?: { query: (d: { name: string }) => Promise<PermissionStatus> } }).permissions;
+        if (!perms?.query) { setCheckingPermission(false); return; }
+        perms.query({ name: 'local-fonts' }).then(status => {
+            if (cancelled) return;
+            if (status.state === 'granted') handleQuery();
+            setCheckingPermission(false);
+        }).catch(() => {
+            if (!cancelled) setCheckingPermission(false);
+        });
+        return () => { cancelled = true; };
+    }, [supported]);
+
     if (!supported) {
         return (
             <p className="font-picker__hint">
@@ -184,6 +204,10 @@ function SystemTab({ value, onChange }: SubProps) {
                 Use one of the other tabs to pick a font.
             </p>
         );
+    }
+
+    if (checkingPermission || (loading && !families)) {
+        return <FontListSkeleton />;
     }
 
     if (!families) {
@@ -230,6 +254,23 @@ function SystemTab({ value, onChange }: SubProps) {
                 ))}
             </div>
         </>
+    );
+}
+
+function FontListSkeleton() {
+    return (
+        <div className="font-picker__name" aria-busy="true" aria-live="polite">
+            <div className="font-picker__row">
+                <div className="font-picker__skeleton-input" />
+            </div>
+            <div className="font-picker__list">
+                {Array.from({ length: 6 }).map((_, i) => (
+                    <div key={i} className="font-picker__item font-picker__skeleton-item">
+                        <span className="font-picker__skeleton-bar" style={{ width: `${40 + ((i * 13) % 50)}%` }} />
+                    </div>
+                ))}
+            </div>
+        </div>
     );
 }
 

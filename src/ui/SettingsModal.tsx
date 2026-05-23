@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import type React from 'react';
-import { useAppStore, selectProfileField, PROFILE_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings } from '../storage';
-import { Button, Input, FontPicker } from './components';
+import { useAppStore, selectProfileField, type Theme, type OutputFontSource, type ProfileSettings } from '../storage';
+import { Input, FontPicker } from './components';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
-const DEFAULT_BG = '#090909';
+const DEFAULT_BG_FALLBACK = '#090909';
+const DEFAULT_FG_FALLBACK = '#d4d4d4';
+const DEFAULT_INPUT_BG_FALLBACK = '#141414';
+const DEFAULT_INPUT_FG_FALLBACK = '#d4d4d4';
 const DEFAULT_PROMPT_TIMEOUT_MS = 300;
 const DEFAULT_FONT_SIZE = 13;
 const MIN_FONT_SIZE = 6;
@@ -13,8 +15,8 @@ const MAX_BORDER_PX = 1000;
 const EMPTY_BORDERS = { top: 0, right: 0, bottom: 0, left: 0 } as const;
 type BorderSide = 'top' | 'right' | 'bottom' | 'left';
 
-function isHexColor(s: string): boolean {
-    return /^#[0-9a-fA-F]{6}$/.test(s);
+function isHexColor(s: string | undefined): s is string {
+    return typeof s === 'string' && /^#[0-9a-fA-F]{6}$/.test(s);
 }
 
 const THEME_OPTIONS: { value: Theme; label: string }[] = [
@@ -24,10 +26,11 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
     { value: 'light', label: 'Light (Qt)' },
 ];
 
-type SettingsTab = 'appearance' | 'network';
+type SettingsTab = 'appearance' | 'colors' | 'network';
 
 const TABS: { value: SettingsTab; label: string }[] = [
     { value: 'appearance', label: 'Appearance' },
+    { value: 'colors',     label: 'Colors' },
     { value: 'network',    label: 'Network' },
 ];
 
@@ -42,6 +45,9 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const theme = useAppStore(s => s.client.theme);
     const patchClient = useAppStore(s => s.patchClient);
     const outputBackground = useAppStore(s => selectProfileField(s, connectionId, 'outputBackground'));
+    const outputForeground = useAppStore(s => selectProfileField(s, connectionId, 'outputForeground'));
+    const inputBackground = useAppStore(s => selectProfileField(s, connectionId, 'inputBackground'));
+    const inputForeground = useAppStore(s => selectProfileField(s, connectionId, 'inputForeground'));
     const outputFont = useAppStore(s => selectProfileField(s, connectionId, 'outputFont'));
     const fontSize = useAppStore(s => selectProfileField(s, connectionId, 'fontSize'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connectionId, 'promptTimeoutMs'));
@@ -60,36 +66,10 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         patchProfile({ outputFont: next });
     };
 
-    const [text, setText] = useState(outputBackground);
-    const [pickerColor, setPickerColor] = useState(
-        isHexColor(outputBackground) ? outputBackground : DEFAULT_BG,
-    );
     const [timeoutText, setTimeoutText] = useState(
         promptTimeoutMs !== undefined ? String(promptTimeoutMs) : '',
     );
     const [fontSizeText, setFontSizeText] = useState(String(fontSize));
-
-    const handlePickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const value = e.target.value;
-        setText(value);
-        setPickerColor(value);
-        patchProfile({ outputBackground: value });
-    };
-
-    const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        setText(e.target.value);
-    };
-
-    const handleTextBlur = () => {
-        patchProfile({ outputBackground: text });
-        if (isHexColor(text)) setPickerColor(text);
-    };
-
-    const handleReset = () => {
-        setText(PROFILE_DEFAULTS.outputBackground);
-        setPickerColor(DEFAULT_BG);
-        patchProfile({ outputBackground: PROFILE_DEFAULTS.outputBackground });
-    };
 
     const handleTimeoutBlur = () => {
         const trimmed = timeoutText.trim();
@@ -108,11 +88,6 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         patchProfile({ promptTimeoutMs: clamped });
     };
 
-    const handleTimeoutReset = () => {
-        setTimeoutText('');
-        patchProfile({ promptTimeoutMs: undefined });
-    };
-
     const handleFontSizeBlur = () => {
         const parsed = parseInt(fontSizeText.trim(), 10);
         if (!Number.isFinite(parsed)) {
@@ -122,11 +97,6 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, parsed));
         setFontSizeText(String(clamped));
         patchProfile({ fontSize: clamped });
-    };
-
-    const handleFontSizeReset = () => {
-        setFontSizeText(String(DEFAULT_FONT_SIZE));
-        patchProfile({ fontSize: DEFAULT_FONT_SIZE });
     };
 
     const handleBorderChange = (side: BorderSide, raw: string) => {
@@ -141,10 +111,6 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         // falls back to PROFILE_DEFAULTS (no border).
         const allZero = next.top === 0 && next.right === 0 && next.bottom === 0 && next.left === 0;
         patchProfile({ outputBorders: allZero ? undefined : next });
-    };
-
-    const handleBordersReset = () => {
-        patchProfile({ outputBorders: undefined });
     };
 
     return (
@@ -175,7 +141,6 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                     {(activeTab === 'appearance' || !connectionId) && (
                         <>
                             <section className="settings-section">
-                                <h3 className="settings-section-title">Appearance</h3>
                                 <div className="settings-row">
                                     <label className="settings-label" htmlFor="theme-select">Theme</label>
                                     <select
@@ -192,28 +157,6 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                             </section>
                             {connectionId && (
                             <section className="settings-section">
-                                <h3 className="settings-section-title">Output</h3>
-                                <div className="settings-row">
-                                    <label className="settings-label" htmlFor="output-bg">Background</label>
-                                    <div className="settings-color-field">
-                                        <input
-                                            type="color"
-                                            className="color-picker"
-                                            value={pickerColor}
-                                            onChange={handlePickerChange}
-                                            aria-label="Pick background color"
-                                        />
-                                        <Input
-                                            id="output-bg"
-                                            value={text}
-                                            placeholder={DEFAULT_BG}
-                                            onChange={handleTextChange}
-                                            onBlur={handleTextBlur}
-                                            spellCheck={false}
-                                        />
-                                        <Button variant="ghost" size="sm" onClick={handleReset}>Reset</Button>
-                                    </div>
-                                </div>
                                 <div className="settings-row">
                                     <label className="settings-label" htmlFor="output-font-size">Font size</label>
                                     <div className="settings-color-field">
@@ -229,7 +172,6 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                             onBlur={handleFontSizeBlur}
                                         />
                                         <span className="settings-unit">pt</span>
-                                        <Button variant="ghost" size="sm" onClick={handleFontSizeReset}>Reset</Button>
                                     </div>
                                 </div>
                                 <div className="settings-row settings-row--top">
@@ -252,16 +194,44 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                                 />
                                             </label>
                                         ))}
-                                        <Button variant="ghost" size="sm" onClick={handleBordersReset}>Reset</Button>
                                     </div>
                                 </div>
                             </section>
                             )}
                         </>
                     )}
+                    {activeTab === 'colors' && connectionId && (
+                        <section className="settings-section">
+                            <div className="settings-colors-grid">
+                                <ColorCell
+                                    label="Output background"
+                                    value={outputBackground}
+                                    fallback={DEFAULT_BG_FALLBACK}
+                                    onChange={v => patchProfile({ outputBackground: v })}
+                                />
+                                <ColorCell
+                                    label="Output foreground"
+                                    value={outputForeground}
+                                    fallback={DEFAULT_FG_FALLBACK}
+                                    onChange={v => patchProfile({ outputForeground: v })}
+                                />
+                                <ColorCell
+                                    label="Input background"
+                                    value={inputBackground}
+                                    fallback={DEFAULT_INPUT_BG_FALLBACK}
+                                    onChange={v => patchProfile({ inputBackground: v })}
+                                />
+                                <ColorCell
+                                    label="Input foreground"
+                                    value={inputForeground}
+                                    fallback={DEFAULT_INPUT_FG_FALLBACK}
+                                    onChange={v => patchProfile({ inputForeground: v })}
+                                />
+                            </div>
+                        </section>
+                    )}
                     {activeTab === 'network' && connectionId && (
                         <section className="settings-section">
-                            <h3 className="settings-section-title">Network</h3>
                             <div className="settings-row settings-row--top">
                                 <label className="settings-label" htmlFor="prompt-timeout">Prompt timeout</label>
                                 <div className="settings-field-with-help">
@@ -278,7 +248,6 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                             onBlur={handleTimeoutBlur}
                                         />
                                         <span className="settings-unit">ms</span>
-                                        <Button variant="ghost" size="sm" onClick={handleTimeoutReset}>Reset</Button>
                                     </div>
                                     <p className="settings-help">
                                         How long to wait for the rest of a line before treating a partial chunk as a prompt.
@@ -293,5 +262,28 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                 </div>
             </div>
         </>
+    );
+}
+
+interface ColorCellProps {
+    label: string;
+    value: string | undefined;
+    fallback: string;
+    onChange: (next: string) => void;
+}
+
+function ColorCell({ label, value, fallback, onChange }: ColorCellProps) {
+    const picked = isHexColor(value) ? value : fallback;
+    return (
+        <label className="settings-color-cell">
+            <span className="settings-label">{label}</span>
+            <input
+                type="color"
+                className="color-picker"
+                value={picked}
+                onChange={e => onChange(e.target.value)}
+                aria-label={label}
+            />
+        </label>
     );
 }

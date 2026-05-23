@@ -402,3 +402,51 @@
     color: var(--text);
     background: var(--bg-input);
 }
+
+.font-picker__skeleton-input {
+    height: 28px;
+    flex: 1;
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+}
+
+.font-picker__skeleton-item {
+    cursor: default;
+    pointer-events: none;
+}
+
+.font-picker__skeleton-item:hover {
+    background: none;
+    color: var(--text);
+}
+
+.font-picker__skeleton-bar {
+    display: inline-block;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--bg-glass);
+    position: relative;
+    overflow: hidden;
+}
+
+.font-picker__skeleton-input::after,
+.font-picker__skeleton-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.06) 50%,
+        transparent 100%
+    );
+    transform: translateX(-100%);
+    animation: font-picker-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes font-picker-shimmer {
+    100% { transform: translateX(100%); }
+}

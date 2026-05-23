@@ -33,14 +33,15 @@ export default function App() {
         setProfileQuery(connection.id);
     };
 
-    // Auto-connect when the page is loaded with ?profile=<id>
+    // Open (but don't dial) when the page is loaded with ?profile=<id>.
+    // User can hit Connect from the toolbar to actually dial.
     useEffect(() => {
         const id = deepLinkProfileId.current;
         if (!id || activeConnection) return;
         const conn = connections.find(c => c.id === id);
         if (!conn) return;
         deepLinkProfileId.current = null;
-        openProfile(conn, true);
+        openProfile(conn, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [connections]);
 

@@ -46,6 +46,12 @@ export interface ProfileSettings {
     showTimestamps: boolean;
     fontSize: number;
     outputBackground: string;
+    /** Default text color for the main output area. Empty/undefined = theme default. */
+    outputForeground?: string;
+    /** Background of the command-line input. Empty/undefined = theme default. */
+    inputBackground?: string;
+    /** Text color of the command-line input. Empty/undefined = theme default. */
+    inputForeground?: string;
     outputFont?: OutputFontSource;
     /** Mudlet setWindowWrap("main", N). 0/undefined disables character-based wrap. */
     outputWrapAt?: number;

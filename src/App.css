@@ -959,6 +959,7 @@ html, body, #root {
     font-family: var(--font-output, var(--font-mono)), monospace;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
+    padding: 3px;
 }
 
 .output-wrapper::-webkit-scrollbar { width: 6px; }
@@ -998,7 +999,6 @@ html, body, #root {
 /* Timestamps */
 .output-timestamp {
     display: none;
-    font-size: 10px;
     color: var(--text-dim);
     flex-shrink: 0;
     font-variant-numeric: tabular-nums;
@@ -1014,9 +1014,9 @@ html, body, #root {
     visibility: hidden;
     pointer-events: none;
     position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 6px; /* leave scrollbar track visible */
+    bottom: 3px;
+    left: 3px;
+    right: 9px; /* 3px padding + 6px scrollbar track */
     background: var(--console-bg);
     color: var(--console-text);
     font-family: var(--font-output, var(--font-mono)), monospace;
@@ -1034,7 +1034,6 @@ html, body, #root {
     bottom: 0;
     left: 0;
     right: 0;
-    padding: 4px 10px;
 }
 
 .output-sticky-handle {
@@ -1124,6 +1123,40 @@ html, body, #root {
     height: 32px;
     padding: 0 8px 0 24px;
     width: 100%;
+    position: relative;
+    z-index: 1;
+}
+
+/* Inline ghost suggestion shown behind the input text. The shadow span is the
+   same width as the typed prefix (with transparent color) so the suffix lines
+   up with where the user's caret is. */
+.command-ghost {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    padding: 0 8px 0 24px;
+    display: flex;
+    align-items: center;
+    font-family: var(--font-mono), monospace;
+    font-size: 13px;
+    line-height: 32px;
+    white-space: pre;
+    overflow: hidden;
+    pointer-events: none;
+    user-select: none;
+    z-index: 2;
+}
+
+.command-ghost__shadow {
+    color: transparent;
+}
+
+.command-ghost__suffix {
+    color: var(--text-dim);
+    opacity: 0.65;
+    font-style: italic;
 }
 
 /* ── Map panel ──────────────────────────────────────────────── */
@@ -1444,6 +1477,10 @@ html, body, #root {
 .settings-modal {
     width: min(640px, 92vw);
     max-height: 80vh;
+    /* Anchor the top so switching to a shorter tab doesn't make the modal
+       drift upward (default .modal centering recenters when content shrinks). */
+    top: 10vh;
+    transform: translateX(-50%);
 }
 
 .proxy-info-modal {
@@ -2115,6 +2152,195 @@ html, body, #root {
     color: var(--text-dim);
 }
 
+/* ── Merge conflict modal ───────────────────────────────────────────── */
+
+.merge-modal-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.merge-summary {
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.merge-summary p {
+    margin: 0 0 6px;
+    line-height: 1.45;
+}
+
+.merge-summary-list {
+    margin: 0 0 8px;
+    padding-left: 18px;
+    color: var(--text-dim);
+    font-size: 11.5px;
+    line-height: 1.55;
+}
+
+.merge-summary-list strong {
+    color: var(--text);
+}
+
+.merge-bulk {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+}
+
+.merge-bulk-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.merge-bulk-btn:hover {
+    border-color: var(--accent-dim);
+    color: var(--accent);
+}
+
+.merge-counts {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-family: var(--font-mono), monospace;
+}
+
+.merge-table-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.merge-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+}
+
+.merge-table th,
+.merge-table td {
+    border-bottom: 1px solid var(--border);
+    padding: 5px 10px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.merge-table th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-input);
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 10.5px;
+    text-transform: lowercase;
+    z-index: 1;
+}
+
+.merge-th-choice {
+    text-align: right;
+    width: 1%;
+    white-space: nowrap;
+}
+
+.merge-path {
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    word-break: break-all;
+    max-width: 260px;
+}
+
+.merge-side {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.merge-side-picked {
+    color: var(--text);
+    background: var(--border-hi);
+}
+
+.merge-size {
+    color: var(--text);
+}
+
+.merge-mtime {
+    font-size: 10px;
+    opacity: 0.75;
+}
+
+.merge-choice-cell {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.merge-choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    color: var(--text-dim);
+}
+
+.merge-choice input[type="radio"] {
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.merge-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.merge-btn-secondary,
+.merge-btn-primary {
+    padding: 5px 14px;
+    border-radius: 3px;
+    font-size: 11.5px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+}
+
+.merge-btn-secondary {
+    background: transparent;
+    color: var(--text);
+}
+
+.merge-btn-secondary:hover {
+    border-color: var(--accent-dim);
+    color: var(--accent);
+}
+
+.merge-btn-primary {
+    background: var(--accent);
+    color: var(--btn-primary-text, #0a0a0a);
+    border-color: var(--accent);
+}
+
+.merge-btn-primary:hover {
+    opacity: 0.88;
+}
+
 .modal-header {
     display: flex;
     align-items: center;
@@ -2169,15 +2395,6 @@ html, body, #root {
     border-top: 1px solid var(--border);
 }
 
-.settings-section-title {
-    font-family: var(--font-ui), sans-serif;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-dim);
-}
-
 .settings-row {
     display: flex;
     align-items: center;
@@ -2189,7 +2406,7 @@ html, body, #root {
 }
 
 .settings-row--top .settings-label {
-    padding-top: 6px;
+    padding-top: 0;
 }
 
 .settings-label {
@@ -2219,8 +2436,9 @@ html, body, #root {
 
 .settings-border-field {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
     min-width: 0;
 }
 
@@ -2289,7 +2507,7 @@ html, body, #root {
 }
 
 .color-picker {
-    width: 28px;
+    width: 56px;
     height: 28px;
     padding: 2px;
     border-radius: 4px;
@@ -2297,6 +2515,23 @@ html, body, #root {
     background: var(--bg-input);
     cursor: pointer;
     flex-shrink: 0;
+}
+
+.settings-colors-grid {
+    display: grid;
+    grid-template-columns: max-content max-content;
+    align-items: center;
+    gap: 10px 24px;
+}
+
+.settings-color-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.settings-color-cell .settings-label {
+    min-width: 130px;
 }
 
 .settings-select {

@@ -12,10 +12,13 @@
 //   • Music tracks register MediaSession metadata so the OS sees this as a
 //     media app — required on iOS for continued background audio and gives
 //     OS-level transport controls for free.
-//   • A persistent silent oscillator (gain 0) is kept running whenever any
-//     sound is active. Chromium throttles "silent" contexts; this keeps the
-//     output stream busy so timing stays sample-accurate across visibility
-//     changes.
+//   • A persistent keepalive source plays real audio samples at ~-60 dB on
+//     loop whenever any sound is active. Chromium tracks audio output for
+//     its "page is actively playing media" flag, which bypasses the ~5s
+//     transient-activation expiration that would otherwise silence
+//     background-tab playback. A silent (gain=0) source gets throttled the
+//     same as no audio at all — the samples have to be genuinely non-zero,
+//     just attenuated past the audible floor.
 
 type LoaderFn = (path: string) => Promise<ArrayBuffer | null>;
 
@@ -64,8 +67,13 @@ interface ActiveSource {
     stopping: boolean;
 }
 
+// Gain applied to the keepalive source. ~-60 dB — inaudible on typical
+// hardware but the underlying samples remain non-zero, which is what
+// Chromium's audio-output activity tracking actually inspects.
+const KEEPALIVE_GAIN = 0.001;
+
 let sharedContext: AudioContext | null = null;
-let sharedKeepAlive: OscillatorNode | null = null;
+let sharedKeepAlive: AudioBufferSourceNode | null = null;
 let unlockInstalled = false;
 const decodeCache = new Map<string, Promise<AudioBuffer>>();
 
@@ -119,13 +127,30 @@ function ensureKeepAlive(): void {
     const ctx = sharedContext;
     if (!ctx || sharedKeepAlive) return;
     try {
-        const osc = ctx.createOscillator();
+        const src = ctx.createBufferSource();
+        src.buffer = createKeepAliveBuffer(ctx);
+        src.loop = true;
         const g = ctx.createGain();
-        g.gain.value = 0;
-        osc.connect(g).connect(ctx.destination);
-        osc.start();
-        sharedKeepAlive = osc;
+        g.gain.value = KEEPALIVE_GAIN;
+        src.connect(g).connect(ctx.destination);
+        src.start();
+        sharedKeepAlive = src;
     } catch { /* ignore — some browsers reject pre-gesture */ }
+}
+
+function createKeepAliveBuffer(ctx: AudioContext): AudioBuffer {
+    // 1 s of 60 Hz sine. 60 Hz sits below most consumer playback chains'
+    // usable response, and the -60 dB gain stage drops it further; the
+    // point is just that the PCM samples are non-zero so the output
+    // stream looks active to Chromium.
+    const sr = ctx.sampleRate;
+    const buf = ctx.createBuffer(1, sr, sr);
+    const data = buf.getChannelData(0);
+    const twoPiF = 2 * Math.PI * 60;
+    for (let i = 0; i < data.length; i++) {
+        data[i] = Math.sin(twoPiF * i / sr);
+    }
+    return buf;
 }
 
 function decodeBuffer(ctx: AudioContext, path: string, loader: LoaderFn): Promise<AudioBuffer> {
