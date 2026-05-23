@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useAppStore, selectProfileField, type Theme, type OutputFontSource, type ProfileSettings } from '../storage';
+import { useAppStore, selectProfileField, MAPPER_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings } from '../storage';
 import { Input, FontPicker } from './components';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
@@ -26,12 +26,13 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
     { value: 'light', label: 'Light (Qt)' },
 ];
 
-type SettingsTab = 'appearance' | 'colors' | 'network';
+type SettingsTab = 'appearance' | 'colors' | 'network' | 'mapper';
 
 const TABS: { value: SettingsTab; label: string }[] = [
     { value: 'appearance', label: 'Appearance' },
     { value: 'colors',     label: 'Colors' },
     { value: 'network',    label: 'Network' },
+    { value: 'mapper',     label: 'Mapper' },
 ];
 
 interface SettingsModalProps {
@@ -56,11 +57,26 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connectionId, 'promptTimeoutMs'));
     const outputBorders = useAppStore(s => selectProfileField(s, connectionId, 'outputBorders'));
     const borders = outputBorders ?? EMPTY_BORDERS;
+    const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
+    const mapperRoomSize = mapper?.roomSize ?? MAPPER_DEFAULTS.roomSize;
+    const mapperRoomShape = mapper?.roomShape ?? MAPPER_DEFAULTS.roomShape;
+    const mapperBorders = mapper?.borders ?? MAPPER_DEFAULTS.borders;
+    const mapperHighlightCurrentRoom = mapper?.highlightCurrentRoom ?? MAPPER_DEFAULTS.highlightCurrentRoom;
+    const mapperLineWidth = mapper?.lineWidth ?? MAPPER_DEFAULTS.lineWidth;
+    const mapperBackgroundColor = mapper?.backgroundColor ?? MAPPER_DEFAULTS.backgroundColor;
+    const mapperLineColor = mapper?.lineColor ?? MAPPER_DEFAULTS.lineColor;
+    const mapperGridEnabled = mapper?.gridEnabled ?? MAPPER_DEFAULTS.gridEnabled;
     const patchConnectionProfile = useAppStore(s => s.patchConnectionProfile);
     // Profile-scoped fields are only writable when a profile is active. On the
     // connection screen the modal hides those rows entirely.
     const patchProfile = (patch: Partial<ProfileSettings>) => {
         if (connectionId) patchConnectionProfile(connectionId, patch);
+    };
+    // Mapper is stored as a nested object so future renderer toggles share one
+    // slot in ProfileSettings; patches merge into the current value so toggling
+    // one field doesn't wipe siblings.
+    const patchMapper = (patch: Partial<MapperSettings>) => {
+        patchProfile({ mapper: { ...(mapper ?? {}), ...patch } });
     };
 
     const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
@@ -100,6 +116,31 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, parsed));
         setFontSizeText(String(clamped));
         patchProfile({ fontSize: clamped });
+    };
+
+    const [roomSizeText, setRoomSizeText] = useState(String(mapperRoomSize));
+    const [lineWidthText, setLineWidthText] = useState(String(mapperLineWidth));
+
+    const handleRoomSizeBlur = () => {
+        const parsed = parseFloat(roomSizeText.trim());
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            setRoomSizeText(String(mapperRoomSize));
+            return;
+        }
+        const clamped = Math.min(parsed, 10);
+        setRoomSizeText(String(clamped));
+        patchMapper({ roomSize: clamped });
+    };
+
+    const handleLineWidthBlur = () => {
+        const parsed = parseFloat(lineWidthText.trim());
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            setLineWidthText(String(mapperLineWidth));
+            return;
+        }
+        const clamped = Math.min(parsed, 1);
+        setLineWidthText(String(clamped));
+        patchMapper({ lineWidth: clamped });
     };
 
     const handleBorderChange = (side: BorderSide, raw: string) => {
@@ -274,6 +315,92 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         matching Mudlet's "Network packet timeout".
                                     </p>
                                 </div>
+                            </div>
+                        </section>
+                    )}
+                    {activeTab === 'mapper' && connectionId && (
+                        <section className="settings-section">
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="mapper-room-size">Room size</label>
+                                <Input
+                                    id="mapper-room-size"
+                                    type="number"
+                                    min={0.1}
+                                    max={10}
+                                    step={0.05}
+                                    value={roomSizeText}
+                                    placeholder={String(MAPPER_DEFAULTS.roomSize)}
+                                    onChange={e => setRoomSizeText(e.target.value)}
+                                    onBlur={handleRoomSizeBlur}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="mapper-room-shape">Room shape</label>
+                                <select
+                                    id="mapper-room-shape"
+                                    className="settings-select"
+                                    value={mapperRoomShape}
+                                    onChange={e => patchMapper({ roomShape: e.target.value as MapperSettings['roomShape'] })}
+                                >
+                                    <option value="rectangle">Rectangle</option>
+                                    <option value="roundedRectangle">Rounded rectangle</option>
+                                    <option value="circle">Circle</option>
+                                </select>
+                            </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="mapper-borders">Room borders</label>
+                                <input
+                                    id="mapper-borders"
+                                    type="checkbox"
+                                    checked={mapperBorders}
+                                    onChange={e => patchMapper({ borders: e.target.checked })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="mapper-highlight-current">Highlight current room</label>
+                                <input
+                                    id="mapper-highlight-current"
+                                    type="checkbox"
+                                    checked={mapperHighlightCurrentRoom}
+                                    onChange={e => patchMapper({ highlightCurrentRoom: e.target.checked })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="mapper-line-width">Exit line width</label>
+                                <Input
+                                    id="mapper-line-width"
+                                    type="number"
+                                    min={0.001}
+                                    max={1}
+                                    step={0.005}
+                                    value={lineWidthText}
+                                    placeholder={String(MAPPER_DEFAULTS.lineWidth)}
+                                    onChange={e => setLineWidthText(e.target.value)}
+                                    onBlur={handleLineWidthBlur}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="mapper-grid-enabled">Show grid</label>
+                                <input
+                                    id="mapper-grid-enabled"
+                                    type="checkbox"
+                                    checked={mapperGridEnabled}
+                                    onChange={e => patchMapper({ gridEnabled: e.target.checked })}
+                                />
+                            </div>
+                            <div className="settings-colors-grid">
+                                <ColorCell
+                                    label="Background"
+                                    value={mapperBackgroundColor}
+                                    fallback={MAPPER_DEFAULTS.backgroundColor}
+                                    onChange={v => patchMapper({ backgroundColor: v })}
+                                />
+                                <ColorCell
+                                    label="Exit lines"
+                                    value={mapperLineColor}
+                                    fallback={MAPPER_DEFAULTS.lineColor}
+                                    onChange={v => patchMapper({ lineColor: v })}
+                                />
                             </div>
                         </section>
                     )}

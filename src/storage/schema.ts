@@ -87,7 +87,53 @@ export interface ProfileSettings {
         centerX: number;
         centerY: number;
     };
+    /** User-tunable subset of mudlet-map-renderer's Settings object. Fields
+     *  are forwarded onto the live renderer.settings on mount and whenever
+     *  the user changes them in the Mapper tab. Missing fields fall through
+     *  to MAPPER_DEFAULTS, which in turn defer to the renderer's own
+     *  createSettings() default for anything we don't override. */
+    mapper?: MapperSettings;
 }
+
+/** User-tunable subset of the map renderer's Settings. Add new entries here
+ *  (and a matching control in the Settings modal + a wire-up in MapPanel) as
+ *  more renderer options get exposed. Keep all fields optional so the
+ *  patcher can ship partial updates and unset fields fall through to the
+ *  renderer's own createSettings() defaults. */
+export interface MapperSettings {
+    /** renderer.settings.roomSize — diameter/side of a room in map units. */
+    roomSize?: number;
+    /** renderer.settings.roomShape. */
+    roomShape?: 'rectangle' | 'circle' | 'roundedRectangle';
+    /** renderer.settings.borders — draw a stroke around each room. */
+    borders?: boolean;
+    /** renderer.settings.highlightCurrentRoom — overlay the player's room/exits. */
+    highlightCurrentRoom?: boolean;
+    /** renderer.settings.lineWidth — exit/edge stroke width in map units. */
+    lineWidth?: number;
+    /** renderer.settings.backgroundColor — hex (#rrggbb). */
+    backgroundColor?: string;
+    /** renderer.settings.lineColor — exit color, hex (#rrggbb). */
+    lineColor?: string;
+    /** renderer.settings.gridEnabled — background grid overlay. */
+    gridEnabled?: boolean;
+}
+
+/** Mirrors the renderer's createSettings() defaults so the Settings modal can
+ *  show meaningful placeholder/fallback values when a field is still
+ *  undefined. MapPanel itself does NOT use these — it only forwards fields
+ *  that the user has actually set, so the renderer's own defaults stay in
+ *  charge for anything untouched. */
+export const MAPPER_DEFAULTS: Required<MapperSettings> = {
+    roomSize: 0.6,
+    roomShape: 'rectangle',
+    borders: true,
+    highlightCurrentRoom: true,
+    lineWidth: 0.025,
+    backgroundColor: '#000000',
+    lineColor: '#e1ffe1',
+    gridEnabled: false,
+};
 
 /** Defaults for profile settings. Reads fall through to these whenever a
  *  profile hasn't set the field. */

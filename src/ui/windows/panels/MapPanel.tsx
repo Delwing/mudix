@@ -1,10 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MapRenderer, createSettings } from 'mudlet-map-renderer';
-import type { RoomContextMenuEventDetail } from 'mudlet-map-renderer';
+import type { RoomContextMenuEventDetail, Settings as MapRendererSettings } from 'mudlet-map-renderer';
 import type { WindowManager } from '../WindowManager';
 import type { MapEventEntry } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
-import { useAppStore } from '../../../storage';
+import { useAppStore, selectProfileField, type MapperSettings } from '../../../storage';
+
+/**
+ * Copy user-set fields from MapperSettings onto a live renderer settings
+ * object. Anything left undefined in `mapper` is intentionally not touched
+ * so the renderer's own createSettings() defaults stay in effect.
+ */
+function applyMapperSettings(target: MapRendererSettings, mapper: MapperSettings | undefined): void {
+    if (!mapper) return;
+    if (mapper.roomSize !== undefined) target.roomSize = mapper.roomSize;
+    if (mapper.roomShape !== undefined) target.roomShape = mapper.roomShape;
+    if (mapper.borders !== undefined) target.borders = mapper.borders;
+    if (mapper.highlightCurrentRoom !== undefined) target.highlightCurrentRoom = mapper.highlightCurrentRoom;
+    if (mapper.lineWidth !== undefined) target.lineWidth = mapper.lineWidth;
+    if (mapper.backgroundColor !== undefined) target.backgroundColor = mapper.backgroundColor;
+    if (mapper.lineColor !== undefined) target.lineColor = mapper.lineColor;
+    if (mapper.gridEnabled !== undefined) target.gridEnabled = mapper.gridEnabled;
+}
 
 type MapStatus = 'loading' | 'empty' | 'ready' | 'error';
 
@@ -53,6 +70,15 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const savedViewRef = useRef(
         useAppStore.getState().connectionProfile[connectionId]?.mapViewState,
     );
+
+    // User-tunable renderer settings (Mapper tab). Subscribing here re-renders
+    // the panel whenever a field changes; the reactive effect below copies the
+    // values onto the live renderer.settings. The ref lets the renderer-init
+    // effect read the current value without taking `mapper` as a dependency
+    // (which would tear down the renderer on every Mapper-tab edit).
+    const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
+    const mapperRef = useRef(mapper);
+    mapperRef.current = mapper;
     const saveTimerRef = useRef<number | null>(null);
     const saveViewState = useCallback(() => {
         if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
@@ -141,6 +167,10 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         readerRef.current = reader;
         const settings = createSettings();
         settings.areaName = false;
+        // Hardcoded — the renderer's default (false) animates the camera on
+        // every room change, which feels sluggish on fast-moving MUDs.
+        settings.instantMapMove = true;
+        applyMapperSettings(settings, mapperRef.current);
         const renderer = new MapRenderer(reader, settings, containerRef.current);
         renderer.centerOnResize = false;
         rendererRef.current = renderer;
@@ -174,6 +204,19 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             readerRef.current = null;
         };
     }, [manager, saveViewState]);
+
+    // Forward Mapper-tab edits onto the live renderer.settings. The settings
+    // object is shared and mutable, but the renderer caches some derived
+    // state per scene build, so size/shape/color changes only show up after
+    // refresh(); backgroundColor lives on the container element and is
+    // updated separately via updateBackground().
+    useEffect(() => {
+        const renderer = rendererRef.current;
+        if (!renderer) return;
+        applyMapperSettings(renderer.settings, mapper);
+        renderer.refresh();
+        renderer.updateBackground();
+    }, [mapper]);
 
     // Boot path: ScriptingEngine and this panel both call bootstrapMap; the
     // manager dedupes to a single IndexedDB fetch + parse. Once it resolves
