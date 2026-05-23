@@ -920,16 +920,65 @@
     color: var(--text-dim);
     font-size: 11.5px;
     line-height: 1.45;
-    white-space: pre-wrap;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+    max-height: calc(1.45em * 2);
     overflow: hidden;
 }
 
 .script-editor__pkg-desc--expanded {
-    display: block;
+    max-height: none;
     overflow: visible;
+}
+
+/* Markdown rendered into the description — same styling in both states. */
+.script-editor__pkg-desc > *:first-child {
+    margin-top: 0;
+}
+.script-editor__pkg-desc > *:last-child {
+    margin-bottom: 0;
+}
+.script-editor__pkg-desc p,
+.script-editor__pkg-desc ul,
+.script-editor__pkg-desc ol,
+.script-editor__pkg-desc pre,
+.script-editor__pkg-desc blockquote {
+    margin: 4px 0;
+}
+.script-editor__pkg-desc h1,
+.script-editor__pkg-desc h2,
+.script-editor__pkg-desc h3,
+.script-editor__pkg-desc h4,
+.script-editor__pkg-desc h5,
+.script-editor__pkg-desc h6 {
+    margin: 6px 0 2px;
+    font-size: 12.5px;
+    color: var(--text);
+}
+.script-editor__pkg-desc ul,
+.script-editor__pkg-desc ol {
+    padding-left: 18px;
+}
+.script-editor__pkg-desc code {
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 0 3px;
+    border-radius: 2px;
+}
+.script-editor__pkg-desc pre {
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 6px 8px;
+    border-radius: 3px;
+    overflow-x: auto;
+    white-space: pre;
+}
+.script-editor__pkg-desc pre code {
+    background: none;
+    padding: 0;
+}
+.script-editor__pkg-desc a {
+    color: var(--accent);
 }
 
 .script-editor__pkg-desc-toggle {

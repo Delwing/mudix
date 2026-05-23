@@ -9,7 +9,7 @@ Status legend:
 > Many APIs become "free" as soon as a single primitive is added. The known blockers right now:
 > - `setMiniConsoleFontSize` — blocks `createConsole` and `Geyser.MiniConsole`.
 > - `createCommandLine` — blocks `Geyser.CommandLine` and the whole overlay command-line widget family.
-> - `insertLink` / `insertPopup` / `setPopup` — block `cinsertLink`/`dinsertLink`/`hinsertLink` and `cinsertPopup`/`dinsertPopup`/`hinsertPopup`.
+> - `insertPopup` / `setPopup` — block `cinsertPopup`/`dinsertPopup`/`hinsertPopup`.
 > - `getLabelStyleSheet` — blocks `getLabelFormat` returning correct values.
 > - `getPath` — blocks pathfinding-aware speedwalk (the runner itself works).
 
@@ -142,8 +142,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `ansi2decho(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `ansi2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `closestColor(r, g, b)` | ✅ | Pure Lua via GUIUtils.lua |
-| `getFgColor([window])` | 🚧 | Get foreground RGB of selection |
-| `getBgColor([window])` | 🚧 | Get background RGB of selection (note: JS `__getBackgroundColor` is a stylesheet hash, not the Mudlet semantic) |
+| `getFgColor([window])` | ✅ | Bridge.lua → `__getFgColor`; reads color at selection start, falls back to profile default when the segment carries no explicit color |
+| `getBgColor([window])` | ✅ | Bridge.lua → `__getBgColor`; same semantics — distinct from window-background `getBackgroundColor` |
 | `color_table` | ✅ | Named color → {r,g,b} table (GUIUtils.lua) |
 
 ---
@@ -156,7 +156,10 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `cechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → echoLink) |
 | `dechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
 | `hechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
-| `insertLink([window,] text, cmd, hint)` | 🚧 | Insert link at cursor — primitive missing (blocks `cinsertLink`/`dinsertLink`/`hinsertLink`) |
+| `insertLink([window,] text, cmd, hint)` | ✅ | JS-exposed; Bridge.lua maps function `cmd` to a callback id (same wrapper as `echoLink`) |
+| `cinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → insertLink) |
+| `dinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
 | `echoPopup([window,] text, cmds, hints)` | ✅ | JS-exposed; Bridge.lua flattens cmds/hints tables |
 | `cechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
 | `dechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |

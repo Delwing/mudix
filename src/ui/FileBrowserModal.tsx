@@ -8,6 +8,7 @@ import { useAppStore } from '../storage';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 import { getSqliteClient } from '../db/sqliteClient';
 import { CodeEditorPreview, EDITABLE_EXTENSIONS } from './CodeEditorPreview';
+import { MarkdownPreview } from './MarkdownPreview';
 import {
     isFolderLinkSupported,
     loadFolderHandle,
@@ -88,8 +89,81 @@ interface FilePreviewStrategy {
     Preview: React.FC<PreviewProps>;
 }
 
-function PlainTextPreview({ content }: PreviewProps) {
-    return <pre className="vfs-preview-text">{content}</pre>;
+const TEXT_PREVIEW_LIMIT = 1_000_000; // 1 MB — anything larger is truncated
+
+// Sniff the first 4KB. A single NUL byte virtually never appears in text
+// formats, so it's the most reliable signal; a high density of other control
+// bytes is the secondary check for NUL-free binary blobs (e.g. some image
+// containers, UTF-16 files — those will look binary, which is acceptable).
+function looksBinary(bytes: Uint8Array): boolean {
+    const sample = bytes.subarray(0, Math.min(4096, bytes.byteLength));
+    if (sample.byteLength === 0) return false;
+    let nonPrintable = 0;
+    for (let i = 0; i < sample.byteLength; i++) {
+        const b = sample[i];
+        if (b === 0) return true;
+        if (b < 9 || (b > 13 && b < 32) || b === 127) nonPrintable++;
+    }
+    return nonPrintable / sample.byteLength > 0.3;
+}
+
+type PlainTextState =
+    | { kind: 'loading' }
+    | { kind: 'binary'; size: number }
+    | { kind: 'text'; text: string; truncated: boolean; size: number }
+    | { kind: 'error'; message: string };
+
+function PlainTextPreview({ path, vfs }: PreviewProps) {
+    const [state, setState] = useState<PlainTextState>({ kind: 'loading' });
+
+    useEffect(() => {
+        setState({ kind: 'loading' });
+        try {
+            const bytes = vfs.readBinaryFile(path);
+            const size = bytes.byteLength;
+            if (looksBinary(bytes)) {
+                setState({ kind: 'binary', size });
+                return;
+            }
+            const truncated = size > TEXT_PREVIEW_LIMIT;
+            const slice = truncated ? bytes.subarray(0, TEXT_PREVIEW_LIMIT) : bytes;
+            try {
+                const text = new TextDecoder('utf-8', { fatal: true }).decode(slice);
+                setState({ kind: 'text', text, truncated, size });
+            } catch {
+                setState({ kind: 'binary', size });
+            }
+        } catch (e) {
+            setState({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+        }
+    }, [path, vfs]);
+
+    if (state.kind === 'loading') return <p className="vfs-preview-empty">Reading…</p>;
+    if (state.kind === 'error') {
+        return (
+            <div className="vfs-preview-error">
+                <span className="vfs-preview-error-label">Cannot read file</span>
+                <span>{state.message}</span>
+            </div>
+        );
+    }
+    if (state.kind === 'binary') {
+        return (
+            <p className="vfs-preview-empty">
+                Binary file — {formatSize(state.size)}. No preview available.
+            </p>
+        );
+    }
+    return (
+        <>
+            {state.truncated && (
+                <p className="vfs-preview-empty" style={{ borderBottom: '1px solid var(--border, #333)' }}>
+                    Showing first {formatSize(TEXT_PREVIEW_LIMIT)} of {formatSize(state.size)} — preview truncated.
+                </p>
+            )}
+            <pre className="vfs-preview-text">{state.text}</pre>
+        </>
+    );
 }
 
 const SQL_PAGE_SIZE = 50;
@@ -468,7 +542,7 @@ function fileExtLower(filename: string): string {
     return i >= 0 ? filename.substring(i + 1).toLowerCase() : '';
 }
 
-const plainTextStrategy: FilePreviewStrategy = { canPreview: () => true, Preview: PlainTextPreview };
+const plainTextStrategy: FilePreviewStrategy = { canPreview: () => true, isBinary: true, Preview: PlainTextPreview };
 const sqliteStrategy: FilePreviewStrategy = {
     canPreview: (n) => /\.(db|sqlite|sqlite3)$/i.test(n),
     isBinary: true,
@@ -488,9 +562,13 @@ const codeEditorStrategy: FilePreviewStrategy = {
     canPreview: (n) => EDITABLE_EXTENSIONS.has(fileExtLower(n)),
     Preview: CodeEditorPreview,
 };
+const markdownStrategy: FilePreviewStrategy = {
+    canPreview: (n) => /\.(md|markdown)$/i.test(n),
+    Preview: MarkdownPreview,
+};
 
 // Add new strategies here — order matters, first match wins
-const previewStrategies: FilePreviewStrategy[] = [sqliteStrategy, imageStrategy, audioStrategy, codeEditorStrategy, plainTextStrategy];
+const previewStrategies: FilePreviewStrategy[] = [sqliteStrategy, imageStrategy, audioStrategy, markdownStrategy, codeEditorStrategy, plainTextStrategy];
 
 function getPreviewStrategy(filename: string): FilePreviewStrategy {
     return previewStrategies.find(s => s.canPreview(filename)) ?? plainTextStrategy;

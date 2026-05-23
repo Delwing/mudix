@@ -10,7 +10,7 @@ import { FileBrowserModal } from './ui/FileBrowserModal';
 import { QuickOpenPalette } from './ui/QuickOpenPalette';
 import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, type MudConnection } from './storage';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
-import { applyOutputFont } from './utils/fontLoader';
+import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
 import type { MudSession } from './mud/MudSession';
 
 interface Props {
@@ -74,6 +74,11 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     useEffect(() => {
         void applyOutputFont(outputFont, engineRef.current?.currentVFS ?? null);
     }, [outputFont, engineRef]);
+
+    // Warm the Local Font Access cache once per profile mount so the first
+    // call to getAvailableFonts() from Lua sees installed system fonts. Silent
+    // — only queries when permission is already granted; never prompts.
+    useEffect(() => { void primeLocalFontsCache(); }, []);
 
     useEffect(() => {
         const unsub1 = session.events.on('script.appendcmd', (text: string) => {

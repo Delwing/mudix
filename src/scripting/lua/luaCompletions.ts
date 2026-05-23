@@ -313,6 +313,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('getFontSize',       '([window]) → number|false','Get the configured output font size in pixels. No window arg returns the main size; a window name returns its override (or the main size if none).'),
     fn('setFont',           '([window,] family) → bool','Set the output font family. No window arg targets the main output (persists in settings as a system font); a window name targets a userwindow or miniconsole. Empty string clears the override.'),
     fn('getFont',           '([window]) → string|false','Get the configured output font family. No window arg returns the main font; a window name returns its override (or the main font if none).'),
+    fn('getAvailableFonts', '() → table',               'Set-style table {[family]=true} of fonts usable from scripts: universal web-safe families, every font registered with the browser FontFaceSet (URL/VFS uploads), the profile output font, and locally-installed system fonts when Local Font Access permission has been granted.'),
     // Borders
     fn('setBorderTop',     '(size)',         'Carve a top border (in pixels) out of the main window for label placement.'),
     fn('setBorderBottom',  '(size)',         'Carve a bottom border (in pixels) out of the main window for label placement.'),
@@ -392,6 +393,10 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('deselect',        '([window])',                   'Clear the current selection'),
     fn('getSelection',    '([window]) → text, start, length',
         'Returns the current selection: text, 0-based start column, and length. Returns false, "no selection" when nothing is selected.'),
+    fn('getFgColor',      '([window]) → r, g, b',
+        'Foreground RGB (0..255) at the current selection start. Returns no values when there is no selection; falls back to the profile default text color when the segment carries no explicit color.'),
+    fn('getBgColor',      '([window]) → r, g, b',
+        'Background RGB (0..255) at the current selection start. Returns no values when there is no selection; falls back to the profile default background when the segment carries no explicit color.'),
     // Timers
     fn('tempTimer',      '(seconds, fn, repeat?)', 'Create a timer (one-shot or repeating)'),
     fn('killTimer',      '(id)',           'Cancel a timer'),
@@ -475,6 +480,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('cechoLink',         '([window,] colorText, cmd, tooltip [, useCurrentFmt])', 'Echo Mudlet-color-tag link text'),
     fn('dechoLink',         '([window,] colorText, cmd, tooltip [, useCurrentFmt])', 'Echo decimal-RGB link text'),
     fn('hechoLink',         '([window,] colorText, cmd, tooltip [, useCurrentFmt])', 'Echo hex-RGB link text'),
+    fn('insertLink',        '([window,] text, cmd, tooltip [, useCurrentFmt])',      'Insert a clickable link at the trigger cursor'),
     fn('cinsertLink',       '([window,] text, cmd, tooltip [, useCurrentFmt])',      'Insert a Mudlet-color-tag link at the trigger cursor'),
     fn('dinsertLink',       '([window,] text, cmd, tooltip [, useCurrentFmt])',      'Insert a decimal-RGB link at the trigger cursor'),
     fn('hinsertLink',       '([window,] text, cmd, tooltip [, useCurrentFmt])',      'Insert a hex-RGB link at the trigger cursor'),

@@ -165,6 +165,81 @@ export async function queryLocalFonts(): Promise<LocalFontEntry[]> {
     return fn();
 }
 
+// ── System-font cache (for sync APIs like Mudlet getAvailableFonts) ─────────
+// queryLocalFonts() is async and the first call requires a user gesture, so
+// scripting APIs that need the list synchronously read this cache. It's
+// populated lazily — primeLocalFontsCache() runs the silent permission check
+// and only queries when permission is already granted (never prompts). The
+// FontPicker also writes through here when the user lists fonts explicitly.
+
+const UNIVERSAL_FONT_DEFAULTS: readonly string[] = [
+    'monospace', 'serif', 'sans-serif',
+    'Consolas', 'Courier New', 'Menlo', 'Monaco', 'DejaVu Sans Mono', 'Cascadia Code',
+    'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Verdana', 'Tahoma',
+];
+
+let localFontsCache: string[] | null = null;
+let localFontsPrimePromise: Promise<void> | null = null;
+
+export function getUniversalDefaultFonts(): readonly string[] {
+    return UNIVERSAL_FONT_DEFAULTS;
+}
+
+export function getCachedLocalFonts(): string[] {
+    return localFontsCache ?? [];
+}
+
+export function setLocalFontsCache(families: Iterable<string>): void {
+    localFontsCache = [...new Set(families)];
+}
+
+/** Fire-and-forget. If Local Font Access is supported AND permission was
+ *  previously granted, query installed fonts and cache the family list.
+ *  Never prompts the user. Idempotent: subsequent calls before the first
+ *  resolves piggy-back on the in-flight promise. */
+export function primeLocalFontsCache(): Promise<void> {
+    if (localFontsCache !== null) return Promise.resolve();
+    if (localFontsPrimePromise) return localFontsPrimePromise;
+    if (!isLocalFontApiSupported()) return Promise.resolve();
+    const perms = (navigator as Navigator & {
+        permissions?: { query: (d: { name: string }) => Promise<PermissionStatus> };
+    }).permissions;
+    if (!perms?.query) return Promise.resolve();
+    localFontsPrimePromise = perms.query({ name: 'local-fonts' as PermissionName })
+        .then(async status => {
+            if (status.state !== 'granted') return;
+            try {
+                const fonts = await queryLocalFonts();
+                const set = new Set<string>();
+                for (const f of fonts) set.add(f.family);
+                localFontsCache = [...set];
+            } catch {
+                // ignore — silent failure is fine for a cache prime
+            }
+        })
+        .catch(() => undefined)
+        .finally(() => { localFontsPrimePromise = null; });
+    return localFontsPrimePromise;
+}
+
+/** Families currently registered in document.fonts — URL stylesheets and
+ *  FontFace-API uploads (the kind loaded by loadFontFromUrl / loadFontFromVfs)
+ *  show up here once the browser has materialized the face. Quoted-string
+ *  forms ("Family Name") are unwrapped to plain names. */
+export function getRegisteredFontFamilies(): string[] {
+    if (typeof document === 'undefined' || !document.fonts) return [];
+    const out = new Set<string>();
+    try {
+        for (const face of document.fonts) {
+            const fam = face.family?.replace(/^['"]|['"]$/g, '');
+            if (fam) out.add(fam);
+        }
+    } catch {
+        // FontFaceSet iteration unsupported — return whatever we have.
+    }
+    return [...out];
+}
+
 const LINK_DATA_ATTR = 'mudixFontUrl';
 
 function ensureStylesheet(url: string): HTMLLinkElement {

@@ -1002,7 +1002,6 @@ html, body, #root {
     color: var(--text-dim);
     flex-shrink: 0;
     font-variant-numeric: tabular-nums;
-    padding: 2px 0;
 }
 
 .output-show-timestamps .output-timestamp {
@@ -1903,6 +1902,176 @@ html, body, #root {
 
 .vfs-editor__host .cm-editor {
     height: 100%;
+}
+
+/* ── Markdown preview ─────────────────────────────────────────────────── */
+
+.vfs-md {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.vfs-md--edit {
+    position: relative;
+}
+
+/* Floating toggle on top of the editor toolbar in edit mode. */
+.vfs-md__mode-toggle {
+    position: absolute;
+    top: 5px;
+    right: 8px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.vfs-md__mode-toggle:hover {
+    background: var(--hover-bg);
+    border-color: var(--accent-focus);
+}
+
+.vfs-md--edit .vfs-editor__actions {
+    /* Make room for the floating toggle so it doesn't overlap Save/Revert. */
+    margin-right: 78px;
+}
+
+.vfs-md__body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 16px 20px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text);
+}
+
+.vfs-md__body > :first-child { margin-top: 0; }
+.vfs-md__body > :last-child  { margin-bottom: 0; }
+
+.vfs-md__body h1,
+.vfs-md__body h2,
+.vfs-md__body h3,
+.vfs-md__body h4,
+.vfs-md__body h5,
+.vfs-md__body h6 {
+    margin: 1.1em 0 0.45em;
+    line-height: 1.25;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.vfs-md__body h1 { font-size: 1.7em; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
+.vfs-md__body h2 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+.vfs-md__body h3 { font-size: 1.2em; }
+.vfs-md__body h4 { font-size: 1.05em; }
+.vfs-md__body h5 { font-size: 0.95em; color: var(--text-dim); }
+.vfs-md__body h6 { font-size: 0.9em; color: var(--text-dim); }
+
+.vfs-md__body p {
+    margin: 0.6em 0;
+}
+
+.vfs-md__body a {
+    color: var(--accent);
+    text-decoration: none;
+}
+.vfs-md__body a:hover {
+    text-decoration: underline;
+}
+
+.vfs-md__body ul,
+.vfs-md__body ol {
+    padding-left: 1.6em;
+    margin: 0.5em 0;
+}
+
+.vfs-md__body li + li {
+    margin-top: 0.15em;
+}
+
+.vfs-md__body li > p {
+    margin: 0.2em 0;
+}
+
+.vfs-md__body code {
+    font-family: var(--font-mono), monospace;
+    font-size: 0.9em;
+    padding: 1px 5px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+}
+
+.vfs-md__body pre {
+    margin: 0.7em 0;
+    padding: 10px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: auto;
+    font-size: 0.9em;
+    line-height: 1.45;
+}
+
+.vfs-md__body pre code {
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    font-size: 1em;
+}
+
+.vfs-md__body blockquote {
+    margin: 0.7em 0;
+    padding: 2px 12px;
+    border-left: 3px solid var(--accent-dim);
+    color: var(--text-dim);
+    background: var(--hover-bg);
+}
+
+.vfs-md__body hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 1.2em 0;
+}
+
+.vfs-md__body table {
+    border-collapse: collapse;
+    margin: 0.7em 0;
+    font-size: 0.95em;
+}
+
+.vfs-md__body th,
+.vfs-md__body td {
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    text-align: left;
+}
+
+.vfs-md__body th {
+    background: var(--bg-input);
+    font-weight: 600;
+}
+
+.vfs-md__body img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 3px;
+}
+
+.vfs-md__body input[type="checkbox"] {
+    margin: 0 6px 0 0;
+    vertical-align: middle;
 }
 
 /* ── Image preview ──────────────────────────────────────────────────────── */

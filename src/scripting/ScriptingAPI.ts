@@ -6,10 +6,41 @@ import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
 import { userWindowQssToScopedCss, cssEscape } from '../ui/labels/qtCss';
-import { AnsiAwareBuffer, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
+import { AnsiAwareBuffer, type FormatColor, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
+import { colorCodes } from '../mud/text/colors';
 import { Console } from '../mud/text/Console';
 import { useAppStore, selectProfileField } from '../storage';
+import {
+    getUniversalDefaultFonts,
+    getRegisteredFontFamilies,
+    getCachedLocalFonts,
+    primeLocalFontsCache,
+} from '../utils/fontLoader';
+
+// Mudlet's TChar always carries baked-in fg/bg colors (the rendered pair), so
+// getFgColor/getBgColor never return "no color" for in-bounds positions. mudix
+// buffer segments are sparse — plain text has no explicit color — so we fall
+// back to these defaults, matching the dark-theme values SettingsModal uses
+// (App.css :root --text / --bg).
+const DEFAULT_FG_RGB: [number, number, number] = [0xd4, 0xd4, 0xd4];
+const DEFAULT_BG_RGB: [number, number, number] = [0x09, 0x09, 0x09];
+
+const HEX_RE = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i;
+function parseHexToRgb(hex: string | undefined): [number, number, number] | null {
+    if (!hex) return null;
+    const m = HEX_RE.exec(hex);
+    if (!m) return null;
+    return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+}
+
+function formatColorToRgb(color: FormatColor | undefined): [number, number, number] | null {
+    if (!color) return null;
+    if (color.space === 'rgb') return [color.r, color.g, color.b];
+    if (color.space === 'hex') return parseHexToRgb(color.color);
+    if (color.space === 'indexed') return parseHexToRgb(colorCodes.xterm[color.index]);
+    return null;
+}
 
 /**
  * Returns how many monospace characters fit horizontally inside `el`. Used by
@@ -706,6 +737,54 @@ export class ScriptingAPI {
         return { text: buf.text.slice(start, start + length), start, length };
     }
 
+    /**
+     * Mudlet `getFgColor([window])` / `getBgColor([window])`. Reads the fg/bg
+     * color at the current selection's start position (Mudlet's P_begin). Each
+     * console tracks its own selection in Mudlet; mudix has a single global
+     * selection, so when `window` is given it must match the selection's
+     * owning window — otherwise we treat it as "no selection in that window"
+     * and return null (Mudlet's "no values" shape, surfaced as nil/nil/nil in
+     * Lua via the Bridge wrapper).
+     *
+     * Mudlet returns 0 values when the cursor sits past the end of the line;
+     * we mirror that for an empty buffer or a selection whose start is at/
+     * past the buffer length. For valid positions where the segment carries
+     * no explicit color, we resolve to the profile's default text/background
+     * (matching Mudlet's behavior that every TChar carries baked-in colors).
+     */
+    getFgColor(windowName?: string): [number, number, number] | null {
+        return this.readSelectionColor('foreground', windowName);
+    }
+
+    getBgColor(windowName?: string): [number, number, number] | null {
+        return this.readSelectionColor('background', windowName);
+    }
+
+    private readSelectionColor(
+        channel: 'foreground' | 'background',
+        windowName: string | undefined,
+    ): [number, number, number] | null {
+        if (!this.selection) return null;
+        if (!this.selectionMatches(windowName)) return null;
+        const sel = this.selection;
+        const buf = this.resolveBuffer(sel.windowName);
+        if (!buf) return null;
+        if (sel.start < 0 || sel.start >= buf.length) return null;
+        const state = buf.getStateAt(sel.start);
+        const color = channel === 'foreground' ? state?.foreground : state?.background;
+        const rgb = formatColorToRgb(color);
+        if (rgb) return rgb;
+        // No explicit color — resolve to the profile's configured default.
+        if (channel === 'background') {
+            const override = selectProfileField(useAppStore.getState(), this.connectionId, 'outputBackgroundColor');
+            if (override) return [override.r, override.g, override.b];
+            const themed = parseHexToRgb(selectProfileField(useAppStore.getState(), this.connectionId, 'outputBackground'));
+            return themed ?? DEFAULT_BG_RGB;
+        }
+        const themed = parseHexToRgb(selectProfileField(useAppStore.getState(), this.connectionId, 'outputForeground'));
+        return themed ?? DEFAULT_FG_RGB;
+    }
+
     applyFormatToSelection(state: FormatStateSnapshot): void {
         this.applyStateToSelection(state);
     }
@@ -933,6 +1012,37 @@ export class ScriptingAPI {
         } else {
             this.echoToWindow(windowName!, text);
         }
+    }
+
+    /**
+     * Mudlet `insertLink([window,] text, cmd, hint, [useCurrentFormat])`.
+     * Like `insertText` but the inserted span is a clickable link bound to
+     * `cmd`. With `useCurrentFormat=false` (the default) the link inherits
+     * Mudlet's built-in style — blue foreground + underline — layered on top
+     * of the current pen state. If no buffer is available (empty console,
+     * sub-window without backing buffer) the call degrades to `echoLink` so
+     * the text isn't lost.
+     */
+    insertLink(text: string, cmd: string, tooltip: string, windowName?: string, useCurrentFormat = false): void {
+        if (!text) return;
+        const con = this.getConsole(windowName);
+        const buf = con?.getBuffer();
+        if (con && buf) {
+            const state: FormatStateSnapshot = con.format.toSnapshot();
+            state.hyperlink = {
+                onClick: () => { this.executeScript?.(cmd); },
+                title: tooltip || undefined,
+            };
+            if (!useCurrentFormat) {
+                state.foreground = { space: 'rgb', r: 0, g: 0, b: 255 };
+                state.underline = true;
+            }
+            const at = Math.max(0, Math.min(con.getCursorColumn(), buf.text.length));
+            buf.insert(at, text, state);
+            if (!this.inTriggerProcessing) buf.rerender();
+            return;
+        }
+        this.echoLink(text, cmd, tooltip, windowName, useCurrentFormat);
     }
 
     /**
@@ -1400,6 +1510,31 @@ export class ScriptingAPI {
         const own = this.session.windows.getFont(win);
         if (own != null) return own;
         return selectProfileField(useAppStore.getState(), this.connectionId, 'outputFont')?.family ?? '';
+    }
+
+    /**
+     * Mudlet `getAvailableFonts()` — set-style table whose keys are font
+     * family names usable from scripts. The browser cannot enumerate the
+     * system font list without an explicit Local Font Access permission, so
+     * this is a best-effort union of what we *do* know:
+     *   - Universal web-safe families that work everywhere.
+     *   - Every family the FontFaceSet has materialized (URL- or VFS-loaded
+     *     fonts go in here once the browser has registered the @font-face).
+     *   - The profile's currently configured output font, if any.
+     *   - Locally installed system fonts, but only when the user has already
+     *     granted Local Font Access in this browser profile — we never prompt
+     *     from inside this getter. A silent prime kicks off here so the next
+     *     call sees the result.
+     */
+    getAvailableFonts(): Record<string, boolean> {
+        const set: Record<string, boolean> = {};
+        for (const f of getUniversalDefaultFonts()) set[f] = true;
+        for (const f of getRegisteredFontFamilies()) set[f] = true;
+        const current = selectProfileField(useAppStore.getState(), this.connectionId, 'outputFont');
+        if (current?.family) set[current.family] = true;
+        for (const f of getCachedLocalFonts()) set[f] = true;
+        void primeLocalFontsCache();
+        return set;
     }
 
     /** Flush any buffered partial lines to the main output and all open windows. Called after each event dispatch. */

@@ -50,9 +50,11 @@ interface Props {
     onSaved?: () => void;
     /** Jump request. Bump `revision` to re-trigger on the same line. */
     gotoLine?: { line: number; revision: number } | null;
+    /** Extra controls rendered inside the toolbar actions area (left of Revert/Save). */
+    toolbarExtra?: React.ReactNode;
 }
 
-export function CodeEditorPreview({ content, filename, path, vfs, onDirtyChange, onSaved, gotoLine }: Props) {
+export function CodeEditorPreview({ content, filename, path, vfs, onDirtyChange, onSaved, gotoLine, toolbarExtra }: Props) {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const originalRef = useRef(content);
@@ -204,6 +206,7 @@ export function CodeEditorPreview({ content, filename, path, vfs, onDirtyChange,
                     {dirty && <span className="vfs-editor__dirty" aria-label="Unsaved changes">●</span>}
                 </span>
                 <div className="vfs-editor__actions">
+                    {toolbarExtra}
                     <button
                         type="button"
                         className="vfs-editor__btn"

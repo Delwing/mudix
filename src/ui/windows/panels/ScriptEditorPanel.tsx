@@ -11,6 +11,7 @@ import { LuaEditor } from './LuaEditor';
 import { installModuleFromVfsPath, installPackageFromFile, uninstallPackageFiles } from '../../../import/packageInstaller';
 import { VfsModulePickerModal } from './VfsModulePickerModal';
 import { strToU8 } from 'fflate';
+import { renderMarkdown } from '../../markdown';
 import './ScriptEditorPanel.css';
 
 type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys' | 'buttons' | 'packages' | 'errors';
@@ -166,21 +167,22 @@ function PackageDescription({ text }: { text: string }) {
     const [expanded, setExpanded] = useState(false);
     const [overflows, setOverflows] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
+    const html = useMemo(() => renderMarkdown(text), [text]);
 
     useEffect(() => {
         const el = ref.current;
         if (!el) return;
         setOverflows(el.scrollHeight > el.clientHeight + 1);
-    }, [text]);
+    }, [html]);
 
     return (
         <div className="script-editor__pkg-desc-wrap">
             <div
                 ref={ref}
                 className={`script-editor__pkg-desc${expanded ? ' script-editor__pkg-desc--expanded' : ''}`}
-            >
-                {text}
-            </div>
+                // renderMarkdown sanitizes via DOMPurify.
+                dangerouslySetInnerHTML={{ __html: html }}
+            />
             {(overflows || expanded) && (
                 <button
                     className="script-editor__pkg-desc-toggle"

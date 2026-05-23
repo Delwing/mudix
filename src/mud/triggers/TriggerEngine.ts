@@ -116,13 +116,26 @@ type CachedEntry = {
     pcreInstances: PcreInstance[];
 };
 
+// JSON.stringify on every node every loadPerm is the dominant self-time cost
+// inside loadPerm — the persisted blob has hundreds of pattern arrays and the
+// stringify shows up in CPU profiles. Cache by node reference: zustand
+// produces a new object only when fields actually change, so a TriggerNode
+// whose patterns/flags didn't change is reference-equal to its prior loadPerm
+// entry and the cached signature is reused. A toggle of `enabled` still
+// produces a new node ref, but the recomputed signature is identical to the
+// prior one, so the cache hit in TriggerEngine.cache survives the toggle.
+const signatureCache = new WeakMap<TriggerNode, string>();
 function signatureOf(item: TriggerNode): string {
-    return JSON.stringify({
+    const hit = signatureCache.get(item);
+    if (hit !== undefined) return hit;
+    const sig = JSON.stringify({
         p: item.patterns,
         ml: !!item.multiline,
         mm: !!item.multipleMatches,
         g: !!item.isGroup,
     });
+    signatureCache.set(item, sig);
+    return sig;
 }
 
 type AndState = {

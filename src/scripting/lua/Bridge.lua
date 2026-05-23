@@ -118,6 +118,22 @@ function getSelection(windowName)
     return t[0], t[1], t[2]
 end
 
+-- Mudlet getFgColor([windowName]) / getBgColor([windowName]) → r, g, b of the
+-- character at the current selection's start position. Returns no values when
+-- there is no selection (so `r, g, b = getFgColor()` yields three nils, the
+-- same shape Mudlet produces for out-of-bounds cursors).
+function getFgColor(windowName)
+    local t = __getFgColor(windowName)
+    if t == nil then return end
+    return t[0], t[1], t[2]
+end
+
+function getBgColor(windowName)
+    local t = __getBgColor(windowName)
+    if t == nil then return end
+    return t[0], t[1], t[2]
+end
+
 -- Mudlet getMapUserData(key). Returns the stored value on success or
 -- (false, errMsg) when the key isn't set.
 function getMapUserData(key)
@@ -760,27 +776,32 @@ do
     end
 end
 
--- echoLink: convert Lua function cmd → stored ref + string command.
+-- echoLink / insertLink / setLink: convert Lua function cmd → stored ref + string command.
 do
     local _fns = {}
     local _id  = 0
-    local _raw = echoLink
     function __mudix_call_link(id) _fns[id]() end
-    echoLink = function(...)
-        local args = {...}
-        local n = #args
-        local ci = (n >= 4 and type(args[4]) == 'string') and 3 or 2
-        if type(args[ci]) == 'function' then
-            _id = _id + 1
-            local id = _id
-            _fns[id] = args[ci]
-            args[ci] = '__mudix_call_link(' .. id .. ')'
-        end
-        return _raw(unpack(args))
-    end
 
-    -- setLink: same function→callback-id conversion; cmd is arg 2 with a window
-    -- prefix (3 args), arg 1 without (2 args).
+    -- For echoLink / insertLink: cmd is at slot 3 when arg 4 is a string (window form),
+    -- otherwise at slot 2 (no-window form, with optional useCurrentFormat at slot 4).
+    local function wrapLink(rawFn)
+        return function(...)
+            local args = {...}
+            local n = #args
+            local ci = (n >= 4 and type(args[4]) == 'string') and 3 or 2
+            if type(args[ci]) == 'function' then
+                _id = _id + 1
+                local id = _id
+                _fns[id] = args[ci]
+                args[ci] = '__mudix_call_link(' .. id .. ')'
+            end
+            return rawFn(unpack(args))
+        end
+    end
+    echoLink = wrapLink(echoLink)
+    insertLink = wrapLink(insertLink)
+
+    -- setLink: cmd is arg 2 with a window prefix (3 args), arg 1 without (2 args).
     local _rawSetLink = setLink
     setLink = function(...)
         local args = {...}

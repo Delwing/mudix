@@ -754,33 +754,36 @@ export class ScriptingEngine {
     /**
      * Toggle triggers' enabled flag by name (Mudlet enableTrigger/disableTrigger).
      * Mudlet matches every trigger or group sharing the name, so we do the same:
-     * toggling a group cascades to children via isEffectivelyEnabled. The store
-     * subscription rebuilds the compiled trigger set on the next tick.
+     * toggling a group cascades to children via isEffectivelyEnabled. All
+     * matching ids are flipped in one `set()` so the store subscription (and
+     * the trigger recompile it triggers) fires exactly once.
      */
     toggleTriggerByName(name: string, enabled: boolean): boolean {
         const store = useAppStore.getState();
         const triggers = store.connectionTriggers[this.connectionId] ?? [];
         const targets = triggers.filter(t => t.name === name);
         if (targets.length === 0) return false;
-        for (const t of targets) {
-            if (t.enabled !== enabled) store.updateTrigger(this.connectionId, t.id, { enabled });
-        }
+        const patches = targets
+            .filter(t => t.enabled !== enabled)
+            .map(t => ({ id: t.id, patch: { enabled } }));
+        if (patches.length > 0) store.updateTriggers(this.connectionId, patches);
         return true;
     }
 
     /**
      * Toggle timers' enabled flag by name (Mudlet enableTimer/disableTimer).
-     * Mirrors toggleTriggerByName: every timer or group sharing the name is
-     * affected, and the store subscription rebuilds the active timer set.
+     * Same batching as toggleTriggerByName: one set() collapses N matches into
+     * a single subscription tick (and a single TimerEngine.loadPerm rebuild).
      */
     toggleTimerByName(name: string, enabled: boolean): boolean {
         const store = useAppStore.getState();
         const timers = store.connectionTimers[this.connectionId] ?? [];
         const targets = timers.filter(t => t.name === name);
         if (targets.length === 0) return false;
-        for (const t of targets) {
-            if (t.enabled !== enabled) store.updateTimer(this.connectionId, t.id, { enabled });
-        }
+        const patches = targets
+            .filter(t => t.enabled !== enabled)
+            .map(t => ({ id: t.id, patch: { enabled } }));
+        if (patches.length > 0) store.updateTimers(this.connectionId, patches);
         return true;
     }
 
@@ -918,27 +921,27 @@ export class ScriptingEngine {
         const id = this.connectionId;
         switch (kind) {
             case 'timer': {
-                const targets = (store.connectionTimers[id] ?? []).filter(t => t.name === name);
-                if (targets.length === 0) return false;
-                for (const t of targets) store.removeTimer(id, t.id);
+                const ids = (store.connectionTimers[id] ?? []).filter(t => t.name === name).map(t => t.id);
+                if (ids.length === 0) return false;
+                store.removeTimers(id, ids);
                 return true;
             }
             case 'alias': {
-                const targets = (store.connectionAliases[id] ?? []).filter(t => t.name === name);
-                if (targets.length === 0) return false;
-                for (const t of targets) store.removeAlias(id, t.id);
+                const ids = (store.connectionAliases[id] ?? []).filter(t => t.name === name).map(t => t.id);
+                if (ids.length === 0) return false;
+                store.removeAliases(id, ids);
                 return true;
             }
             case 'trigger': {
-                const targets = (store.connectionTriggers[id] ?? []).filter(t => t.name === name);
-                if (targets.length === 0) return false;
-                for (const t of targets) store.removeTrigger(id, t.id);
+                const ids = (store.connectionTriggers[id] ?? []).filter(t => t.name === name).map(t => t.id);
+                if (ids.length === 0) return false;
+                store.removeTriggers(id, ids);
                 return true;
             }
             case 'key': {
-                const targets = (store.connectionKeybindings[id] ?? []).filter(t => t.name === name);
-                if (targets.length === 0) return false;
-                for (const t of targets) store.removeKeybinding(id, t.id);
+                const ids = (store.connectionKeybindings[id] ?? []).filter(t => t.name === name).map(t => t.id);
+                if (ids.length === 0) return false;
+                store.removeKeybindings(id, ids);
                 return true;
             }
         }

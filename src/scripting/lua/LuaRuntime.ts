@@ -875,6 +875,20 @@ export class LuaRuntime implements IScriptingRuntime {
             this.api.echoLink(text, cmd, tooltip, win, useCurrentFormat);
         });
 
+        // insertLink primitive — same overload set as echoLink, but inserts at the
+        // cursor on the current line instead of echoing to the end of the buffer.
+        // Lua-side `cinsertLink`/`dinsertLink`/`hinsertLink` (in mudlet-lua/GUIUtils)
+        // route here via xEcho.
+        this.lua.global.set('insertLink', (a: unknown, b: unknown, c: unknown, d?: unknown, e?: unknown) => {
+            const hasWindow = typeof d === 'string';
+            const win = hasWindow ? (a as string) : undefined;
+            const text = hasWindow ? (b as string) : (a as string);
+            const cmd = hasWindow ? (c as string) : (b as string);
+            const tooltip = hasWindow ? (d as string) : (c as string);
+            const useCurrentFormat = !!(hasWindow ? e : d);
+            this.api.insertLink(text, cmd, tooltip, win, useCurrentFormat);
+        });
+
         // Mudlet `setLink([window,] cmd, hint)` — applies the link to the current
         // selection. Function-cmd conversion is done in Bridge.lua (same pattern
         // as echoLink). Disambiguate by argc: 3 strings → with-window, 2 → main.
@@ -1244,6 +1258,19 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__getSelection', (win?: string) => {
             const sel = this.api.getSelection(win);
             return sel ? [sel.text, sel.start, sel.length] : null;
+        });
+
+        // Mudlet getFgColor([window]) / getBgColor([window]) → r, g, b at the
+        // current selection's start position, or no values when there is no
+        // selection / the cursor sits past the end of the line. The JS side
+        // hands back a 0-indexed [r, g, b] array or null; Bridge.lua unpacks.
+        this.lua.global.set('__getFgColor', (win?: unknown) => {
+            const rgb = this.api.getFgColor(typeof win === 'string' ? win : undefined);
+            return rgb ?? null;
+        });
+        this.lua.global.set('__getBgColor', (win?: unknown) => {
+            const rgb = this.api.getBgColor(typeof win === 'string' ? win : undefined);
+            return rgb ?? null;
         });
 
         // ── Temp callbacks (timer/alias/trigger/key) ──────────────────────────
@@ -1638,6 +1665,12 @@ export class LuaRuntime implements IScriptingRuntime {
                 : this.api.getFont();
             return family ?? null;
         });
+
+        // Mudlet getAvailableFonts() — set-style table {[family] = true}. JS
+        // returns a plain object with string keys, which wasmoon converts to a
+        // Lua table directly (same path as getBorderSizes). See ScriptingAPI
+        // for what goes into the merged set.
+        this.lua.global.set('getAvailableFonts', () => this.api.getAvailableFonts());
 
         // ── Borders ───────────────────────────────────────────────────────────
         // Mudlet setBorderTop/Bottom/Left/Right, setBorderSizes, setBorderColor.

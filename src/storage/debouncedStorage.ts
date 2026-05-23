@@ -1,25 +1,30 @@
+import type { PersistStorage, StorageValue } from 'zustand/middleware';
+
 /**
- * Web-Storage-shaped adapter that coalesces rapid `setItem` calls into one
- * write after `delayMs` of quiet. The persisted blob is large (every
- * connection's scripts/triggers/timers/packages in one key) and stringifying
- * + writing it on the main thread costs tens of ms; without coalescing, a
- * single name-based `enableTrigger` over N matches triggers N full writes.
+ * Zustand PersistStorage adapter that coalesces rapid mutations into a single
+ * write — *including* the JSON serialization step.
  *
- * The latest pending value is flushed on `pagehide` / `visibilitychange→hidden`
- * / `beforeunload` so a tab close right after a mutation doesn't lose state.
- * `getItem` returns the pending value if one exists so callers reading back
- * during the debounce window see the freshest state (zustand's persist itself
- * only reads on rehydrate, but this keeps the adapter independently correct).
+ * Using `createJSONStorage` over a debounced Web-Storage wrapper only collapses
+ * the localStorage.setItem call; zustand still runs `JSON.stringify(state)`
+ * before each setItem, so N mutations cost N full serializations of the
+ * persisted blob (scripts, triggers, packages, …). Implementing PersistStorage
+ * directly lets us hold the unserialized object and stringify exactly once,
+ * at flush time.
+ *
+ * The latest pending value is flushed synchronously on `pagehide`,
+ * `visibilitychange→hidden`, and `beforeunload` so a tab close right after a
+ * mutation doesn't lose state. `getItem` honours an in-flight pending value so
+ * the adapter is internally consistent even mid-debounce.
  */
-export function createDebouncedLocalStorage(delayMs: number): Storage {
-    const pending = new Map<string, string>();
+export function createDebouncedJsonStorage<S>(delayMs: number): PersistStorage<S> {
+    const pending = new Map<string, StorageValue<S>>();
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const flush = (): void => {
         if (timer !== null) { clearTimeout(timer); timer = null; }
         for (const [key, value] of pending) {
-            try { localStorage.setItem(key, value); }
-            catch (e) { console.warn('[persist] setItem failed for', key, e); }
+            try { localStorage.setItem(key, JSON.stringify(value)); }
+            catch (e) { console.warn('[persist] write failed for', key, e); }
         }
         pending.clear();
     };
@@ -33,29 +38,23 @@ export function createDebouncedLocalStorage(delayMs: number): Storage {
     }
 
     return {
-        get length(): number { return localStorage.length; },
-        key: (i: number) => localStorage.key(i),
-        getItem: (name: string): string | null => {
+        getItem: (name) => {
             const p = pending.get(name);
-            return p !== undefined ? p : localStorage.getItem(name);
+            if (p !== undefined) return p;
+            const raw = localStorage.getItem(name);
+            if (raw === null) return null;
+            try { return JSON.parse(raw) as StorageValue<S>; }
+            catch { return null; }
         },
-        setItem: (name: string, value: string): void => {
+        setItem: (name, value) => {
             pending.set(name, value);
             if (timer === null) {
-                timer = setTimeout(() => {
-                    timer = null;
-                    flush();
-                }, delayMs);
+                timer = setTimeout(() => { timer = null; flush(); }, delayMs);
             }
         },
-        removeItem: (name: string): void => {
+        removeItem: (name) => {
             pending.delete(name);
             localStorage.removeItem(name);
-        },
-        clear: (): void => {
-            pending.clear();
-            if (timer !== null) { clearTimeout(timer); timer = null; }
-            localStorage.clear();
         },
     };
 }

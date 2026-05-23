@@ -51,32 +51,89 @@ export class TimerEngine {
         return true;
     }
 
+    /**
+     * Cached previous load. `nodes` is the TimerNode keyed by id, `desc` is the
+     * shape that determines whether the running setTimeout/setInterval is still
+     * correct (seconds, repeat, isGroup, code presence, name) — if `desc` is
+     * unchanged AND the timer is still enabled, the live handle is left alone.
+     * This makes a name-toggle that disables one timer cost one clearTimeout
+     * instead of "clear all + recreate all".
+     */
+    private readonly prevDesc = new Map<string, string>();
+
+    private descOf(t: TimerNode): string {
+        return `${t.seconds}|${t.repeat ? 1 : 0}|${t.isGroup ? 1 : 0}|${t.code ? 1 : 0}|${t.command ?? ''}|${t.language ?? ''}|${t.name}`;
+    }
+
     loadPerm(timers: TimerNode[], executeFn: ExecuteFn): void {
-        this.stopPerm();
         const enabledIds = buildEffectivelyEnabledIds(timers);
+        const nextIds = new Set<string>();
+        const nextDesc = new Map<string, string>();
+        const nextNames = new Map<string, string>();
+
         for (const timer of timers) {
-            if (!enabledIds.has(timer.id)) continue;
-            if (timer.isGroup && !timer.code) continue;
-            const fire = () => executeFn(timer);
-            const intervalMs = timer.seconds * 1000;
-            const start = Date.now();
-            if (timer.repeat) {
-                const handle = setInterval(fire, intervalMs) as unknown as ReturnType<typeof setTimeout>;
-                this.perm.set(timer.id, { handle, repeat: true, start, intervalMs });
-            } else {
-                const handle = setTimeout(() => {
-                    this.perm.delete(timer.id);
-                    if (this.permNameToId.get(timer.name) === timer.id) {
-                        this.permNameToId.delete(timer.name);
-                    }
-                    fire();
-                }, intervalMs);
-                this.perm.set(timer.id, { handle, repeat: false, start, intervalMs });
+            const wantRun = enabledIds.has(timer.id) && !(timer.isGroup && !timer.code);
+            const desc = this.descOf(timer);
+            const prevDesc = this.prevDesc.get(timer.id);
+            const isLive = this.perm.has(timer.id);
+
+            if (!wantRun) {
+                // Drop any live handle for an item that is no longer enabled.
+                if (isLive) this.killPermHandle(timer.id);
+                continue;
             }
-            // First-write-wins on duplicate names so remainingTime / kill-by-name
-            // pick the earliest-loaded timer when scripts share names.
-            if (!this.permNameToId.has(timer.name)) this.permNameToId.set(timer.name, timer.id);
+
+            nextIds.add(timer.id);
+            nextDesc.set(timer.id, desc);
+
+            if (isLive && prevDesc === desc) {
+                // Same shape, still enabled — leave the running handle alone so
+                // remainingTime keeps reporting against the original schedule.
+            } else {
+                if (isLive) this.killPermHandle(timer.id);
+                this.startPerm(timer, executeFn);
+            }
+            if (!nextNames.has(timer.name)) nextNames.set(timer.name, timer.id);
         }
+
+        // Drop handles for items that disappeared from the list entirely.
+        for (const id of [...this.perm.keys()]) {
+            if (!nextIds.has(id)) this.killPermHandle(id);
+        }
+
+        this.prevDesc.clear();
+        for (const [k, v] of nextDesc) this.prevDesc.set(k, v);
+        this.permNameToId.clear();
+        for (const [k, v] of nextNames) this.permNameToId.set(k, v);
+    }
+
+    private startPerm(timer: TimerNode, executeFn: ExecuteFn): void {
+        const fire = () => executeFn(timer);
+        const intervalMs = timer.seconds * 1000;
+        const start = Date.now();
+        if (timer.repeat) {
+            const handle = setInterval(fire, intervalMs) as unknown as ReturnType<typeof setTimeout>;
+            this.perm.set(timer.id, { handle, repeat: true, start, intervalMs });
+        } else {
+            const handle = setTimeout(() => {
+                this.perm.delete(timer.id);
+                this.prevDesc.delete(timer.id);
+                if (this.permNameToId.get(timer.name) === timer.id) {
+                    this.permNameToId.delete(timer.name);
+                }
+                fire();
+            }, intervalMs);
+            this.perm.set(timer.id, { handle, repeat: false, start, intervalMs });
+        }
+    }
+
+    private killPermHandle(id: string): void {
+        const entry = this.perm.get(id);
+        if (!entry) return;
+        if (entry.repeat) clearInterval(entry.handle as unknown as number);
+        else clearTimeout(entry.handle);
+        this.perm.delete(id);
+        this.prevDesc.delete(id);
     }
 
     /**
@@ -115,6 +172,7 @@ export class TimerEngine {
         }
         this.perm.clear();
         this.permNameToId.clear();
+        this.prevDesc.clear();
     }
 
     destroy(): void {

@@ -11,6 +11,7 @@ import {
     loadFontFromUrl,
     loadFontFromVfs,
     diagnoseFontProbe,
+    setLocalFontsCache,
     type FontProbeReport,
     type LocalFontEntry,
 } from '../../utils/fontLoader';
@@ -172,7 +173,9 @@ function SystemTab({ value, onChange }: SubProps) {
             const list = await queryLocalFonts();
             const set = new Set<string>();
             for (const f of list as LocalFontEntry[]) set.add(f.family);
-            setFamilies([...set].sort((a, b) => a.localeCompare(b)));
+            const sorted = [...set].sort((a, b) => a.localeCompare(b));
+            setFamilies(sorted);
+            setLocalFontsCache(sorted);
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
         } finally {

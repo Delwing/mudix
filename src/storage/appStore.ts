@@ -1,9 +1,9 @@
 import { create } from 'zustand';
-import { createJSONStorage, persist } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type ButtonNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type ClientSettings, type ProfileSettings, type PackageManifest } from './schema';
 import type { MudletImportResult } from '../import/mudletXmlImport';
 import type { WindowOpenOptions } from '../ui/windows/types';
-import { createDebouncedLocalStorage } from './debouncedStorage';
+import { createDebouncedJsonStorage } from './debouncedStorage';
 
 function getDescendantIds(id: string, items: { id: string; parentId: string | null }[]): string[] {
     const result: string[] = [];
@@ -54,13 +54,20 @@ interface AppStore extends AppSchema {
     removeAlias: (connectionId: string, id: string) => void;
     addTrigger: (connectionId: string, data: Omit<TriggerNode, 'id'>) => string;
     updateTrigger: (connectionId: string, id: string, patch: Partial<Omit<TriggerNode, 'id'>>) => void;
+    /** Bulk apply enabled/disabled (or any partial) to many triggers in one set(). */
+    updateTriggers: (connectionId: string, patches: ReadonlyArray<{ id: string; patch: Partial<Omit<TriggerNode, 'id'>> }>) => void;
     removeTrigger: (connectionId: string, id: string) => void;
+    removeTriggers: (connectionId: string, ids: ReadonlyArray<string>) => void;
     addTimer: (connectionId: string, data: Omit<TimerNode, 'id'>) => string;
     updateTimer: (connectionId: string, id: string, patch: Partial<Omit<TimerNode, 'id'>>) => void;
+    updateTimers: (connectionId: string, patches: ReadonlyArray<{ id: string; patch: Partial<Omit<TimerNode, 'id'>> }>) => void;
     removeTimer: (connectionId: string, id: string) => void;
+    removeTimers: (connectionId: string, ids: ReadonlyArray<string>) => void;
+    removeAliases: (connectionId: string, ids: ReadonlyArray<string>) => void;
     addKeybinding: (connectionId: string, data: Omit<KeyNode, 'id'>) => string;
     updateKeybinding: (connectionId: string, id: string, patch: Partial<Omit<KeyNode, 'id'>>) => void;
     removeKeybinding: (connectionId: string, id: string) => void;
+    removeKeybindings: (connectionId: string, ids: ReadonlyArray<string>) => void;
     addButton: (connectionId: string, data: Omit<ButtonNode, 'id'>) => string;
     updateButton: (connectionId: string, id: string, patch: Partial<Omit<ButtonNode, 'id'>>) => void;
     removeButton: (connectionId: string, id: string) => void;
@@ -203,6 +210,21 @@ export const useAppStore = create<AppStore>()(
                     },
                 };
             }),
+            removeAliases: (connectionId, ids) => set(s => {
+                if (ids.length === 0) return {};
+                const current = s.connectionAliases[connectionId] ?? [];
+                const toRemove = new Set<string>();
+                for (const id of ids) {
+                    toRemove.add(id);
+                    for (const d of getDescendantIds(id, current)) toRemove.add(d);
+                }
+                return {
+                    connectionAliases: {
+                        ...s.connectionAliases,
+                        [connectionId]: current.filter(a => !toRemove.has(a.id)),
+                    },
+                };
+            }),
             addTrigger: (connectionId, data) => {
                 const id = crypto.randomUUID();
                 set(s => ({
@@ -221,9 +243,36 @@ export const useAppStore = create<AppStore>()(
                     ),
                 },
             })),
+            updateTriggers: (connectionId, patches) => set(s => {
+                if (patches.length === 0) return {};
+                const byId = new Map(patches.map(p => [p.id, p.patch] as const));
+                return {
+                    connectionTriggers: {
+                        ...s.connectionTriggers,
+                        [connectionId]: (s.connectionTriggers[connectionId] ?? []).map(
+                            t => byId.has(t.id) ? { ...t, ...byId.get(t.id) } : t,
+                        ),
+                    },
+                };
+            }),
             removeTrigger: (connectionId, id) => set(s => {
                 const current = s.connectionTriggers[connectionId] ?? [];
                 const toRemove = new Set([id, ...getDescendantIds(id, current)]);
+                return {
+                    connectionTriggers: {
+                        ...s.connectionTriggers,
+                        [connectionId]: current.filter(t => !toRemove.has(t.id)),
+                    },
+                };
+            }),
+            removeTriggers: (connectionId, ids) => set(s => {
+                if (ids.length === 0) return {};
+                const current = s.connectionTriggers[connectionId] ?? [];
+                const toRemove = new Set<string>();
+                for (const id of ids) {
+                    toRemove.add(id);
+                    for (const d of getDescendantIds(id, current)) toRemove.add(d);
+                }
                 return {
                     connectionTriggers: {
                         ...s.connectionTriggers,
@@ -249,9 +298,36 @@ export const useAppStore = create<AppStore>()(
                     ),
                 },
             })),
+            updateTimers: (connectionId, patches) => set(s => {
+                if (patches.length === 0) return {};
+                const byId = new Map(patches.map(p => [p.id, p.patch] as const));
+                return {
+                    connectionTimers: {
+                        ...s.connectionTimers,
+                        [connectionId]: (s.connectionTimers[connectionId] ?? []).map(
+                            t => byId.has(t.id) ? { ...t, ...byId.get(t.id) } : t,
+                        ),
+                    },
+                };
+            }),
             removeTimer: (connectionId, id) => set(s => {
                 const current = s.connectionTimers[connectionId] ?? [];
                 const toRemove = new Set([id, ...getDescendantIds(id, current)]);
+                return {
+                    connectionTimers: {
+                        ...s.connectionTimers,
+                        [connectionId]: current.filter(t => !toRemove.has(t.id)),
+                    },
+                };
+            }),
+            removeTimers: (connectionId, ids) => set(s => {
+                if (ids.length === 0) return {};
+                const current = s.connectionTimers[connectionId] ?? [];
+                const toRemove = new Set<string>();
+                for (const id of ids) {
+                    toRemove.add(id);
+                    for (const d of getDescendantIds(id, current)) toRemove.add(d);
+                }
                 return {
                     connectionTimers: {
                         ...s.connectionTimers,
@@ -280,6 +356,21 @@ export const useAppStore = create<AppStore>()(
             removeKeybinding: (connectionId, id) => set(s => {
                 const current = s.connectionKeybindings[connectionId] ?? [];
                 const toRemove = new Set([id, ...getDescendantIds(id, current)]);
+                return {
+                    connectionKeybindings: {
+                        ...s.connectionKeybindings,
+                        [connectionId]: current.filter(k => !toRemove.has(k.id)),
+                    },
+                };
+            }),
+            removeKeybindings: (connectionId, ids) => set(s => {
+                if (ids.length === 0) return {};
+                const current = s.connectionKeybindings[connectionId] ?? [];
+                const toRemove = new Set<string>();
+                for (const id of ids) {
+                    toRemove.add(id);
+                    for (const d of getDescendantIds(id, current)) toRemove.add(d);
+                }
                 return {
                     connectionKeybindings: {
                         ...s.connectionKeybindings,
@@ -419,10 +510,10 @@ export const useAppStore = create<AppStore>()(
             version: 18,
             // Coalesce rapid mutations (e.g. an enableTrigger that touches N
             // matching nodes, or a script edit firing on every keystroke) into
-            // one localStorage write. The persisted blob is large and
-            // stringify+write blocks the main thread; without this, profile
-            // load and trigger-toggle storms paid the cost N times over.
-            storage: createJSONStorage(() => createDebouncedLocalStorage(5000)),
+            // one JSON.stringify + localStorage write. createJSONStorage runs
+            // the stringify before our adapter sees the value, so we implement
+            // PersistStorage directly to defer serialization until flush time.
+            storage: createDebouncedJsonStorage<AppSchema>(5000),
             partialize: ({ connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages }) => ({
                 connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages,
             }),
