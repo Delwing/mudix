@@ -172,12 +172,13 @@ function emitSubtree<T extends TreeNode>(
             isFolder:  node.isGroup ? 'yes' : 'no',
         });
         emitOne(xml, node, node.isGroup);
-        if (node.isGroup) {
-            const grandChildren = childMap.get(node.id);
-            if (grandChildren && grandChildren.length > 0) {
-                xml.raw('');
-                emitSubtree(xml, grandChildren, childMap, leafTag, groupTag, emitOne);
-            }
+        // Non-group nodes can still have children (Mudlet allows leaf triggers
+        // to act as chain heads with descendants), so always recurse if any
+        // exist — not just on isGroup.
+        const grandChildren = childMap.get(node.id);
+        if (grandChildren && grandChildren.length > 0) {
+            xml.raw('');
+            emitSubtree(xml, grandChildren, childMap, leafTag, groupTag, emitOne);
         }
         xml.close(tag);
     }

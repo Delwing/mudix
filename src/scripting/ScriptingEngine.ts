@@ -115,6 +115,14 @@ export class ScriptingEngine {
     // off the first apply (and any subsequent store updates for triggers)
     // until TriggerEngine.ready() resolves.
     private triggersReady = false;
+    // Microtask-coalesce trigger reloads. A burst of N store mutations in
+    // one synchronous tick (e.g. a Lua package registering 30 triggers in a
+    // loop, or zustand emitting many sets back-to-back during boot) used to
+    // run loadPerm N times — each call is O(triggers). With a flag + queued
+    // flush, the burst collapses into one rebuild per tick. flushPending* is
+    // exposed so notifyPackageInstalled can drain synchronously before
+    // sysInstallPackage fires (handlers may add/inspect triggers).
+    private triggersDirty = false;
     // Last seen script list for the active connection. Used to diff against
     // the next store update so we know which scripts to load/unload.
     private prevScripts: ScriptNode[] = [];
@@ -221,7 +229,7 @@ export class ScriptingEngine {
             // apply whatever the store says now.
             void TriggerEngine.ready().then(() => {
                 this.triggersReady = true;
-                this.applyTriggersFromStore();
+                this.scheduleTriggerApply();
             });
 
             this.storeUnsub = useAppStore.subscribe((state, prevState) => {
@@ -237,7 +245,7 @@ export class ScriptingEngine {
                 if (aliasesChanged) this.applyAliasesFromStore();
                 if (timersChanged)  this.applyTimersFromStore();
                 if (keysChanged)    this.applyKeybindingsFromStore();
-                if (this.triggersReady && triggersChanged) this.applyTriggersFromStore();
+                if (this.triggersReady && triggersChanged) this.scheduleTriggerApply();
 
                 // Sync-on-edit for modules: any tagged-node mutation schedules
                 // a debounced XML rewrite for affected modules.
@@ -482,8 +490,28 @@ export class ScriptingEngine {
     }
 
     private applyTriggersFromStore(): void {
+        this.triggersDirty = false;
         const triggers = useAppStore.getState().connectionTriggers[this.connectionId] ?? [];
         this.triggerEngine.loadPerm(triggers);
+    }
+
+    private scheduleTriggerApply(): void {
+        if (this.triggersDirty) return;
+        this.triggersDirty = true;
+        queueMicrotask(() => {
+            if (!this.triggersDirty) return;
+            this.applyTriggersFromStore();
+        });
+    }
+
+    /**
+     * Drain any pending coalesced reloads synchronously. Callers that raise
+     * events whose handlers may depend on the just-mutated store (e.g.
+     * notifyPackageInstalled → sysInstallPackage) must call this between the
+     * store update and the event so handlers see the post-mutation engine state.
+     */
+    flushPendingApplies(): void {
+        if (this.triggersReady && this.triggersDirty) this.applyTriggersFromStore();
     }
 
     private applyTimersFromStore(): void {
@@ -608,6 +636,7 @@ export class ScriptingEngine {
             });
             this.api.setScriptToggler((name, enabled) => this.toggleScriptByName(name, enabled));
             this.api.setTriggerToggler((name, enabled) => this.toggleTriggerByName(name, enabled));
+            this.api.setTriggerStayOpenSetter((name, lines) => this.setTriggerStayOpenByName(name, lines));
             this.api.setTimerToggler((name, enabled) => this.toggleTimerByName(name, enabled));
             this.api.setAliasToggler((name, enabled) => this.toggleAliasByName(name, enabled));
             this.api.setExistsCallback((name, type) => this.existsByName(name, type));
@@ -676,6 +705,7 @@ export class ScriptingEngine {
      * this method runs the package's event handlers are already registered.
      */
     notifyPackageInstalled(packageName: string): void {
+        this.flushPendingApplies();
         this.raiseEvent('sysInstall', [packageName]);
         this.raiseEvent('sysInstallPackage', [packageName]);
     }
@@ -842,6 +872,25 @@ export class ScriptingEngine {
         const patches = targets
             .filter(t => t.enabled !== enabled)
             .map(t => ({ id: t.id, patch: { enabled } }));
+        if (patches.length > 0) store.updateTriggers(this.connectionId, patches);
+        return true;
+    }
+
+    /**
+     * Mudlet `setTriggerStayOpen(name, lines)`. Updates `fireLength` on every
+     * trigger matching the name (Mudlet does the same — the name doesn't have
+     * to be unique). Negative line counts are clamped to 0 to match Mudlet,
+     * which rejects them at the binding layer.
+     */
+    setTriggerStayOpenByName(name: string, lines: number): boolean {
+        const fireLength = Math.max(0, Math.trunc(lines));
+        const store = useAppStore.getState();
+        const triggers = store.connectionTriggers[this.connectionId] ?? [];
+        const targets = triggers.filter(t => t.name === name);
+        if (targets.length === 0) return false;
+        const patches = targets
+            .filter(t => t.fireLength !== fireLength)
+            .map(t => ({ id: t.id, patch: { fireLength } }));
         if (patches.length > 0) store.updateTriggers(this.connectionId, patches);
         return true;
     }

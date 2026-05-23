@@ -48,7 +48,6 @@ const parseGmcpPayload = (
 
     try {
         const gmcp = JSON.parse(payload);
-        console.log("Received GMCP:", type, gmcp);
         onMessage(type, gmcp);
     } catch (error) {
         console.error("Error parsing GMCP JSON:", error);

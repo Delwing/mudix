@@ -361,6 +361,7 @@ export class ScriptingAPI {
     private cssRewriter: ((css: string) => string) | null = null;
     private scriptToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
+    private triggerStayOpenSetter: ((name: string, lines: number) => boolean) | null = null;
     private timerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private aliasToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private existsCallback: ((nameOrId: string | number, type: string) => number) | null = null;
@@ -471,6 +472,20 @@ export class ScriptingAPI {
         this.triggerToggler = fn;
     }
 
+    setTriggerStayOpenSetter(fn: ((name: string, lines: number) => boolean) | null): void {
+        this.triggerStayOpenSetter = fn;
+    }
+
+    /**
+     * Mudlet `setTriggerStayOpen(name, lines)`. Updates the named trigger's
+     * chain fire-length so it stays open for `lines` more lines of input. 0
+     * closes the chain immediately on the next match check; positive values
+     * extend or shorten an already-running chain.
+     */
+    setTriggerStayOpen(name: string, lines: number): boolean {
+        return this.triggerStayOpenSetter?.(name, lines) ?? false;
+    }
+
     setTimerToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
         this.timerToggler = fn;
     }
@@ -524,7 +539,6 @@ export class ScriptingAPI {
     }
 
     enableTrigger(name: string): boolean {
-        console.debug(`Enabling trigger: ${name}`);
         return this.triggerToggler?.(name, true) ?? false;
     }
 
@@ -785,16 +799,10 @@ export class ScriptingAPI {
     }
 
     resetFormat(windowName?: string): void {
-        if (this.selection) {
-            const sel = this.selection;
-            this.selection = null;
-            const buf = this.resolveBuffer(sel.windowName);
-            if (buf) {
-                buf.clearFormat([sel.start, sel.start + sel.length]);
-                if (!this.inTriggerProcessing) buf.rerender();
-            }
-            return;
-        }
+        // Mudlet TConsole::reset(): deselect + reset pen state to defaults.
+        // It does NOT touch the buffer — selections lose their pointer here,
+        // but characters keep whatever format was applied to them.
+        this.selection = null;
         this.outputConsole(windowName).resetFormat();
     }
 
@@ -1131,9 +1139,14 @@ export class ScriptingAPI {
     }
 
     /**
-     * Mudlet getColumnCount. Returns the wrap width (in characters) configured
-     * via setWindowWrap; if none is set, measures the rendered output element
-     * and returns how many monospace characters fit horizontally.
+     * Mudlet getColumnCount. Reports the displayable column capacity of the
+     * rendered output area — how many monospace characters fit horizontally.
+     * Unaffected by setWindowWrap; that controls where lines wrap when text is
+     * appended to the buffer, not the screen width. Returning the wrap value
+     * would break the canonical Mudlet idiom
+     *   setWindowWrap(name, getColumnCount(name) - 1)
+     * called from a sysUserWindowResizeEvent handler, where each resize would
+     * otherwise feed the stored wrap back in and decrement it by one.
      *
      * Fallback path: scripts that just called openUserWindow + resizeWindow
      * commonly busy-loop on getColumnCount in the same JS turn — React can't
@@ -1145,11 +1158,6 @@ export class ScriptingAPI {
      */
     getColumnCount(windowName?: string): number {
         const isMain = !windowName || windowName === 'main';
-        const wrap = isMain
-            ? selectProfileField(useAppStore.getState(), this.connectionId, 'outputWrapAt')
-            : this.session.windows.getWrap(windowName!);
-        if (wrap && wrap > 0) return wrap;
-
         const el = isMain
             ? this.session.windows.getElement('main')
             : this.session.windows.getElement(windowName!);

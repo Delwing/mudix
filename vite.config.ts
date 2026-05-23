@@ -40,6 +40,15 @@ export default defineConfig({
         react(),
         nodePolyfills({ include: ['buffer', 'stream', 'events', 'util'] }),
     ],
+    // Workers don't inherit `plugins`; re-declare nodePolyfills here so the map
+    // parser worker (mudlet-map-binary-reader → Buffer) gets the same shim it
+    // gets on the main thread.
+    worker: {
+        format: 'es',
+        plugins: () => [
+            nodePolyfills({ include: ['buffer', 'stream', 'events', 'util'] }),
+        ],
+    },
     build: {
         rollupOptions: {
             onwarn(warning, defaultHandler) {

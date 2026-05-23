@@ -5,6 +5,7 @@ import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData 
 import { MapStore } from '../../map/MapStore';
 import { saveMap as saveMapToStorage, loadMap as loadMapFromStorage } from '../../storage/mapStorage';
 import { readMapFromBuffer, writeMapToBuffer } from 'mudlet-map-binary-reader';
+import { parseMapInWorker } from '../../map/mapParserClient';
 import { Buffer } from 'buffer';
 
 interface ScriptWindowData extends ScriptWindowRenderData {
@@ -453,6 +454,16 @@ export class WindowManager {
     }
 
     /**
+     * Async sibling of {@link ingestMapBuffer} that parses in a worker so the
+     * main thread stays free for paint. `buf` is transferred — callers that
+     * also need the bytes (e.g. IndexedDB persistence) must clone first.
+     */
+    async ingestMapBufferAsync(buf: ArrayBuffer): Promise<void> {
+        const mudletMap = await parseMapInWorker(buf);
+        this.mapStore.loadFromBinary(mudletMap);
+    }
+
+    /**
      * Mudlet parity: a map is available to scripts before `sysLoadEvent` fires.
      * ScriptingEngine awaits this in its start() path so the initial script
      * load runs against an initialized MapStore (and the binary's hashes + user
@@ -471,7 +482,10 @@ export class WindowManager {
             try {
                 const buf = await loadMapFromStorage(this._connectionId);
                 if (!buf) return false;
-                this.ingestMapBuffer(buf);
+                // Off-main-thread parse — the boot path is what dominates LCP,
+                // and the binary reader's Buffer-polyfill loop is the single
+                // biggest synchronous cost when a saved map is large.
+                await this.ingestMapBufferAsync(buf);
                 return true;
             } catch (err) {
                 console.warn('[WindowManager] bootstrapMap failed:', err);

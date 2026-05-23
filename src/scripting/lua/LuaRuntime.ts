@@ -872,6 +872,27 @@ export class LuaRuntime implements IScriptingRuntime {
         // numeric 1-12 index or as a name ("north"/"n"/etc.); MapStore's
         // parseDirection normalizes both forms.
         this.lua.global.set('getRoomExits',      (id: number)                          => this.api.map.getRoomExits(id));
+        // Mudlet getPath(from, to). Returns a string error message (validation
+        // failure or no-path) or the PathfindResult object. The Bridge.lua
+        // wrapper resets the speedWalkPath/Dir/Weight globals on every call,
+        // populates them 1-indexed on success, and unpacks the JS shape into
+        // Mudlet's (true, totalWeight) / (false, -1, errMsg) multi-return.
+        this.lua.global.set('__getPath', (from: unknown, to: unknown) => {
+            const fromId = Number(from), toId = Number(to);
+            if (!Number.isFinite(fromId)) {
+                return `getPath: bad argument #1 type (number expected, got ${typeof from}!)`;
+            }
+            if (!Number.isFinite(toId)) {
+                return `getPath: bad argument #2 type (number expected, got ${typeof to}!)`;
+            }
+            if (!this.api.map.roomExists(fromId)) {
+                return `getPath: number ${fromId} is not a valid source roomID`;
+            }
+            if (!this.api.map.roomExists(toId)) {
+                return `getPath: number ${toId} is not a valid target roomID`;
+            }
+            return this.api.map.findPath(fromId, toId);
+        });
         this.lua.global.set('setExit', (from: unknown, to: unknown, dir: unknown) =>
             this.api.map.setExit(Number(from), Number(to), dir as number | string));
         this.lua.global.set('getExitStubs',      (id: number)                          => this.api.map.getExitStubs(id));
@@ -935,6 +956,37 @@ export class LuaRuntime implements IScriptingRuntime {
         // would otherwise key a JS array 0..n-1).
         this.lua.global.set('__getMapEvents', () => this.api.map.getMapEvents());
 
+        // ── Map info contributors (Mudlet registerMapInfo) ────────────────────
+        // Bridge.lua compiles the callback into the `__mudix_cb` registry and
+        // hands JS only the numeric id (same pattern as label/timer callbacks).
+        // Re-registering an existing label frees the prior cb slot to avoid
+        // leaks. The evaluator is invoked from MapPanel via evaluateMapInfos
+        // — see __mudix_dispatch_mapinfo in Bridge.lua for the multi-return
+        // unpacking dance.
+        this.api.map.setMapInfoEvaluator((cbId, roomId, selectionSize, areaId, displayedAreaId) =>
+            this.evaluateMapInfo(cbId, roomId, selectionSize, areaId, displayedAreaId));
+        this.lua.global.set('__mudix_registerMapInfo', (label: unknown, cbId: unknown) => {
+            const id = Number(cbId);
+            if (typeof label !== 'string' || !label || !Number.isFinite(id)) return false;
+            const { prevCallbackId } = this.api.map.registerMapInfo(label, id);
+            if (prevCallbackId && prevCallbackId !== id) this.unregisterCb(prevCallbackId);
+            return true;
+        });
+        this.lua.global.set('__killMapInfo', (label: unknown) => {
+            if (typeof label !== 'string' || !label) return false;
+            const { callbackId, removed } = this.api.map.killMapInfo(label);
+            if (callbackId) this.unregisterCb(callbackId);
+            return removed;
+        });
+        this.lua.global.set('__enableMapInfo', (label: unknown) => {
+            if (typeof label !== 'string' || !label) return false;
+            return this.api.map.enableMapInfo(label);
+        });
+        this.lua.global.set('__disableMapInfo', (label: unknown) => {
+            if (typeof label !== 'string' || !label) return false;
+            return this.api.map.disableMapInfo(label);
+        });
+
         // ── Custom env colors ─────────────────────────────────────────────────
         // Mudlet setCustomEnvColor(envID, r, g, b, a). Updates mCustomEnvColors
         // on the active map; the renderer reads this when painting rooms whose
@@ -963,6 +1015,41 @@ export class LuaRuntime implements IScriptingRuntime {
         // numeric envID.
         this.lua.global.set('__getCustomEnvColorTable',
             () => this.api.map.getCustomEnvColorTable());
+
+        // ── Room highlights ──────────────────────────────────────────────────
+        // Mudlet highlightRoom(id, c1R, c1G, c1B, c2R, c2G, c2B, radius, c1A, c2A).
+        // Two-color radial gradient with alpha — rendered Mudlet-style by
+        // MudletHighlightOverlay. Wasmoon hands regex captures as strings, so
+        // every channel goes through channel() for 0..255 validation.
+        this.lua.global.set('highlightRoom', (
+            id: unknown,
+            r1: unknown, g1: unknown, b1: unknown,
+            r2: unknown, g2: unknown, b2: unknown,
+            radius: unknown,
+            a1?: unknown, a2?: unknown,
+        ) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid)) return false;
+            const c1r = channel(r1), c1g = channel(g1), c1b = channel(b1);
+            const c2r = channel(r2), c2g = channel(g2), c2b = channel(b2);
+            if (c1r === null || c1g === null || c1b === null) return false;
+            if (c2r === null || c2g === null || c2b === null) return false;
+            const rad = Number(radius);
+            if (!Number.isFinite(rad)) return false;
+            const c1a = a1 === undefined ? 255 : channel(a1);
+            const c2a = a2 === undefined ? 255 : channel(a2);
+            if (c1a === null || c2a === null) return false;
+            return this.api.map.highlightRoom(
+                Math.trunc(rid),
+                c1r, c1g, c1b, c2r, c2g, c2b,
+                rad, c1a, c2a,
+            );
+        });
+        this.lua.global.set('unHighlightRoom', (id: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid)) return false;
+            return this.api.map.unHighlightRoom(Math.trunc(rid));
+        });
 
         // ── Areas ─────────────────────────────────────────────────────────────
         // Mudlet addAreaName / setAreaName return (false, errMsg) on duplicate
@@ -1353,6 +1440,10 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('enableTrigger', (name: string) => this.api.enableTrigger(String(name ?? '')));
         this.lua.global.set('disableTrigger', (name: string) => this.api.disableTrigger(String(name ?? '')));
+        // Mudlet setTriggerStayOpen(name, lines). Updates fireLength on every
+        // trigger sharing the name; pass 0 to close an open chain immediately.
+        this.lua.global.set('setTriggerStayOpen', (name: unknown, lines: unknown) =>
+            this.api.setTriggerStayOpen(String(name ?? ''), Number(lines)));
         this.lua.global.set('enableTimer', (name: string) => this.api.enableTimer(String(name ?? '')));
         this.lua.global.set('disableTimer', (name: string) => this.api.disableTimer(String(name ?? '')));
         this.lua.global.set('enableAlias', (name: string) => this.api.enableAlias(String(name ?? '')));
@@ -1607,7 +1698,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 releaseCb(cbId);
                 this.tempIds.delete(id);
             };
-            unsub = this.api.triggers.addTemp(pattern, (matches, spans) => {
+            unsub = this.api.triggers.addTemp(pattern, (matches, spans, namedGroups) => {
                 if (killed) return;
                 const prevSpans = this.currentCaptureSpans;
                 const prevNamed = this.currentNamedSpans;
@@ -1617,7 +1708,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 this.currentCaptureSpans = spans?.captureSpans ?? [];
                 this.currentNamedSpans = spans?.namedSpans ?? {};
                 this.currentFullMatchSpan = spans?.matchSpan ?? null;
-                this.setMatches(matches);
+                this.setMatches(matches, undefined, namedGroups);
                 try {
                     dispatchCb(cbId, label);
                 } finally {
@@ -2477,18 +2568,26 @@ export class LuaRuntime implements IScriptingRuntime {
     // table. Object.keys skips holes, so a sparse array with index 0 empty
     // pushes as a 1-indexed Lua sequence (which Mudlet user code expects:
     // matches[1] = full match, matches[2] = first capture).
+    //
+    // Named-capture keys are stuffed onto the same array via string property
+    // assignment. wasmoon's pushTable splits numeric vs string keys at push
+    // time, so `matches[2]` and `matches.foo` coexist on the Lua side just
+    // like in Mudlet.
     private setMatches(matches: string[], multimatches?: string[][], namedGroups?: Record<string, string>): void {
-        const oneIndexed = (arr: string[]): string[] => {
+        const oneIndexed = (arr: string[], named?: Record<string, string>): string[] => {
             const t: string[] = [];
             for (let i = 0; i < arr.length; i++) t[i + 1] = arr[i];
+            if (named) {
+                const asRec = t as unknown as Record<string, string>;
+                for (const k in named) asRec[k] = named[k];
+            }
             return t;
         };
-        this.lua.global.set('matches', oneIndexed(matches));
+        this.lua.global.set('matches', oneIndexed(matches, namedGroups));
         const mm: string[][] = [];
         if (multimatches) for (let i = 0; i < multimatches.length; i++) mm[i + 1] = oneIndexed(multimatches[i]);
         this.lua.global.set('multimatches', mm);
-        // Mudlet exposes named captures as a global `namedCaptures` table;
-        // user code reads it as `namedCaptures.foo`.
+        // Mudlet also exposes a separate `namedCaptures` table; keep parity.
         this.lua.global.set('namedCaptures', namedGroups ?? {});
     }
 
@@ -2671,9 +2770,49 @@ export class LuaRuntime implements IScriptingRuntime {
         return this.lua.global.get('__mudix_pat_result') === true;
     }
 
+    /**
+     * Invoke a `registerMapInfo` contributor. The Lua dispatcher pcalls the
+     * stashed callback and writes its multi-return into scalar globals
+     * (`__mudix_mapinfo_text` / _bold / _italic / _r / _g / _b). Returning
+     * `null` covers three cases: runtime is being torn down, callback id is
+     * stale, or the callback returned a nil/empty text — the panel treats
+     * all three the same (skip the entry).
+     */
+    private evaluateMapInfo(
+        cbId: number,
+        roomId: number | null,
+        selectionSize: number,
+        areaId: number,
+        displayedAreaId: number,
+    ): { text: string; isBold: boolean; isItalic: boolean; color?: { r: number; g: number; b: number } } | null {
+        if (this.destroyed || !cbId) return null;
+        const roomArg = roomId == null ? 'nil' : String(roomId | 0);
+        this.runChunk(
+            `__mudix_dispatch_mapinfo(${cbId}, ${roomArg}, ${selectionSize | 0}, ${areaId | 0}, ${displayedAreaId | 0})`,
+            'registerMapInfo callback',
+        );
+        const text = this.lua.global.get('__mudix_mapinfo_text');
+        if (typeof text !== 'string' || !text) return null;
+        const isBold = this.lua.global.get('__mudix_mapinfo_bold') === true;
+        const isItalic = this.lua.global.get('__mudix_mapinfo_italic') === true;
+        const r = this.lua.global.get('__mudix_mapinfo_r');
+        const g = this.lua.global.get('__mudix_mapinfo_g');
+        const b = this.lua.global.get('__mudix_mapinfo_b');
+        const ch = (v: unknown): number | null => {
+            if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+            const i = Math.round(v);
+            return i >= 0 && i <= 255 ? i : null;
+        };
+        const rr = ch(r), gg = ch(g), bb = ch(b);
+        const color = rr !== null && gg !== null && bb !== null ? { r: rr, g: gg, b: bb } : undefined;
+        return { text, isBold, isItalic, color };
+    }
+
     destroy(): void {
         this.destroyed = true;
         this.api.map.setMapEventDispatcher(null);
+        this.api.map.setMapInfoEvaluator(null);
+        this.api.map.clearMapInfoContributors();
         this.lua.global.close();
     }
 }

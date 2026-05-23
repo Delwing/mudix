@@ -11,6 +11,7 @@ type TempFn = (
         namedSpans?: Record<string, CaptureSpan>;
         matchSpan?: CaptureSpan;
     },
+    namedGroups?: Record<string, string>,
 ) => void;
 
 /**
@@ -246,9 +247,17 @@ export class TriggerEngine {
     // freed. Items currently disabled stay cached so re-enabling is free.
     private cache = new Map<string, CachedEntry>();
 
-    // Chain state: maps group-trigger ID → last line number on which chain is open.
+    // Chain state: maps chain-head trigger ID → last line number on which chain
+    // is open. A chain head is any trigger with children (group or not) — Mudlet
+    // lets a leaf trigger with its own script also act as a chain head for the
+    // nested triggers it contains.
     private lineCounter = 0;
     private readonly chainOpenUntil = new Map<string, number>();
+
+    // IDs of triggers that have at least one child. Recomputed in loadPerm so
+    // matchPerm and the chain-access helpers can answer "is this a chain head?"
+    // without scanning the full tree per call.
+    private hasChildren = new Set<string>();
 
     // AND state: per-trigger progress for multiline AND triggers
     private andStates = new Map<string, AndState>();
@@ -304,6 +313,12 @@ export class TriggerEngine {
     loadPerm(items: TriggerNode[]): void {
         this.allById = new Map(items.map(i => [i.id, i]));
         const enabledIds = buildEffectivelyEnabledIds(items);
+
+        const hasChildren = new Set<string>();
+        for (const it of items) {
+            if (it.parentId) hasChildren.add(it.parentId);
+        }
+        this.hasChildren = hasChildren;
         const compiledIds = new Set<string>();
         const nextCache = new Map<string, CachedEntry>();
         const newCompiled: CompiledEntry[] = [];
@@ -459,6 +474,7 @@ export class TriggerEngine {
                         ? { start: result.matchStart, length: result.matchedText.length }
                         : undefined,
                 },
+                result.namedGroups,
             );
         }
     }
@@ -475,6 +491,7 @@ export class TriggerEngine {
             if (!this.isChainAccessible(item, currentLine)) continue;
 
             const effectiveLine = this.getEffectiveLine(item, line);
+            const isChainHead = item.isGroup || this.hasChildren.has(item.id);
 
             if (item.isGroup) {
                 // Chain head: match opens the chain for children.
@@ -488,23 +505,32 @@ export class TriggerEngine {
                 }
                 if (result !== null) {
                     seen.add(item.id);
-                    this.chainOpenUntil.set(item.id, currentLine + (item.fireLength ?? 0));
-                    // Update filter state if this is a filter group
-                    if (item.isFilter) {
-                        this.filterActiveText.set(item.id, result.captures[0] ?? result.matchedText);
-                    }
+                    this.openChain(item, currentLine, result);
                     if (item.code) {
                         results.push(matchResultToTriggerMatch(item, result));
                     }
                 }
             } else if (entry.kind === 'and') {
                 const r = this.processAndTrigger(entry, effectiveLine, isPrompt, currentLine);
-                if (r) results.push(r);
+                if (r) {
+                    if (isChainHead) {
+                        this.openChain(item, currentLine, {
+                            captures: r.captures,
+                            matchedText: r.matchedText,
+                        });
+                    }
+                    results.push(r);
+                }
             } else {
                 // OR entry (non-group)
                 if (entry.testAll) {
+                    let firstResult: MatchResult | null = null;
                     for (const r of entry.testAll(effectiveLine)) {
+                        if (firstResult === null) firstResult = r;
                         results.push(matchResultToTriggerMatch(item, r));
+                    }
+                    if (firstResult !== null && isChainHead) {
+                        this.openChain(item, currentLine, firstResult);
                     }
                 } else {
                     if (seen.has(item.id)) continue;
@@ -515,6 +541,7 @@ export class TriggerEngine {
                     }
                     if (result !== null) {
                         seen.add(item.id);
+                        if (isChainHead) this.openChain(item, currentLine, result);
                         results.push(matchResultToTriggerMatch(item, result));
                     }
                 }
@@ -543,6 +570,7 @@ export class TriggerEngine {
         this.lineCounter = 0;
         this.andStates.clear();
         this.filterActiveText.clear();
+        this.hasChildren.clear();
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -628,8 +656,20 @@ export class TriggerEngine {
     }
 
     /**
+     * Record a chain-head match: open the chain for `fireLength` more lines and,
+     * if the trigger is also a filter, stash the captured/matched text so
+     * descendants see it as their effective input.
+     */
+    private openChain(item: TriggerNode, currentLine: number, result: { captures: string[]; matchedText: string }): void {
+        this.chainOpenUntil.set(item.id, currentLine + (item.fireLength ?? 0));
+        if (item.isFilter) {
+            this.filterActiveText.set(item.id, result.captures[0] ?? result.matchedText);
+        }
+    }
+
+    /**
      * Returns the effective line to match against for `item`.
-     * If a filter-group ancestor has active filter text, that text is used instead.
+     * If a filter-trigger ancestor has active filter text, that text is used instead.
      * Innermost filter wins.
      */
     private getEffectiveLine(item: TriggerNode, originalLine: string): string {
@@ -638,7 +678,7 @@ export class TriggerEngine {
         while (parentId) {
             const parent = this.allById.get(parentId);
             if (!parent) break;
-            if (parent.isGroup && parent.isFilter) {
+            if (parent.isFilter) {
                 const filtered = this.filterActiveText.get(parentId);
                 if (filtered !== undefined) effective = filtered;
                 // innermost filter wins, so break after first filter ancestor we find going up
@@ -651,16 +691,19 @@ export class TriggerEngine {
     }
 
     /**
-     * A trigger is chain-accessible if every group ancestor with patterns has an
-     * open chain (matched within the last fireLength lines, inclusive of the
-     * current line). Regular group ancestors (no patterns) always grant access.
+     * A trigger is chain-accessible if every patterned ancestor has an open
+     * chain (matched within the last fireLength lines, inclusive of the current
+     * line). Pattern-less ancestors (pure folders) always grant access. This
+     * applies regardless of whether the ancestor is a folder or a leaf with its
+     * own script — Mudlet treats any patterned trigger with children as a chain
+     * head.
      */
     private isChainAccessible(item: TriggerNode, currentLine: number): boolean {
         let parentId = item.parentId;
         while (parentId) {
             const parent = this.allById.get(parentId);
             if (!parent) break;
-            if (parent.isGroup && parent.patterns && parent.patterns.length > 0) {
+            if (parent.patterns && parent.patterns.length > 0) {
                 const openUntil = this.chainOpenUntil.get(parentId);
                 if (openUntil === undefined || openUntil < currentLine) return false;
             }

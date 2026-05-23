@@ -1,5 +1,40 @@
 matches = {}; multimatches = {}
 
+-- Mudlet's getPath populates these globals (cleared on every call). Predeclare
+-- them as empty tables so user code reading them before any getPath call
+-- doesn't crash on nil-indexing — Mudlet's C++ side leaves them undefined
+-- until first call but most scripts assume they exist.
+speedWalkPath, speedWalkDir, speedWalkWeight = {}, {}, {}
+
+-- Mudlet getPath(from, to) — A* over the map graph. Always clears the three
+-- speedWalk* globals; on success repopulates them 1-indexed and returns
+-- (true, totalWeight). On argument-validation failure returns (false, errMsg);
+-- on no-path returns (false, -1, errMsg) — matching Mudlet's multi-return.
+function getPath(from, to)
+    speedWalkPath, speedWalkDir, speedWalkWeight = {}, {}, {}
+    local res = __getPath(from, to)
+    if type(res) == 'string' then
+        return false, res
+    end
+    if type(res) ~= 'table' then
+        return false, -1,
+            "getPath: no path found from the roomID " .. tostring(from)
+            .. " to roomID " .. tostring(to) .. "!"
+    end
+    -- JS hands the three step lists over as 0-indexed arrays (wasmoon convention).
+    local p, d, w = res.path, res.dirs, res.weights
+    if type(p) == 'table' then
+        local i = 0
+        while p[i] ~= nil do
+            speedWalkPath[i + 1]   = p[i]
+            speedWalkDir[i + 1]    = d[i]
+            speedWalkWeight[i + 1] = w[i]
+            i = i + 1
+        end
+    end
+    return true, res.totalWeight or 0
+end
+
 -- wasmoon pushes JS arrays 0-indexed in Lua (Object.keys → numeric keys
 -- 0..n-1), so unpack as t[0], t[1], ... not t[1], t[2], ...
 function getRoomCoordinates(id)
@@ -1043,6 +1078,74 @@ end
 function playMusicFile(opts)
     if type(opts) ~= 'table' then return false end
     return __playMusicFile(opts)
+end
+
+-- Mudlet registerMapInfo(label, function). The callback runs every time the
+-- map widget repaints; its multi-return (text, isBold, isItalic, r, g, b)
+-- becomes the rendered line. New contributors land disabled — caller must
+-- enableMapInfo() to show them. Re-registering the same label replaces the
+-- callback (JS frees the prior __mudix_cb slot).
+do
+    local _raw = __mudix_registerMapInfo
+    function registerMapInfo(label, fn)
+        if type(label) ~= 'string' or label == '' then
+            error("registerMapInfo: bad argument #1 type (non-empty string expected, got " .. type(label) .. ")", 2)
+        end
+        if type(fn) ~= 'function' then
+            error("registerMapInfo: bad argument #2 type (function expected, got " .. type(fn) .. ")", 2)
+        end
+        return _raw(label, __mudix_register_cb(fn))
+    end
+end
+
+-- Mudlet killMapInfo / enableMapInfo / disableMapInfo. Each returns true on
+-- success or (false, errMsg) when the label isn't registered.
+function killMapInfo(label)
+    if __killMapInfo(label) then return true end
+    return false, "killMapInfo: could not find map info called '" .. tostring(label) .. "'"
+end
+function enableMapInfo(label)
+    if __enableMapInfo(label) then return true end
+    return false, "enableMapInfo: could not find map info called '" .. tostring(label) .. "'"
+end
+function disableMapInfo(label)
+    if __disableMapInfo(label) then return true end
+    return false, "disableMapInfo: could not find map info called '" .. tostring(label) .. "'"
+end
+
+-- JS-readable result slots for a single registerMapInfo callback invocation.
+-- The MapPanel re-evaluator drives one dispatch per enabled contributor and
+-- reads these globals immediately after each call — Lua coroutines share
+-- globals, so the chunk run inside runChunk writes to the same _G we read.
+__mudix_mapinfo_text = nil
+__mudix_mapinfo_bold = false
+__mudix_mapinfo_italic = false
+__mudix_mapinfo_r = nil
+__mudix_mapinfo_g = nil
+__mudix_mapinfo_b = nil
+function __mudix_dispatch_mapinfo(id, roomId, selectionSize, areaId, displayedAreaId)
+    __mudix_mapinfo_text = nil
+    __mudix_mapinfo_bold = false
+    __mudix_mapinfo_italic = false
+    __mudix_mapinfo_r = nil
+    __mudix_mapinfo_g = nil
+    __mudix_mapinfo_b = nil
+    local fn = __mudix_cb[id]
+    if type(fn) ~= 'function' then return end
+    local ok, text, isBold, isItalic, r, g, b = pcall(fn, roomId, selectionSize, areaId, displayedAreaId)
+    if not ok then
+        if type(showHandlerError) == 'function' then
+            showHandlerError("registerMapInfo callback", tostring(text))
+        end
+        return
+    end
+    if text == nil or text == '' then return end
+    __mudix_mapinfo_text = tostring(text)
+    __mudix_mapinfo_bold = isBold == true
+    __mudix_mapinfo_italic = isItalic == true
+    if type(r) == 'number' then __mudix_mapinfo_r = r end
+    if type(g) == 'number' then __mudix_mapinfo_g = g end
+    if type(b) == 'number' then __mudix_mapinfo_b = b end
 end
 
 -- Mudlet `stopMusic([{name=..., key=..., tag=..., fadeout=...}])`.

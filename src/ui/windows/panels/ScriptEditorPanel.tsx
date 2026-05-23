@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { AlertCircle, Clock, Folder, FolderOpen, FolderPlus, Keyboard, MousePointerClick, Package, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
+import { AlertCircle, Clock, Filter, Folder, FolderOpen, FolderPlus, Keyboard, MousePointerClick, Package, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
 import { Button, Input, ContextMenu, useConfirm } from '../../components';
 import { useAppStore } from '../../../storage';
 import type { AliasNode, ButtonLocation, ButtonNode, ButtonOrientation, KeyNode, PackageManifest, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
@@ -95,12 +95,17 @@ function isAncestorOf(ancestorId: string, itemId: string, items: AnyNode[]): boo
 const ICON_SIZE = 13;
 const ICON_STROKE = 1.6;
 
-function ItemIcon({ category, isGroup, isExpanded }: { category: Category; isGroup: boolean; isExpanded: boolean }) {
+function ItemIcon({ category, isGroup, isExpanded, hasChildren = false }: { category: Category; isGroup: boolean; isExpanded: boolean; hasChildren?: boolean }) {
     if (isGroup) {
         const F = isExpanded ? FolderOpen : Folder;
         return <F size={ICON_SIZE} strokeWidth={ICON_STROKE} className="script-editor__item-icon script-editor__item-icon--folder" />;
     }
     const props = { size: ICON_SIZE, strokeWidth: ICON_STROKE, className: 'script-editor__item-icon' };
+    // Mudlet shows a funnel on a leaf trigger that holds nested child triggers
+    // — the visual cue that it acts as a chain head, not just a one-off match.
+    if (category === 'triggers' && hasChildren) {
+        return <Filter {...props} className="script-editor__item-icon script-editor__item-icon--chainhead" />;
+    }
     switch (category) {
         case 'scripts':  return <FileCode2          {...props} />;
         case 'aliases':  return <Shuffle            {...props} />;
@@ -112,7 +117,9 @@ function ItemIcon({ category, isGroup, isExpanded }: { category: Category; isGro
     }
 }
 
-/** Build a flat, ordered render list from a tree stored as a flat array. */
+/** Build a flat, ordered render list from a tree stored as a flat array.
+ *  Any node with children is expandable — Mudlet allows leaf triggers to act
+ *  as chain heads with descendants, so descent isn't gated on isGroup. */
 function flattenTree<T extends { id: string; parentId: string | null; isGroup: boolean }>(
     items: T[],
     parentId: string | null,
@@ -122,7 +129,8 @@ function flattenTree<T extends { id: string; parentId: string | null; isGroup: b
     const result: Array<{ item: T; depth: number }> = [];
     for (const item of items.filter(i => i.parentId === parentId)) {
         result.push({ item, depth });
-        if (item.isGroup && expanded.has(item.id)) {
+        const hasChildren = items.some(i => i.parentId === item.id);
+        if (hasChildren && expanded.has(item.id)) {
             result.push(...flattenTree(items, item.id, expanded, depth + 1));
         }
     }
@@ -403,7 +411,6 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
     const updateTrigger    = useAppStore(s => s.updateTrigger);
     const removeTrigger    = useAppStore(s => s.removeTrigger);
     const moveTrigger      = useAppStore(s => s.moveTrigger);
-    const groupTriggers    = useAppStore(s => s.groupTriggers);
     const addTimer         = useAppStore(s => s.addTimer);
     const updateTimer      = useAppStore(s => s.updateTimer);
     const removeTimer      = useAppStore(s => s.removeTimer);
@@ -906,9 +913,11 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
         e.dataTransfer.dropEffect = 'move';
         const rect = e.currentTarget.getBoundingClientRect();
         const relY = (e.clientY - rect.top) / rect.height;
-        const canDropInto = item.isGroup || category === 'triggers';
+        // Any node accepts a child drop — Mudlet allows nesting under leaves in
+        // every category (chain-head triggers, but also organisational nesting
+        // for scripts/aliases/timers/keys/buttons).
         const intent: 'before' | 'into' | 'after' =
-            canDropInto && relY > 0.3 && relY < 0.7 ? 'into' :
+            relY > 0.3 && relY < 0.7 ? 'into' :
             relY < 0.5 ? 'before' : 'after';
         setDragOver(prev => (prev?.id === item.id && prev?.intent === intent) ? prev : { id: item.id, intent });
     };
@@ -920,16 +929,6 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
 
         const intent = dragOver?.intent ?? 'before';
 
-        // Special case: dropping onto a non-group trigger → target becomes the group, dragged becomes child
-        if (intent === 'into' && !target.isGroup && category === 'triggers') {
-            groupTriggers(connectionId, target.id, id);
-            setExpanded(prev => { const next = new Set(prev); next.add(target.id); return next; });
-            setSelectedId(target.id);
-            setDragId(null);
-            setDragOver(null);
-            return;
-        }
-
         let newParentId: string | null;
         let insertBeforeId: string | null;
 
@@ -938,15 +937,13 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
             insertBeforeId = null;
         } else if (
             intent === 'after' &&
-            target.isGroup &&
             expanded.has(target.id) &&
             items.some(i => i.parentId === target.id)
         ) {
-            // The "after" line cue under an expanded non-empty group sits
-            // between the group's row and its first child, so land the drop at
-            // that exact slot (first child of the group). Otherwise the
-            // calculation can pick the dragged item itself as insertBeforeId
-            // and silently no-op.
+            // The "after" line cue under an expanded node with children sits
+            // between the parent row and its first child, so land the drop at
+            // that exact slot. Applies to any expanded node — group or leaf
+            // chain head — whose children are currently visible.
             newParentId = target.id;
             insertBeforeId = items.find(i => i.parentId === target.id)?.id ?? null;
         } else {
@@ -1100,7 +1097,12 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
     }, [category, connectionId, addScript, addAlias, addTrigger, addTimer, addKeybinding, addButton]);
 
     const handleNew = (asGroup = false) => {
-        const parentId = selected?.isGroup
+        // When the selection is already acting as a parent — a folder, or a
+        // leaf that has nested children — new items land inside it. Otherwise
+        // they become siblings of the selection (or roots if nothing is
+        // selected).
+        const selectedHasChildren = selected ? (childCounts.get(selected.id) ?? 0) > 0 : false;
+        const parentId = selected && (selected.isGroup || selectedHasChildren)
             ? selected.id
             : selected?.parentId ?? null;
         createItem(asGroup, parentId);
@@ -1324,8 +1326,9 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                         const isSelected = item.id === selectedId;
                         const isExpanded = expanded.has(item.id);
                         const isOver = dragOver?.id === item.id;
-                        const childCount = item.isGroup ? (childCounts.get(item.id) ?? 0) : 0;
-                        const isEmptyGroup = item.isGroup && childCount === 0;
+                        const childCount = childCounts.get(item.id) ?? 0;
+                        const hasChildren = childCount > 0;
+                        const isEmptyGroup = item.isGroup && !hasChildren;
                         return (
                             <div
                                 key={item.id}
@@ -1349,14 +1352,14 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                 onDragEnd={handleDragEnd}
                                 onContextMenu={e => handleItemContextMenu(e, item.id)}
                             >
-                                {item.isGroup ? (
+                                {hasChildren || item.isGroup ? (
                                     <button
                                         className="script-editor__item-expand"
                                         onClick={e => handleToggleExpand(item.id, e)}
                                         tabIndex={-1}
                                         title={isEmptyGroup ? 'Empty group' : (isExpanded ? 'Collapse' : 'Expand')}
                                     >
-                                        <ItemIcon category={category} isGroup={true} isExpanded={isExpanded && !isEmptyGroup} />
+                                        <ItemIcon category={category} isGroup={item.isGroup} isExpanded={isExpanded && hasChildren} hasChildren={hasChildren} />
                                     </button>
                                 ) : (
                                     <span className="script-editor__item-spacer">
@@ -1372,7 +1375,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                 />
                                 <span className="script-editor__item-name">
                                     {item.name}
-                                    {item.isGroup && !isEmptyGroup && (
+                                    {hasChildren && (
                                         <span className="script-editor__item-count">{childCount}</span>
                                     )}
                                     {'key' in item && (item as KeyNode).key && (
@@ -1785,8 +1788,9 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                     </div>
                                 </div>
 
-                                {/* Chain section — groups only */}
-                                {selected.isGroup && (
+                                {/* Chain section — visible whenever this trigger could be a chain head
+                                    (a folder, or a leaf with at least one nested child trigger). */}
+                                {(selected.isGroup || (childCounts.get(selected.id) ?? 0) > 0) && (
                                     <div className="script-editor__trigger-card">
                                         <span className="script-editor__trigger-card-label">Chain</span>
                                         <div className="script-editor__trigger-card-row">

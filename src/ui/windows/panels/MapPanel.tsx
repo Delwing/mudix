@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { MapRenderer, createSettings } from 'mudlet-map-renderer';
 import type { RoomContextMenuEventDetail, Settings as MapRendererSettings } from 'mudlet-map-renderer';
 import type { WindowManager } from '../WindowManager';
-import type { MapEventEntry } from '../../../map/MapStore';
+import type { MapEventEntry, MapInfoResult } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
+import { MudletHighlightOverlay } from '../../../map/MudletHighlightOverlay';
 import { useAppStore, selectProfileField, type MapperSettings } from '../../../storage';
 
 /**
@@ -35,6 +36,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<MapRenderer | null>(null);
     const readerRef = useRef<MudixMapReader | null>(null);
+    const highlightOverlayRef = useRef<MudletHighlightOverlay | null>(null);
     const prevWidthRef = useRef<number>(0);
     const needsFitRef = useRef<boolean>(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -54,6 +56,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         roomId: number;
         items: MapEventEntry[];
     } | null>(null);
+    const [mapInfos, setMapInfos] = useState<MapInfoResult[]>([]);
 
     // Refs mirror the latest area/level so callbacks captured at mount time
     // can see the current selection (state values would be stale captures).
@@ -61,15 +64,6 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const currentLevelRef = useRef<number>(0);
     currentAreaRef.current = currentArea;
     currentLevelRef.current = currentLevel;
-
-    // Saved view state snapshot — captured once on mount so the first
-    // syncFromStore can restore area/level + zoom/pan instead of fitting.
-    // Subsequent saves (camera/area/level changes) write back via
-    // patchConnectionProfile; we don't re-read because that would clobber
-    // the user's live pan/zoom whenever the store notifies.
-    const savedViewRef = useRef(
-        useAppStore.getState().connectionProfile[connectionId]?.mapViewState,
-    );
 
     // User-tunable renderer settings (Mapper tab). Subscribing here re-renders
     // the panel whenever a field changes; the reactive effect below copies the
@@ -79,31 +73,133 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
     const mapperRef = useRef(mapper);
     mapperRef.current = mapper;
+
+    // Read a saved per-area view directly from the store. Always reads live so
+    // a write done moments earlier (flushSave on area switch) is visible.
+    const getSavedView = useCallback(
+        (areaId: number) =>
+            useAppStore.getState().connectionProfile[connectionId]?.mapViewStates?.[areaId],
+        [connectionId],
+    );
+
+    // Debounced per-area camera save. Captured at *schedule* time so flushing
+    // before an area switch writes the outgoing area's coords, not the new
+    // area's. Without this, a quick pan-then-switch sequence would write the
+    // post-switch (often fitArea) values back over the pan we just made.
     const saveTimerRef = useRef<number | null>(null);
+    const pendingSaveRef = useRef<{
+        areaId: number;
+        level: number;
+        zoom: number;
+        centerX: number;
+        centerY: number;
+    } | null>(null);
+
+    const flushSave = useCallback(() => {
+        if (saveTimerRef.current != null) {
+            window.clearTimeout(saveTimerRef.current);
+            saveTimerRef.current = null;
+        }
+        const pending = pendingSaveRef.current;
+        if (!pending) return;
+        pendingSaveRef.current = null;
+        const store = useAppStore.getState();
+        const existing = store.connectionProfile[connectionId]?.mapViewStates ?? {};
+        store.patchConnectionProfile(connectionId, {
+            mapViewStates: {
+                ...existing,
+                [pending.areaId]: {
+                    level: pending.level,
+                    zoom: pending.zoom,
+                    centerX: pending.centerX,
+                    centerY: pending.centerY,
+                },
+            },
+            mapLastAreaId: pending.areaId,
+        });
+    }, [connectionId]);
+
     const saveViewState = useCallback(() => {
+        const renderer = rendererRef.current;
+        const areaId = currentAreaRef.current;
+        if (!renderer || areaId == null) return;
+        const bounds = renderer.getViewportBounds();
+        pendingSaveRef.current = {
+            areaId,
+            level: currentLevelRef.current,
+            zoom: renderer.getZoom(),
+            centerX: (bounds.minX + bounds.maxX) / 2,
+            centerY: (bounds.minY + bounds.maxY) / 2,
+        };
         if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = window.setTimeout(() => {
             saveTimerRef.current = null;
-            const renderer = rendererRef.current;
-            const areaId = currentAreaRef.current;
-            if (!renderer || areaId == null) return;
-            const bounds = renderer.getViewportBounds();
-            const centerX = (bounds.minX + bounds.maxX) / 2;
-            const centerY = (bounds.minY + bounds.maxY) / 2;
-            const next = {
-                areaId,
-                level: currentLevelRef.current,
-                zoom: renderer.getZoom(),
-                centerX,
-                centerY,
-            };
-            // Keep the live ref in sync so the dock-hide-then-show recovery
-            // path (ResizeObserver else branch when container width transitions
-            // through 0) re-applies the user's current view, not mount-time.
-            savedViewRef.current = next;
-            useAppStore.getState().patchConnectionProfile(connectionId, { mapViewState: next });
+            flushSave();
         }, 400);
-    }, [connectionId]);
+    }, [flushSave]);
+
+    // The renderer's player marker isn't gated by area/z — its onPositionChanged
+    // runs after every drawArea and re-draws the marker at the player room's
+    // (x, y) on whatever canvas is currently displayed, so viewing a different
+    // area shows the marker in the wrong place. Gate it here: refresh the
+    // marker only when the displayed area+level contains the player room,
+    // otherwise clear it. clearPosition wipes positionRoomId but the next
+    // sync call (after a manual switch back, or a centerview) restores it.
+
+    // Re-evaluate every enabled registerMapInfo contributor. Cheap when no
+    // contributors are registered (most profiles); contributors are pure-Lua
+    // and the dispatcher pcalls each so a broken one can't take the panel
+    // down. roomId is the player's current room (mudix has no selection model
+    // — Mudlet's selectionSize/displayedAreaId distinction only matters there).
+    const recomputeMapInfos = useCallback(() => {
+        const areaId = currentAreaRef.current;
+        if (areaId == null) {
+            setMapInfos(prev => (prev.length === 0 ? prev : []));
+            return;
+        }
+        const playerRoomId = manager.mapStore.getPlayerRoom();
+        const playerRoomArea = playerRoomId != null
+            ? manager.mapStore.getRoomArea(playerRoomId)
+            : areaId;
+        const next = manager.mapStore.evaluateMapInfos(
+            playerRoomId,
+            0,
+            playerRoomArea === -1 ? areaId : playerRoomArea,
+            areaId,
+        );
+        // Avoid a state churn (and downstream re-render) when nothing changed.
+        // Compare cheaply by text+style — contributor identity is implicit in
+        // insertion order, which is stable.
+        setMapInfos(prev => {
+            if (prev.length !== next.length) return next;
+            for (let i = 0; i < next.length; i++) {
+                const a = prev[i], b = next[i];
+                if (a.label !== b.label || a.text !== b.text
+                    || a.isBold !== b.isBold || a.isItalic !== b.isItalic
+                    || a.color?.r !== b.color?.r || a.color?.g !== b.color?.g || a.color?.b !== b.color?.b) {
+                    return next;
+                }
+            }
+            return prev;
+        });
+    }, [manager]);
+
+    const syncPositionMarker = useCallback((areaId: number, level: number) => {
+        const renderer = rendererRef.current;
+        const reader = readerRef.current;
+        if (!renderer || !reader) return;
+        const playerRoomId = manager.mapStore.getPlayerRoom();
+        if (playerRoomId == null) {
+            renderer.clearPosition();
+            return;
+        }
+        const room = reader.getRoom(playerRoomId);
+        if (room && room.area === areaId && room.z === level) {
+            renderer.updatePositionMarker(playerRoomId);
+        } else {
+            renderer.clearPosition();
+        }
+    }, [manager]);
 
     // Refresh the live reader from MapStore and pick an area/level to display.
     // Used both on initial sync and on every store-change tick. Returns true
@@ -125,38 +221,52 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             return false;
         }
 
-        // On first sync, fall through to the saved view state from a prior
-        // session (if any) so the user keeps their area/level. The hint args
-        // win when explicitly provided (e.g. centerview from script).
-        const saved = needsFitRef.current ? undefined : savedViewRef.current;
-        const keepArea = opts?.keepArea ?? currentAreaRef.current ?? saved?.areaId ?? undefined;
-        const keepLevel = opts?.keepLevel ?? (currentAreaRef.current != null ? currentLevelRef.current : saved?.level);
+        // On first sync, restore the area the user was last viewing (and
+        // that area's saved view). Subsequent calls keep whatever area the
+        // user is currently in. Explicit hints (centerview from script) win.
+        const profile = useAppStore.getState().connectionProfile[connectionId];
+        const lastAreaId = profile?.mapLastAreaId;
+        const keepArea = opts?.keepArea
+            ?? currentAreaRef.current
+            ?? (needsFitRef.current ? undefined : lastAreaId);
         const restoredArea = keepArea != null && areaList.some(a => a.id === keepArea)
             ? keepArea
             : areaList[0].id;
         const areaLevels = reader.getArea(restoredArea).getZLevels().sort((a, b) => a - b);
+        const savedForArea = needsFitRef.current ? undefined : getSavedView(restoredArea);
+        const keepLevel = opts?.keepLevel
+            ?? (currentAreaRef.current != null ? currentLevelRef.current : savedForArea?.level);
         const restoredLevel =
             keepLevel != null && areaLevels.includes(keepLevel) ? keepLevel
             : areaLevels.includes(0) ? 0 : (areaLevels[0] ?? 0);
         setLevels(areaLevels);
         setCurrentLevel(restoredLevel);
         setCurrentArea(restoredArea);
+        // Update the mirrors synchronously too. The render-time `ref = state`
+        // assignment hasn't happened yet (setState is queued), so anything
+        // that runs before the next render — notably the ResizeObserver
+        // re-apply branch that fires from a queued layout pass — would
+        // otherwise see stale (often null) values and fall through to fitArea,
+        // clobbering the view we just restored.
+        currentAreaRef.current = restoredArea;
+        currentLevelRef.current = restoredLevel;
         renderer.drawArea(restoredArea, restoredLevel);
+        syncPositionMarker(restoredArea, restoredLevel);
+        recomputeMapInfos();
         // Only fit on the first successful render; afterwards preserve user pan/zoom.
-        // If we have a saved zoom/center for the same area we restored, apply
-        // those instead of fitting (so the user lands on their last view).
+        // If we have a saved zoom/center for this area, apply that instead.
         if (!needsFitRef.current) {
             needsFitRef.current = true;
-            if (saved && saved.areaId === restoredArea && Number.isFinite(saved.zoom)) {
-                renderer.setZoom(saved.zoom);
-                renderer.camera.panToMapPoint(saved.centerX, saved.centerY);
+            if (savedForArea && Number.isFinite(savedForArea.zoom)) {
+                renderer.setZoom(savedForArea.zoom);
+                renderer.camera.panToMapPoint(savedForArea.centerX, savedForArea.centerY);
             } else {
                 renderer.fitArea();
             }
         }
         setStatus('ready');
         return true;
-    }, []);
+    }, [connectionId, getSavedView, syncPositionMarker, recomputeMapInfos]);
 
     // Construct the renderer + live reader exactly once. Subsequent store
     // mutations flow through `reader.refresh()` + `renderer.drawArea(...)` —
@@ -174,6 +284,14 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         const renderer = new MapRenderer(reader, settings, containerRef.current);
         renderer.centerOnResize = false;
         rendererRef.current = renderer;
+
+        // Mudlet-style highlights (radial gradient with both colours + alphas).
+        // The overlay self-subscribes to MapStore mutations and area-change
+        // events via its SceneOverlayContext; the renderer disposes it via
+        // renderer.destroy(). Engine-agnostic, so it also appears in exports.
+        const highlightOverlay = new MudletHighlightOverlay(manager.mapStore, reader);
+        renderer.addSceneOverlay('mudlet-highlights', highlightOverlay);
+        highlightOverlayRef.current = highlightOverlay;
 
         renderer.backend.events.on('roomcontextmenu', (detail: RoomContextMenuEventDetail) => {
             const items = manager.mapStore.getMapEvents();
@@ -195,15 +313,15 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
 
         return () => {
             renderer.camera.off('change', onCameraChange);
-            if (saveTimerRef.current != null) {
-                window.clearTimeout(saveTimerRef.current);
-                saveTimerRef.current = null;
-            }
+            // Flush any pending camera save so a panel close (or connection
+            // switch) right after a pan doesn't drop the user's last view.
+            flushSave();
             renderer.destroy();
             rendererRef.current = null;
             readerRef.current = null;
+            highlightOverlayRef.current = null;
         };
-    }, [manager, saveViewState]);
+    }, [manager, saveViewState, flushSave]);
 
     // Forward Mapper-tab edits onto the live renderer.settings. The settings
     // object is shared and mutable, but the renderer caches some derived
@@ -216,23 +334,55 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         applyMapperSettings(renderer.settings, mapper);
         renderer.refresh();
         renderer.updateBackground();
+        // renderer.refresh() doesn't emit any state event the highlight overlay
+        // listens to, but a change to roomSize moves every highlight circle's
+        // radius. Force the overlay to re-read settings.roomSize.
+        highlightOverlayRef.current?.refresh();
     }, [mapper]);
 
     // Boot path: ScriptingEngine and this panel both call bootstrapMap; the
     // manager dedupes to a single IndexedDB fetch + parse. Once it resolves
     // (or fails) we sync from the now-populated MapStore.
+    //
+    // The first sync runs drawArea, whose createExits step is one of the
+    // single biggest main-thread blocks during boot (~140ms+). We yield with
+    // requestIdleCallback (fallback: rAF + setTimeout) so the browser paints
+    // the rest of the UI first, then build the map scene — this keeps the
+    // map's first-paint cost from delaying LCP.
     useEffect(() => {
         let cancelled = false;
+        let idleHandle: ReturnType<typeof setTimeout> | number | null = null;
         setStatus('loading');
-        manager.bootstrapMap().then(() => {
+        const runSync = () => {
             if (cancelled) return;
             try { syncFromStore(); }
             catch (e) {
                 setErrorMsg(e instanceof Error ? e.message : String(e));
                 setStatus('error');
             }
+        };
+        const scheduleAfterPaint = (cb: () => void) => {
+            const rIC = (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
+            if (typeof rIC === 'function') {
+                idleHandle = rIC(cb, { timeout: 300 });
+            } else {
+                // Double-yield: rAF fires *before* the next paint, so chain a
+                // task to land after the paint commits.
+                requestAnimationFrame(() => { idleHandle = setTimeout(cb, 0); });
+            }
+        };
+        manager.bootstrapMap().then(() => {
+            if (cancelled) return;
+            scheduleAfterPaint(runSync);
         });
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+            const cIC = (window as Window & { cancelIdleCallback?: (h: number) => void }).cancelIdleCallback;
+            if (idleHandle != null) {
+                if (typeof cIC === 'function') cIC(idleHandle as number);
+                else clearTimeout(idleHandle as ReturnType<typeof setTimeout>);
+            }
+        };
     }, [manager, syncFromStore]);
 
     // Close dropdown on outside click
@@ -303,8 +453,9 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 // trigger another saved-state restore and wipe the user's
                 // live pan/zoom.
                 if (renderer && newWidth > 0 && needsFitRef.current) {
-                    const saved = savedViewRef.current;
-                    if (saved && currentAreaRef.current === saved.areaId && Number.isFinite(saved.zoom)) {
+                    const areaId = currentAreaRef.current;
+                    const saved = areaId != null ? getSavedView(areaId) : undefined;
+                    if (saved && Number.isFinite(saved.zoom)) {
                         renderer.setZoom(saved.zoom);
                         renderer.camera.panToMapPoint(saved.centerX, saved.centerY);
                     } else {
@@ -316,7 +467,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         });
         ro.observe(el);
         return () => ro.disconnect();
-    }, []);
+    }, [getSavedView]);
 
     // Area/level changes don't always move the camera (e.g. level cycling via
     // ▲▼ buttons just redraws the same viewport), so the camera-change handler
@@ -365,13 +516,23 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         const areaId: number = room.area;
         const zLevel: number = room.z;
         const areaLevels = reader.getArea(areaId).getZLevels().sort((a, b) => a - b);
+        // Crossing into another area — save the outgoing area's view before
+        // ref flips. centerview itself keeps the current zoom (mapper-script
+        // semantics: follow the player without rescaling on every move).
+        if (currentAreaRef.current !== areaId) {
+            flushSave();
+            useAppStore.getState().patchConnectionProfile(connectionId, { mapLastAreaId: areaId });
+        }
         setLevels(areaLevels);
         setCurrentLevel(zLevel);
         setCurrentArea(areaId);
+        currentAreaRef.current = areaId;
+        currentLevelRef.current = zLevel;
         setDropdownOpen(false);
         renderer.drawArea(areaId, zLevel);
         renderer.setPosition(roomId, true);
-    }, []);
+        recomputeMapInfos();
+    }, [flushSave, connectionId, recomputeMapInfos]);
 
     useEffect(() => {
         const handler = (roomId: number) => centerViewImplRef.current(roomId);
@@ -399,15 +560,38 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     }, [manager]);
 
     const selectArea = useCallback((id: number) => {
+        const renderer = rendererRef.current;
+        if (!renderer) return;
+        // Flush the outgoing area's pending camera save BEFORE the area ref
+        // flips — pending captured areaId at schedule time, so flushing now
+        // writes against the old area, not the one we're about to switch to.
+        // Also persist the new mapLastAreaId immediately so a tab close
+        // before the new area's debounced save fires still restores to it.
+        if (currentAreaRef.current !== id) {
+            flushSave();
+            useAppStore.getState().patchConnectionProfile(connectionId, { mapLastAreaId: id });
+        }
         const areaLevels = readerRef.current?.getArea(id).getZLevels().sort((a, b) => a - b) ?? [0];
-        const level = areaLevels.includes(0) ? 0 : (areaLevels[0] ?? 0);
+        const saved = getSavedView(id);
+        const level = saved && areaLevels.includes(saved.level)
+            ? saved.level
+            : areaLevels.includes(0) ? 0 : (areaLevels[0] ?? 0);
         setLevels(areaLevels);
         setCurrentLevel(level);
         setCurrentArea(id);
+        currentAreaRef.current = id;
+        currentLevelRef.current = level;
         setDropdownOpen(false);
-        rendererRef.current?.drawArea(id, level);
-        rendererRef.current?.fitArea();
-    }, []);
+        renderer.drawArea(id, level);
+        syncPositionMarker(id, level);
+        if (saved && Number.isFinite(saved.zoom)) {
+            renderer.setZoom(saved.zoom);
+            renderer.camera.panToMapPoint(saved.centerX, saved.centerY);
+        } else {
+            renderer.fitArea();
+        }
+        recomputeMapInfos();
+    }, [flushSave, getSavedView, connectionId, syncPositionMarker, recomputeMapInfos]);
 
     const handleLevelChange = useCallback((delta: number) => {
         if (!rendererRef.current || !currentArea) return;
@@ -417,13 +601,32 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         const nextLevel = levels[nextIdx];
         setCurrentLevel(nextLevel);
         rendererRef.current.drawArea(currentArea, nextLevel);
-    }, [currentArea, currentLevel, levels]);
+        syncPositionMarker(currentArea, nextLevel);
+        recomputeMapInfos();
+    }, [currentArea, currentLevel, levels, syncPositionMarker, recomputeMapInfos]);
 
     const currentAreaName = areas.find(a => a.id === currentArea)?.name ?? '';
 
     return (
         <div className="map-panel">
             <div ref={containerRef} className="map-canvas-container" />
+            {mapInfos.length > 0 && (
+                <div className="map-info">
+                    {mapInfos.map(info => (
+                        <div
+                            key={info.label}
+                            className="map-info-entry"
+                            style={{
+                                fontWeight: info.isBold ? 700 : undefined,
+                                fontStyle: info.isItalic ? 'italic' : undefined,
+                                color: info.color ? `rgb(${info.color.r}, ${info.color.g}, ${info.color.b})` : undefined,
+                            }}
+                        >
+                            {info.text}
+                        </div>
+                    ))}
+                </div>
+            )}
             <input ref={fileInputRef} type="file" accept=".dat" onChange={handleFileChange} hidden />
             <div className="map-panel-toolbar">
                 {status === 'ready' && areas.length > 1 && (

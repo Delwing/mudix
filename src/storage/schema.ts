@@ -76,17 +76,21 @@ export interface ProfileSettings {
      *  prompt. Mitigates spurious mid-line breaks when long MUD lines arrive
      *  fragmented. `undefined` = use MudClient's built-in default (300ms). */
     promptTimeoutMs?: number;
-    /** Last-saved MapPanel camera state, restored when the panel mounts so
-     *  the user keeps their zoom/pan/area/level across reloads. Cleared
-     *  implicitly when a fresh map is loaded and the saved area no longer
-     *  exists (syncFromStore falls back to the first area + fitArea). */
-    mapViewState?: {
-        areaId: number;
+    /** Per-area MapPanel camera state. Each area remembers its own zoom,
+     *  pan and last-viewed level so switching between areas (or reopening
+     *  the panel) restores the view you had in that area. Updated whenever
+     *  the camera moves; cleared implicitly for an area that no longer
+     *  exists when the panel falls back to fitArea. */
+    mapViewStates?: Record<number, {
         level: number;
         zoom: number;
         centerX: number;
         centerY: number;
-    };
+    }>;
+    /** The area id the user was viewing last. Restored as the initial
+     *  area on panel mount; the matching {@link mapViewStates} entry drives
+     *  the initial zoom/pan. Falls through to the first area in the map. */
+    mapLastAreaId?: number;
     /** User-tunable subset of mudlet-map-renderer's Settings object. Fields
      *  are forwarded onto the live renderer.settings on mount and whenever
      *  the user changes them in the Mapper tab. Missing fields fall through

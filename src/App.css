@@ -1310,6 +1310,34 @@ html, body, #root {
     width: 100%;
 }
 
+.map-info {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    max-width: 60%;
+    padding: 6px 10px;
+    background: var(--bg-glass);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: inset 0 1px 0 var(--border-hi);
+    color: var(--text);
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    line-height: 1.4;
+    pointer-events: none;
+    z-index: 5;
+}
+
+.map-info-entry {
+    white-space: pre-wrap;
+}
+
+.map-info-entry + .map-info-entry {
+    margin-top: 4px;
+}
+
 .map-hamburger {
     position: relative;
     margin-left: auto;

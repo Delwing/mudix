@@ -17,6 +17,12 @@ function getText(el: Element, tag: string): string {
     return el.querySelector(`:scope > ${tag}`)?.textContent?.trim() ?? '';
 }
 
+// Like getText but preserves leading/trailing whitespace — use for fields where
+// whitespace is semantic (trigger pattern strings, alias regex patterns).
+function getRawText(el: Element, tag: string): string {
+    return el.querySelector(`:scope > ${tag}`)?.textContent ?? '';
+}
+
 function isYes(el: Element, attr: string): boolean {
     return el.getAttribute(attr) === 'yes';
 }
@@ -86,7 +92,7 @@ function parseAliases(els: Element[], parentId: string | null, out: AliasNode[])
     for (const el of els) {
         const id = crypto.randomUUID();
         const group = isGroup(el);
-        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), pattern: getText(el, 'regex'), command: getText(el, 'command'), code: getText(el, 'script'), language: 'lua' });
+        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), pattern: getRawText(el, 'regex'), command: getText(el, 'command'), code: getText(el, 'script'), language: 'lua' });
         if (group) parseAliases(directChildren(el, 'Alias', 'AliasGroup'), id, out);
     }
 }
@@ -104,7 +110,9 @@ function parseTriggers(els: Element[], parentId: string | null, out: TriggerNode
 
         const patterns: TriggerPattern[] = patternEls.map((p, i) => {
             const typeIdx = parseInt(typeEls[i]?.textContent?.trim() ?? '0') || 0;
-            return { text: p.textContent?.trim() ?? '', type: MUDLET_PATTERN_TYPES[typeIdx] ?? 'substring' };
+            // Pattern text is preserved verbatim — leading/trailing whitespace
+            // is significant for substring/exactMatch/regex matching.
+            return { text: p.textContent ?? '', type: MUDLET_PATTERN_TYPES[typeIdx] ?? 'substring' };
         });
         if (patterns.length === 0 && !group) patterns.push({ text: '', type: 'substring' });
 
@@ -122,7 +130,10 @@ function parseTriggers(els: Element[], parentId: string | null, out: TriggerNode
             delta: parseInt(getText(el, 'conditonLineDelta')) || 0,
             isFilter: isYes(el, 'isFilterTrigger'),
         });
-        if (group) parseTriggers(directChildren(el, 'Trigger', 'TriggerGroup'), id, out);
+        // Triggers (unlike scripts/aliases/timers/keys) can nest under a non-folder
+        // parent: Mudlet's chain-trigger model lets any trigger with children act as
+        // a chain head, gating its descendants for `mStayOpen` lines after it fires.
+        parseTriggers(directChildren(el, 'Trigger', 'TriggerGroup'), id, out);
     }
 }
 

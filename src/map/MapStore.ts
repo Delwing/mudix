@@ -1,5 +1,8 @@
 import type {MudletArea, MudletColor, MudletFont, MudletLabel, MudletMap, MudletRoom} from 'mudlet-map-binary-reader';
 import {readerExport} from 'mudlet-map-binary-reader';
+import {findPath, type PathfindResult} from './pathfinding';
+
+export type {PathfindResult} from './pathfinding';
 
 export type MapRendererData = ReturnType<typeof readerExport>;
 
@@ -120,6 +123,38 @@ function labelToInfo(l: MudletLabel): MapLabelInfo {
     };
 }
 
+/** Mudlet room highlight: two-color radial gradient with per-color alpha and
+ *  a radius factor. Rendered by MudletHighlightOverlay (LiveEffect) — color1
+ *  at the center, color2 at the outer edge, full Mudlet semantics. */
+export interface RoomHighlight {
+    r1: number; g1: number; b1: number;
+    r2: number; g2: number; b2: number;
+    a1: number; a2: number;
+    radius: number;
+}
+
+/** Mudlet registerMapInfo callback result. Returned by the LuaRuntime
+ *  evaluator after invoking a registered contributor; `null` when the
+ *  callback returned an empty string / nothing, or when the evaluator
+ *  itself failed (the Lua error is reported via showHandlerError, not here). */
+export interface MapInfoResult {
+    label: string;
+    text: string;
+    isBold: boolean;
+    isItalic: boolean;
+    color?: { r: number; g: number; b: number };
+}
+
+/** A registered Mudlet `registerMapInfo` contributor. `callbackId` indexes
+ *  into the Lua-side `__mudix_cb` registry; the LuaRuntime evaluator
+ *  dispatches to it. Starts disabled (Mudlet semantics — caller must
+ *  `enableMapInfo(label)` to show it). */
+export interface MapInfoContributor {
+    label: string;
+    callbackId: number;
+    enabled: boolean;
+}
+
 export interface MapEventEntry {
     /** Stable id used by removeMapEvent and as a parent reference. */
     uniqueName: string;
@@ -149,6 +184,7 @@ export class MapStore {
     private notifyPending = false;
     private mapEvents = new Map<string, MapEventEntry>();
     private customEnvColors = new Map<number, MudletColor>();
+    private roomHighlights = new Map<number, RoomHighlight>();
     private mapUserData: Record<string, string> = {};
     // Player's current room id, mirrors Mudlet's mRoomIdHash[host.getName()].
     // Updated by centerview (matching Mudlet's centerview-sets-player-room
@@ -158,6 +194,15 @@ export class MapStore {
     // Set by LuaRuntime so dispatchMapEvent can fire raiseEvent into the runtime.
     // Cleared on runtime teardown to avoid firing into a closed lua_State.
     private mapEventDispatcher: ((eventName: string, args: unknown[]) => void) | null = null;
+    // Mudlet registerMapInfo contributors. Insertion-ordered so the panel renders
+    // entries in registration order (Mudlet behaves the same).
+    private mapInfoContributors: MapInfoContributor[] = [];
+    // Set by LuaRuntime so evaluateMapInfos can invoke each contributor's
+    // Lua callback and capture its multi-return. Cleared on runtime teardown
+    // alongside the contributor list — the cb ids are runtime-scoped.
+    private mapInfoEvaluator:
+        | ((callbackId: number, roomId: number | null, selectionSize: number, areaId: number, displayedAreaId: number) => Omit<MapInfoResult, 'label'> | null)
+        | null = null;
 
     subscribe(cb: () => void): () => void {
         this.subscribers.add(cb);
@@ -194,6 +239,7 @@ export class MapStore {
         this.labels.clear();
         this.envColors.clear();
         this.customEnvColors.clear();
+        this.roomHighlights.clear();
         this.mapUserData = {};
         this.playerRoomId = null;
         this.nextRoomId = 1;
@@ -221,6 +267,7 @@ export class MapStore {
         this.labels.clear();
         this.envColors.clear();
         this.customEnvColors.clear();
+        this.roomHighlights.clear();
         this.playerRoomId = null;
 
         for (const [k, room] of Object.entries(mudletMap.rooms ?? {})) {
@@ -244,7 +291,18 @@ export class MapStore {
             this.areaNames.set(Number(k), name);
         }
         for (const [k, labels] of Object.entries(mudletMap.labels ?? {})) {
-            this.labels.set(Number(k), labels);
+            // Normalize pixmaps to base64 strings up-front. Heavy Buffer
+            // payloads here would later get walked by lodash.cloneDeep inside
+            // readerExport on every renderer refresh — see MudixMapReader for
+            // the strip/patch dance that depends on this normalization.
+            const normalized = labels.map(l => {
+                const pm = l.pixMap as unknown;
+                if (typeof pm === 'string') return l;
+                if (!pm) return l;
+                try { return { ...l, pixMap: Buffer.from(pm as Uint8Array).toString('base64') }; }
+                catch { return { ...l, pixMap: '' }; }
+            });
+            this.labels.set(Number(k), normalized);
         }
         for (const [k, c] of Object.entries(mudletMap.mCustomEnvColors ?? {})) {
             this.customEnvColors.set(Number(k), c);
@@ -514,6 +572,12 @@ export class MapStore {
     }
 
     getExitStubs(id: number): number[] { return [...(this.rooms.get(id)?.stubs ?? [])]; }
+
+    /** Mudlet `findPath(from, to)` — see {@link findPath} in `./pathfinding`
+     *  for the algorithm (A* with Mudlet's Euclidean-or-1 heuristic). */
+    findPath(from: number, to: number): PathfindResult | null {
+        return findPath(this.rooms, from, to);
+    }
 
     setExitStub(id: number, dir: number | string, set: boolean): boolean {
         const room = this.rooms.get(id);
@@ -872,6 +936,91 @@ export class MapStore {
         this.mapEventDispatcher?.(entry.eventName, [uniqueName, roomId]);
     }
 
+    // ── Map info contributors (Mudlet registerMapInfo) ────────────────────────
+
+    setMapInfoEvaluator(fn: MapStore['mapInfoEvaluator']): void {
+        this.mapInfoEvaluator = fn;
+    }
+
+    /** Add or replace a contributor. Re-registering the same label keeps the
+     *  current enabled state and returns the prior callbackId so the runtime
+     *  can free the leaked Lua-registry slot. */
+    registerMapInfo(label: string, callbackId: number): { prevCallbackId: number | null } {
+        const idx = this.mapInfoContributors.findIndex(c => c.label === label);
+        let prev: number | null = null;
+        if (idx >= 0) {
+            prev = this.mapInfoContributors[idx].callbackId;
+            this.mapInfoContributors[idx] = { label, callbackId, enabled: this.mapInfoContributors[idx].enabled };
+        } else {
+            this.mapInfoContributors.push({ label, callbackId, enabled: false });
+        }
+        this.notify();
+        return { prevCallbackId: prev };
+    }
+
+    /** Remove a contributor entirely. Returns the freed callbackId (so the
+     *  runtime can release the Lua-registry slot) or null when the label
+     *  wasn't registered. */
+    killMapInfo(label: string): { callbackId: number | null; removed: boolean } {
+        const idx = this.mapInfoContributors.findIndex(c => c.label === label);
+        if (idx < 0) return { callbackId: null, removed: false };
+        const cb = this.mapInfoContributors[idx].callbackId;
+        this.mapInfoContributors.splice(idx, 1);
+        this.notify();
+        return { callbackId: cb, removed: true };
+    }
+
+    enableMapInfo(label: string): boolean {
+        const c = this.mapInfoContributors.find(c => c.label === label);
+        if (!c) return false;
+        if (c.enabled) return true;
+        c.enabled = true;
+        this.notify();
+        return true;
+    }
+
+    disableMapInfo(label: string): boolean {
+        const c = this.mapInfoContributors.find(c => c.label === label);
+        if (!c) return false;
+        if (!c.enabled) return true;
+        c.enabled = false;
+        this.notify();
+        return true;
+    }
+
+    /** Snapshot for tests / debug. The panel goes through evaluateMapInfos. */
+    getMapInfoContributors(): MapInfoContributor[] {
+        return this.mapInfoContributors.map(c => ({ ...c }));
+    }
+
+    /** Run every enabled contributor through the LuaRuntime evaluator and
+     *  collect their (text, style, color) results. Empty when the evaluator
+     *  is unhooked or no contributor returned a non-empty text. */
+    evaluateMapInfos(
+        roomId: number | null,
+        selectionSize: number,
+        areaId: number,
+        displayedAreaId: number,
+    ): MapInfoResult[] {
+        const evaluator = this.mapInfoEvaluator;
+        if (!evaluator || this.mapInfoContributors.length === 0) return [];
+        const out: MapInfoResult[] = [];
+        for (const c of this.mapInfoContributors) {
+            if (!c.enabled) continue;
+            const r = evaluator(c.callbackId, roomId, selectionSize, areaId, displayedAreaId);
+            if (r && r.text) out.push({ label: c.label, ...r });
+        }
+        return out;
+    }
+
+    /** Drop every registered contributor. Called on LuaRuntime teardown — the
+     *  callback IDs index into the dying runtime's __mudix_cb registry. */
+    clearMapInfoContributors(): void {
+        if (this.mapInfoContributors.length === 0) return;
+        this.mapInfoContributors = [];
+        this.notify();
+    }
+
     // ── Custom env colors (Mudlet setCustomEnvColor) ──────────────────────────
 
     /** Mudlet setCustomEnvColor(envID, r, g, b, a). envID identifies the user
@@ -894,6 +1043,41 @@ export class MapStore {
             out[id] = { r: c.r, g: c.g, b: c.b, a: c.alpha };
         }
         return out;
+    }
+
+    // ── Room highlights (Mudlet highlightRoom / unHighlightRoom) ──────────────
+
+    /**
+     * Mudlet highlightRoom(roomID, r1, g1, b1, r2, g2, b2, radius, a1, a2).
+     * Painted by MudletHighlightOverlay as a radial gradient: color1 (with
+     * a1 alpha) at the center, color2 (with a2 alpha) at the outer edge,
+     * with the circle radius = settings.roomSize × `radius`. Returns false
+     * if the room does not exist.
+     */
+    highlightRoom(
+        id: number,
+        r1: number, g1: number, b1: number,
+        r2: number, g2: number, b2: number,
+        radius: number,
+        a1 = 255, a2 = 255,
+    ): boolean {
+        if (!this.rooms.has(id)) return false;
+        this.roomHighlights.set(id, { r1, g1, b1, r2, g2, b2, a1, a2, radius });
+        this.notify();
+        return true;
+    }
+
+    /** Mudlet unHighlightRoom(roomID). Returns false when the room had no highlight. */
+    unHighlightRoom(id: number): boolean {
+        if (!this.roomHighlights.delete(id)) return false;
+        this.notify();
+        return true;
+    }
+
+    /** Snapshot of all active room highlights. MapPanel reads this each store
+     *  notify to reconcile the renderer's overlay shapes against the store. */
+    getRoomHighlights(): Map<number, RoomHighlight> {
+        return this.roomHighlights;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

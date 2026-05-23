@@ -79,7 +79,6 @@ interface AppStore extends AppSchema {
     moveTimer: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     moveKeybinding: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
     moveButton: (connectionId: string, id: string, newParentId: string | null, insertBeforeId: string | null) => void;
-    groupTriggers: (connectionId: string, targetId: string, draggedId: string) => void;
     saveScriptEditorBounds: (connectionId: string, bounds: ScriptEditorBounds) => void;
     saveModalBounds: (connectionId: string, key: string, bounds: ModalBounds) => void;
     installPackage: (connectionId: string, manifest: PackageManifest, data: MudletImportResult) => void;
@@ -464,20 +463,6 @@ export const useAppStore = create<AppStore>()(
                     [connectionId]: moveInList(s.connectionButtons[connectionId] ?? [], id, newParentId, insertBeforeId),
                 },
             })),
-            groupTriggers: (connectionId, targetId, draggedId) => set(s => {
-                const current = s.connectionTriggers[connectionId] ?? [];
-                // Target becomes the group; dragged becomes a child of target.
-                return {
-                    connectionTriggers: {
-                        ...s.connectionTriggers,
-                        [connectionId]: current.map(t => {
-                            if (t.id === targetId) return { ...t, isGroup: true };
-                            if (t.id === draggedId) return { ...t, parentId: targetId };
-                            return t;
-                        }),
-                    },
-                };
-            }),
             saveScriptEditorBounds: (connectionId, bounds) => set(s => ({
                 connectionScriptEditorBounds: {
                     ...s.connectionScriptEditorBounds,
@@ -529,7 +514,7 @@ export const useAppStore = create<AppStore>()(
         }),
         {
             name: 'mudix_v1',
-            version: 18,
+            version: 19,
             // Coalesce rapid mutations (e.g. an enableTrigger that touches N
             // matching nodes, or a script edit firing on every keystroke) into
             // one JSON.stringify + localStorage write. createJSONStorage runs
@@ -590,6 +575,26 @@ export const useAppStore = create<AppStore>()(
                         if (legacyUi[k] !== undefined) (seed as any)[k] = legacyUi[k];
                     }
                     connectionProfile = Object.fromEntries(connections.map(c => [c.id, { ...seed }]));
+                }
+
+                // v19: split single mapViewState into per-area mapViewStates +
+                // mapLastAreaId so each area remembers its own zoom/pan/level.
+                if (version < 19) {
+                    for (const prof of Object.values(connectionProfile) as any[]) {
+                        const legacy = prof?.mapViewState;
+                        if (!legacy) continue;
+                        prof.mapViewStates = {
+                            ...(prof.mapViewStates ?? {}),
+                            [legacy.areaId]: {
+                                level: legacy.level,
+                                zoom: legacy.zoom,
+                                centerX: legacy.centerX,
+                                centerY: legacy.centerY,
+                            },
+                        };
+                        prof.mapLastAreaId = legacy.areaId;
+                        delete prof.mapViewState;
+                    }
                 }
 
                 return {

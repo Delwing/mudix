@@ -1,6 +1,8 @@
 import {MapReader} from 'mudlet-map-renderer';
 import type {IArea, IMapReader} from 'mudlet-map-renderer';
 import {readerExport} from 'mudlet-map-binary-reader';
+import type {MudletLabel, MudletMap} from 'mudlet-map-binary-reader';
+import {Buffer} from 'buffer';
 import type {MapStore} from './MapStore';
 
 // The renderer's `MapData.Room` / `MapData.Map` types live in a global
@@ -68,7 +70,36 @@ export class MudixMapReader implements IMapReader {
         if (Object.keys(mudletMap.rooms).length === 0) {
             return new MapReader([], []);
         }
-        const {mapData, colors} = readerExport(mudletMap);
+        // readerExport internally does `lodash.cloneDeep(mapModel)`. On
+        // label-heavy maps that walks each pixMap Buffer via cloneArrayBuffer
+        // — hundreds of ms per image, paid on every store-version bump. The
+        // worker / loadFromBinary normalize pixmaps to base64 strings up-front,
+        // but readerExport's own convertLabel still re-runs `Buffer.from(...)`
+        // on whatever it gets. Strip the pixmaps to a shared empty Buffer for
+        // the clone, then patch the renderer-format output back with the
+        // already-cached base64 strings.
+        const emptyBuf = Buffer.alloc(0);
+        const pixmapByArea = new Map<string, string[]>();
+        const strippedLabels: Record<number, MudletLabel[]> = {};
+        for (const [areaIdStr, labels] of Object.entries(mudletMap.labels ?? {})) {
+            const cached: string[] = [];
+            strippedLabels[Number(areaIdStr)] = labels.map(l => {
+                cached.push(typeof l.pixMap === 'string' ? l.pixMap : '');
+                return {...l, pixMap: emptyBuf};
+            });
+            pixmapByArea.set(areaIdStr, cached);
+        }
+        const stripped: MudletMap = {...mudletMap, labels: strippedLabels};
+        const {mapData, colors} = readerExport(stripped);
+        // mapData[].areaId is the same string key we indexed by; patch each
+        // label's renderer-shape pixMap back to its real base64 payload.
+        for (const area of mapData) {
+            const cached = pixmapByArea.get(String(area.areaId));
+            if (!cached) continue;
+            for (let i = 0; i < area.labels.length; i++) {
+                (area.labels[i] as {pixMap: string}).pixMap = cached[i] ?? '';
+            }
+        }
         // RendererRoom (binary-reader output) is structurally a MapData.Room
         // with `areaId` missing — the renderer reads room.area, not
         // room.areaId, so the gap is harmless. Cast through unknown to bridge.
