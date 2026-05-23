@@ -962,9 +962,15 @@ html, body, #root {
     padding: 3px;
 }
 
-.output-wrapper::-webkit-scrollbar { width: 6px; }
+.output-wrapper::-webkit-scrollbar { width: 6px; height: 6px; }
 .output-wrapper::-webkit-scrollbar-track { background: transparent; }
 .output-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Mudlet scrollbar / scrolling APIs apply these classes to the wrapper. */
+.output-wrapper.mudix-no-scrollbar { scrollbar-width: none; }
+.output-wrapper.mudix-no-scrollbar::-webkit-scrollbar:vertical { display: none; }
+.output-wrapper.mudix-h-scrollbar { overflow-x: auto; }
+.output-wrapper.mudix-no-scrolling { overflow-y: hidden; }
 
 /* ── Output messages ────────────────────────────────────────── */
 .output-msg {
@@ -1073,6 +1079,23 @@ html, body, #root {
 .scroll-to-bottom:hover {
     background: color-mix(in srgb, var(--bg-input) 85%, transparent);
     box-shadow: inset 0 1px 0 var(--border-hi), var(--shadow-button-hover), 0 0 8px var(--accent-glow);
+}
+
+/* ── Per-userwindow command line (Mudlet enableCommandLine on a userwindow). */
+.window-cmdline {
+    flex: 0 0 auto;
+    width: 100%;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 4px 8px;
+    outline: none;
+}
+.window-cmdline:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-focus);
 }
 
 /* ── Command bar ────────────────────────────────────────────── */
@@ -1728,6 +1751,20 @@ html, body, #root {
 
 .vfs-new-folder-input::placeholder {
     color: var(--text-dim);
+}
+
+.vfs-rename-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-family: var(--font-mono), monospace;
+    background: var(--bg, #1a1a1a);
+    color: var(--text);
+    border: 1px solid var(--accent, #64a0ff);
+    border-radius: 2px;
+    outline: none;
+    padding: 0 4px;
+    margin: -1px 0;
 }
 
 .vfs-chevron {

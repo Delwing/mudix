@@ -3,13 +3,35 @@ import type { Console } from '../../mud/text/Console';
 import type { AnsiAwareBuffer } from '../../mud/text/FormatState';
 import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
 import { MapStore } from '../../map/MapStore';
-import { saveMap, loadMap as loadMapFromStorage } from '../../storage/mapStorage';
-import { readMapFromBuffer } from 'mudlet-map-binary-reader';
+import { saveMap as saveMapToStorage, loadMap as loadMapFromStorage } from '../../storage/mapStorage';
+import { readMapFromBuffer, writeMapToBuffer } from 'mudlet-map-binary-reader';
 import { Buffer } from 'buffer';
 
 interface ScriptWindowData extends ScriptWindowRenderData {
     pendingText: Array<string | AnsiAwareBuffer>;
+    /** Pre-mount holding cell for the latest partial line (script echo without
+     *  a trailing newline). Only the most-recent value matters — the renderer
+     *  paints partials in-place — so we overwrite rather than queue. */
+    pendingPartial?: AnsiAwareBuffer;
 }
+
+interface WindowCmdLineState {
+    /** Lua callback fired on Enter. When null/undefined, Enter falls through to
+     *  the main connection (mirrors Mudlet's pre-setCmdLineAction default). */
+    action: ((text: string) => void) | null;
+}
+
+interface ScrollState {
+    scrollBarVisible: boolean;
+    horizontalScrollBarVisible: boolean;
+    scrollingEnabled: boolean;
+}
+
+const DEFAULT_SCROLL_STATE: ScrollState = {
+    scrollBarVisible: true,
+    horizontalScrollBarVisible: false,
+    scrollingEnabled: true,
+};
 
 const TEXT_BUFFER_LIMIT = 5000;
 
@@ -38,10 +60,20 @@ export class WindowManager {
      *  full user-window box that labels live in, not the inner output area. */
     private readonly viewports     = new Map<string, HTMLElement>();
     private readonly lineBuffers   = new Map<string, string>();
+    /** Per-window scroll/scrollbar overrides applied via CSS classes when the
+     *  console's wrapper element registers. Mudlet's enable/disable Scrolling
+     *  and (Horizontal)ScrollBar APIs back into this. */
+    private readonly scrollState   = new Map<string, ScrollState>();
     private readonly portalTargets = new Map<string, HTMLDivElement>();
     private readonly resizeObservers = new Map<string, ResizeObserver>();
     private readonly lastEmittedSize = new Map<string, { w: number; h: number }>();
     private readonly activeTabGroups = new Map<string, string>(); // groupId → active panelId
+    /** Per-window command-line state. Keyed by window id; entry exists only
+     *  after enableCommandLine. The actual rendered <input> lives in TextPanel
+     *  /HtmlPanel and pulls its enabled/css/value from the ScriptWindowRenderData
+     *  payload that notify() emits — this map only carries non-serializable
+     *  state (the Lua callback). */
+    private readonly cmdLineState = new Map<string, WindowCmdLineState>();
     private readonly mapCallbacks  = new Map<string, (roomId: number) => void>();
     private mapLoadCallback: ((buf?: ArrayBuffer) => boolean) | null = null;
     /** Single in-flight bootstrap promise — both ScriptingEngine.start (which
@@ -100,6 +132,101 @@ export class WindowManager {
         this.notify();
     }
 
+    // ── saveWindowLayout / loadWindowLayout ───────────────────────────────────
+
+    /**
+     * Snapshot the current window hints + dock extents. Returned object is a
+     * deep copy — safe to persist without aliasing the live state. Backs
+     * Mudlet's `saveWindowLayout()`.
+     */
+    captureLayoutSnapshot(): { hints: Record<string, WindowOpenOptions>; dockExtents: Record<DockSide, number> } {
+        return {
+            hints: structuredClone(this.windowHints),
+            dockExtents: { ...this.dockExtents },
+        };
+    }
+
+    /**
+     * Re-apply a previously captured snapshot to the live state. Backs
+     * Mudlet's `loadWindowLayout()`. Behaviour:
+     *   - Replaces the stored windowHints + dockExtents with the snapshot.
+     *   - For each currently open window with a snapshot entry, rewrites its
+     *     geometry / dock state / style fields in place (keeps pendingText,
+     *     controls, miniconsole content intact).
+     *   - For each snapshot hint with no current window, opens the window when
+     *     the snapshot recorded it as visible (hidden !== true).
+     * `onWindowHint` / `onDockExtentsChange` callbacks fire so the persistence
+     * layer mirrors the restored state.
+     */
+    applyLayoutSnapshot(snapshot: { hints: Record<string, WindowOpenOptions>; dockExtents: Record<string, number> }): void {
+        // 1) Dock extents
+        for (const [side, size] of Object.entries(snapshot.dockExtents)) {
+            if (size !== undefined) this.dockExtents[side as DockSide] = size;
+        }
+        this.onDockExtentsChange?.({ ...this.dockExtents });
+
+        // 2) Replace the hint cache. structuredClone so subsequent saveHint
+        //    mutations don't write back into the snapshot object.
+        this.windowHints = structuredClone(snapshot.hints);
+
+        // 3) Re-apply hints to currently open windows.
+        for (const [id, hint] of Object.entries(this.windowHints)) {
+            const win = this.windows.get(id);
+            if (!win) continue;
+
+            if (hint.x          !== undefined) win.x          = hint.x;
+            if (hint.y          !== undefined) win.y          = hint.y;
+            if (hint.width      !== undefined) win.width      = hint.width;
+            if (hint.height     !== undefined) win.height     = hint.height;
+            if (hint.title      !== undefined) win.title      = hint.title;
+
+            win.docked     = hint.docked;
+            win.dockOrder  = hint.dockOrder;
+            win.dockFlex   = hint.dockFlex;
+            win.dockGroup  = hint.dockGroup;
+            win.tabOrder   = hint.tabOrder;
+            win.splitGroup = hint.splitGroup;
+            win.splitOrder = hint.splitOrder;
+            win.splitFlex  = hint.splitFlex;
+
+            win.fontSize        = hint.fontSize;
+            win.fontFamily      = hint.fontFamily;
+            win.wrapAt          = hint.wrapAt;
+            win.backgroundColor = hint.backgroundColor;
+            win.backgroundImage = hint.backgroundImage;
+
+            // Snapshot is authoritative for visibility: hidden flag flips the
+            // current state. Don't bump zIndex — preserve relative stacking.
+            win.visible = hint.hidden !== true;
+
+            if (hint.dockGroup) {
+                if (hint.isActiveTab || !this.activeTabGroups.has(hint.dockGroup)) {
+                    this.activeTabGroups.set(hint.dockGroup, id);
+                }
+            }
+        }
+
+        // 4) Open windows that the snapshot has but are not currently mounted,
+        //    provided they were visible at save time. Use `ignoreHint: false`
+        //    semantics — pass the hint directly via options so open() lays the
+        //    window out from the snapshot rather than from any stale prior
+        //    state. autoOpen is preserved by spreading the saved hint.
+        for (const [id, hint] of Object.entries(this.windowHints)) {
+            if (this.windows.has(id)) continue;
+            if (hint.hidden === true) continue;
+            if (!hint.kind) continue;
+            this.open(id, hint);
+        }
+
+        // 5) Persist the restored hints (so the live store mirrors the
+        //    snapshot, and a later save without intervening edits is a no-op).
+        for (const [id, hint] of Object.entries(this.windowHints)) {
+            this.onWindowHint?.(id, hint);
+        }
+
+        this.notify();
+    }
+
     // ── Portal target ─────────────────────────────────────────────────────────
 
     /** Returns the stable portal-target div for a window, creating it on first call.
@@ -124,10 +251,18 @@ export class WindowManager {
         this.controls.set(id, controls);
         const win = this.windows.get(id);
         if (win?.pendingText.length) {
-            for (const line of win.pendingText) controls.push(line);
+            // Drive the renderer's partial-completion path by tagging completed
+            // lines with type 'script' so a previously-buffered script-partial
+            // would be replaced in-place (matches the main-output flow).
+            for (const line of win.pendingText) controls.push(line, 'script');
             win.pendingText = [];
         }
+        if (win?.pendingPartial && win.pendingPartial.length > 0) {
+            controls.push(win.pendingPartial, 'script-partial');
+            win.pendingPartial = undefined;
+        }
         this.elements.set(id, element);
+        this.applyScrollClasses(id);
     }
 
     /** Registers the outer panel element for size queries and sysUserWindowResizeEvent.
@@ -149,8 +284,12 @@ export class WindowManager {
     /** OutputArea registers the main `.output-wrapper` here so getColumnCount()
      *  can measure character width against the actual rendered element. */
     registerMainOutput(element: HTMLElement | null): void {
-        if (element) this.elements.set('main', element);
-        else         this.elements.delete('main');
+        if (element) {
+            this.elements.set('main', element);
+            this.applyScrollClasses('main');
+        } else {
+            this.elements.delete('main');
+        }
     }
 
     /**
@@ -186,6 +325,7 @@ export class WindowManager {
             }
             win.pendingText = [];
         }
+        this.applyScrollClasses(id);
     }
 
     pushBuffer(id: string, buffer: AnsiAwareBuffer): void {
@@ -195,12 +335,34 @@ export class WindowManager {
         this.flushLine(id);
         const ctrl = this.controls.get(id);
         if (ctrl) {
-            ctrl.push(buffer);
+            // type='script' lets the renderer finalize a script-partial in-place
+            // (instead of leaving an orphan element above the new line).
+            ctrl.push(buffer, 'script');
         } else {
             win.pendingText.push(buffer);
+            // A completed line supersedes any pending partial that belonged to
+            // the same logical line — otherwise registerTextPanel would paint
+            // both.
+            win.pendingPartial = undefined;
             if (win.pendingText.length > TEXT_BUFFER_LIMIT) {
                 win.pendingText.splice(0, win.pendingText.length - TEXT_BUFFER_LIMIT);
             }
+        }
+    }
+
+    /** Push the current partial-line buffer (script echo without a trailing
+     *  newline) so the renderer can paint it in-place via the 'script-partial'
+     *  path. Repeated calls update the same DOM element; a subsequent
+     *  pushBuffer completes the partial. Pre-mount, the latest partial is
+     *  cached on the window and flushed by registerTextPanel. */
+    pushPartialBuffer(id: string, buffer: AnsiAwareBuffer): void {
+        const win = this.windows.get(id);
+        if (!win || win.kind !== 'text') return;
+        const ctrl = this.controls.get(id);
+        if (ctrl) {
+            ctrl.push(buffer, 'script-partial');
+        } else {
+            win.pendingPartial = buffer;
         }
     }
 
@@ -336,7 +498,7 @@ export class WindowManager {
             // ingest below runs first — so without a copy IDB persists
             // parser-mutated bytes, and the next mount loads them and
             // double-swaps QString regions into CJK garbage.
-            saveMap(this._connectionId, buf.slice(0)).catch(err =>
+            saveMapToStorage(this._connectionId, buf.slice(0)).catch(err =>
                 console.warn('[WindowManager] saveMap failed:', err));
             try {
                 this.ingestMapBuffer(buf);
@@ -351,6 +513,41 @@ export class WindowManager {
         this.mapLoadCallback?.(buf);
         if (buf) this.onRaiseEvent?.('sysMapLoadEvent', []);
         return true;
+    }
+
+    /**
+     * Mudlet `saveMap([location])`. Serialises the in-memory MapStore to the
+     * Mudlet binary `.dat` format and persists it to this connection's
+     * IndexedDB slot — the equivalent of Mudlet's default profile map path,
+     * picked up by {@link bootstrapMap} on next session start. Returns the
+     * serialised bytes so the Lua binding can also write them to a VFS path
+     * when the caller supplies one. Returns null when there is no connection
+     * or serialisation fails.
+     */
+    saveMap(): ArrayBuffer | null {
+        let bytes: ArrayBuffer;
+        try {
+            const buf = writeMapToBuffer(this.mapStore.toMudletMap());
+            // Copy into a freshly-allocated standalone ArrayBuffer — the
+            // returned Buffer is a view onto a Node Buffer pool (and at the
+            // type level its .buffer may be SharedArrayBuffer), neither of
+            // which the binary reader or IDB persistence can handle directly.
+            const out = new ArrayBuffer(buf.byteLength);
+            new Uint8Array(out).set(buf);
+            bytes = out;
+        } catch (err) {
+            console.warn('[WindowManager] saveMap serialisation failed:', err);
+            return null;
+        }
+        if (this._connectionId) {
+            // Same swap16 hazard as loadMap: the binary reader mutates buffers
+            // in-place when parsing QStrings. Cloning before IDB persistence
+            // keeps the bytes we return safe if anything later round-trips them
+            // through readMapFromBuffer.
+            saveMapToStorage(this._connectionId, bytes.slice(0)).catch(err =>
+                console.warn('[WindowManager] saveMap persist failed:', err));
+        }
+        return bytes;
     }
 
     markAsMiniConsole(id: string): void {
@@ -426,6 +623,124 @@ export class WindowManager {
         return win?.wrapAt ?? null;
     }
 
+    // ── Scrollbar / scrolling ─────────────────────────────────────────────────
+
+    /** Mudlet enable/disableScrollBar — toggle the vertical scrollbar's visibility
+     *  on a console wrapper. Wheel/keyboard scrolling continues regardless; only
+     *  the gutter rendering is affected. Persists across mounts; idempotent. */
+    setScrollBarVisible(id: string, visible: boolean): void {
+        this.getScrollStateMut(id).scrollBarVisible = visible;
+        this.applyScrollClasses(id);
+    }
+
+    /** Mudlet enable/disableHorizontalScrollBar — toggle a horizontal scrollbar
+     *  on a console wrapper. mudix wraps long lines by default so this is rarely
+     *  needed; included for parity. */
+    setHorizontalScrollBarVisible(id: string, visible: boolean): void {
+        this.getScrollStateMut(id).horizontalScrollBarVisible = visible;
+        this.applyScrollClasses(id);
+    }
+
+    /** Mudlet enable/disableScrolling — when disabled, the wrapper sticks to the
+     *  bottom (wheel/touch/keys cannot scroll back). Mudlet forbids this on the
+     *  main window; we follow that policy. Returns false on 'main', true otherwise. */
+    setScrollingEnabled(id: string, enabled: boolean): boolean {
+        if (id === 'main') return false;
+        this.getScrollStateMut(id).scrollingEnabled = enabled;
+        this.applyScrollClasses(id);
+        return true;
+    }
+
+    /** Buffer-line index of the topmost visible line in `id`'s wrapper. In tail
+     *  mode returns the last line number (matching Mudlet's mCursorY behaviour at
+     *  the end of the buffer). Returns 0 if the element is unmounted or empty.
+     *
+     *  Uses getBoundingClientRect rather than offsetTop because `.output-container`
+     *  is `position: relative` — child offsetTop is relative to *that*, not to the
+     *  scroll-container `.output-wrapper`, so the rectangles are the unambiguous
+     *  way to relate child position to the scroll viewport. */
+    getScrollLine(id: string): number {
+        const el = this.elements.get(id);
+        if (!el) return 0;
+        const lineEls = this.lineElements(el);
+        const total = lineEls.length;
+        if (total === 0) return 0;
+        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (distFromBottom <= 1) return total - 1;
+        const containerTop = el.getBoundingClientRect().top;
+        for (let i = 0; i < total; i++) {
+            const rect = lineEls[i].getBoundingClientRect();
+            // First line whose bottom edge sits inside the viewport — that's the
+            // topmost partly-visible line. -1 tolerates sub-pixel rounding.
+            if (rect.bottom > containerTop + 1) return i;
+        }
+        return total - 1;
+    }
+
+    /** Scroll `id`'s wrapper so `line` (0-indexed) sits at the top. `undefined`
+     *  resumes tail mode (scroll-to-bottom); negative values count from the end
+     *  (Mudlet semantics). Returns false if the wrapper is not mounted. */
+    scrollToLine(id: string, line: number | undefined): boolean {
+        const el = this.elements.get(id);
+        if (!el) return false;
+        if (line === undefined) {
+            el.scrollTop = el.scrollHeight;
+            return true;
+        }
+        const lineEls = this.lineElements(el);
+        const total = lineEls.length;
+        if (total === 0) {
+            el.scrollTop = el.scrollHeight;
+            return true;
+        }
+        let target = line;
+        if (target < 0) target = Math.max(total + target, 0);
+        if (target >= total - 1) {
+            el.scrollTop = el.scrollHeight;
+            return true;
+        }
+        if (target <= 0) {
+            el.scrollTop = 0;
+            return true;
+        }
+        // Bounding-rect math: convert the line's viewport-relative top into a
+        // scroll position within the wrapper. offsetTop is relative to the
+        // nearest positioned ancestor (`.output-container`), not to the scroll
+        // container, so we can't read it directly.
+        const containerRect = el.getBoundingClientRect();
+        const lineRect = lineEls[target].getBoundingClientRect();
+        el.scrollTop = Math.max(0, lineRect.top - containerRect.top + el.scrollTop);
+        return true;
+    }
+
+    private getScrollStateMut(id: string): ScrollState {
+        let s = this.scrollState.get(id);
+        if (!s) {
+            s = { ...DEFAULT_SCROLL_STATE };
+            this.scrollState.set(id, s);
+        }
+        return s;
+    }
+
+    private applyScrollClasses(id: string): void {
+        const el = this.elements.get(id);
+        if (!el) return;
+        const s = this.scrollState.get(id) ?? DEFAULT_SCROLL_STATE;
+        el.classList.toggle('mudix-no-scrollbar', !s.scrollBarVisible);
+        el.classList.toggle('mudix-h-scrollbar', s.horizontalScrollBarVisible);
+        el.classList.toggle('mudix-no-scrolling', !s.scrollingEnabled);
+    }
+
+    /** Direct line-element children of the wrapper (skips the sticky-output
+     *  sentinel, which sits at the end with height: 0). */
+    private lineElements(el: HTMLElement): HTMLElement[] {
+        const out: HTMLElement[] = [];
+        for (const child of Array.from(el.children) as HTMLElement[]) {
+            if (child.classList.contains('output-msg')) out.push(child);
+        }
+        return out;
+    }
+
     /** Mudlet setBackgroundColor for a userwindow / miniconsole. */
     setBackgroundColor(id: string, r: number, g: number, b: number, a = 255): boolean {
         const win = this.windows.get(id);
@@ -475,6 +790,118 @@ export class WindowManager {
         }
         this.notify();
         this.saveHint(id, win);
+    }
+
+    // ── Per-window command line ───────────────────────────────────────────────
+
+    /** Mudlet enableCommandLine(name). Idempotent. Returns false when the
+     *  window doesn't exist. */
+    enableCommandLine(id: string): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        if (!this.cmdLineState.has(id)) this.cmdLineState.set(id, { action: null });
+        if (win.cmdLineEnabled) return true;
+        win.cmdLineEnabled = true;
+        this.notify();
+        return true;
+    }
+
+    /** Mudlet disableCommandLine(name). Idempotent. Returns false when the
+     *  window doesn't exist. The action callback is kept so re-enabling
+     *  resumes the same binding (matches Mudlet's behaviour). */
+    disableCommandLine(id: string): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        if (!win.cmdLineEnabled) return true;
+        win.cmdLineEnabled = false;
+        this.notify();
+        return true;
+    }
+
+    /** Mudlet setCmdLineStyleSheet(name, qss). Stored as raw QSS; the panel
+     *  translates it through cmdLineQssToScopedCss at render time. Returns
+     *  false when the window doesn't exist. */
+    setCmdLineStyleSheet(id: string, qss: string): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        win.cmdLineStyleSheet = qss && qss.trim() ? qss : undefined;
+        this.notify();
+        return true;
+    }
+
+    /** Bind the Lua callback fired when the user presses Enter in this
+     *  window's command line. Pass null to clear. Returns false when the
+     *  window doesn't exist. */
+    setCmdLineAction(id: string, cb: ((text: string) => void) | null): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        const state = this.cmdLineState.get(id) ?? { action: null };
+        state.action = cb;
+        this.cmdLineState.set(id, state);
+        return true;
+    }
+
+    /** Whether a script has bound a per-window Enter handler. */
+    hasCmdLineAction(id: string): boolean {
+        return !!this.cmdLineState.get(id)?.action;
+    }
+
+    /** Read the bound callback (or null). The TextPanel input invokes this
+     *  directly on Enter so the React tree never sees the function. */
+    getCmdLineAction(id: string): ((text: string) => void) | null {
+        return this.cmdLineState.get(id)?.action ?? null;
+    }
+
+    /** Mudlet clearCmdLine([name]) when name is a userwindow — wipes the
+     *  input contents. The seq bump forces React to apply the seed even
+     *  when the value didn't change. Returns false when the window doesn't
+     *  exist or has no command line. */
+    clearWindowCmdLine(id: string): boolean {
+        const win = this.windows.get(id);
+        if (!win || !win.cmdLineEnabled) return false;
+        win.cmdLineValue = '';
+        win.cmdLineValueSeq = (win.cmdLineValueSeq ?? 0) + 1;
+        this.notify();
+        return true;
+    }
+
+    /** Mudlet printCmdLine([name], text) when name is a userwindow — replaces
+     *  the input contents and moves the caret to the end (React side). */
+    printWindowCmdLine(id: string, text: string): boolean {
+        const win = this.windows.get(id);
+        if (!win || !win.cmdLineEnabled) return false;
+        win.cmdLineValue = String(text ?? '');
+        win.cmdLineValueSeq = (win.cmdLineValueSeq ?? 0) + 1;
+        this.notify();
+        return true;
+    }
+
+    /** Mudlet appendCmdLine([name], text) when name is a userwindow — pushes
+     *  `text` onto the end of the current contents. */
+    appendWindowCmdLine(id: string, text: string): boolean {
+        const win = this.windows.get(id);
+        if (!win || !win.cmdLineEnabled) return false;
+        win.cmdLineValue = String(win.cmdLineValue ?? '') + String(text ?? '');
+        win.cmdLineValueSeq = (win.cmdLineValueSeq ?? 0) + 1;
+        this.notify();
+        return true;
+    }
+
+    /** Used by ScriptingAPI.getCmdLine([name]) when the name targets a window;
+     *  returns the cached value last seeded. The actual live input value is
+     *  reported by the TextPanel through a register callback (see
+     *  registerCmdLineValueProbe). */
+    private cmdLineValueProbes = new Map<string, () => string>();
+    registerCmdLineValueProbe(id: string, probe: () => string): () => void {
+        this.cmdLineValueProbes.set(id, probe);
+        return () => {
+            if (this.cmdLineValueProbes.get(id) === probe) this.cmdLineValueProbes.delete(id);
+        };
+    }
+    getCmdLineValue(id: string): string {
+        const probe = this.cmdLineValueProbes.get(id);
+        if (probe) return probe();
+        return this.windows.get(id)?.cmdLineValue ?? '';
     }
 
     bringToFront(id: string): void {
@@ -798,6 +1225,11 @@ export class WindowManager {
             backgroundColor: hint?.backgroundColor,
             backgroundImage: hint?.backgroundImage,
             parent: options.parent,
+            // Mudlet's openUserWindow(..., autoDock=false) opens the window
+            // floating AND prevents the user from later docking it. Persist
+            // the lock so re-opens after layout restore preserve the intent
+            // (the saved hint carries the flag through saveHint).
+            lockFloating: options.lockFloating ?? hint?.lockFloating ?? (options.autoDock === false ? true : undefined),
             pendingText: [],
         };
 
@@ -821,6 +1253,8 @@ export class WindowManager {
         this.portalTargets.delete(id);
         this.consoleRegistry?.delete(id);
         this.miniConsoles.delete(id);
+        this.cmdLineState.delete(id);
+        this.cmdLineValueProbes.delete(id);
         this.onWindowClosed?.(id);
         this.notify();
     }
@@ -835,6 +1269,8 @@ export class WindowManager {
         }
         this.windows.clear();
         this.miniConsoles.clear();
+        this.cmdLineState.clear();
+        this.cmdLineValueProbes.clear();
         this.notify();
     }
 
@@ -891,10 +1327,14 @@ export class WindowManager {
         const win = this.windows.get(id);
         if (!win) return;
         win.pendingText = [];
+        win.pendingPartial = undefined;
         this.lineBuffers.delete(id);
         this.controls.get(id)?.clear();
         const el = this.elements.get(id);
         if (el && win.kind === 'html') el.replaceChildren();
+        // Also reset the upstream Console — without this the next echo would
+        // re-include any pre-clear partial text when drainWindowConsole fires.
+        this.consoleRegistry?.get(id)?.clear();
     }
 
     /**
@@ -969,10 +1409,11 @@ export class WindowManager {
 
     private notify(): void {
         const arr = [...this.windows.values()]
-            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent }) => ({
+            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent, lockFloating, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }) => ({
                 id, title, kind, visible, x, y, width, height, zIndex,
                 docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex,
-                fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent,
+                fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent, lockFloating,
+                cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq,
                 isActiveTab: dockGroup ? this.activeTabGroups.get(dockGroup) === id : undefined,
             }))
             .sort((a, b) => a.zIndex - b.zIndex);
@@ -995,6 +1436,7 @@ export class WindowManager {
             wrapAt:    win.wrapAt,
             backgroundColor: win.backgroundColor,
             backgroundImage: win.backgroundImage,
+            lockFloating: win.lockFloating,
         };
         this.windowHints[id] = hint;
         this.onWindowHint?.(id, hint);

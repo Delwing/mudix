@@ -193,6 +193,49 @@ export function userWindowQssToScopedCss(qss: string, scope: string): string {
     return rules.join('\n');
 }
 
+// Translate Mudlet's `setCmdLineStyleSheet(name, qss)` body into scoped CSS
+// targeting the per-window command-line `<input>` selected by `scope`. Mudlet
+// scripts most commonly write `QPlainTextEdit { ... }` (the underlying Qt
+// widget Mudlet uses) or `QWidget { ... }` / no selector / `*`. Pseudo states
+// on those selectors (`:hover`, `:focus`) project to the same input. Rules
+// targeting any other Qt widget type are dropped — there is no equivalent
+// child widget in the DOM input.
+export function cmdLineQssToScopedCss(qss: string, scope: string): string {
+    if (!qss.trim()) return '';
+    const rules: string[] = [];
+    if (qss.indexOf('{') < 0) {
+        const decls = qtDeclarationsToCss(qss);
+        return decls ? `${scope} { ${decls} }` : '';
+    }
+    for (const rule of splitRulesets(qss)) {
+        const pseudo = qtCmdLineSelectorToPseudo(rule.selector);
+        if (pseudo === null) continue;
+        const decls = qtDeclarationsToCss(rule.body);
+        if (!decls) continue;
+        rules.push(`${scope}${pseudo} { ${decls} }`);
+    }
+    return rules.join('\n');
+}
+
+// Sibling of qtWidgetSelectorToPseudo for the command-line case. Adds
+// QPlainTextEdit / QLineEdit / QTextEdit to the set of selectors that resolve
+// to the input itself.
+function qtCmdLineSelectorToPseudo(sel: string): string | null {
+    const trimmed = sel.trim();
+    if (!trimmed) return '';
+    if (trimmed === '*' || /^(QWidget|QPlainTextEdit|QLineEdit|QTextEdit)$/i.test(trimmed)) return '';
+    const m = trimmed.match(/^(QWidget|QPlainTextEdit|QLineEdit|QTextEdit)?(:{1,2}!?[\w-]+)$/i);
+    if (!m) return null;
+    let pseudo = m[2];
+    if (pseudo.startsWith('::')) pseudo = pseudo.slice(1);
+    if (pseudo.startsWith(':!')) pseudo = ':not(:' + pseudo.slice(2) + ')';
+    const QT_TO_CSS: Record<string, string> = {
+        ':pressed': ':active',
+        ':!pressed': ':not(:active)',
+    };
+    return QT_TO_CSS[pseudo] ?? pseudo;
+}
+
 // Sibling of qtSelectorToPseudo for the userwindow case: `QWidget`, `*`, or an
 // empty (base-block) selector all map to the scope itself; state pseudos like
 // `QWidget:hover` become scoped `:hover`. Anything else returns null and the

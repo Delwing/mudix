@@ -4,6 +4,7 @@ import type { WindowManager } from '../WindowManager';
 import type { LabelManager } from '../../labels/LabelManager';
 import { LabelOverlay } from '../../labels/LabelOverlay';
 import { backgroundImageStyle } from '../../output/backgroundImageStyle';
+import { WindowCmdLine } from './WindowCmdLine';
 
 interface HtmlPanelProps {
     id: string;
@@ -11,9 +12,13 @@ interface HtmlPanelProps {
     labels?: LabelManager;
     backgroundColor?: { r: number; g: number; b: number; a: number };
     backgroundImage?: { url: string; mode: number };
+    cmdLineEnabled?: boolean;
+    cmdLineStyleSheet?: string;
+    cmdLineValue?: string;
+    cmdLineValueSeq?: number;
 }
 
-export function HtmlPanel({ id, manager, labels, backgroundColor, backgroundImage }: HtmlPanelProps) {
+export function HtmlPanel({ id, manager, labels, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: HtmlPanelProps) {
     const viewportRef = useRef<HTMLDivElement>(null);
     const ref = useRef<HTMLDivElement>(null);
 
@@ -33,13 +38,33 @@ export function HtmlPanel({ id, manager, labels, backgroundColor, backgroundImag
         }
         : INNER_STYLE;
 
+    // See TextPanel — LabelOverlay must remain a direct viewport child so its
+    // inset:0 spans the padding box (otherwise userwindow QSS padding offsets
+    // labels positioned at the viewport origin).
+    const htmlContent = <div ref={ref} className="window-html-panel" style={innerStyle} />;
+
     return (
         <div ref={viewportRef} data-mudix-window={id} style={WRAPPER_STYLE}>
-            <div ref={ref} className="window-html-panel" style={innerStyle} />
+            {cmdLineEnabled ? (
+                <div style={STACK_STYLE}>
+                    <div style={OUTPUT_FILL_STYLE}>{htmlContent}</div>
+                    <WindowCmdLine
+                        id={id}
+                        manager={manager}
+                        styleSheet={cmdLineStyleSheet}
+                        seedValue={cmdLineValue}
+                        seedSeq={cmdLineValueSeq}
+                    />
+                </div>
+            ) : (
+                htmlContent
+            )}
             {labels && <LabelOverlay manager={labels} parent={id} />}
         </div>
     );
 }
 
 const WRAPPER_STYLE: React.CSSProperties = { position: 'relative', height: '100%', width: '100%' };
+const STACK_STYLE: React.CSSProperties   = { position: 'relative', height: '100%', width: '100%', display: 'flex', flexDirection: 'column' };
+const OUTPUT_FILL_STYLE: React.CSSProperties = { position: 'relative', flex: '1 1 auto', minHeight: 0 };
 const INNER_STYLE: React.CSSProperties = { height: '100%', width: '100%', overflow: 'auto' };

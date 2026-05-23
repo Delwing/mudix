@@ -16,6 +16,7 @@ import {registerVfs, unregisterVfs} from './vfs/vfsBridge';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
 import {installModuleFromVfsPath, installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
+import {downloadFromUrl, filenameFromUrl, parseClientGuiPayload} from '../import/remotePackageInstall';
 import {ensureDefaultPackages} from '../import/defaultPackages';
 import {serializeMudletXml} from '../import/mudletXmlExport';
 import type {PackageManifest} from '../storage/schema';
@@ -58,6 +59,13 @@ function formatErrorPrefix(kind: ScriptLogSourceKind, name: string): string {
 // removes unintended blank lines, but also removes intentional spacing in MUDs that
 // use ANSI-only lines deliberately.  Toggle this flag per preference.
 const FILTER_ANSI_ONLY_LINES = true;
+
+// Mudlet-style INFO prefix used by postMessage(): yellow "[ INFO ]" then a green body.
+// See Mudlet's ctelnet.cpp / Host.cpp where strings like "[ INFO ]  - " are passed to
+// postMessage(); the two-space-dash separator is part of Mudlet's convention.
+function mudletInfo(message: string): string {
+    return `\x1b[33m[ INFO ]\x1b[32m  - ${message}\x1b[0m`;
+}
 
 /**
  * Compare the slice of nodes tagged with `pkgName` between two arrays. Returns
@@ -702,7 +710,7 @@ export class ScriptingEngine {
         try {
             const buf = vfs.readBinaryFile(path);
             const filename = path.split('/').pop() || path;
-            const { manifest, data } = installPackageFromBytes(filename, buf, vfs);
+            const { manifest, data } = installPackageFromBytes(filename, buf, vfs, { sourcePath: path });
             useAppStore.getState().installPackage(this.connectionId, manifest, data);
             this.notifyPackageInstalled(manifest.name);
             void vfs.flush();
@@ -711,6 +719,73 @@ export class ScriptingEngine {
             const msg = err instanceof Error ? err.message : String(err);
             this.api.printError(`[installPackage] ${msg}`);
             return false;
+        }
+    }
+
+    /**
+     * Handle a `Client.GUI` GMCP message: download the URL and install the
+     * resulting package. Honors `client.allowMudPackageInstall` (default true,
+     * undefined = true). Deduplicates against previously-installed packages
+     * via `manifest.sourceUrl` so the same MUD telling us to install on every
+     * connect doesn't churn the file system.
+     */
+    private async handleClientGuiInstall(value: unknown): Promise<void> {
+        const parsed = parseClientGuiPayload(value);
+        if (!parsed) return;
+        const { url, version } = parsed;
+
+        const client = useAppStore.getState().client;
+        if (client.allowMudPackageInstall === false) {
+            this.session.events.emit('message',
+                mudletInfo(`ignored install request for ${url} (disabled in settings)`),
+                'info', Date.now());
+            return;
+        }
+
+        // Same URL + same version already installed → no-op.
+        const existing = (useAppStore.getState().connectionPackages[this.connectionId] ?? [])
+            .find(p => p.sourceUrl === url);
+        if (existing && version && existing.version === version) return;
+        if (existing && !version && existing.version) return;
+
+        const vfs = this.vfs;
+        if (!vfs) {
+            this.api.printError(`[Client.GUI] no profile VFS available`);
+            return;
+        }
+
+        const displayName = filenameFromUrl(url).replace(/\.[^.]+$/, '') || 'package';
+        this.session.events.emit('message',
+            mudletInfo(`Downloading and installing package '${displayName}' (url='${url}').`),
+            'info', Date.now());
+
+        let bytes: Uint8Array;
+        try {
+            bytes = await downloadFromUrl(url, this.proxyUrlGetter());
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.api.printError(`[Client.GUI] download failed: ${msg}`);
+            return;
+        }
+
+        try {
+            const filename = filenameFromUrl(url);
+            const { manifest, data } = installPackageFromBytes(filename, bytes, vfs);
+            const finalManifest: PackageManifest = {
+                ...manifest,
+                sourceUrl: url,
+                ...(version ? { version } : {}),
+            };
+            useAppStore.getState().installPackage(this.connectionId, finalManifest, data);
+            this.notifyPackageInstalled(finalManifest.name);
+            void vfs.flush();
+            const versionSuffix = finalManifest.version ? ` v${finalManifest.version}` : '';
+            this.session.events.emit('message',
+                mudletInfo(`installed ${finalManifest.name}${versionSuffix}`),
+                'info', Date.now());
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.api.printError(`[Client.GUI] install failed: ${msg}`);
         }
     }
 
@@ -1058,6 +1133,12 @@ export class ScriptingEngine {
         this.mapOpen.notify();
     }
 
+    /** Hand the API a getter for the current command-line text. Lets Lua's
+     *  getCmdLine() read the value React holds in state. Pass null to clear. */
+    setCmdLineProvider(fn: (() => string) | null): void {
+        this.api.setCmdLineProvider(fn);
+    }
+
     destroy(): void {
         for (const t of this.moduleSyncTimers.values()) clearTimeout(t);
         this.moduleSyncTimers.clear();
@@ -1343,6 +1424,12 @@ export class ScriptingEngine {
                 for (const segment of path.split('.')) {
                     token += `.${segment}`;
                     this.emit(token, [token, fullKey]);
+                }
+                // Built-in Client.GUI handler — Mudlet semantics. Fires after
+                // the gmcp.* event chain so user scripts can still observe (or
+                // pre-empt by clearing) the payload before we act on it.
+                if (path.toLowerCase() === 'client.gui') {
+                    void this.handleClientGuiInstall(value);
                 }
             }),
             // Package install/uninstall events are dispatched by callers via

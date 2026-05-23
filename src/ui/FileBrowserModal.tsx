@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { Folder, FolderOpen, FolderPlus, File, RefreshCw, Upload, Trash2, Home, Link, Unlink } from 'lucide-react';
+import { Folder, FolderOpen, FolderPlus, FolderUp, File, RefreshCw, LucideFolderPen, Upload, Trash2, Home, Link, Unlink } from 'lucide-react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { ResizableModal } from './ResizableModal';
 import { ContextMenu } from './components';
@@ -622,6 +622,14 @@ interface DragHandlers {
     onDropOnDir: (e: React.DragEvent, path: string) => void;
 }
 
+interface RenameState {
+    path: string | null;
+    value: string;
+    onChange: (value: string) => void;
+    onCommit: (node: VFSNode) => void;
+    onCancel: () => void;
+}
+
 interface TreeNodeProps {
     node: VFSNode;
     depth: number;
@@ -632,17 +640,47 @@ interface TreeNodeProps {
     onSelect: (node: VFSNode) => void;
     onContextMenu: (e: React.MouseEvent, node: VFSNode) => void;
     dnd: DragHandlers;
+    rename: RenameState;
 }
 
-function TreeNode({ node, depth, expanded, selectedPath, uploadDir, onToggle, onSelect, onContextMenu, dnd }: TreeNodeProps) {
+function RenameInput({ node, rename }: { node: VFSNode; rename: RenameState }) {
+    // Select the basename (everything before the final dot) on focus so the
+    // user can replace the name without first clearing the extension.
+    const onFocus = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
+        const v = e.currentTarget.value;
+        const dot = node.type === 'file' ? v.lastIndexOf('.') : -1;
+        e.currentTarget.setSelectionRange(0, dot > 0 ? dot : v.length);
+    }, [node.type]);
+
+    return (
+        <input
+            autoFocus
+            className="vfs-rename-input"
+            value={rename.value}
+            onChange={e => rename.onChange(e.target.value)}
+            onFocus={onFocus}
+            onClick={e => e.stopPropagation()}
+            onDoubleClick={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+            onBlur={() => rename.onCommit(node)}
+            onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); rename.onCommit(node); }
+                else if (e.key === 'Escape') { e.preventDefault(); rename.onCancel(); }
+            }}
+        />
+    );
+}
+
+function TreeNode({ node, depth, expanded, selectedPath, uploadDir, onToggle, onSelect, onContextMenu, dnd, rename }: TreeNodeProps) {
     const isOpen       = expanded.has(node.path);
     const isSelected   = node.path === selectedPath;
     const isDragging   = dnd.dragPath === node.path;
     const isDropTarget = dnd.dropTarget === node.path;
+    const isRenaming   = rename.path === node.path;
     const indent       = depth * 16;
 
     const dragAttrs = {
-        draggable: true as const,
+        draggable: !isRenaming,
         onDragStart: (e: React.DragEvent) => dnd.onDragStart(e, node),
         onDragEnd: dnd.onDragEnd,
     };
@@ -653,7 +691,7 @@ function TreeNode({ node, depth, expanded, selectedPath, uploadDir, onToggle, on
                 <div
                     className={`vfs-row vfs-dir${isDropTarget ? ' vfs-drop-target' : ''}${isDragging ? ' vfs-dragging' : ''}`}
                     style={{ paddingLeft: indent + 4 }}
-                    onClick={() => onToggle(node.path)}
+                    onClick={() => { if (!isRenaming) onToggle(node.path); }}
                     onContextMenu={e => onContextMenu(e, node)}
                     onDragOver={e => dnd.onDragOverDir(e, node.path)}
                     onDragLeave={() => dnd.onDragLeaveDir(node.path)}
@@ -666,8 +704,10 @@ function TreeNode({ node, depth, expanded, selectedPath, uploadDir, onToggle, on
                     <span className="vfs-icon">
                         {isOpen ? <FolderOpen size={13} /> : <Folder size={13} />}
                     </span>
-                    <span className="vfs-name">{node.name}/</span>
-                    {uploadDir === node.path && (
+                    {isRenaming
+                        ? <RenameInput node={node} rename={rename} />
+                        : <span className="vfs-name">{node.name}/</span>}
+                    {!isRenaming && uploadDir === node.path && (
                         <span className="vfs-upload-indicator" title="Upload target">
                             <Upload size={10} />
                         </span>
@@ -685,6 +725,7 @@ function TreeNode({ node, depth, expanded, selectedPath, uploadDir, onToggle, on
                         onSelect={onSelect}
                         onContextMenu={onContextMenu}
                         dnd={dnd}
+                        rename={rename}
                     />
                 ))}
             </div>
@@ -695,13 +736,15 @@ function TreeNode({ node, depth, expanded, selectedPath, uploadDir, onToggle, on
         <div
             className={`vfs-row vfs-file${isSelected ? ' vfs-selected' : ''}${isDragging ? ' vfs-dragging' : ''}`}
             style={{ paddingLeft: indent + 20 }}
-            onClick={() => onSelect(node)}
+            onClick={() => { if (!isRenaming) onSelect(node); }}
             onContextMenu={e => onContextMenu(e, node)}
             {...dragAttrs}
         >
             <span className="vfs-icon"><File size={13} /></span>
-            <span className="vfs-name">{node.name}</span>
-            {node.size !== undefined && <span className="vfs-size">{formatSize(node.size)}</span>}
+            {isRenaming
+                ? <RenameInput node={node} rename={rename} />
+                : <span className="vfs-name">{node.name}</span>}
+            {!isRenaming && node.size !== undefined && <span className="vfs-size">{formatSize(node.size)}</span>}
         </div>
     );
 }
@@ -948,6 +991,7 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
     const [uploadDir, setUploadDir] = useState<string>(vfs?.profilePath ?? '');
     const uploadDirRef = useRef<string>(vfs?.profilePath ?? '');
     const uploadInputRef = useRef<HTMLInputElement>(null);
+    const uploadFolderInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         const path = vfs?.profilePath ?? '';
@@ -956,12 +1000,20 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
     }, [vfs]);
 
     const handleUploadClick = useCallback(() => uploadInputRef.current?.click(), []);
+    const handleUploadFolderClick = useCallback(() => uploadFolderInputRef.current?.click(), []);
 
     const handleUploadHere = useCallback((dirPath: string) => {
         uploadDirRef.current = dirPath;
         setUploadDir(dirPath);
         setCtxMenu(null);
         uploadInputRef.current?.click();
+    }, []);
+
+    const handleUploadFolderHere = useCallback((dirPath: string) => {
+        uploadDirRef.current = dirPath;
+        setUploadDir(dirPath);
+        setCtxMenu(null);
+        uploadFolderInputRef.current?.click();
     }, []);
 
     const resetUploadDir = useCallback(() => {
@@ -984,12 +1036,21 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
         let pending = files.length;
         for (const file of files) {
             const reader = new FileReader();
+            // webkitRelativePath is set when the user picked a folder — it
+            // looks like "myfolder/sub/file.txt" and we preserve that layout
+            // under the target dir. Plain file picks leave it empty.
+            const relPath = file.webkitRelativePath || file.name;
+            const destPath = `${targetDir}/${relPath}`;
             reader.onload = () => {
                 try {
                     const bytes = new Uint8Array(reader.result as ArrayBuffer);
-                    vfs.writeBinaryFile(`${targetDir}/${file.name}`, bytes);
+                    const slash = destPath.lastIndexOf('/');
+                    if (slash > targetDir.length) {
+                        vfs.mkdir(destPath.substring(0, slash));
+                    }
+                    vfs.writeBinaryFile(destPath, bytes);
                 } catch (err) {
-                    console.error(`Upload failed for ${file.name}:`, err);
+                    console.error(`Upload failed for ${relPath}:`, err);
                 }
                 if (--pending === 0) bumpRev();
             };
@@ -1051,6 +1112,59 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
         if (!vfs) return;
         setCtxMenu({ x: e.clientX, y: e.clientY, node: { name: '', path: vfs.profilePath, type: 'dir' } });
     }, [vfs]);
+
+    // ── Inline rename ─────────────────────────────────────────────────────
+
+    const [renamingPath, setRenamingPath] = useState<string | null>(null);
+    const [renameValue, setRenameValue] = useState('');
+
+    const handleRename = useCallback((node: VFSNode) => {
+        setCtxMenu(null);
+        if (!vfs) return;
+        if (node.path === vfs.profilePath) return;
+        setRenamingPath(node.path);
+        setRenameValue(node.name);
+    }, [vfs]);
+
+    const cancelRename = useCallback(() => {
+        setRenamingPath(null);
+        setRenameValue('');
+    }, []);
+
+    const commitRename = useCallback((node: VFSNode) => {
+        if (!vfs) { cancelRename(); return; }
+        const newName = renameValue.trim();
+        if (!newName || newName === node.name) { cancelRename(); return; }
+        if (newName.includes('/')) {
+            window.alert('Name cannot contain "/"');
+            return;
+        }
+        const parent = node.path.substring(0, node.path.lastIndexOf('/'));
+        const newPath = `${parent}/${newName}`;
+        if (vfs.exists(newPath)) {
+            window.alert(`"${newName}" already exists`);
+            return;
+        }
+        try {
+            vfs.rename(node.path, newPath);
+            clearSelection(node.path);
+            pruneExpanded(node.path);
+            bumpRev();
+        } catch (err) {
+            console.error('Rename failed:', err);
+            window.alert(`Rename failed: ${(err as Error).message}`);
+        } finally {
+            cancelRename();
+        }
+    }, [vfs, renameValue, pruneExpanded, clearSelection, bumpRev, cancelRename]);
+
+    const renameState: RenameState = {
+        path: renamingPath,
+        value: renameValue,
+        onChange: setRenameValue,
+        onCommit: commitRename,
+        onCancel: cancelRename,
+    };
 
     const handleDelete = useCallback((node: VFSNode) => {
         setCtxMenu(null);
@@ -1316,6 +1430,16 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                             style={{ display: 'none' }}
                             onChange={handleUpload}
                         />
+                        <input
+                            ref={uploadFolderInputRef}
+                            type="file"
+                            multiple
+                            style={{ display: 'none' }}
+                            onChange={handleUpload}
+                            // webkitdirectory isn't typed in React's InputHTMLAttributes
+                            // but it works in Chrome, Edge, Firefox, and Safari on desktop.
+                            {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+                        />
                         {!isAtRoot && (
                             <button
                                 className="modal-close"
@@ -1332,6 +1456,14 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                             disabled={!vfs}
                         >
                             <Upload size={13} />
+                        </button>
+                        <button
+                            className="modal-close"
+                            title={isAtRoot ? 'Upload folder to profile root' : `Upload folder to: ${uploadDir.substring((vfs?.profilePath.length ?? 0) + 1)}`}
+                            onClick={handleUploadFolderClick}
+                            disabled={!vfs}
+                        >
+                            <FolderUp size={13} />
                         </button>
                         {linkSupported && (linkedHandle ? (
                             <button
@@ -1428,6 +1560,7 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                                         onSelect={handleSelect}
                                         onContextMenu={handleContextMenu}
                                         dnd={dnd}
+                                        rename={renameState}
                                     />
                                 ))}
                             </div>
@@ -1476,6 +1609,22 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                                 <Upload size={13} />
                                 Upload here
                             </button>
+                            <button
+                                className="ctx-menu__item"
+                                type="button"
+                                onClick={() => handleUploadFolderHere(ctxMenu.node.path)}
+                            >
+                                <FolderUp size={13} />
+                                Upload folder here
+                            </button>
+                            <button
+                                className="ctx-menu__item"
+                                type="button"
+                                onClick={() => handleRename(ctxMenu.node)}
+                            >
+                                <LucideFolderPen size={13} />
+                                Rename
+                            </button>
                             {!isRoot(ctxMenu.node) && (
                                 <>
                                     <div className="ctx-menu__sep" />
@@ -1492,14 +1641,25 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                         </>
                     )}
                     {ctxMenu.node.type === 'file' && (
-                        <button
-                            className="ctx-menu__item ctx-menu__item--danger"
-                            type="button"
-                            onClick={() => handleDelete(ctxMenu.node)}
-                        >
-                            <Trash2 size={13} />
-                            Delete file
-                        </button>
+                        <>
+                            <button
+                                className="ctx-menu__item"
+                                type="button"
+                                onClick={() => handleRename(ctxMenu.node)}
+                            >
+                                <LucideFolderPen size={13} />
+                                Rename
+                            </button>
+                            <div className="ctx-menu__sep" />
+                            <button
+                                className="ctx-menu__item ctx-menu__item--danger"
+                                type="button"
+                                onClick={() => handleDelete(ctxMenu.node)}
+                            >
+                                <Trash2 size={13} />
+                                Delete file
+                            </button>
+                        </>
                     )}
                 </ContextMenu>
             )}

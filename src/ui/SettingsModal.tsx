@@ -43,7 +43,10 @@ interface SettingsModalProps {
 
 export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsModalProps) {
     const theme = useAppStore(s => s.client.theme);
+    const allowMudPackageInstall = useAppStore(s => s.client.allowMudPackageInstall);
     const patchClient = useAppStore(s => s.patchClient);
+    // Default to true when the user hasn't explicitly disabled it.
+    const mudPackageInstallEnabled = allowMudPackageInstall !== false;
     const outputBackground = useAppStore(s => selectProfileField(s, connectionId, 'outputBackground'));
     const outputForeground = useAppStore(s => selectProfileField(s, connectionId, 'outputForeground'));
     const inputBackground = useAppStore(s => selectProfileField(s, connectionId, 'inputBackground'));
@@ -153,6 +156,21 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
+                                </div>
+                                <div className="settings-row settings-row--top">
+                                    <label className="settings-label" htmlFor="allow-mud-package-install">Allow package installs from MUDs</label>
+                                    <div className="settings-field-with-help">
+                                        <input
+                                            id="allow-mud-package-install"
+                                            type="checkbox"
+                                            checked={mudPackageInstallEnabled}
+                                            onChange={e => patchClient({ allowMudPackageInstall: e.target.checked })}
+                                        />
+                                        <p className="settings-help">
+                                            When a connected MUD sends a <code>Client.GUI</code> GMCP message, automatically
+                                            download and install the package it points to. Disable to ignore those requests.
+                                        </p>
+                                    </div>
                                 </div>
                             </section>
                             {connectionId && (

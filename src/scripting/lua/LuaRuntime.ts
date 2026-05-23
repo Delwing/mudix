@@ -70,6 +70,11 @@ export class LuaRuntime implements IScriptingRuntime {
     // Mudlet setCmdLineAction installs at most one Enter-interceptor. Track its
     // cb id so a re-bind frees the prior chunk (same leak fix as label cbs).
     private cmdLineActionCbId = 0;
+    // Per-userwindow setCmdLineAction cb ids — same leak-free re-bind logic but
+    // keyed by window name. Bound when setCmdLineAction targets a userwindow
+    // command line (vs the main command bar). Cleared on disableCommandLine /
+    // resetCmdLineAction(name) and when the window is closed.
+    private windowCmdLineActionCbIds = new Map<string, number>();
     private currentMatches: string[] = [];
     // selectCaptureGroup needs the actual offset of each capture in the
     // source line; without these spans it falls back to selectString(text, 1)
@@ -175,6 +180,42 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setUnderline', styleSetter((v, w) => this.api.setUnderline(v, w)));
         this.lua.global.set('setStrikeOut', styleSetter((v, w) => this.api.setStrikethrough(v, w)));
         this.lua.global.set('resetFormat', (_win?: string) => this.api.resetFormat(_win));
+
+        // Mudlet setTextFormat(windowName, r1, g1, b1, r2, g2, b2, bold,
+        // underline, italics, [strikeout], [overline], [reverse], [blinkMode]).
+        // r1/g1/b1 is BACKGROUND, r2/g2/b2 is FOREGROUND (Mudlet quirk).
+        // Boolean attrs accept boolean or number (non-zero = true) per Mudlet.
+        // blinkMode is "none"/"slow"/"fast"; mudix renders slow/rapid blink but
+        // has no overline channel — that flag is accepted and silently dropped.
+        // Returns true on success, false when the named window doesn't exist.
+        const boolOrNum = (v: unknown): boolean => {
+            if (typeof v === 'boolean') return v;
+            if (typeof v === 'number') return v !== 0;
+            return false;
+        };
+        this.lua.global.set('setTextFormat', (
+            winName: unknown,
+            r1: unknown, g1: unknown, b1: unknown,
+            r2: unknown, g2: unknown, b2: unknown,
+            bold: unknown, underline: unknown, italics: unknown,
+            strikeout?: unknown, overline?: unknown, reverse?: unknown,
+            blinkMode?: unknown,
+        ) => {
+            const clamp = (v: unknown): number =>
+                Math.max(0, Math.min(255, Math.round(Number(v) || 0)));
+            const win = typeof winName === 'string' && winName && winName !== 'main' ? winName : undefined;
+            const bg = { r: clamp(r1), g: clamp(g1), b: clamp(b1) };
+            const fg = { r: clamp(r2), g: clamp(g2), b: clamp(b2) };
+            const mode = typeof blinkMode === 'string'
+                && (blinkMode === 'slow' || blinkMode === 'fast') ? blinkMode : 'none';
+            return this.api.setTextFormat(
+                win,
+                bg, fg,
+                boolOrNum(bold), boolOrNum(underline), boolOrNum(italics),
+                boolOrNum(strikeout), boolOrNum(overline), boolOrNum(reverse),
+                mode,
+            );
+        });
         this.lua.global.set('deselect', (win?: string) =>
             this.api.deselect(typeof win === 'string' ? win : undefined),
         );
@@ -604,11 +645,26 @@ export class LuaRuntime implements IScriptingRuntime {
         // setLabelOnLeave: real bindings installed in Bridge.lua over the
         // __mudix_setLabel* primitives above.
 
-        // Mudlet setCmdLineAction([cmdLineName,] fn, [args...]). Single command
-        // bar in mudix → cmdLineName is dropped. JS hands a numeric cb id
-        // (Bridge.lua wrapper bakes any trailing args into the closure); 0
-        // means "clear". The prior cb id is freed in __mudix_cb on rebind.
-        this.lua.global.set('__mudix_setCmdLineAction', (cbId: number) => {
+        // Mudlet setCmdLineAction([cmdLineName,] fn, [args...]). With no
+        // cmdLineName (or "main") the binding targets the single main command
+        // bar; with a userwindow name it targets that window's per-window
+        // command line (enabled via enableCommandLine). JS receives a numeric
+        // cb id; 0 clears. Prior cb ids are freed in __mudix_cb on rebind so
+        // closures don't leak.
+        this.lua.global.set('__mudix_setCmdLineAction', (cbId: number, windowName?: unknown) => {
+            const name = typeof windowName === 'string' && windowName && windowName !== 'main' ? windowName : null;
+            if (name) {
+                const prev = this.windowCmdLineActionCbIds.get(name);
+                if (prev && prev !== cbId) this.unregisterCb(prev);
+                if (!cbId) {
+                    this.windowCmdLineActionCbIds.delete(name);
+                    return this.api.windows.setCmdLineAction(name, null);
+                }
+                this.windowCmdLineActionCbIds.set(name, cbId);
+                return this.api.windows.setCmdLineAction(name, (text: string) => {
+                    this.dispatchCbWithArg(cbId, text, 'setCmdLineAction');
+                });
+            }
             const prev = this.cmdLineActionCbId;
             if (prev && prev !== cbId) this.unregisterCb(prev);
             this.cmdLineActionCbId = cbId || 0;
@@ -621,7 +677,14 @@ export class LuaRuntime implements IScriptingRuntime {
             });
             return true;
         });
-        this.lua.global.set('__mudix_resetCmdLineAction', () => {
+        this.lua.global.set('__mudix_resetCmdLineAction', (windowName?: unknown) => {
+            const name = typeof windowName === 'string' && windowName && windowName !== 'main' ? windowName : null;
+            if (name) {
+                const prev = this.windowCmdLineActionCbIds.get(name);
+                if (prev) this.unregisterCb(prev);
+                this.windowCmdLineActionCbIds.delete(name);
+                return this.api.windows.setCmdLineAction(name, null);
+            }
             const prev = this.cmdLineActionCbId;
             if (prev) this.unregisterCb(prev);
             this.cmdLineActionCbId = 0;
@@ -657,6 +720,33 @@ export class LuaRuntime implements IScriptingRuntime {
             }
             return this.api.loadMap();
         });
+
+        // Mudlet saveMap([location]). Serialises the current MapStore to the
+        // Mudlet binary `.dat` format and persists it to this connection's
+        // IndexedDB slot. With a path, the same bytes are also written to the
+        // VFS so external tools (or a future loadMap(path)) can read them
+        // back. Returns true on success, false if serialisation fails or the
+        // VFS write throws.
+        this.lua.global.set('saveMap', (location?: unknown) => {
+            const bytes = this.api.saveMap();
+            if (!bytes) return false;
+            if (typeof location === 'string' && location.length > 0) {
+                if (!this.vfs) return false;
+                try { this.vfs.writeBinaryFile(location, bytes); }
+                catch { return false; }
+            }
+            return true;
+        });
+
+        // Mudlet saveWindowLayout / loadWindowLayout. Captures the current
+        // dock layout (window positions/sizes/docking + dock-area extents) to
+        // a per-connection snapshot in persistent storage; loadWindowLayout
+        // restores it (re-positions live windows, opens any saved-visible
+        // windows that are currently closed). Both return false on failure
+        // — saveWindowLayout when there's no active connection,
+        // loadWindowLayout when no snapshot exists yet.
+        this.lua.global.set('saveWindowLayout', () => this.api.saveWindowLayout());
+        this.lua.global.set('loadWindowLayout', () => this.api.loadWindowLayout());
 
         // ── Room CRUD ─────────────────────────────────────────────────────────
         // Mudlet `createRoomID([minimum])` — smallest unused room id at or
@@ -1025,15 +1115,70 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // ── Command bar ───────────────────────────────────────────────────────
         // Mudlet's cmdline APIs accept an optional first window-name arg for
-        // sub-command-lines (Geyser.CommandLine). We only support the main
-        // command bar — drop the window arg and operate on it.
-        this.lua.global.set('appendCmdLine', (a: string, b?: string) => {
-            this.api.appendCmdLine(b !== undefined ? b : a);
+        // sub-command-lines (Geyser.CommandLine / userwindow command lines).
+        // We route to the per-window command line when a matching userwindow
+        // is open with enableCommandLine; otherwise we drop the name and
+        // target the main command bar.
+        const isUserCmdLine = (name?: unknown): name is string => {
+            if (typeof name !== 'string' || !name || name === 'main') return false;
+            return this.api.windows.has(name);
+        };
+        this.lua.global.set('appendCmdLine', (a: unknown, b?: unknown) => {
+            if (isUserCmdLine(a)) { this.api.windows.appendCmdLine(a, String(b ?? '')); return; }
+            this.api.appendCmdLine(String(b !== undefined ? b : a));
         });
-        this.lua.global.set('printCmdLine', (a: string, b?: string) => {
-            this.api.printCmdLine(b !== undefined ? b : a);
+        this.lua.global.set('printCmdLine', (a: unknown, b?: unknown) => {
+            if (isUserCmdLine(a)) { this.api.windows.printCmdLine(a, String(b ?? '')); return; }
+            this.api.printCmdLine(String(b !== undefined ? b : a));
         });
-        this.lua.global.set('clearCmdLine', (_name?: string) => this.api.clearCmdLine());
+        this.lua.global.set('clearCmdLine', (name?: unknown) => {
+            if (isUserCmdLine(name)) { this.api.windows.clearCmdLine(name); return; }
+            this.api.clearCmdLine();
+        });
+        // Mudlet getCmdLine([name]) → current input string. Returns the live
+        // value of the named userwindow's command line when present, else the
+        // main command bar.
+        this.lua.global.set('getCmdLine', (name?: unknown) => {
+            if (isUserCmdLine(name)) return this.api.windows.getCmdLineValue(name);
+            return this.api.getCmdLine();
+        });
+        // Mudlet enableCommandLine / disableCommandLine for userwindows. mudix
+        // doesn't (yet) gate the main cmd bar this way — calling with no name
+        // or "main" is a no-op that returns true so scripts targeting the main
+        // bar don't crash.
+        this.lua.global.set('enableCommandLine', (name?: unknown) => {
+            if (typeof name !== 'string' || !name || name === 'main') return true;
+            return this.api.windows.enableCommandLine(name);
+        });
+        this.lua.global.set('disableCommandLine', (name?: unknown) => {
+            if (typeof name !== 'string' || !name || name === 'main') return true;
+            return this.api.windows.disableCommandLine(name);
+        });
+        // Mudlet setCmdLineStyleSheet(name, css). mudix has no main-bar QSS
+        // hook, so the main / "main" form is a no-op that returns true.
+        this.lua.global.set('setCmdLineStyleSheet', (a: unknown, b?: unknown) => {
+            const name = typeof a === 'string' ? a : '';
+            const css = String((b !== undefined ? b : (typeof a === 'string' && b === undefined ? '' : a)) ?? '');
+            if (!name || name === 'main') return true;
+            return this.api.windows.setCmdLineStyleSheet(name, css);
+        });
+        // Mudlet (add|remove)CmdLineSuggestion([name], suggestion) /
+        // clearCmdLineSuggestions([name]). Suggestions feed Tab completion in
+        // the command bar (merged with command history). The optional leading
+        // command-line name arg is accepted for parity and dropped.
+        const cmdLineSuggestArg = (a: unknown, b?: unknown): string => {
+            const v = b !== undefined ? b : a;
+            return String(v ?? '');
+        };
+        this.lua.global.set('addCmdLineSuggestion', (a: unknown, b?: unknown) => {
+            this.api.addCmdLineSuggestion(cmdLineSuggestArg(a, b));
+        });
+        this.lua.global.set('removeCmdLineSuggestion', (a: unknown, b?: unknown) => {
+            this.api.removeCmdLineSuggestion(cmdLineSuggestArg(a, b));
+        });
+        this.lua.global.set('clearCmdLineSuggestions', (_name?: string) => {
+            this.api.clearCmdLineSuggestions();
+        });
 
         // ── Command-line context menu ─────────────────────────────────────────
         // Mudlet addCommandLineMenuEvent([cmdLineName,] menuLabel, eventName).
@@ -1267,6 +1412,26 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('getLineNumber',  (win?: string)=> this.api.getLineNumber(win));
         this.lua.global.set('getLineCount',   (win?: string)=> this.api.getLineCount(win));
         this.lua.global.set('getLastLineNumber', (win?: string)=> this.api.getLastLineNumber(win));
+        // Mudlet [enable|disable][Horizontal]ScrollBar([windowName])
+        const scrollWin = (win?: unknown) => typeof win === 'string' ? win : undefined;
+        this.lua.global.set('disableScrollBar',           (win?: unknown) => this.api.disableScrollBar(scrollWin(win)));
+        this.lua.global.set('enableScrollBar',            (win?: unknown) => this.api.enableScrollBar(scrollWin(win)));
+        this.lua.global.set('disableHorizontalScrollBar', (win?: unknown) => this.api.disableHorizontalScrollBar(scrollWin(win)));
+        this.lua.global.set('enableHorizontalScrollBar',  (win?: unknown) => this.api.enableHorizontalScrollBar(scrollWin(win)));
+        this.lua.global.set('disableScrolling',           (win?: unknown) => this.api.disableScrolling(scrollWin(win)));
+        this.lua.global.set('enableScrolling',            (win?: unknown) => this.api.enableScrolling(scrollWin(win)));
+        // Mudlet getScroll([windowName]) — buffer line index at viewport top.
+        this.lua.global.set('getScroll', (win?: unknown) => this.api.getScroll(scrollWin(win)));
+        // Mudlet scrollTo([windowName,] [lineNumber]). With no line (or no args)
+        // resume tail mode. Wasmoon hands regex captures as strings, so the
+        // numeric branch wraps with Number().
+        this.lua.global.set('scrollTo', (a?: unknown, b?: unknown) => {
+            if (typeof a === 'string') {
+                return this.api.scrollTo(a, b === undefined ? undefined : Number(b));
+            }
+            if (a === undefined) return this.api.scrollTo(undefined, undefined);
+            return this.api.scrollTo(undefined, Number(a));
+        });
         this.lua.global.set('getColumnNumber',(win?: string)=> this.api.getColumnNumber(win));
         this.lua.global.set('getColumnCount', (win?: string)=> this.api.getColumnCount(win));
         // setWindowWrap(windowName, charsPerLine) — Mudlet shape. The name arg
@@ -2333,6 +2498,7 @@ export class LuaRuntime implements IScriptingRuntime {
     // Same as dispatchCb but passes a single argument to the callback. Used by
     // label mouse callbacks to deliver the {button, x, y, ...} event table.
     private dispatchCbWithArg(cbId: number, arg: unknown, label: string): void {
+        if (this.destroyed) return;
         this.lua.global.set('__mudix_cb_arg', arg);
         this.runChunk(`__mudix_dispatch_cb_arg(${cbId})`, label);
         this.api.flushOutput();

@@ -205,6 +205,32 @@ class ScriptingWindowsAPI {
     element(id: string): HTMLElement | null {
         return this.session.windows.getElement(id);
     }
+
+    // ── Per-window command line ────────────────────────────────
+    enableCommandLine(id: string): boolean {
+        return this.session.windows.enableCommandLine(id);
+    }
+    disableCommandLine(id: string): boolean {
+        return this.session.windows.disableCommandLine(id);
+    }
+    setCmdLineStyleSheet(id: string, css: string): boolean {
+        return this.session.windows.setCmdLineStyleSheet(id, css);
+    }
+    setCmdLineAction(id: string, cb: ((text: string) => void) | null): boolean {
+        return this.session.windows.setCmdLineAction(id, cb);
+    }
+    clearCmdLine(id: string): boolean {
+        return this.session.windows.clearWindowCmdLine(id);
+    }
+    printCmdLine(id: string, text: string): boolean {
+        return this.session.windows.printWindowCmdLine(id, text);
+    }
+    appendCmdLine(id: string, text: string): boolean {
+        return this.session.windows.appendWindowCmdLine(id, text);
+    }
+    getCmdLineValue(id: string): string {
+        return this.session.windows.getCmdLineValue(id);
+    }
 }
 
 // ── Labels ────────────────────────────────────────────────────────────────────
@@ -689,6 +715,59 @@ export class ScriptingAPI {
         this.outputConsole(win).setStrikethrough(v);
     }
 
+    /**
+     * Mudlet `setTextFormat(windowName, r1, g1, b1, r2, g2, b2, bold, underline,
+     * italics, [strikeout], [overline], [reverse], [blinkMode]) → bool`. Sets
+     * the full pen state in one call. r1/g1/b1 is BACKGROUND, r2/g2/b2 is
+     * FOREGROUND (a Mudlet quirk — preserved here for parity). `blinkMode` is
+     * "none" / "slow" / "fast"; overline is accepted but a no-op (FormatState
+     * has no overline channel). Returns false when the named window doesn't
+     * resolve. Mirrors setFgColor & friends: the pen is updated on the resolved
+     * console AND applied to the current selection when one is active on it.
+     */
+    setTextFormat(
+        windowName: string | undefined,
+        bg: { r: number; g: number; b: number },
+        fg: { r: number; g: number; b: number },
+        bold: boolean,
+        underline: boolean,
+        italics: boolean,
+        strikeout: boolean,
+        _overline: boolean,
+        reverse: boolean,
+        blinkMode: 'none' | 'slow' | 'fast',
+    ): boolean {
+        const isMain = !windowName || windowName === 'main';
+        if (!isMain && !this.session.windows.has(windowName!)) return false;
+
+        const snapshot: FormatStateSnapshot = {
+            foreground: { space: 'rgb', r: fg.r, g: fg.g, b: fg.b },
+            background: { space: 'rgb', r: bg.r, g: bg.g, b: bg.b },
+            bold: bold || undefined,
+            italic: italics || undefined,
+            underline: underline || undefined,
+            strikethrough: strikeout || undefined,
+            inverse: reverse || undefined,
+            slowBlink: blinkMode === 'slow' || undefined,
+            rapidBlink: blinkMode === 'fast' || undefined,
+        };
+
+        if (this.selectionMatches(windowName)) {
+            this.applyStateToSelection(snapshot);
+        }
+        const con = this.outputConsole(windowName);
+        con.format.foreground = snapshot.foreground;
+        con.format.background = snapshot.background;
+        con.format.bold = snapshot.bold;
+        con.format.italic = snapshot.italic;
+        con.format.underline = snapshot.underline;
+        con.format.strikethrough = snapshot.strikethrough;
+        con.format.inverse = snapshot.inverse;
+        con.format.slowBlink = snapshot.slowBlink;
+        con.format.rapidBlink = snapshot.rapidBlink;
+        return true;
+    }
+
     // ── Formatting (selection-aware) ──────────────────────────────────────────
 
     fg(name: string, win?: string): void {
@@ -994,6 +1073,44 @@ export class ScriptingAPI {
         return this.getConsole(windowName)?.getLineCount() ?? -1;
     }
 
+    // ── Scrolling / scrollbars ────────────────────────────────────────────────
+    // Mudlet hides/shows the gutter for the named console (or "main") and
+    // independently toggles whether the user can scroll back at all. The
+    // [Horizontal]ScrollBar pair only affects the gutter; the Scrolling pair
+    // also blocks wheel/key scrolling. Mudlet forbids disable/enableScrolling
+    // on the main window — we keep that policy (the binding hands Lua `false`).
+
+    disableScrollBar(windowName?: string): void {
+        this.session.windows.setScrollBarVisible(windowName ?? 'main', false);
+    }
+    enableScrollBar(windowName?: string): void {
+        this.session.windows.setScrollBarVisible(windowName ?? 'main', true);
+    }
+    disableHorizontalScrollBar(windowName?: string): void {
+        this.session.windows.setHorizontalScrollBarVisible(windowName ?? 'main', false);
+    }
+    enableHorizontalScrollBar(windowName?: string): void {
+        this.session.windows.setHorizontalScrollBarVisible(windowName ?? 'main', true);
+    }
+    disableScrolling(windowName?: string): boolean {
+        return this.session.windows.setScrollingEnabled(windowName ?? 'main', false);
+    }
+    enableScrolling(windowName?: string): boolean {
+        return this.session.windows.setScrollingEnabled(windowName ?? 'main', true);
+    }
+
+    /** Mudlet getScroll — 0-indexed buffer line at the top of the viewport. In
+     *  tail mode reports the last line (Mudlet's mCursorY behaviour at end). */
+    getScroll(windowName?: string): number {
+        return this.session.windows.getScrollLine(windowName ?? 'main');
+    }
+
+    /** Mudlet scrollTo. With no line (or a line past end), resume tail mode.
+     *  Negative line counts back from the buffer end. */
+    scrollTo(windowName: string | undefined, lineNumber: number | undefined): boolean {
+        return this.session.windows.scrollToLine(windowName ?? 'main', lineNumber);
+    }
+
     getLines(from: number, to: number, windowName?: string): string[] {
         return this.getConsole(windowName)?.getLines(from, to) ?? [];
     }
@@ -1016,8 +1133,15 @@ export class ScriptingAPI {
     /**
      * Mudlet getColumnCount. Returns the wrap width (in characters) configured
      * via setWindowWrap; if none is set, measures the rendered output element
-     * and returns how many monospace characters fit horizontally. Returns 0
-     * when the window doesn't exist or hasn't been mounted yet.
+     * and returns how many monospace characters fit horizontally.
+     *
+     * Fallback path: scripts that just called openUserWindow + resizeWindow
+     * commonly busy-loop on getColumnCount in the same JS turn — React can't
+     * render the new panel until the loop yields, so a pure DOM measurement
+     * stays at 0 forever and the loop hangs. When the window exists but the
+     * element hasn't mounted (or measures zero), derive an estimate from the
+     * window's logical pixel width and the active font's cell width, so the
+     * reported column count tracks resizeWindow even before layout commits.
      */
     getColumnCount(windowName?: string): number {
         const isMain = !windowName || windowName === 'main';
@@ -1029,7 +1153,22 @@ export class ScriptingAPI {
         const el = isMain
             ? this.session.windows.getElement('main')
             : this.session.windows.getElement(windowName!);
-        return measureColumnCapacity(el);
+        const measured = measureColumnCapacity(el);
+        if (measured > 0) return measured;
+        if (isMain) return 0;
+
+        const size = this.session.windows.getSize(windowName!);
+        if (!size || size.width <= 0) return 0;
+        const profileFamily = selectProfileField(useAppStore.getState(), this.connectionId, 'outputFont')?.family ?? '';
+        const profileSize   = selectProfileField(useAppStore.getState(), this.connectionId, 'fontSize') ?? 12;
+        const family = this.session.windows.getFont(windowName!) ?? profileFamily;
+        const fontSize = this.session.windows.getFontSize(windowName!) ?? profileSize;
+        const [cellW] = measureMonospaceCell(family, fontSize);
+        if (cellW <= 0) return 0;
+        // Match the gutter/padding measureColumnCapacity would subtract once
+        // the element mounts (~8px per side on text panels).
+        const usable = Math.max(0, size.width - 16);
+        return Math.floor(usable / cellW);
     }
 
     /**
@@ -1257,6 +1396,57 @@ export class ScriptingAPI {
         this.session.events.emit('script.clearcmd');
     }
 
+    // ── Command-line value provider (Mudlet getCmdLine) ────────────────────────
+    // The current input string lives in React state inside ProfileSession.
+    // ProfileSession registers a getter via setCmdLineProvider so the script
+    // API can read the value synchronously without round-tripping through an
+    // event. Provider is cleared when no command bar is mounted.
+    private cmdLineProvider: (() => string) | null = null;
+
+    setCmdLineProvider(fn: (() => string) | null): void {
+        this.cmdLineProvider = fn;
+    }
+
+    getCmdLine(): string {
+        return this.cmdLineProvider?.() ?? '';
+    }
+
+    // ── Command-line tab-completion suggestions ───────────────────────────────
+    // Mudlet's addCmdLineSuggestion family. Stored as an insertion-ordered Set
+    // so addCmdLineSuggestion("a"); add("b") feeds tab completion as ["a","b"].
+    // CommandBar merges these with command history when computing matches.
+    // Mutations emit `script.cmdlinesuggestions` with the current snapshot so
+    // React can re-render without polling.
+    private cmdLineSuggestions = new Set<string>();
+
+    addCmdLineSuggestion(suggestion: string): void {
+        const s = suggestion ?? '';
+        if (!s) return;
+        if (this.cmdLineSuggestions.has(s)) return;
+        this.cmdLineSuggestions.add(s);
+        this.emitCmdLineSuggestions();
+    }
+
+    removeCmdLineSuggestion(suggestion: string): void {
+        if (this.cmdLineSuggestions.delete(suggestion ?? '')) {
+            this.emitCmdLineSuggestions();
+        }
+    }
+
+    clearCmdLineSuggestions(): void {
+        if (this.cmdLineSuggestions.size === 0) return;
+        this.cmdLineSuggestions.clear();
+        this.emitCmdLineSuggestions();
+    }
+
+    getCmdLineSuggestions(): string[] {
+        return [...this.cmdLineSuggestions];
+    }
+
+    private emitCmdLineSuggestions(): void {
+        this.session.events.emit('script.cmdlinesuggestions', [...this.cmdLineSuggestions]);
+    }
+
     /**
      * Mudlet `openUrl(url) → bool`. Opens a URL in a new browser tab. Special
      * case: a `file:` prefix (as in `openUrl("file:" .. getMudletHomeDir())`)
@@ -1371,6 +1561,45 @@ export class ScriptingAPI {
         const out = new ArrayBuffer(buf.byteLength);
         new Uint8Array(out).set(buf);
         return this.session.windows.loadMap(out);
+    }
+
+    /**
+     * Mudlet `saveMap([location])`. Serialises the current MapStore to the
+     * Mudlet binary `.dat` format and persists it to the connection's default
+     * IndexedDB slot (so it survives reload). Returns the bytes so the Lua
+     * binding can also write them to a VFS path when one is supplied. Returns
+     * null when serialisation fails.
+     */
+    saveMap(): Uint8Array | null {
+        const buf = this.session.windows.saveMap();
+        return buf ? new Uint8Array(buf) : null;
+    }
+
+    /**
+     * Mudlet `saveWindowLayout()` — capture the current layout (window hints
+     * + dock area extents) into a per-connection snapshot in the persisted
+     * app store. A later `loadWindowLayout()` re-applies the captured state.
+     * Returns true on success, false when no connectionId is bound.
+     */
+    saveWindowLayout(): boolean {
+        if (!this.connectionId) return false;
+        const snapshot = this.session.windows.captureLayoutSnapshot();
+        useAppStore.getState().saveLayoutSnapshot(this.connectionId, snapshot);
+        return true;
+    }
+
+    /**
+     * Mudlet `loadWindowLayout()` — restore the most recently saved snapshot
+     * for this connection. Re-applies geometry, dock state, font/colour, and
+     * visibility to live windows; opens windows that the snapshot had visible
+     * but are not currently mounted. Returns false when no snapshot exists.
+     */
+    loadWindowLayout(): boolean {
+        if (!this.connectionId) return false;
+        const snapshot = useAppStore.getState().connectionLayoutSnapshots[this.connectionId];
+        if (!snapshot) return false;
+        this.session.windows.applyLayoutSnapshot(snapshot);
+        return true;
     }
 
     // ── Misc ──────────────────────────────────────────────────────────────────
@@ -1828,6 +2057,13 @@ export class ScriptingAPI {
         for (const line of con.takeLines()) {
             this.session.windows.pushBuffer(win, line);
         }
+        // Also surface the in-flight partial (echo without a trailing \n) so
+        // prompts like `echo(win, "Do: ")` actually appear — matches the
+        // main-output `script-partial` path. The renderer updates the same
+        // DOM element on subsequent partial pushes and finalizes it once a
+        // completed line arrives via pushBuffer.
+        const partial = con.currentPartial;
+        if (partial.length > 0) this.session.windows.pushPartialBuffer(win, partial);
     }
 
     private resolveBuffer(windowName: string | undefined): AnsiAwareBuffer | null {

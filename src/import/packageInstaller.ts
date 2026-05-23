@@ -15,6 +15,13 @@ export interface InstallOptions {
      *                       VFS so it can be re-parsed on the next profile open and synced to.
      */
     kind?: PackageKind;
+    /**
+     * Absolute VFS path the bytes were read from, when known. If it lives inside the
+     * derived pkgDir, the install skips the pkgDir wipe — otherwise an installer-style
+     * "unzip into <pkgDir>/ then installPackage(<pkgDir>/foo.xml)" pattern would delete
+     * the resources the script just staged.
+     */
+    sourcePath?: string;
 }
 
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04]; // "PK\x03\x04" — local file header
@@ -67,7 +74,12 @@ export function installPackageFromBytes(
     const pkgDir = `${vfs.profilePath}/${packageName}`;
 
     // Wipe any previous install of the same package (re-install is a clean slate).
-    if (vfs.exists(pkgDir)) vfs.rmdir(pkgDir);
+    // Skip when the source file is staged inside pkgDir — the caller pre-positioned
+    // the package's contents there and the wipe would destroy what we're about to
+    // install.
+    const sourceInsidePkgDir = !!opts.sourcePath
+        && (opts.sourcePath === pkgDir || opts.sourcePath.startsWith(`${pkgDir}/`));
+    if (!sourceInsidePkgDir && vfs.exists(pkgDir)) vfs.rmdir(pkgDir);
 
     let xmlContent: string;
     let xmlRelPath: string | undefined;
@@ -263,7 +275,7 @@ export function installModuleFromVfsPath(absolutePath: string, vfs: ProfileVFS):
     if (looksLikeZip(buf)) {
         // Zips always go through the unzip-into-pkgDir flow; the user's source archive
         // stays where it was but isn't part of the module's reload path.
-        return installPackageFromBytes(filename, buf, vfs, { kind: 'module' });
+        return installPackageFromBytes(filename, buf, vfs, { kind: 'module', sourcePath: absolutePath });
     }
 
     // Plain XML: reference in place, no pkgDir.

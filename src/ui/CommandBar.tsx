@@ -12,9 +12,12 @@ interface CommandBarProps {
     commandInputRef: React.RefObject<HTMLInputElement>;
     onSubmit: () => void;
     cmdLineMenu: CmdLineMenuRegistry;
+    /** Tab-completion suggestions added via Mudlet's addCmdLineSuggestion API.
+     *  Merged ahead of command history (dedup, case-insensitive). */
+    suggestions?: string[];
 }
 
-export function CommandBar({ command, onCommandChange, passwordMode, commandInputRef, onSubmit, cmdLineMenu }: CommandBarProps) {
+export function CommandBar({ command, onCommandChange, passwordMode, commandInputRef, onSubmit, cmdLineMenu, suggestions }: CommandBarProps) {
     const [menu, setMenu] = useState<{ x: number; y: number; items: CmdLineMenuEntry[] } | null>(null);
     const inputBackground = useProfileField('inputBackground');
     const inputForeground = useProfileField('inputForeground');
@@ -43,9 +46,27 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
 
     const [ghostHidden, setGhostHidden] = useState(false);
 
+    // Suggestions (from Mudlet's addCmdLineSuggestion) come before history so
+    // they outrank older entries when prefix kinds tie. Dedup is case-insensitive
+    // — typing the same word in either source shouldn't produce a duplicate row.
+    const candidates = useMemo<string[]>(() => {
+        if (!suggestions || suggestions.length === 0) return history;
+        const seen = new Set<string>();
+        const out: string[] = [];
+        for (const s of suggestions) {
+            const k = s.toLowerCase();
+            if (!seen.has(k)) { seen.add(k); out.push(s); }
+        }
+        for (const h of history) {
+            const k = h.toLowerCase();
+            if (!seen.has(k)) { seen.add(k); out.push(h); }
+        }
+        return out;
+    }, [suggestions, history]);
+
     const matches = useMemo<Match[]>(
-        () => (passwordMode ? [] : matchHistory(command, history)),
-        [command, history, passwordMode],
+        () => (passwordMode ? [] : matchHistory(command, candidates)),
+        [command, candidates, passwordMode],
     );
 
     const ghostText = useMemo(() => {

@@ -39,6 +39,10 @@ export interface WindowOpenOptions {
     ignoreHint?: boolean;
     /** If false, force floating regardless of dockingArea (Mudlet autoDock=false). */
     autoDock?: boolean;
+    /** If true, the user cannot drag this window into a dock slot. Set
+     *  automatically when openUserWindow(name, _, autoDock=false) is called,
+     *  mirroring Mudlet's "autoDock=false locks the window floating" behaviour. */
+    lockFloating?: boolean;
     /** Dock side to use when no saved hint exists (Mudlet dockingArea). "main" = floating. */
     dockingArea?: string;
     /** Output font size in pixels (Mudlet setFontSize). */
@@ -96,4 +100,21 @@ export interface ScriptWindowRenderData {
     backgroundImage?: { url: string; mode: number };
     /** For miniconsoles created with a parent userwindow — see WindowOpenOptions.parent. */
     parent?: string;
+    /** When true, drag-to-dock is disabled for this floating window. See
+     *  WindowOpenOptions.lockFloating. */
+    lockFloating?: boolean;
+    /** Mudlet enableCommandLine(name) — when true, the panel renders a single-line
+     *  input below the output area. Enter fires the registered cmd-line action;
+     *  if none, the text is sent to the MUD via the main connection. */
+    cmdLineEnabled?: boolean;
+    /** Mudlet setCmdLineStyleSheet(name, qss) — Qt QSS for the per-window input.
+     *  Translated through cmdLineQssToScopedCss at render time. */
+    cmdLineStyleSheet?: string;
+    /** Mudlet clearCmdLine / printCmdLine seed value. Drives the input's value
+     *  one-shot on change so React stays in sync with script writes. */
+    cmdLineValue?: string;
+    /** Bumped each time cmdLineValue is written by script, so identical writes
+     *  still trigger React's seed effect (otherwise printCmdLine('x') after a
+     *  user types 'x' would do nothing). */
+    cmdLineValueSeq?: number;
 }

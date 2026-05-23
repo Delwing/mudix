@@ -37,6 +37,11 @@ export interface ClientSettings {
      *  ConnectionScreen uses this as the placeholder/default instead of
      *  DEFAULT_PROXY_URL, so new connections route through the user's worker. */
     userProxyUrl?: string;
+    /** When true (default), MUDs can request a package install via the
+     *  `Client.GUI` GMCP message — the URL is downloaded and installed
+     *  automatically. Disable to ignore those requests. Treat `undefined` as
+     *  true so existing profiles opt in without a migration. */
+    allowMudPackageInstall?: boolean;
 }
 
 /** Per-profile settings. Scripts (setBorder, setFont, setBackgroundColor, …) and
@@ -129,6 +134,11 @@ export interface PackageManifest {
     xmlVfsPath?: string;
     /** Source filename (e.g. "GenericMapper.mpackage"), useful for display. */
     sourceFile?: string;
+    /** When the package was installed via a remote URL (e.g. a `Client.GUI`
+     *  GMCP message), records the originating URL so subsequent install
+     *  requests for the same URL can be deduplicated against this manifest
+     *  even when the on-disk package name differs from the filename. */
+    sourceUrl?: string;
     /** Wall-clock install time, ISO-8601. */
     installedAt: string;
     /**
@@ -305,6 +315,16 @@ export interface ModalBounds {
     height: number;
 }
 
+/**
+ * Mudlet saveWindowLayout/loadWindowLayout snapshot — frozen copy of the
+ * window hints + dock extents at the moment the script called save. A later
+ * loadWindowLayout() re-applies these values to the live WindowManager.
+ */
+export interface WindowLayoutSnapshot {
+    hints: Record<string, WindowOpenOptions>;
+    dockExtents: Record<string, number>;
+}
+
 export interface ScriptEditorBounds extends ModalBounds {
     listWidth?: number;
     metaHeight?: number;
@@ -332,6 +352,10 @@ export interface AppSchema {
     connectionScriptEditorBounds: Record<string, ScriptEditorBounds>;
     connectionModalBounds: Record<string, Record<string, ModalBounds>>;
     connectionPackages: Record<string, PackageManifest[]>;
+    /** Per-connection saveWindowLayout snapshot — captured by Lua's
+     *  `saveWindowLayout()`, restored by `loadWindowLayout()`. Missing key
+     *  means no snapshot exists yet for that connection. */
+    connectionLayoutSnapshots: Record<string, WindowLayoutSnapshot>;
 }
 
 export const APP_DEFAULTS: AppSchema = {
@@ -349,6 +373,7 @@ export const APP_DEFAULTS: AppSchema = {
     connectionScriptEditorBounds: {},
     connectionModalBounds: {},
     connectionPackages: {},
+    connectionLayoutSnapshots: {},
 };
 
 /**

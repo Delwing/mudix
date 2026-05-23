@@ -880,22 +880,39 @@ do
     end
 end
 
--- Mudlet setCmdLineAction([cmdLineName,] fn, [args...]). The cmdLineName arg
--- targets a specific command bar; mudix has only one, so we tolerate either
--- shape — strings as the leading arg are dropped, functions become the
--- handler. The action receives the typed text plus any trailing varargs.
+-- Mudlet setCmdLineAction([cmdLineName,] fn, [args...]). With a cmdLineName
+-- the binding targets a userwindow's per-window command line (enabled via
+-- enableCommandLine); without one (or "main") it targets the main command
+-- bar. The action receives the typed text plus any trailing varargs.
+--
+-- Mudlet strictly requires a function value, but a long-standing community
+-- pattern (visible in older Arkadia / Polish-MUD scripts) is to pass the
+-- string name of a global function: `setCmdLineAction("win", "myHandler")`.
+-- We treat such a string — a bare Lua identifier whose global resolves to a
+-- function — as that function, so those scripts run without modification.
+-- A non-identifier string falls through to __mudix_to_fn's loadstring path.
 do
     local _set = __mudix_setCmdLineAction
     local _reset = __mudix_resetCmdLineAction
+    local function resolveFnArg(v, who, argN)
+        if type(v) == 'string' and v:match('^[%w_][%w_%.]*$') then
+            local g = _G[v]
+            if type(g) == 'function' then return g end
+        end
+        return __mudix_to_fn(v, who, argN)
+    end
     function setCmdLineAction(...)
         local n = select('#', ...)
         if n == 0 then
             error("setCmdLineAction: missing function argument", 2)
         end
         local first = select(1, ...)
-        local fn, extras
-        if type(first) == 'string' then
-            -- (cmdLineName, fn, ...) — drop the name.
+        local windowName, fn, extras
+        -- Disambiguate (name, fn, ...) from (fn, ...) by argument count and
+        -- second-arg shape: when arg 1 is a string AND arg 2 is also present
+        -- and is a function / string, treat arg 1 as the cmdLineName.
+        if type(first) == 'string' and n >= 2 then
+            windowName = first
             fn = select(2, ...)
             extras = { select(3, ...) }
         else
@@ -903,18 +920,18 @@ do
             extras = { select(2, ...) }
         end
         if fn == nil then
-            return _set(0)
+            return _set(0, windowName)
         end
-        local f = __mudix_to_fn(fn, "setCmdLineAction", 1)
+        local f = resolveFnArg(fn, "setCmdLineAction", windowName and 2 or 1)
         if #extras > 0 then
             local trailing = extras
             local inner = f
             f = function(text) return inner(text, unpack(trailing)) end
         end
-        return _set(__mudix_register_cb(f))
+        return _set(__mudix_register_cb(f), windowName)
     end
-    function resetCmdLineAction(_cmdLineName)
-        return _reset()
+    function resetCmdLineAction(cmdLineName)
+        return _reset(cmdLineName)
     end
 end
 

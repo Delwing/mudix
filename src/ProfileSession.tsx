@@ -29,8 +29,15 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const [scriptsOpen, setScriptsOpen] = useState(false);
     const [filesOpen, setFilesOpen] = useState<false | { initialPath?: string; initialLine?: number; pickedAt?: number }>(false);
     const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+    const [cmdLineSuggestions, setCmdLineSuggestions] = useState<string[]>([]);
     const commandInputRef = useRef<HTMLInputElement>(null);
     const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
+
+    // Live mirror of the current command bar text — read by Lua's getCmdLine()
+    // through the provider registered on the engine. Updated in render so the
+    // provider always returns the latest value the user has typed.
+    const commandRef = useRef(command);
+    commandRef.current = command;
 
     const outputFont = useAppStore(s => selectProfileField(s, connection.id, 'outputFont'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connection.id, 'promptTimeoutMs'));
@@ -80,6 +87,14 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // — only queries when permission is already granted; never prompts.
     useEffect(() => { void primeLocalFontsCache(); }, []);
 
+    // Clear the input whenever the server toggles IAC ECHO. Otherwise the
+    // previously typed char name remains in state and renders as dots in the
+    // password field — and on the way back out, the password would briefly
+    // surface as plaintext.
+    useEffect(() => {
+        setCommand('');
+    }, [passwordMode]);
+
     useEffect(() => {
         const unsub1 = session.events.on('script.appendcmd', (text: string) => {
             setCommand(prev => prev + text);
@@ -101,8 +116,22 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         const unsub4 = session.events.on('script.openvfs', (path: string) => {
             setFilesOpen({ initialPath: path, pickedAt: Date.now() });
         });
-        return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
+        const unsub5 = session.events.on('script.cmdlinesuggestions', (items: string[]) => {
+            setCmdLineSuggestions(items);
+        });
+        return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
     }, [session]);
+
+    // Register the getCmdLine provider on the engine. Effect re-runs when the
+    // engine instance changes (connection swap). Suggestions state is reset
+    // here too because the new engine starts with an empty Set.
+    useEffect(() => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        engine.setCmdLineProvider(() => commandRef.current);
+        setCmdLineSuggestions([]);
+        return () => engine.setCmdLineProvider(null);
+    }, [session, connection.id, engineRef]);
 
     // Drain disk-backed VFS writes before navigation. Folder-linked profiles
     // use async write-through; without this, edits made just before close can
@@ -232,6 +261,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                             commandInputRef={commandInputRef}
                             onSubmit={handleSend}
                             cmdLineMenu={session.cmdLineMenu}
+                            suggestions={cmdLineSuggestions}
                         />
                     }
                 />

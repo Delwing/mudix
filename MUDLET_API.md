@@ -368,6 +368,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `disableScrollBar(name)` | 🚧 | |
 | `enableScrollBar(name)` | 🚧 | |
 | `hasFocus([window])` | 🚧 | `document.activeElement` check |
+| `saveWindowLayout()` | ✅ | JS-exposed; snapshots window hints + dock extents into `connectionLayoutSnapshots` in the app store |
+| `loadWindowLayout()` | ✅ | JS-exposed; re-applies the saved snapshot — re-positions live windows and reopens saved-visible windows that are currently closed |
 
 ---
 
@@ -515,7 +517,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `getMapLabels(areaID)` | ✅ | Bridge.lua → `__getMapLabels`; re-keys numeric-string keys back to integer label ids |
 | `getMapLabel(areaID, labelID\|labelText)` | ✅ | Bridge.lua → `__getMapLabel`; by-id returns flat properties, by-text returns `{[id]=properties}` matches |
 | `loadMap(path)` | ✅ | JS-exposed |
-| `saveMap(path)` | 🚧 | Via virtual filesystem |
+| `saveMap(path)` | ✅ | JS-exposed; serialises MapStore via `writeMapToBuffer` and writes to VFS / IDB |
 | `saveJsonMap(path)` / `loadJsonMap(path)` | 🚧 | JSON map format |
 | `updateMap()` | 🚧 | Force redraw |
 | `getMapZoom()` / `setMapZoom(level)` | 🚧 | |

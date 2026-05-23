@@ -385,6 +385,7 @@ export async function setupRex(lua: Lua): Promise<void> {
         end
 
         package.loaded["rex_pcre2"] = M
+        package.loaded["rex_pcre"] = M
 
         -- clean up bridge globals
         __rex_match__  = nil
@@ -400,4 +401,5 @@ export async function setupRex(lua: Lua): Promise<void> {
     `);
     lua.global.set('rex', rexModule);
     lua.global.set('rex_pcre2', rexModule);
+    lua.global.set('rex_pcre', rexModule);
 }

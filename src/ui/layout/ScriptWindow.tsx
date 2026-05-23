@@ -17,6 +17,9 @@ interface ScriptWindowProps {
     /** Miniconsoles render bare: no titlebar, no border, no drag, no resize.
      *  Position and size are script-controlled. */
     isMiniConsole?: boolean;
+    /** When true, dragging the titlebar still moves the window but never
+     *  enters a dock zone — mirrors Mudlet's openUserWindow(..., autoDock=false). */
+    lockFloating?: boolean;
     onFocus:            () => void;
     onMoved:            (x: number, y: number) => void;
     onResized:          (w: number, h: number) => void;
@@ -29,7 +32,7 @@ interface ScriptWindowProps {
 export function ScriptWindow({
     id, title, visible,
     x, y, width, height, zIndex,
-    manager, isMiniConsole,
+    manager, isMiniConsole, lockFloating,
     onFocus, onMoved, onResized, onDock, onDragStateChange, onTitlebarContextMenu, onHide,
 }: ScriptWindowProps) {
     const windowRef  = useRef<HTMLDivElement>(null);
@@ -74,7 +77,11 @@ export function ScriptWindow({
         let potentialSplitBefore: boolean | undefined;
 
         const updateDockState = (shiftHeld: boolean, clientX: number, clientY: number) => {
-            const { side, slotIndex, stackTargetId, splitTargetId, splitBefore } = shiftHeld
+            // lockFloating windows (Mudlet autoDock=false) never enter a dock
+            // zone — same shape as shift-suppressed drags. Holding shift while
+            // dragging is still useful for unlocked windows to drag past a
+            // dock band without it activating.
+            const { side, slotIndex, stackTargetId, splitTargetId, splitBefore } = (shiftHeld || lockFloating)
                 ? { side: null, slotIndex: 0, stackTargetId: undefined, splitTargetId: undefined, splitBefore: undefined }
                 : detectDock(clientX, clientY);
 

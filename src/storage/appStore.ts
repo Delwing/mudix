@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type ButtonNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type ClientSettings, type ProfileSettings, type PackageManifest } from './schema';
+import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type ButtonNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type ClientSettings, type ProfileSettings, type PackageManifest, type WindowLayoutSnapshot } from './schema';
 import type { MudletImportResult } from '../import/mudletXmlImport';
 import type { WindowOpenOptions } from '../ui/windows/types';
 import { createDebouncedJsonStorage } from './debouncedStorage';
@@ -46,6 +46,7 @@ interface AppStore extends AppSchema {
     saveWindowHint: (connectionId: string, panelId: string, hint: WindowOpenOptions) => void;
     clearWindowHints: (connectionId: string) => void;
     saveDockExtents: (connectionId: string, extents: Record<string, number>) => void;
+    saveLayoutSnapshot: (connectionId: string, snapshot: WindowLayoutSnapshot) => void;
     addScript: (connectionId: string, data: Omit<ScriptNode, 'id'>) => string;
     updateScript: (connectionId: string, id: string, patch: Partial<Omit<ScriptNode, 'id'>>) => void;
     removeScript: (connectionId: string, id: string) => void;
@@ -108,6 +109,7 @@ export const useAppStore = create<AppStore>()(
                 const { [id]: _sb, ...restBounds } = s.connectionScriptEditorBounds;
                 const { [id]: _mb, ...restModalBounds } = s.connectionModalBounds;
                 const { [id]: _ui, ...restProfile } = s.connectionProfile;
+                const { [id]: _ls, ...restLayoutSnapshots } = s.connectionLayoutSnapshots;
                 return {
                     connections: s.connections.filter(c => c.id !== id),
                     connectionProfile: restProfile,
@@ -125,6 +127,7 @@ export const useAppStore = create<AppStore>()(
                         const { [id]: _pk, ...rest } = s.connectionPackages;
                         return rest;
                     })(),
+                    connectionLayoutSnapshots: restLayoutSnapshots,
                 };
             }),
             patchClient: patch => set(s => ({ client: { ...s.client, ...patch } })),
@@ -153,6 +156,12 @@ export const useAppStore = create<AppStore>()(
                 connectionDockExtents: {
                     ...s.connectionDockExtents,
                     [connectionId]: extents,
+                },
+            })),
+            saveLayoutSnapshot: (connectionId, snapshot) => set(s => ({
+                connectionLayoutSnapshots: {
+                    ...s.connectionLayoutSnapshots,
+                    [connectionId]: snapshot,
                 },
             })),
             addScript: (connectionId, data) => {
@@ -527,8 +536,8 @@ export const useAppStore = create<AppStore>()(
             // the stringify before our adapter sees the value, so we implement
             // PersistStorage directly to defer serialization until flush time.
             storage: createDebouncedJsonStorage<AppSchema>(5000),
-            partialize: ({ connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages }) => ({
-                connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages,
+            partialize: ({ connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages, connectionLayoutSnapshots }) => ({
+                connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages, connectionLayoutSnapshots,
             }),
             migrate: (saved, version) => {
                 const s = saved as Partial<AppSchema> & { connections?: any[]; ui?: any };
