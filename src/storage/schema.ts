@@ -66,7 +66,7 @@ export interface ProfileSettings {
  *  profile hasn't set the field. */
 export const PROFILE_DEFAULTS: ProfileSettings = {
     showTimestamps: false,
-    fontSize: 13,
+    fontSize: 11,
     outputBackground: '',
 };
 

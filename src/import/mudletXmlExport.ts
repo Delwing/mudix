@@ -41,10 +41,17 @@ const CODE_TO_QT_KEY: Record<string, number> = {
     F1: 16777264,  F2: 16777265,  F3: 16777266,  F4: 16777267,
     F5: 16777268,  F6: 16777269,  F7: 16777270,  F8: 16777271,
     F9: 16777272,  F10: 16777273, F11: 16777274, F12: 16777275,
+    // Numpad codes share Qt::Key values with their main-keyboard counterparts;
+    // the numpad distinction is carried by Qt::KeypadModifier in keyModifier.
+    Numpad0: 48, Numpad1: 49, Numpad2: 50, Numpad3: 51, Numpad4: 52,
+    Numpad5: 53, Numpad6: 54, Numpad7: 55, Numpad8: 56, Numpad9: 57,
+    NumpadMultiply: 42, NumpadAdd: 43, NumpadSubtract: 45,
+    NumpadDecimal: 46, NumpadDivide: 47, NumpadEqual: 61,
 };
 
 const QT_SHIFT = 33554432, QT_CTRL = 67108864, QT_ALT = 134217728, QT_META = 268435456;
-function modifiersToQt(mods: string[]): number {
+const QT_KEYPAD = 536870912;
+function modifiersToQt(mods: string[], key: string): number {
     let bits = 0;
     for (const m of mods) {
         const k = m.toLowerCase();
@@ -53,6 +60,10 @@ function modifiersToQt(mods: string[]): number {
         else if (k === 'alt')   bits |= QT_ALT;
         else if (k === 'meta')  bits |= QT_META;
     }
+    // NumpadEnter has its own dedicated Qt::Key, so it doesn't need the flag;
+    // every other Numpad* key shares a Qt::Key with its main-keyboard counterpart
+    // and the modifier is the only thing that disambiguates them.
+    if (key.startsWith('Numpad') && key !== 'NumpadEnter') bits |= QT_KEYPAD;
     return bits;
 }
 
@@ -286,7 +297,7 @@ function emitKeys(xml: XmlBuilder, nodes: KeyNode[], opts: ExportOptions): void 
         xml.leaf('command', n.command ?? '');
         xml.leaf('packageName', n.packageName ?? '');
         xml.leaf('keyCode', String(CODE_TO_QT_KEY[n.key] ?? 0));
-        xml.leaf('keyModifier', String(modifiersToQt(n.modifiers ?? [])));
+        xml.leaf('keyModifier', String(modifiersToQt(n.modifiers ?? [], n.key)));
     });
     xml.close('KeyPackage');
 }

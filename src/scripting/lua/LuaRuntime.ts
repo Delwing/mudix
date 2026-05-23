@@ -1358,7 +1358,7 @@ export class LuaRuntime implements IScriptingRuntime {
         // overload before passing here.
         this.lua.global.set('__mudix_tempKey', (modifier: number, key: string | number, cbId: number) => {
             const mods = qtModifiersToList(modifier);
-            const keyCode = qtKeyToDomCode(key);
+            const keyCode = qtKeyToDomCode(key, modifier);
             return this.api.keys.addTemp(keyCode, mods, () => {
                 dispatchCb(cbId, 'tempKey');
             });

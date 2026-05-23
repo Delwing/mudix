@@ -104,13 +104,40 @@ const QT_KEY_TO_DOM_CODE: Record<number, string> = {
 };
 
 /**
+ * Keypad overrides: when Qt::KeypadModifier is set, these ASCII-range codes
+ * resolve to their Numpad* DOM-code variants rather than the main-keyboard
+ * equivalents. Digits 0–9 are handled by the range check (no table entry).
+ */
+const QT_KEYPAD_OVERRIDES: Record<number, string> = {
+    0x2A: 'NumpadMultiply',           // *
+    0x2B: 'NumpadAdd',                // +
+    0x2D: 'NumpadSubtract',           // -
+    0x2E: 'NumpadDecimal',            // .
+    0x2F: 'NumpadDivide',             // /
+    0x3D: 'NumpadEqual',              // =
+};
+
+/** Qt::KeypadModifier — set by Mudlet when a binding came from the numpad. */
+export const QT_KEYPAD_MODIFIER = 0x20000000;
+
+/**
  * Translate a Qt::Key integer (or already-translated DOM `KeyboardEvent.code`
  * string) into a DOM `KeyboardEvent.code`. Mudlet `tempKey` accepts both;
  * passing a string straight through lets users pre-resolve when they prefer.
+ *
+ * When `modifier` includes Qt::KeypadModifier, digit and symbol codes resolve
+ * to their Numpad* DOM variants — DOM `KeyboardEvent.code` distinguishes
+ * numpad keys from the main keyboard while Qt::Key alone does not.
  */
-export function qtKeyToDomCode(key: string | number): string {
+export function qtKeyToDomCode(key: string | number, modifier = 0): string {
     if (typeof key === 'string') return key;
     if (!Number.isFinite(key)) return String(key);
+
+    if ((modifier & QT_KEYPAD_MODIFIER) !== 0) {
+        if (key >= 0x30 && key <= 0x39) return 'Numpad' + String.fromCharCode(key);
+        const numpad = QT_KEYPAD_OVERRIDES[key];
+        if (numpad) return numpad;
+    }
 
     // Digit row: Qt::Key_0..Key_9 == 0x30..0x39
     if (key >= 0x30 && key <= 0x39) return 'Digit' + String.fromCharCode(key);
