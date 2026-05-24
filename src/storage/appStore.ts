@@ -4,6 +4,7 @@ import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type 
 import type { MudletImportResult } from '../import/mudletXmlImport';
 import type { WindowOpenOptions } from '../ui/windows/types';
 import { createDebouncedJsonStorage } from './debouncedStorage';
+import { deleteSessionsForConnection } from './logStorage';
 
 function getDescendantIds(id: string, items: { id: string; parentId: string | null }[]): string[] {
     const result: string[] = [];
@@ -97,6 +98,9 @@ export const useAppStore = create<AppStore>()(
                 connections: s.connections.map(c => c.id === id ? { ...data, id } : c),
             })),
             removeConnection: id => set(s => {
+                // Logs live in their own IndexedDB (like maps). Drop them
+                // best-effort; the store update below is synchronous regardless.
+                void deleteSessionsForConnection(id).catch(() => {});
                 const { [id]: _h, ...restHints } = s.connectionWindowHints;
                 const { [id]: _e, ...restExtents } = s.connectionDockExtents;
                 const { [id]: _sc, ...restScripts } = s.connectionScripts;

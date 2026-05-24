@@ -83,6 +83,8 @@ Layout is serialized per-connection to Zustand with a 400ms debounce. On restore
 
 **`mapStorage`** (`src/storage/mapStorage.ts`): Separate IndexedDB (`mudix_maps` DB) for Mudlet binary map data. Async `saveMap(ArrayBuffer)` / `loadMap()`.
 
+**`logStorage`** (`src/storage/logStorage.ts`): Separate IndexedDB (`mudix_logs` DB, `sessions` + `entries` stores) for persisted gameplay logs. `SessionLogger` (`src/logging/SessionLogger.ts`) subscribes to `session.events('message')` — the choke point all output (including echoed commands) flows through — snapshots each line's `toHtml()` + plain text, and batch-writes. Browsable via `LogBrowserModal` (toolbar **Logs** button); export helpers in `logExport.ts`. Per-profile toggle: `ProfileSettings.loggingEnabled` (default on).
+
 ### JS API Parity with Mudlet
 
 Every Mudlet API feature needs a JS/Lua equivalent in `ScriptingAPI`, but it should be structured idiomatically for this client — not a 1:1 copy of Mudlet's API surface.

@@ -7,7 +7,9 @@ import { ContentLayout } from './ui/layout/ContentLayout';
 import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
 import { FileBrowserModal } from './ui/FileBrowserModal';
+import { LogBrowserModal } from './ui/LogBrowserModal';
 import { QuickOpenPalette } from './ui/QuickOpenPalette';
+import { SessionLogger } from './logging/SessionLogger';
 import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, type MudConnection } from './storage';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
@@ -28,6 +30,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const [command, setCommand] = useState('');
     const [scriptsOpen, setScriptsOpen] = useState(false);
     const [filesOpen, setFilesOpen] = useState<false | { initialPath?: string; initialLine?: number; pickedAt?: number }>(false);
+    const [logsOpen, setLogsOpen] = useState(false);
     const [quickOpenOpen, setQuickOpenOpen] = useState(false);
     const [cmdLineSuggestions, setCmdLineSuggestions] = useState<string[]>([]);
     const commandInputRef = useRef<HTMLInputElement>(null);
@@ -41,6 +44,8 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
 
     const outputFont = useAppStore(s => selectProfileField(s, connection.id, 'outputFont'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connection.id, 'promptTimeoutMs'));
+    // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
+    const loggingEnabled = useAppStore(s => selectProfileField(s, connection.id, 'loggingEnabled')) !== false;
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
     const connectionDockExtents = useAppStore(s => s.connectionDockExtents);
     const saveWindowHint = useAppStore(s => s.saveWindowHint);
@@ -77,6 +82,16 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             session.setPromptTimeoutMs(promptTimeoutMs);
         }
     }, [promptTimeoutMs, session]);
+
+    // Record this session's output to the persistent log store. One logger per
+    // profile-session lifetime; reconnects within the same mount append to it.
+    // Toggling the setting off stops recording (and flushes what's buffered).
+    useEffect(() => {
+        if (!loggingEnabled) return;
+        const logger = new SessionLogger(session, connection.id, connection.name);
+        logger.start();
+        return () => { void logger.stop(); };
+    }, [session, connection.id, connection.name, loggingEnabled]);
 
     useEffect(() => {
         void applyOutputFont(outputFont, engineRef.current?.currentVFS ?? null);
@@ -233,6 +248,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                 onOpenMap={handleOpenMap}
                 onOpenScripts={handleOpenScripts}
                 onOpenFiles={handleOpenFiles}
+                onOpenLogs={() => setLogsOpen(true)}
                 onOpenSettings={onToggleSettings}
                 onContextMenu={e => windowContextMenuHandlerRef.current?.(e)}
             />
@@ -284,6 +300,13 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                     initialPathTick={filesOpen.pickedAt}
                     initialLine={filesOpen.initialLine}
                     onClose={() => setFilesOpen(false)}
+                />
+            )}
+            {logsOpen && (
+                <LogBrowserModal
+                    connectionId={connection.id}
+                    connectionName={connection.name}
+                    onClose={() => setLogsOpen(false)}
                 />
             )}
             {quickOpenOpen && engineRef.current?.currentVFS && (

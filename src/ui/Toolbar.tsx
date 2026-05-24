@@ -12,11 +12,12 @@ interface ToolbarProps {
     onOpenMap: () => void;
     onOpenScripts: () => void;
     onOpenFiles: () => void;
+    onOpenLogs: () => void;
     onOpenSettings: () => void;
     onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }
 
-export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenFiles, onOpenSettings, onContextMenu }: ToolbarProps) {
+export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenFiles, onOpenLogs, onOpenSettings, onContextMenu }: ToolbarProps) {
     const [menuOpen, setMenuOpen] = useState(false);
     const hamburgerRef = useRef<HTMLDivElement>(null);
 
@@ -36,6 +37,7 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
             <Button variant="ghost" onClick={fire(onOpenScripts)}>Scripts</Button>
             <Button variant="ghost" onClick={fire(onOpenFiles)}>Files</Button>
             <Button variant="ghost" onClick={fire(onOpenMap)}>Map</Button>
+            <Button variant="ghost" onClick={fire(onOpenLogs)}>Logs</Button>
             <Button variant="ghost" onClick={fire(onOpenSettings)}>Settings</Button>
             {status === 'disconnected'
                 ? <>

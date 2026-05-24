@@ -55,6 +55,8 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const outputFont = useAppStore(s => selectProfileField(s, connectionId, 'outputFont'));
     const fontSize = useAppStore(s => selectProfileField(s, connectionId, 'fontSize'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connectionId, 'promptTimeoutMs'));
+    const loggingEnabled = useAppStore(s => selectProfileField(s, connectionId, 'loggingEnabled'));
+    const loggingOn = loggingEnabled !== false;
     const outputBorders = useAppStore(s => selectProfileField(s, connectionId, 'outputBorders'));
     const borders = outputBorders ?? EMPTY_BORDERS;
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
@@ -236,6 +238,21 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                 <div className="settings-row settings-row--top">
                                     <label className="settings-label">Font</label>
                                     <FontPicker value={outputFont} onChange={handleFontChange} vfs={vfs} />
+                                </div>
+                                <div className="settings-row settings-row--top">
+                                    <label className="settings-label" htmlFor="logging-enabled">Record session logs</label>
+                                    <div className="settings-field-with-help">
+                                        <input
+                                            id="logging-enabled"
+                                            type="checkbox"
+                                            checked={loggingOn}
+                                            onChange={e => patchProfile({ loggingEnabled: e.target.checked })}
+                                        />
+                                        <p className="settings-help">
+                                            Save this profile's output and your typed commands to the persistent
+                                            log store, browsable from the toolbar's <code>Logs</code> button.
+                                        </p>
+                                    </div>
                                 </div>
                                 <div className="settings-row settings-row--top">
                                     <label className="settings-label">Borders</label>

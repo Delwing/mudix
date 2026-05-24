@@ -91,6 +91,11 @@ export interface ProfileSettings {
      *  area on panel mount; the matching {@link mapViewStates} entry drives
      *  the initial zoom/pan. Falls through to the first area in the map. */
     mapLastAreaId?: number;
+    /** Record gameplay output (and your echoed commands) to the persistent log
+     *  store, browsable via the toolbar's Logs button. Treat `undefined` as
+     *  enabled so existing profiles opt in without a migration; set to `false`
+     *  to stop recording for this profile. */
+    loggingEnabled?: boolean;
     /** User-tunable subset of mudlet-map-renderer's Settings object. Fields
      *  are forwarded onto the live renderer.settings on mount and whenever
      *  the user changes them in the Mapper tab. Missing fields fall through
