@@ -3,6 +3,7 @@ import { useMudSession } from './hooks/useMudSession';
 import { useEngines } from './hooks/useEngines';
 import { Toolbar } from './ui/Toolbar';
 import { CommandBar } from './ui/CommandBar';
+import { BufferWordIndex } from './ui/bufferWords';
 import { ContentLayout } from './ui/layout/ContentLayout';
 import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
@@ -33,6 +34,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const [logsOpen, setLogsOpen] = useState(false);
     const [quickOpenOpen, setQuickOpenOpen] = useState(false);
     const [cmdLineSuggestions, setCmdLineSuggestions] = useState<string[]>([]);
+    const [bufferWords, setBufferWords] = useState<BufferWordIndex | null>(null);
     const commandInputRef = useRef<HTMLInputElement>(null);
     const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
 
@@ -92,6 +94,15 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         logger.start();
         return () => { void logger.stop(); };
     }, [session, connection.id, connection.name, loggingEnabled]);
+
+    // Index words from this session's output for argument-word Tab completion in
+    // the command bar. Lives for the session's lifetime; one per connection.
+    useEffect(() => {
+        const index = new BufferWordIndex(session);
+        index.start();
+        setBufferWords(index);
+        return () => { index.stop(); setBufferWords(null); };
+    }, [session]);
 
     useEffect(() => {
         void applyOutputFont(outputFont, engineRef.current?.currentVFS ?? null);
@@ -278,6 +289,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                             onSubmit={handleSend}
                             cmdLineMenu={session.cmdLineMenu}
                             suggestions={cmdLineSuggestions}
+                            bufferWords={bufferWords}
                         />
                     }
                 />

@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input } from './components';
 import { useProfileField } from '../storage';
 import { useCommandHistory } from './useCommandHistory';
-import { computeLcp, matchHistory, type Match } from './commandHistory';
+import { matchHistory, type Match } from './commandHistory';
+import { hasPrecedingWord, matchWordCandidates, splitTrailingWord, type ActiveWord, type BufferWordIndex } from './bufferWords';
 import type { CmdLineMenuEntry, CmdLineMenuRegistry } from './CmdLineMenuRegistry';
 
 interface CommandBarProps {
@@ -15,9 +16,11 @@ interface CommandBarProps {
     /** Tab-completion suggestions added via Mudlet's addCmdLineSuggestion API.
      *  Merged ahead of command history (dedup, case-insensitive). */
     suggestions?: string[];
+    /** Recency-ordered words seen in output, for argument-word Tab completion. */
+    bufferWords?: BufferWordIndex | null;
 }
 
-export function CommandBar({ command, onCommandChange, passwordMode, commandInputRef, onSubmit, cmdLineMenu, suggestions }: CommandBarProps) {
+export function CommandBar({ command, onCommandChange, passwordMode, commandInputRef, onSubmit, cmdLineMenu, suggestions, bufferWords }: CommandBarProps) {
     const [menu, setMenu] = useState<{ x: number; y: number; items: CmdLineMenuEntry[] } | null>(null);
     const inputBackground = useProfileField('inputBackground');
     const inputForeground = useProfileField('inputForeground');
@@ -43,6 +46,12 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
     // After traversal or Tab, we want the caret pinned at end after the value
     // re-renders. Set inside the keydown handler, applied in useLayoutEffect.
     const pendingCaretEndRef = useRef(false);
+
+    // In-progress argument-word Tab cycle. `lastValue` is the value we last wrote
+    // — if the box no longer matches it, the user has edited and the cycle is
+    // stale, so the next Tab recomputes matches from scratch.
+    const cycleRef = useRef<{ matches: string[]; index: number; lastValue: string } | null>(null);
+    const resetCycle = () => { cycleRef.current = null; };
 
     const [ghostHidden, setGhostHidden] = useState(false);
 
@@ -86,6 +95,7 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         draftRef.current = command;
         setCursor(-1);
         setGhostHidden(false);
+        cycleRef.current = null;
     }, [command]);
 
     useLayoutEffect(() => {
@@ -128,6 +138,7 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         draftRef.current = val;
         setCursor(-1);
         setGhostHidden(false);
+        resetCycle();
         setValue(val);
     };
 
@@ -139,21 +150,38 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         draftRef.current = command;
         setCursor(-1);
         setGhostHidden(false);
+        resetCycle();
         onSubmit();
     };
 
-    const tryTabComplete = (): boolean => {
-        if (matches.length === 0) return false;
-        const lcp = computeLcp(matches, command);
-        const target = lcp ?? matches[0].item;
-        draftRef.current = target;
+    // Complete the trailing word by cycling through prefix matches. `dir` is +1
+    // for Tab (forward) / -1 for Shift+Tab (backward); the index wraps. The first
+    // press computes + caches the candidate list from the typed word; subsequent
+    // presses just advance the cached index (the snapshot survives until the user
+    // edits, which clears cycleRef). `lists` are the candidate pools in priority
+    // order — for the first word: suggestions, history (whole commands), buffer
+    // words; for an argument word: suggestions, buffer words.
+    const cycleWord = (active: ActiveWord, dir: 1 | -1, lists: string[][]): void => {
+        let state = cycleRef.current;
+        if (!state || state.lastValue !== command) {
+            const matched = matchWordCandidates(active.word, lists);
+            if (matched.length === 0) { cycleRef.current = null; return; }
+            state = { matches: matched, index: dir === 1 ? 0 : matched.length - 1, lastValue: '' };
+            cycleRef.current = state;
+        } else {
+            const n = state.matches.length;
+            state.index = (state.index + dir + n) % n;
+        }
+        const next = active.prefix + state.matches[state.index];
+        state.lastValue = next;
+        draftRef.current = next;
         setCursor(-1);
         pendingCaretEndRef.current = true;
-        setValue(target);
-        return true;
+        setValue(next);
     };
 
     const traverseTo = (newCursor: number) => {
+        resetCycle();
         if (newCursor === -1) {
             setCursor(-1);
             pendingCaretEndRef.current = true;
@@ -182,6 +210,7 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         if (isComposingRef.current || e.nativeEvent.isComposing) return;
 
         if (e.key === 'Escape') {
+            resetCycle();
             if (ghostText) {
                 setGhostHidden(true);
                 e.preventDefault();
@@ -189,12 +218,25 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
             return;
         }
 
-        if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !passwordMode) {
-            // Always consume — keeps focus in the input regardless of whether
-            // the input has matches to complete against.
+        if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !passwordMode) {
+            const active = splitTrailingWord(command);
+            if (!active) {
+                // Nothing to complete (empty input or trailing whitespace). Consume
+                // forward Tab so focus stays in the box; leave Shift+Tab native.
+                if (!e.shiftKey) e.preventDefault();
+                return;
+            }
             e.preventDefault();
-            if (matches.length === 0) return;
-            tryTabComplete();
+            const sugg = suggestions ?? [];
+            const words = bufferWords?.getWords() ?? [];
+            // First word: complete commands you've run (history) + suggestions +
+            // buffer words. Argument word: suggestions + buffer words only.
+            // History is prefix-matched too, so it never "completes" to an
+            // unrelated command the way subsequence matching used to.
+            const lists = hasPrecedingWord(active.prefix)
+                ? [sugg, words]
+                : [sugg, history, words];
+            cycleWord(active, e.shiftKey ? -1 : 1, lists);
             return;
         }
 
