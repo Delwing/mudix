@@ -185,6 +185,7 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setItalics',   styleSetter((v, w) => this.api.setItalic(v, w)));
         this.lua.global.set('setUnderline', styleSetter((v, w) => this.api.setUnderline(v, w)));
         this.lua.global.set('setStrikeOut', styleSetter((v, w) => this.api.setStrikethrough(v, w)));
+        this.lua.global.set('setReverse',   styleSetter((v, w) => this.api.setReverse(v, w)));
         this.lua.global.set('resetFormat', (_win?: string) => this.api.resetFormat(_win));
 
         // Mudlet setTextFormat(windowName, r1, g1, b1, r2, g2, b2, bold,
@@ -229,6 +230,36 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('getProfileName', () => this.api.profileName);
 
         this.lua.global.set('getEpoch', () => Date.now() / 1000);
+
+        // Mudlet getMainConsoleWidth() → pixel width of the main console text area.
+        this.lua.global.set('getMainConsoleWidth', () => this.api.getMainConsoleWidth());
+
+        // Mudlet getConnectionInfo() → host, port, connected. JS hands back a
+        // 0-indexed [host, port, connected] array; Bridge.lua unpacks it into
+        // the three documented return values.
+        this.lua.global.set('__getConnectionInfo', () => {
+            const info = this.api.getConnectionInfo();
+            return [info.host, info.port, info.connected];
+        });
+
+        // Mudlet announce(text [, processing]). processing is a politeness hint
+        // ("importantall"/"importantmostrecent" → assertive, else polite); any
+        // other (or missing) value is treated as polite. No return value.
+        this.lua.global.set('announce', (text: unknown, processing?: unknown) => {
+            this.api.announce(
+                String(text ?? ''),
+                typeof processing === 'string' ? processing : undefined,
+            );
+        });
+
+        // Mudlet showNotification(title, [content], [expiryInSeconds]) → true.
+        this.lua.global.set('showNotification', (title: unknown, content?: unknown, expiry?: unknown) => {
+            return this.api.showNotification(
+                String(title ?? ''),
+                content == null ? undefined : String(content),
+                expiry == null ? undefined : Number(expiry),
+            );
+        });
 
         // Mudlet `getTime([asString, format])`. The Bridge.lua wrapper handles
         // the table-vs-string dispatch and Qt-style format token expansion on

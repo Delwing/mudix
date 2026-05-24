@@ -66,7 +66,7 @@ A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gaug
 | `scrollDown([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
 | `showColors([columns])` | ✅ | Pure Lua via GUIUtils.lua |
 | `showCaptureGroups()` | ✅ | Pure Lua via DebugTools.lua (uses `matches` global) |
-| `announce(text)` | 🚧 | `aria-live` region or Web Speech API |
+| `announce(text [, processing])` | ✅ | ARIA live region; `processing` (`importantall`/`importantmostrecent` → assertive, else polite) matches Mudlet's politeness mapping |
 
 ---
 
@@ -108,7 +108,7 @@ A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gaug
 | `setItalics([window,] bool)` | ✅ | JS-exposed |
 | `setUnderline([window,] bool)` | ✅ | JS-exposed |
 | `setStrikeOut([window,] bool)` | ✅ | JS-exposed |
-| `setReverse([window,] bool)` | 🚧 | Toggle reverse video |
+| `setReverse([window,] bool)` | ✅ | Toggle reverse video — sets `FormatState.inverse` on pen + selection (renderer swaps fg/bg) |
 | `setTextFormat([window,] ...)` | 🚧 | Set all formatting in one call |
 | `getTextFormat([window])` | 🚧 | Get current formatting |
 | `setCommandBackgroundColor(r,g,b,a)` | 🚧 | CSS on main command bar |
@@ -309,7 +309,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `sendGMCP(message)` | ✅ | JS-exposed (frames as IAC SB GMCP …) |
 | `sendMSDP(var, ...)` | 🚧 | MSDP variable request |
 | `sendSocket(data)` | 🚧 | Send raw bytes over socket |
-| `getConnectionInfo()` | 🚧 | Return host/port/ssl |
+| `getConnectionInfo()` | ✅ | Bridge.lua unpacks `__getConnectionInfo` → host, port, connected (mud-mode config or parsed websocket URL) |
 | `getNetworkLatency()` | ✅ | JS-exposed |
 | `connectToServer(host, port)` | 🚧 | Connect from Lua |
 | `disconnect()` | ⚠️ | JS-side method exists on `ScriptingAPI`; not bound as a top-level Lua global yet |
@@ -362,7 +362,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `getConsoleBufferSize([window])` | 🚧 | |
 | `getMainWindowSize()` | ✅ | Returns `window.innerWidth, window.innerHeight` |
 | `getUserWindowSize(name)` | ✅ | Bridge.lua → `__getUserWindowSize` |
-| `getMainConsoleWidth()` | 🚧 | Character width of main console |
+| `getMainConsoleWidth()` | ✅ | Pixel width of the main console: monospace cell width × (wrap columns + 1) |
 | `setWindowWrap(name, col)` | ✅ | JS-exposed |
 | `windowType(name)` | ✅ | Bridge.lua → `__windowType` |
 | `disableScrollBar(name)` | 🚧 | |
@@ -606,7 +606,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `compare(a, b)` | 🚧 | Deep equality, pure Lua |
 | `f(str)` | ✅ | StringUtils.lua (see String section) |
 | `openUrl(url)` | ✅ | JS-exposed — `window.open(url, '_blank')`; a `file:` prefix routes to the VFS file browser (matches Mudlet's `openMudletHomeDir`) |
-| `showNotification(title, text)` | 🚧 | Web Notifications API |
+| `showNotification(title, text)` | ✅ | Web Notifications API; gated on the Settings opt-in (`client.notificationsEnabled`) which is where the permission prompt is raised. Optional expiry auto-closes |
 | `alert(secs)` | 🚧 | `document.title` flash or favicon badge |
 | `loadReplay(path)` | 🚧 | Replay a recorded session from VFS |
 | `startLogging(bool)` | 🚧 | Log session output to VFS file |

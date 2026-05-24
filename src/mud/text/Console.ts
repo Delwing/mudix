@@ -43,6 +43,7 @@ export class Console {
     setItalic(v: boolean):        void { this.format.italic        = v || undefined; }
     setUnderline(v: boolean):     void { this.format.underline     = v || undefined; }
     setStrikethrough(v: boolean): void { this.format.strikethrough = v || undefined; }
+    setReverse(v: boolean):       void { this.format.inverse       = v || undefined; }
 
     resetFormat(): void { this.format.reset(); }
 

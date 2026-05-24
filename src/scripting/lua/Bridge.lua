@@ -48,6 +48,13 @@ function getMainWindowSize()
     return t[0], t[1]
 end
 
+-- Mudlet getConnectionInfo() → host (string), port (number), connected (bool).
+-- JS returns a 0-indexed [host, port, connected] array (wasmoon convention).
+function getConnectionInfo()
+    local t = __getConnectionInfo()
+    return t[0], t[1], t[2]
+end
+
 function getMousePosition()
     local t = __getMousePosition()
     return t[0], t[1]

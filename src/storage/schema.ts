@@ -42,6 +42,12 @@ export interface ClientSettings {
      *  automatically. Disable to ignore those requests. Treat `undefined` as
      *  true so existing profiles opt in without a migration. */
     allowMudPackageInstall?: boolean;
+    /** Opt-in to desktop notifications (Mudlet's `showNotification`). `undefined`
+     *  / `false` means off — `showNotification` is a no-op until the user enables
+     *  this in Settings, which is also where the browser permission prompt is
+     *  triggered (a real user gesture), so the first script notification can fire
+     *  without a surprise permission pop-up. */
+    notificationsEnabled?: boolean;
 }
 
 /** Per-profile settings. Scripts (setBorder, setFont, setBackgroundColor, …) and

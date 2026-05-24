@@ -729,6 +729,16 @@ export class ScriptingAPI {
         if (this.selectionMatches(win)) this.applyStateToSelection({ strikethrough: v });
         this.outputConsole(win).setStrikethrough(v);
     }
+    /**
+     * Mudlet `setReverse([window,] bool)`. Toggles reverse-video — the renderer
+     * swaps the fg/bg pair when `inverse` is set (see Console rendering). Mirrors
+     * the other style setters: applies to the active selection when one matches,
+     * and updates the resolved console's pen for subsequent echo.
+     */
+    setReverse(v: boolean, win?: string): void {
+        if (this.selectionMatches(win)) this.applyStateToSelection({ inverse: v });
+        this.outputConsole(win).setReverse(v);
+    }
 
     /**
      * Mudlet `setTextFormat(windowName, r1, g1, b1, r2, g2, b2, bold, underline,
@@ -1714,6 +1724,110 @@ export class ScriptingAPI {
             if (rect.width > 0 || rect.height > 0) return [rect.width, rect.height];
         }
         return [window.innerWidth, window.innerHeight];
+    }
+
+    /**
+     * Mudlet `getMainConsoleWidth()` — pixel width of the main console's text
+     * area. Mudlet computes `averageCharWidth * (wrapAt + 1)`; we mirror that
+     * with a canvas-measured monospace cell for the profile's output font, and
+     * resolve the wrap column from the profile's `outputWrapAt` override (the
+     * value `setWindowWrap("main", n)` writes), falling back to the live
+     * measured column count when no explicit wrap is set.
+     */
+    getMainConsoleWidth(): number {
+        const state = useAppStore.getState();
+        const family = selectProfileField(state, this.connectionId, 'outputFont')?.family ?? '';
+        const size = selectProfileField(state, this.connectionId, 'fontSize') ?? 12;
+        const [cellW] = measureMonospaceCell(family, size);
+        const wrapAt = selectProfileField(state, this.connectionId, 'outputWrapAt')
+            ?? this.getColumnCount('main');
+        return Math.round(cellW * (wrapAt + 1));
+    }
+
+    /**
+     * Mudlet `getConnectionInfo()` → `host, port, connected`. Mudlet reports the
+     * MUD's telnet host/port; mudix reads them off the active connection config.
+     * For a `mud`-mode connection those are the stored host/port; for a raw
+     * `websocket` connection we parse them out of the endpoint URL (port falls
+     * back to the ws/wss default). `connected` reflects the live session status.
+     */
+    getConnectionInfo(): { host: string; port: number; connected: boolean } {
+        const conn = useAppStore.getState().connections.find(c => c.id === this.connectionId);
+        let host = '';
+        let port = 0;
+        if (conn) {
+            if (conn.mode === 'mud') {
+                host = conn.host ?? '';
+                port = conn.port ?? 23;
+            } else if (conn.url) {
+                try {
+                    const u = new URL(conn.url);
+                    host = u.hostname;
+                    port = u.port ? Number(u.port) : (u.protocol === 'wss:' ? 443 : 80);
+                } catch { /* malformed url → leave host/port at defaults */ }
+            }
+        }
+        return { host, port, connected: this.session.status === 'connected' };
+    }
+
+    /**
+     * Mudlet `announce(text [, processing])` — push `text` to assistive tech.
+     * Mudlet raises a Qt accessibility announcement; the browser equivalent is
+     * an ARIA live region. `processing` maps to live-region politeness exactly
+     * as Mudlet does: `importantall`/`importantmostrecent` → `assertive`, every
+     * other value → `polite`. Two persistent off-screen regions are reused so
+     * repeated calls don't pile up DOM nodes. The text is cleared then re-set on
+     * a microtask so screen readers re-announce even identical consecutive
+     * messages (a live region that doesn't change is not spoken again).
+     */
+    announce(text: string, processing?: string): void {
+        if (typeof document === 'undefined' || !text) return;
+        const assertive = processing === 'importantall' || processing === 'importantmostrecent';
+        const id = assertive ? 'mudix-aria-live-assertive' : 'mudix-aria-live-polite';
+        let region = document.getElementById(id);
+        if (!region) {
+            region = document.createElement('div');
+            region.id = id;
+            region.setAttribute('aria-live', assertive ? 'assertive' : 'polite');
+            region.setAttribute('aria-atomic', 'true');
+            region.setAttribute('role', 'status');
+            // Visually-hidden but still read by screen readers.
+            region.style.cssText = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);border:0;white-space:nowrap';
+            document.body.appendChild(region);
+        }
+        const el = region;
+        el.textContent = '';
+        setTimeout(() => { el.textContent = text; }, 50);
+    }
+
+    /**
+     * Mudlet `showNotification(title [, content [, expiryInSeconds]])` → true.
+     * Mudlet pops a system tray notification; the browser equivalent is the Web
+     * Notifications API. `content` defaults to `title` (matching Mudlet). `expiry`
+     * (when given, ≥1s) auto-closes the notification.
+     *
+     * Gated on the user having opted in via Settings (`client.notificationsEnabled`),
+     * which is also where the browser permission prompt is raised — so we never
+     * trigger a permission pop-up from a script call here, and silently no-op
+     * unless the user enabled notifications AND the browser granted permission.
+     * Mudlet always returns true regardless of whether anything is shown, so we
+     * match that — the return value reflects "the call was accepted", not "a
+     * notification appeared".
+     */
+    showNotification(title: string, content?: string, expirySeconds?: number): boolean {
+        const enabled = useAppStore.getState().client.notificationsEnabled === true;
+        if (enabled
+            && typeof window !== 'undefined'
+            && 'Notification' in window
+            && Notification.permission === 'granted') {
+            try {
+                const n = new Notification(title, { body: content ?? title });
+                if (expirySeconds && expirySeconds > 0) {
+                    setTimeout(() => n.close(), Math.max(1000, Math.round(expirySeconds * 1000)));
+                }
+            } catch { /* construction can throw where the API needs a SW (e.g. mobile) */ }
+        }
+        return true;
     }
 
     /**

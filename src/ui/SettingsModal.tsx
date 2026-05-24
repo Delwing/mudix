@@ -45,9 +45,34 @@ interface SettingsModalProps {
 export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsModalProps) {
     const theme = useAppStore(s => s.client.theme);
     const allowMudPackageInstall = useAppStore(s => s.client.allowMudPackageInstall);
+    const notificationsEnabled = useAppStore(s => s.client.notificationsEnabled);
     const patchClient = useAppStore(s => s.patchClient);
     // Default to true when the user hasn't explicitly disabled it.
     const mudPackageInstallEnabled = allowMudPackageInstall !== false;
+    // Notifications are opt-in (default off) and require browser permission.
+    const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
+    const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
+        notificationsSupported ? Notification.permission : 'denied',
+    );
+    const notificationsOn = notificationsEnabled === true && notifPermission === 'granted';
+
+    // Toggling on requests browser permission here — a real user gesture — so the
+    // first script-driven showNotification fires without a surprise prompt. We
+    // only flip the stored flag true when permission is actually granted.
+    const handleNotificationsToggle = async (checked: boolean) => {
+        if (!checked) {
+            patchClient({ notificationsEnabled: false });
+            return;
+        }
+        if (!notificationsSupported) return;
+        let perm = Notification.permission;
+        if (perm === 'default') {
+            try { perm = await Notification.requestPermission(); }
+            catch { /* some browsers reject without a gesture; leave as-is */ }
+        }
+        setNotifPermission(perm);
+        patchClient({ notificationsEnabled: perm === 'granted' });
+    };
     const outputBackground = useAppStore(s => selectProfileField(s, connectionId, 'outputBackground'));
     const outputForeground = useAppStore(s => selectProfileField(s, connectionId, 'outputForeground'));
     const inputBackground = useAppStore(s => selectProfileField(s, connectionId, 'inputBackground'));
@@ -212,6 +237,26 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         <p className="settings-help">
                                             When a connected MUD sends a <code>Client.GUI</code> GMCP message, automatically
                                             download and install the package it points to. Disable to ignore those requests.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="settings-row settings-row--top">
+                                    <label className="settings-label" htmlFor="notifications-enabled">Desktop notifications</label>
+                                    <div className="settings-field-with-help">
+                                        <input
+                                            id="notifications-enabled"
+                                            type="checkbox"
+                                            checked={notificationsOn}
+                                            disabled={!notificationsSupported || notifPermission === 'denied'}
+                                            onChange={e => { void handleNotificationsToggle(e.target.checked); }}
+                                        />
+                                        <p className="settings-help">
+                                            Let scripts raise desktop notifications via <code>showNotification()</code>.
+                                            {!notificationsSupported
+                                                ? ' Your browser does not support notifications.'
+                                                : notifPermission === 'denied'
+                                                ? ' Notifications are blocked for this site — re-enable them in your browser’s site settings, then toggle this on.'
+                                                : ' Enabling prompts your browser for permission so the first notification can show without interruption.'}
                                         </p>
                                     </div>
                                 </div>
