@@ -265,7 +265,6 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
 
         renderer.backend.events.on('roomcontextmenu', (detail: RoomContextMenuEventDetail) => {
             const items = manager.mapStore.getMapEvents();
-            if (items.length === 0) return;
             const rect = containerRef.current?.getBoundingClientRect();
             setContextMenu({
                 x: (rect?.left ?? 0) + detail.position.x,
@@ -684,6 +683,15 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                     y={contextMenu.y}
                     roomId={contextMenu.roomId}
                     items={contextMenu.items}
+                    builtinItems={[
+                        {
+                            label: 'Set player location',
+                            onClick: () => {
+                                centerViewImplRef.current(contextMenu.roomId);
+                                setContextMenu(null);
+                            },
+                        },
+                    ]}
                     onClose={() => setContextMenu(null)}
                     onSelect={(uniqueName) => {
                         manager.mapStore.dispatchMapEvent(uniqueName, contextMenu.roomId);
@@ -698,16 +706,23 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
 // Right-click menu for the map. Items with `parent` referencing another item's
 // uniqueName nest as submenus that open on hover. Clicking a leaf dispatches
 // the registered Lua event via mapStore.dispatchMapEvent.
+interface MapContextMenuBuiltin {
+    label: string;
+    onClick: () => void;
+}
+
 interface MapContextMenuProps {
     x: number;
     y: number;
     roomId: number;
     items: MapEventEntry[];
+    /** Client-provided items rendered above user entries, separated by a divider. */
+    builtinItems: MapContextMenuBuiltin[];
     onSelect: (uniqueName: string) => void;
     onClose: () => void;
 }
 
-function MapContextMenu({ x, y, items, onSelect }: MapContextMenuProps) {
+function MapContextMenu({ x, y, items, builtinItems, onSelect }: MapContextMenuProps) {
     const childrenByParent = new Map<string | null, MapEventEntry[]>();
     for (const item of items) {
         const key = item.parent ?? null;
@@ -716,7 +731,7 @@ function MapContextMenu({ x, y, items, onSelect }: MapContextMenuProps) {
         childrenByParent.set(key, arr);
     }
     const topLevel = childrenByParent.get(null) ?? [];
-    if (topLevel.length === 0) return null;
+    if (topLevel.length === 0 && builtinItems.length === 0) return null;
 
     return (
         <div
@@ -725,6 +740,21 @@ function MapContextMenu({ x, y, items, onSelect }: MapContextMenuProps) {
             style={{ left: x, top: y }}
             onContextMenu={(e) => e.preventDefault()}
         >
+            {builtinItems.map((builtin, i) => (
+                <div
+                    key={`builtin-${i}`}
+                    className="map-context-menu-item"
+                    onMouseDown={(e) => {
+                        e.stopPropagation();
+                        builtin.onClick();
+                    }}
+                >
+                    <span className="map-context-menu-label">{builtin.label}</span>
+                </div>
+            ))}
+            {builtinItems.length > 0 && topLevel.length > 0 && (
+                <div className="map-context-menu-separator" />
+            )}
             {topLevel.map(item => (
                 <MapContextMenuItem
                     key={item.uniqueName}
