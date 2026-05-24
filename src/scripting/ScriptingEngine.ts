@@ -877,21 +877,18 @@ export class ScriptingEngine {
     }
 
     /**
-     * Mudlet `setTriggerStayOpen(name, lines)`. Updates `fireLength` on every
-     * trigger matching the name (Mudlet does the same — the name doesn't have
-     * to be unique). Negative line counts are clamped to 0 to match Mudlet,
-     * which rejects them at the binding layer.
+     * Mudlet `setTriggerStayOpen(name, lines)`. Keeps every trigger matching the
+     * name open for `lines` more lines of input (Mudlet matches by name, which
+     * need not be unique). This affects only the *current* run: it adjusts the
+     * engine's transient chain window, leaving the persisted trigger (and its
+     * `fireLength`) untouched. Negative line counts clamp to 0, matching Mudlet.
      */
     setTriggerStayOpenByName(name: string, lines: number): boolean {
-        const fireLength = Math.max(0, Math.trunc(lines));
         const store = useAppStore.getState();
         const triggers = store.connectionTriggers[this.connectionId] ?? [];
         const targets = triggers.filter(t => t.name === name);
         if (targets.length === 0) return false;
-        const patches = targets
-            .filter(t => t.fireLength !== fireLength)
-            .map(t => ({ id: t.id, patch: { fireLength } }));
-        if (patches.length > 0) store.updateTriggers(this.connectionId, patches);
+        this.triggerEngine.setStayOpen(targets.map(t => t.id), lines);
         return true;
     }
 

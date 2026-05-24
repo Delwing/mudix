@@ -1440,8 +1440,9 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('enableTrigger', (name: string) => this.api.enableTrigger(String(name ?? '')));
         this.lua.global.set('disableTrigger', (name: string) => this.api.disableTrigger(String(name ?? '')));
-        // Mudlet setTriggerStayOpen(name, lines). Updates fireLength on every
-        // trigger sharing the name; pass 0 to close an open chain immediately.
+        // Mudlet setTriggerStayOpen(name, lines). Keeps every trigger sharing
+        // the name open for `lines` more lines this run only (transient chain
+        // state, not the persisted fireLength); pass 0 to close after this line.
         this.lua.global.set('setTriggerStayOpen', (name: unknown, lines: unknown) =>
             this.api.setTriggerStayOpen(String(name ?? ''), Number(lines)));
         this.lua.global.set('enableTimer', (name: string) => this.api.enableTimer(String(name ?? '')));
@@ -1628,6 +1629,22 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__getBgColor', (win?: unknown) => {
             const rgb = this.api.getBgColor(typeof win === 'string' ? win : undefined);
             return rgb ?? null;
+        });
+
+        // Mudlet getTextFormat([window]) → table of the display attributes at the
+        // current selection's start, or (nil, errMsg) when there is no usable
+        // selection. wasmoon's nested-table marshalling is unreliable, so JS
+        // hands back a flat 0-indexed array of primitives and Bridge.lua rebuilds
+        // the documented table (with 1-indexed foreground/background triples).
+        this.lua.global.set('__getTextFormat', (win?: unknown) => {
+            const f = this.api.getTextFormat(typeof win === 'string' ? win : undefined);
+            if (!f) return null;
+            return [
+                f.bold, f.italic, f.underline, f.strikeout, f.reverse,
+                f.overline, f.concealed, f.alternateFont, f.blinking,
+                f.foreground[0], f.foreground[1], f.foreground[2],
+                f.background[0], f.background[1], f.background[2],
+            ];
         });
 
         // ── Temp callbacks (timer/alias/trigger/key) ──────────────────────────

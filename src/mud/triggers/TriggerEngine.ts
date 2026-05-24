@@ -668,6 +668,27 @@ export class TriggerEngine {
     }
 
     /**
+     * Mudlet `setTriggerStayOpen(name, lines)`: keep the named chain head(s)
+     * open for `lines` more lines of input, starting from the line currently
+     * being processed. This is transient runtime state — it mutates only the
+     * `chainOpenUntil` window, never the persisted `fireLength` on the node, so
+     * the trigger's stored definition is untouched and the override expires
+     * naturally as input scrolls past.
+     *
+     * `matchPerm` post-increments `lineCounter`, so during a trigger's script
+     * the line just matched is `lineCounter - 1`; the window math then mirrors
+     * `openChain` exactly. Negative counts clamp to 0 (open for the current
+     * line only). `ids` are resolved by name by the caller.
+     */
+    setStayOpen(ids: string[], lines: number): void {
+        const currentLine = this.lineCounter - 1;
+        const openUntil = currentLine + Math.max(0, Math.trunc(lines));
+        for (const id of ids) {
+            this.chainOpenUntil.set(id, openUntil);
+        }
+    }
+
+    /**
      * Returns the effective line to match against for `item`.
      * If a filter-trigger ancestor has active filter text, that text is used instead.
      * Innermost filter wins.

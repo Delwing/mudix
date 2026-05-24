@@ -197,6 +197,29 @@ function getBgColor(windowName)
     return t[0], t[1], t[2]
 end
 
+-- Mudlet getTextFormat([windowName]) → table describing the display attributes
+-- of the character at the current selection's start, or (nil, errMsg) when
+-- there is no usable selection. JS returns a flat 0-indexed array of primitives
+-- (see __getTextFormat); rebuild the documented table here, with 1-indexed
+-- {r, g, b} foreground/background triples.
+function getTextFormat(windowName)
+    local t = __getTextFormat(windowName)
+    if t == nil then return nil, "no character under cursor or selection" end
+    return {
+        bold = t[0],
+        italic = t[1],
+        underline = t[2],
+        strikeout = t[3],
+        reverse = t[4],
+        overline = t[5],
+        concealed = t[6],
+        alternateFont = t[7],
+        blinking = t[8],
+        foreground = { t[9], t[10], t[11] },
+        background = { t[12], t[13], t[14] },
+    }
+end
+
 -- Mudlet getMapUserData(key). Returns the stored value on success or
 -- (false, errMsg) when the key isn't set.
 function getMapUserData(key)

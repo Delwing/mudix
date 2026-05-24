@@ -477,10 +477,11 @@ export class ScriptingAPI {
     }
 
     /**
-     * Mudlet `setTriggerStayOpen(name, lines)`. Updates the named trigger's
-     * chain fire-length so it stays open for `lines` more lines of input. 0
-     * closes the chain immediately on the next match check; positive values
-     * extend or shorten an already-running chain.
+     * Mudlet `setTriggerStayOpen(name, lines)`. Keeps the named trigger's chain
+     * open for `lines` more lines of input for the current run only — it adjusts
+     * transient chain state, not the persisted trigger's fire-length. 0 closes
+     * the chain after the current line; positive values extend or shorten an
+     * already-running chain.
      */
     setTriggerStayOpen(name: string, lines: number): boolean {
         return this.triggerStayOpenSetter?.(name, lines) ?? false;
@@ -932,6 +933,57 @@ export class ScriptingAPI {
         }
         const themed = parseHexToRgb(selectProfileField(useAppStore.getState(), this.connectionId, 'outputForeground'));
         return themed ?? DEFAULT_FG_RGB;
+    }
+
+    /**
+     * Mudlet `getTextFormat([windowName]) → table | nil, errMsg`. Reads the full
+     * set of display attributes of the character at the current selection's start
+     * position (Mudlet's "char under cursor or selection"). Mirrors getFgColor /
+     * getBgColor: requires an active selection that, when `windowName` is given,
+     * belongs to that window, and whose start is within the buffer — otherwise
+     * returns null (surfaced as nil + reason by the Bridge wrapper).
+     *
+     * `foreground`/`background` resolve through the same logic as getFgColor /
+     * getBgColor (falling back to the profile defaults for unstyled segments).
+     * `overline`, `concealed`, and `alternateFont` have no equivalent in mudix's
+     * FormatState, so they report Mudlet's "off" values (false / 0) for parity.
+     */
+    getTextFormat(windowName?: string): {
+        bold: boolean;
+        italic: boolean;
+        underline: boolean;
+        strikeout: boolean;
+        reverse: boolean;
+        overline: boolean;
+        concealed: boolean;
+        alternateFont: number;
+        blinking: 'none' | 'slow' | 'fast';
+        foreground: [number, number, number];
+        background: [number, number, number];
+    } | null {
+        if (!this.selection) return null;
+        if (!this.selectionMatches(windowName)) return null;
+        const sel = this.selection;
+        const buf = this.resolveBuffer(sel.windowName);
+        if (!buf) return null;
+        if (sel.start < 0 || sel.start >= buf.length) return null;
+        const foreground = this.readSelectionColor('foreground', windowName);
+        const background = this.readSelectionColor('background', windowName);
+        if (!foreground || !background) return null;
+        const state = buf.getStateAt(sel.start);
+        return {
+            bold: !!state?.bold,
+            italic: !!state?.italic,
+            underline: !!state?.underline,
+            strikeout: !!state?.strikethrough,
+            reverse: !!state?.inverse,
+            overline: false,
+            concealed: false,
+            alternateFont: 0,
+            blinking: state?.rapidBlink ? 'fast' : state?.slowBlink ? 'slow' : 'none',
+            foreground,
+            background,
+        };
     }
 
     applyFormatToSelection(state: FormatStateSnapshot): void {
