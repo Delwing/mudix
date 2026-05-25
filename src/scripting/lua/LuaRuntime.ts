@@ -320,6 +320,16 @@ export class LuaRuntime implements IScriptingRuntime {
             );
         });
 
+        // Mudlet hasFocus([window]) → bool. True when the named console (or the
+        // main command bar when omitted) holds keyboard focus.
+        this.lua.global.set('hasFocus', (name?: unknown) =>
+            this.api.hasFocus(typeof name === 'string' ? name : undefined));
+        // Mudlet alert([seconds]) — flash for attention. Browsers can't flash the
+        // taskbar, so mudix flashes the document title for `seconds` (default 10).
+        this.lua.global.set('alert', (seconds?: unknown) => {
+            this.api.alert(seconds === undefined ? undefined : Number(seconds));
+        });
+
         // Mudlet showNotification(title, [content], [expiryInSeconds]) → true.
         this.lua.global.set('showNotification', (title: unknown, content?: unknown, expiry?: unknown) => {
             return this.api.showNotification(
@@ -449,6 +459,11 @@ export class LuaRuntime implements IScriptingRuntime {
                 parent,
             );
         });
+        // Mudlet deleteMiniConsole(name) → bool. Destroys a mini-console created
+        // via createMiniConsole; rejects non-miniconsole targets (main window,
+        // dock panels, unknown names).
+        this.lua.global.set('deleteMiniConsole', (name: unknown) =>
+            typeof name === 'string' ? this.api.deleteMiniConsole(name) : false);
         // createMapper has two calling conventions:
         //   createMapper(x, y, w, h)             — 4 args, embedded in main window
         //   createMapper(parent, x, y, w, h)     — 5 args, embedded in a userwindow
@@ -711,6 +726,18 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('resetLabelCursor', (name: unknown) => {
             if (typeof name === 'string') this.api.labels.setCursor(name, undefined);
+        });
+        // setLabelCustomCursor(name, cursorPath, [hotX, hotY]) — point a label's
+        // cursor at a custom image. hotX/hotY are the hotspot in pixels; numbers
+        // may arrive as capture strings, so coerce with Number().
+        this.lua.global.set('setLabelCustomCursor', (name: unknown, path: unknown, hotX?: unknown, hotY?: unknown) => {
+            if (typeof name !== 'string') return false;
+            return this.api.setLabelCustomCursor(
+                name,
+                String(path ?? ''),
+                hotX === undefined ? undefined : Number(hotX),
+                hotY === undefined ? undefined : Number(hotY),
+            );
         });
 
         // Mudlet setAppStyleSheet(css, [tag]) — install or replace a CSS block
@@ -1375,6 +1402,27 @@ export class LuaRuntime implements IScriptingRuntime {
             if (isUserCmdLine(name)) return this.api.windows.getCmdLineValue(name);
             return this.api.getCmdLine();
         });
+        // Mudlet selectCmdLineText([commandLine]) — highlight all text in the
+        // command bar. Only the main bar is wired in mudix; a named overlay
+        // command line arg is accepted but ignored.
+        this.lua.global.set('selectCmdLineText', (name?: unknown) => {
+            this.api.selectCmdLineText(typeof name === 'string' ? name : undefined);
+        });
+        // Mudlet setCommandBackgroundColor([windowName,] r, g, b [, a]) and
+        // setCommandForegroundColor — recolor the main command bar. Optional
+        // leading windowName string; numeric channels arrive as regex-capture
+        // strings, so coerce with Number(). Alpha defaults to 255 (opaque).
+        const cmdColorSetter = (apply: (r: number, g: number, b: number, a: number, win?: string) => boolean) =>
+            (a: unknown, b: unknown, c: unknown, d?: unknown, e?: unknown) => {
+                if (typeof a === 'string') {
+                    return apply(Number(b), Number(c), Number(d), e === undefined ? 255 : Number(e), a);
+                }
+                return apply(Number(a), Number(b), Number(c), d === undefined ? 255 : Number(d));
+            };
+        this.lua.global.set('setCommandBackgroundColor',
+            cmdColorSetter((r, g, b, al, win) => this.api.setCommandBackgroundColor(r, g, b, al, win)));
+        this.lua.global.set('setCommandForegroundColor',
+            cmdColorSetter((r, g, b, al, win) => this.api.setCommandForegroundColor(r, g, b, al, win)));
         // Mudlet enableCommandLine / disableCommandLine for userwindows. mudix
         // doesn't (yet) gate the main cmd bar this way — calling with no name
         // or "main" is a no-op that returns true so scripts targeting the main
@@ -1867,7 +1915,7 @@ export class LuaRuntime implements IScriptingRuntime {
         // N fires; -1/0/omitted = unlimited. The Bridge.lua wrappers dispatch
         // to one of the JS bindings below.
         const installTempTrigger = (
-            pattern: string, cbId: number, kind: 'regex' | 'substring' | 'startOfLine' | 'exactMatch',
+            pattern: string, cbId: number, kind: 'regex' | 'substring' | 'startOfLine' | 'exactMatch' | 'prompt',
             expirationCount: number | undefined, label: string,
         ) => {
             const id = this.nextTempId++;
@@ -1915,6 +1963,11 @@ export class LuaRuntime implements IScriptingRuntime {
             installTempTrigger(pattern, cbId, 'exactMatch', expirationCount, 'tempExactMatchTrigger'));
         this.lua.global.set('__mudix_tempBeginOfLineTrigger', (pattern: string, cbId: number, expirationCount?: number) =>
             installTempTrigger(pattern, cbId, 'startOfLine', expirationCount, 'tempBeginOfLineTrigger'));
+        // tempPromptTrigger(fn[, expirationCount]) — fires on every line the
+        // server flags as a prompt (GA/EOR). No pattern; the empty string is a
+        // placeholder the 'prompt' kind ignores.
+        this.lua.global.set('__mudix_tempPromptTrigger', (cbId: number, expirationCount?: number) =>
+            installTempTrigger('', cbId, 'prompt', expirationCount, 'tempPromptTrigger'));
         this.lua.global.set('killTrigger', (idOrName: number | string) => {
             if (typeof idOrName === 'string') return this.api.killByName('trigger', idOrName);
             const unsub = this.tempIds.get(idOrName);
@@ -2167,6 +2220,24 @@ export class LuaRuntime implements IScriptingRuntime {
                 tag: strOpt(o.tag),
                 fadeout: numOpt(o.fadeout),
             });
+        });
+        // getPlayingSounds([filter]) — Bridge.lua normalises both the positional
+        // (name[,key][,tag]) and the options-table forms into a single options
+        // table, then re-indexes the JS 0-indexed array of {name,key,tag,volume}
+        // into a 1-based Lua array.
+        this.lua.global.set('__getPlayingSounds', (t?: unknown) => {
+            const o = detachOpts(t);
+            return sounds.getPlaying({
+                name: strOpt(o.name),
+                key: strOpt(o.key),
+                tag: strOpt(o.tag),
+            });
+        });
+        // loadSoundFile(name[, url]) | ({name=...}) — preload/decode so the first
+        // playSoundFile has no decode latency. Bridge.lua normalises to a name.
+        this.lua.global.set('__loadSoundFile', (t: unknown) => {
+            const o = detachOpts(t);
+            return sounds.preload(String(o.name ?? ''));
         });
 
         // ── Text-to-speech (Mudlet ttsSpeak / ttsQueue / ttsSetRate / ...) ─────

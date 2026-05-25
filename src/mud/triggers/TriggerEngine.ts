@@ -236,6 +236,7 @@ export class TriggerEngine {
         | { kind: 'substring'; pattern: string; fn: TempFn }
         | { kind: 'startOfLine'; pattern: string; fn: TempFn }
         | { kind: 'exactMatch'; pattern: string; fn: TempFn }
+        | { kind: 'prompt'; fn: TempFn }
     >();
     private nextId = 1;
     private permCompiled: CompiledEntry[] = [];
@@ -286,16 +287,21 @@ export class TriggerEngine {
      *                     Callback receives `[pattern]`.
      *   - `'exactMatch'`— full-line equality (Mudlet
      *                     `tempExactMatchTrigger`). Callback receives `[line]`.
+     *   - `'prompt'`    — fires on every line the server flags as a prompt
+     *                     (Mudlet `tempPromptTrigger`); `pattern` is ignored.
+     *                     Callback receives `[line]`.
      * Invalid regex patterns return a no-op disposer so callers don't need
      * to special-case compile failures.
      */
     addTemp(
         pattern: string,
         fn: TempFn,
-        kind: 'regex' | 'substring' | 'startOfLine' | 'exactMatch' = 'regex',
+        kind: 'regex' | 'substring' | 'startOfLine' | 'exactMatch' | 'prompt' = 'regex',
     ): () => void {
         const id = this.nextId++;
-        if (kind === 'substring' || kind === 'startOfLine' || kind === 'exactMatch') {
+        if (kind === 'prompt') {
+            this.temp.set(id, { kind, fn });
+        } else if (kind === 'substring' || kind === 'startOfLine' || kind === 'exactMatch') {
             this.temp.set(id, { kind, pattern, fn });
         } else {
             const re = compilePcre(pattern);
@@ -442,8 +448,12 @@ export class TriggerEngine {
 
     // ── Temp triggers (session-scoped, created by scripts) ────────────────────
 
-    processTemp(line: string): void {
+    processTemp(line: string, isPrompt = false): void {
         for (const entry of this.temp.values()) {
+            if (entry.kind === 'prompt') {
+                if (isPrompt) entry.fn([line]);
+                continue;
+            }
             if (entry.kind === 'substring') {
                 if (line.includes(entry.pattern)) {
                     entry.fn([entry.pattern]);

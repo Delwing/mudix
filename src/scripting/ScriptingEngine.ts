@@ -1470,7 +1470,7 @@ export class ScriptingEngine {
         this.api.beginLine(buffer, isPrompt);
         try {
             this.runtimes.lua?.setCurrentLine(plain, isPrompt);
-            this.triggerEngine.processTemp(plain);
+            this.triggerEngine.processTemp(plain, isPrompt);
             const matches = this.triggerEngine.matchPerm(plain, isPrompt);
             for (const m of matches) {
                 this.executePermTrigger(

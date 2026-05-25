@@ -35,6 +35,15 @@ function parseHexToRgb(hex: string | undefined): [number, number, number] | null
     return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
 }
 
+/** Build a CSS color string from Mudlet-style 0..255 channels (alpha included).
+ *  Channels are clamped and rounded; alpha (Mudlet's 0..255 "transparency") is
+ *  mapped to CSS's 0..1 range. Used by setCommand{Background,Foreground}Color. */
+function rgbaCss(r: number, g: number, b: number, a = 255): string {
+    const ch = (n: number) => Math.max(0, Math.min(255, Math.round(Number(n) || 0)));
+    const alpha = Math.max(0, Math.min(1, (Number(a) || 0) / 255));
+    return `rgba(${ch(r)}, ${ch(g)}, ${ch(b)}, ${alpha})`;
+}
+
 function formatColorToRgb(color: FormatColor | undefined): [number, number, number] | null {
     if (!color) return null;
     if (color.space === 'rgb') return [color.r, color.g, color.b];
@@ -1487,6 +1496,19 @@ export class ScriptingAPI {
     }
 
     /**
+     * Mudlet `deleteMiniConsole(name)`. Destroys a mini-console created by
+     * createMiniConsole, freeing its registry/buffer/console state. Restricted
+     * to mini-consoles (mirrors Mudlet's CONSOLE-only check) — returns false
+     * for the main window, dockable panels, or an unknown name.
+     */
+    deleteMiniConsole(name: string): boolean {
+        if (!name || name === 'main') return false;
+        if (!this.session.windows.isMiniConsole(name)) return false;
+        this.session.windows.close(name);
+        return true;
+    }
+
+    /**
      * Mudlet `createMapper([parent,] x, y, width, height)`. Creates a positioned
      * mapper widget inside the given parent (defaults to `main`), or repositions
      * it if it already exists. Singleton: Mudlet allows only one in-console
@@ -1560,6 +1582,41 @@ export class ScriptingAPI {
 
     clearCmdLine(): void {
         this.session.events.emit('script.clearcmd');
+    }
+
+    /**
+     * Mudlet selectCmdLineText([commandLine]). Selects (highlights) all text in
+     * the command bar so the next keystroke overtypes it. mudix has a single
+     * main command bar; a named overlay command-line arg is accepted for
+     * compatibility but only "main"/omitted is acted upon. The actual DOM
+     * selection happens in ProfileSession, which owns the input ref.
+     */
+    selectCmdLineText(name?: string): void {
+        if (name && name !== 'main') return;
+        this.session.events.emit('script.selectcmd');
+    }
+
+    /**
+     * Mudlet setCommandBackgroundColor([windowName], r, g, b, [transparency]).
+     * Recolors the command bar's background. mudix only has the main command
+     * bar, so a non-"main" windowName is ignored. `a` is Mudlet's 0..255 alpha;
+     * the CommandBar reads the `inputBackground` profile field as a CSS color.
+     */
+    setCommandBackgroundColor(r: number, g: number, b: number, a = 255, name?: string): boolean {
+        if (name && name !== 'main') return false;
+        useAppStore.getState().patchConnectionProfile(this.connectionId, {
+            inputBackground: rgbaCss(r, g, b, a),
+        });
+        return true;
+    }
+
+    /** Mudlet setCommandForegroundColor — recolors the command bar text. */
+    setCommandForegroundColor(r: number, g: number, b: number, a = 255, name?: string): boolean {
+        if (name && name !== 'main') return false;
+        useAppStore.getState().patchConnectionProfile(this.connectionId, {
+            inputForeground: rgbaCss(r, g, b, a),
+        });
+        return true;
     }
 
     // ── Command-line value provider (Mudlet getCmdLine) ────────────────────────
@@ -1821,6 +1878,61 @@ export class ScriptingAPI {
         }
         return [window.innerWidth, window.innerHeight];
     }
+
+    /**
+     * Mudlet `hasFocus([window])` → bool. Reports whether the named console (or
+     * the main command bar / output area when omitted) currently holds keyboard
+     * focus. mudix maps "main"/omitted to the command input, and a named window
+     * to its registered overlay element. Returns false when nothing matches.
+     */
+    hasFocus(windowName?: string): boolean {
+        if (typeof document === 'undefined') return false;
+        const activeEl = document.activeElement;
+        if (!activeEl) return false;
+        if (!windowName || windowName === 'main') {
+            const input = document.querySelector('.command-input');
+            return !!input && (activeEl === input || (!!input && input.contains(activeEl)));
+        }
+        const el = this.session.windows.getElement(windowName);
+        return !!el && (activeEl === el || el.contains(activeEl));
+    }
+
+    /**
+     * Mudlet `alert([seconds])`. Mudlet flashes the taskbar entry to grab the
+     * user's attention; browsers have no taskbar-flash API, so we flash the
+     * document title (alternating with a "● " bell prefix) for `seconds`
+     * (default 10, Mudlet's default), and skip the flash entirely while the tab
+     * is already focused — matching Mudlet, which no-ops when the window is
+     * active.
+     */
+    alert(seconds?: number): void {
+        if (typeof document === 'undefined') return;
+        if (document.hasFocus()) return;
+        const dur = Number.isFinite(seconds) && (seconds as number) > 0 ? (seconds as number) : 10;
+        if (this.alertTimer !== null) {
+            clearInterval(this.alertTimer);
+            this.alertTimer = null;
+            if (this.alertOriginalTitle !== null) document.title = this.alertOriginalTitle;
+        }
+        this.alertOriginalTitle = document.title;
+        const base = this.alertOriginalTitle;
+        let on = false;
+        const flip = () => {
+            on = !on;
+            document.title = on ? `● ${base}` : base;
+        };
+        flip();
+        this.alertTimer = window.setInterval(flip, 1000);
+        const stop = () => {
+            if (this.alertTimer !== null) { clearInterval(this.alertTimer); this.alertTimer = null; }
+            if (this.alertOriginalTitle !== null) { document.title = this.alertOriginalTitle; this.alertOriginalTitle = null; }
+            window.removeEventListener('focus', stop);
+        };
+        window.addEventListener('focus', stop);
+        window.setTimeout(stop, dur * 1000);
+    }
+    private alertTimer: number | null = null;
+    private alertOriginalTitle: string | null = null;
 
     /**
      * Mudlet `getMainConsoleWidth()` — pixel width of the main console's text
@@ -2095,6 +2207,24 @@ export class ScriptingAPI {
             return this.session.labels.resetBackgroundImage(name);
         }
         return this.session.windows.resetBackgroundImage(name);
+    }
+
+    /**
+     * Mudlet `setLabelCustomCursor(labelName, cursorPath, [hotX, hotY])`. Points
+     * the label's mouse cursor at a custom image. The path is run through the
+     * VFS-aware URL resolver (same as setBackgroundImage) so package-relative
+     * paths resolve, then composed into a CSS `cursor: url(...) hotX hotY, auto`
+     * value. hotX/hotY are the cursor hotspot in pixels (default 0,0). Returns
+     * false when the label doesn't exist.
+     */
+    setLabelCustomCursor(name: string, path: string, hotX?: number, hotY?: number): boolean {
+        if (!name || !this.session.labels.has(name)) return false;
+        const url = this.resolveImageUrl(path ?? '');
+        if (!url) return this.session.labels.setCursor(name, undefined);
+        const x = Number.isFinite(hotX) ? Math.max(0, Math.round(hotX as number)) : 0;
+        const y = Number.isFinite(hotY) ? Math.max(0, Math.round(hotY as number)) : 0;
+        const escaped = url.replace(/"/g, '\\"');
+        return this.session.labels.setCursor(name, `url("${escaped}") ${x} ${y}, auto`);
     }
 
     private applyBackgroundImage(_target: undefined, path: string, mode: number): boolean {

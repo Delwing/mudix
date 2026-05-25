@@ -239,6 +239,42 @@ export class SoundManager {
         this.updateMediaSessionState();
     }
 
+    /**
+     * Mudlet getPlayingSounds. Returns the currently-playing sound effects
+     * (music is excluded — Mudlet has a separate getPlayingMusic) optionally
+     * filtered by name/key/tag. Volume is reported on Mudlet's 0..100 scale.
+     */
+    getPlaying(filter: { name?: string; key?: string; tag?: string } = {}): Array<{
+        name: string; key?: string; tag?: string; volume: number;
+    }> {
+        const out: Array<{ name: string; key?: string; tag?: string; volume: number }> = [];
+        for (const a of this.active.values()) {
+            if (a.kind !== 'sound' || a.stopping) continue;
+            if (filter.name && a.name !== filter.name) continue;
+            if (filter.key && a.key !== filter.key) continue;
+            if (filter.tag && a.tag !== filter.tag) continue;
+            out.push({ name: a.name, key: a.key, tag: a.tag, volume: Math.round(a.volume * 100) });
+        }
+        return out;
+    }
+
+    /**
+     * Mudlet loadSoundFile. Preloads (decodes + caches) a sound so the first
+     * playSoundFile has no decode latency. Fire-and-forget: warms `decodeCache`
+     * via the same path playSound uses, so a later play of the same name hits
+     * the cache. Returns false when no AudioContext is available yet.
+     */
+    preload(name: string): boolean {
+        const target = (name ?? '').trim();
+        if (!target) return false;
+        const ctx = getContext();
+        if (!ctx) return false;
+        // Swallow rejection — decodeBuffer already evicts failed entries from
+        // the cache, and preload is advisory.
+        decodeBuffer(ctx, target, this.loader).catch(() => {});
+        return true;
+    }
+
     /** Stop everything this manager owns. Call on engine teardown. */
     stopAll(): void {
         const ctx = sharedContext;

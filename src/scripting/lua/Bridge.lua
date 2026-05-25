@@ -911,6 +911,12 @@ do
     function tempBeginOfLineTrigger(pattern, fn, expirationCount)
         return _bol(pattern, __mudix_register_cb(__mudix_to_fn(fn, "tempBeginOfLineTrigger", 2)), expirationCount)
     end
+    -- tempPromptTrigger(fn[, expirationCount]) — fires whenever the server sends
+    -- a prompt (no pattern). The callback is arg #1, so __mudix_to_fn looks there.
+    local _prompt = __mudix_tempPromptTrigger
+    function tempPromptTrigger(fn, expirationCount)
+        return _prompt(__mudix_register_cb(__mudix_to_fn(fn, "tempPromptTrigger", 1)), expirationCount)
+    end
 end
 
 do
@@ -1167,6 +1173,41 @@ end
 function playMusicFile(opts)
     if type(opts) ~= 'table' then return false end
     return __playMusicFile(opts)
+end
+
+-- Mudlet `loadSoundFile`. Preloads a sound so the first playSoundFile has no
+-- decode latency. Accepts:
+--   loadSoundFile(name [, url])            -- positional
+--   loadSoundFile({name=..., url=...})     -- table
+-- mudix resolves `name` against the profile VFS (or treats it as a URL); the
+-- optional `url` is accepted for Mudlet compatibility and used only when no
+-- name is supplied.
+function loadSoundFile(a, b)
+    if type(a) == 'table' then
+        return __loadSoundFile({ name = tostring(a.name or a.url or '') })
+    end
+    return __loadSoundFile({ name = tostring(a or b or '') })
+end
+
+-- Mudlet `getPlayingSounds([filter])`. Returns a 1-indexed array of currently
+-- playing sound effects: { {name=, key=, tag=, volume=}, ... }. Accepts an
+-- optional filter as either positional (name[,key][,tag]) or a table. JS hands
+-- back a 0-indexed array (wasmoon convention); re-index to 1-based here.
+function getPlayingSounds(a, b, c)
+    local filter
+    if type(a) == 'table' then
+        filter = { name = a.name, key = a.key, tag = a.tag }
+    else
+        filter = { name = a, key = b, tag = c }
+    end
+    local raw = __getPlayingSounds(filter)
+    local out = {}
+    if type(raw) == 'table' then
+        for _, v in pairs(raw) do
+            out[#out + 1] = { name = v.name, key = v.key, tag = v.tag, volume = v.volume }
+        end
+    end
+    return out
 end
 
 -- Mudlet registerMapInfo(label, function). The callback runs every time the

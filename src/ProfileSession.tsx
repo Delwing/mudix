@@ -145,7 +145,17 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         const unsub5 = session.events.on('script.cmdlinesuggestions', (items: string[]) => {
             setCmdLineSuggestions(items);
         });
-        return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
+        // Mudlet selectCmdLineText — highlight all text in the command bar so the
+        // next keystroke overtypes it (same selectAll behaviour as script.setcmd).
+        const unsub6 = session.events.on('script.selectcmd', () => {
+            queueMicrotask(() => {
+                const el = commandInputRef.current;
+                if (!el) return;
+                el.focus();
+                el.select();
+            });
+        });
+        return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); };
     }, [session]);
 
     // Register the getCmdLine provider on the engine. Effect re-runs when the

@@ -111,8 +111,8 @@ A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gaug
 | `setReverse([window,] bool)` | ✅ | Toggle reverse video — sets `FormatState.inverse` on pen + selection (renderer swaps fg/bg) |
 | `setTextFormat([window,] ...)` | 🚧 | Set all formatting in one call |
 | `getTextFormat([window])` | 🚧 | Get current formatting |
-| `setCommandBackgroundColor(r,g,b,a)` | 🚧 | CSS on main command bar |
-| `setCommandForegroundColor(r,g,b,a)` | 🚧 | CSS on main command bar |
+| `setCommandBackgroundColor([window,] r,g,b[,a])` | ✅ | Patches the `inputBackground` profile field (rgba 0..255 → CSS). Main bar only; non-"main" window ignored |
+| `setCommandForegroundColor([window,] r,g,b[,a])` | ✅ | Patches the `inputForeground` profile field. Main bar only |
 | `setBackgroundColor([window,] r,g,b,a)` | ✅ | JS-exposed |
 
 ---
@@ -210,7 +210,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `tempExactMatchTrigger(pattern, code)` | ✅ | Full-line exact match |
 | `tempColorTrigger(fg, bg, code)` | 🚧 | Match on ANSI color in line |
 | `tempLineTrigger(from, count, code)` | 🚧 | Fire on N consecutive lines |
-| `tempPromptTrigger(code)` | 🚧 | Fire on MUD prompt detection |
+| `tempPromptTrigger(code)` | ✅ | Bridge.lua wraps `__mudix_tempPromptTrigger`; fires on lines flagged as a prompt (GA/EOR). expirationCount honoured |
 | `permRegexTrigger(name, parent, pattern, code)` | ⚠️ | `__mudix_permRegexTrigger`/`permRegexTrigger` exist; full Lua API still limited |
 | `permSubstringTrigger(name, parent, pattern, code)` | ⚠️ | Same |
 | `enableTrigger(name)` | ✅ | JS-exposed |
@@ -356,7 +356,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `createBuffer(name)` | 🚧 | Off-screen text buffer (no position) |
 | `appendBuffer(name)` | 🚧 | Paste buffer content into a window |
 | `echoUserWindow(name, text)` | ✅ | Alias for `mudix.windows.write` |
-| `deleteMiniConsole(name)` | 🚧 | Remove overlay mini-console |
+| `deleteMiniConsole(name)` | ✅ | JS-exposed; closes the panel via `WindowManager.close`. Rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
 | `deleteLabel(name)` | ✅ | Bridge.lua → `__deleteLabel` |
 | `deleteCommandLine(name)` | 🚧 | Remove overlay command line |
 | `setConsoleBufferSize([window,] linesLimit [, batchSize])` | ✅ | Scrollback size limit — maps to `Console.setMaxLines`; batch size round-tripped |
@@ -368,7 +368,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `windowType(name)` | ✅ | Bridge.lua → `__windowType` |
 | `disableScrollBar(name)` | 🚧 | |
 | `enableScrollBar(name)` | 🚧 | |
-| `hasFocus([window])` | 🚧 | `document.activeElement` check |
+| `hasFocus([window])` | ✅ | JS-exposed; `document.activeElement` check. No name = command bar; a name targets the registered overlay element |
 | `saveWindowLayout()` | ✅ | JS-exposed; snapshots window hints + dock extents into `connectionLayoutSnapshots` in the app store |
 | `loadWindowLayout()` | ✅ | JS-exposed; re-applies the saved snapshot — re-positions live windows and reopens saved-visible windows that are currently closed |
 
@@ -390,7 +390,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `getLabelFormat(name)` | ✅ | GUIUtils.lua; now resolves since `getLabelStyleSheet` is implemented |
 | `getLabelSizeHint(name)` | 🚧 | Return preferred size |
 | `setLabelCursor(name, shape)` | ✅ | JS-exposed |
-| `setLabelCustomCursor(name, path, x, y)` | 🚧 | CSS `cursor: url(...)` |
+| `setLabelCustomCursor(name, path[, hotX, hotY])` | ✅ | JS-exposed; CSS `cursor: url(...) hotX hotY, auto`. Path resolved through the VFS-aware rewriter |
 | `resetLabelCursor(name)` | ✅ | JS-exposed |
 | `setLabelToolTip(name, text, delay)` | ✅ | JS-exposed |
 | `resetLabelToolTip(name)` | ✅ | JS-exposed |
@@ -422,7 +422,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `printCmdLine(name, text)` | ⚠️ | JS-exposed for main bar; named widgets 🚧 |
 | `setCmdLineAction(name, fn)` | ⚠️ | Bridge.lua wraps it for the main bar; named widgets 🚧 |
 | `resetCmdLineAction(name)` | ⚠️ | Bridge.lua wraps it for the main bar; named widgets 🚧 |
-| `selectCmdLineText(name)` | 🚧 | Select all text in input |
+| `selectCmdLineText([name])` | ⚠️ | JS-exposed; selects all main command-bar text (emits `script.selectcmd` → ProfileSession `.select()`). Named overlay widgets not yet wired |
 | `enableCommandLine(name)` | 🚧 | |
 | `disableCommandLine(name)` | 🚧 | |
 | `setCmdLineStyleSheet(name, css)` | 🚧 | CSS on overlay input |
@@ -613,7 +613,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `f(str)` | ✅ | StringUtils.lua (see String section) |
 | `openUrl(url)` | ✅ | JS-exposed — `window.open(url, '_blank')`; a `file:` prefix routes to the VFS file browser (matches Mudlet's `openMudletHomeDir`) |
 | `showNotification(title, text)` | ✅ | Web Notifications API; gated on the Settings opt-in (`client.notificationsEnabled`) which is where the permission prompt is raised. Optional expiry auto-closes |
-| `alert(secs)` | 🚧 | `document.title` flash or favicon badge |
+| `alert([secs])` | ✅ | JS-exposed; flashes `document.title` for `secs` (default 10). No-op while the tab is focused (matches Mudlet) |
 | `loadReplay(path)` | 🚧 | Replay a recorded session from VFS |
 | `startLogging(bool)` | 🚧 | Log session output to VFS file |
 | `loadProfile(name)` | ❌ | No multi-profile switching |
@@ -628,10 +628,10 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | Function | Status | Notes |
 |---|---|---|
 | `playSoundFile(path [, vol, loops, ch])` | ✅ | Bridge.lua → `SoundManager` (Web Audio + VFS or http(s) URL) |
-| `loadSoundFile(path)` | 🚧 | Preload audio |
+| `loadSoundFile(path)` | ✅ | Bridge.lua → `SoundManager.preload`; decodes + caches so the first `playSoundFile` has no latency. Accepts positional or table form |
 | `pauseSounds([channel])` | 🚧 | |
 | `stopSounds([channel])` | ✅ | JS-exposed |
-| `getPlayingSounds()` | 🚧 | |
+| `getPlayingSounds()` | ✅ | Bridge.lua → `SoundManager.getPlaying`; re-indexes to a 1-based array of `{name, key, tag, volume}`. Optional name/key/tag filter |
 | `playMusicFile(path [, vol, loops, ch])` | ✅ | Bridge.lua → `SoundManager` |
 | `stopMusic([channel])` | ✅ | Bridge.lua → `SoundManager` |
 | `playVideoFile(path)` | 🚧 | HTML `<video>` element in overlay |
