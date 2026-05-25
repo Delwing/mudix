@@ -278,27 +278,119 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 ### System Events (fired to Lua by the client)
 
+Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.org/w/Manual:Event_Engine) list (every `sys*`/`map*` event Mudlet raises). Status reflects what mudix actually fires today (verified against `LuaRuntime`/`ScriptingEngine`/`WindowManager`/`HttpService` and the bundled `mudlet-lua`). Arg lists exclude the implicit leading event-name argument that Mudlet prepends.
+
+**Lifecycle / connection**
+
 | Event | Status | Notes |
 |---|---|---|
-| `sysConnect` / `connect` | ✅ | |
-| `sysDisconnect` / `disconnect` | ✅ | |
-| `sysGmcpMessage` / `gmcp` | ✅ | Per GMCP packet |
-| `output` | ✅ | Per output line |
-| `sysDataSendRequest` | 🚧 | Before each send — can deny |
-| `sysWindowResizeEvent` | 🚧 | On main window resize |
-| `sysLoadEvent` | 🚧 | Scripts initialized |
-| `sysInstall` / `sysInstallPackage` | ✅ | After package install — arg: package name |
-| `sysUninstall` / `sysUninstallPackage` | ✅ | Before package uninstall — arg: package name |
-| `sysPathChanged` | 🚧 | Virtual FS file change watch |
-| `sysSpeedwalkFinished` | 🚧 | After speedwalk completes |
-| `sysUserWindowCreated` | 🚧 | After overlay element is created |
-| `sysUserWindowClosed` | 🚧 | After overlay element is closed |
-| `sysDownloadDone` | 🚧 | After downloadFile completes |
-| `sysDownloadError` | 🚧 | After downloadFile fails |
-| `sysGetHttpDone` | 🚧 | After getHTTP completes |
-| `sysGetHttpError` | 🚧 | After getHTTP fails |
-| `sysPostHttpDone` | 🚧 | After postHTTP completes |
-| `sysMapperLocationChanged` | 🚧 | When player position in mapper changes |
+| `sysLoadEvent` | ✅ | After the initial script load (`ScriptingEngine.start`) |
+| `sysExitEvent` | 🚧 | Profile shutdown — hook `beforeunload`/disconnect teardown to fire it |
+| `sysConnectionEvent` | ✅ | Fired on connect (`ScriptingEngine` bridge), alongside mudix's native `connect` |
+| `sysDisconnectionEvent` | ✅ | Fired on disconnect, alongside mudix's native `disconnect` |
+| `sysProfileFocusChangeEvent` | 🚧 | Could fire on active-connection (tab) focus change — arg: isFocused |
+
+**Input / send**
+
+| Event | Status | Notes |
+|---|---|---|
+| `sysDataSendRequest` | ✅ | Before each send (`LuaRuntime.dispatchSendRequest`); handler may call `denyCurrentSend()` to cancel — arg: text |
+
+**Packages / modules**
+
+| Event | Status | Notes |
+|---|---|---|
+| `sysInstall` | ✅ | After any package/module install — arg: name |
+| `sysUninstall` | ✅ | Before any package/module uninstall — arg: name |
+| `sysInstallPackage` | ✅ | After package install — args: name, fileName |
+| `sysUninstallPackage` | ✅ | Before package uninstall — arg: name |
+| `sysInstallModule` | ✅ | After module install (`ScriptingEngine`) — args: name, fileName |
+| `sysUninstallModule` | ✅ | Before module uninstall — arg: name |
+| `sysLuaInstallModule` | ✅ | Fired by the Lua `installModule()` path — args: name, fileName |
+| `sysLuaUninstallModule` | ✅ | Fired by the Lua `uninstallModule()` path — arg: name |
+| `sysSyncInstallModule` | 🚧 | mudix has a non-standard `sysSyncOnModule`; add the Mudlet `sysSyncInstallModule` name |
+| `sysSyncUninstallModule` | 🚧 | No equivalent fired yet |
+
+**HTTP / download**
+
+| Event | Status | Notes |
+|---|---|---|
+| `sysGetHttpDone` / `sysGetHttpError` | ✅ | `getHTTP` (`HttpService`) — done: url, body · error: error, url |
+| `sysPostHttpDone` / `sysPostHttpError` | ✅ | `postHTTP` — done: url, body · error: error, url |
+| `sysPutHttpDone` / `sysPutHttpError` | ✅ | `putHTTP` |
+| `sysDeleteHttpDone` / `sysDeleteHttpError` | ✅ | `deleteHTTP` |
+| `sysCustomHttpDone` / `sysCustomHttpError` | ✅ | `customHTTP` — extra arg: HTTP method |
+| `sysDownloadDone` | ✅ | After `downloadFile` completes — args: saveTo, fileSize, "" (body omitted) |
+| `sysDownloadError` | ✅ | After `downloadFile` fails — args: errorMessage, saveTo, url |
+| `sysDownloadFileProgress` | ✅ | During download — args: url, bytesDownloaded, totalBytes |
+| `sysUnzipDone` / `sysUnzipError` | ✅ | `unzipAsync` — args: zipPath, destDir |
+
+**Speedwalk** (pure Lua — bundled `Other.lua` / generic mapper)
+
+| Event | Status | Notes |
+|---|---|---|
+| `sysSpeedwalkStarted` | ✅ | |
+| `sysSpeedwalkPaused` | ✅ | |
+| `sysSpeedwalkResumed` | ✅ | |
+| `sysSpeedwalkStopped` | ✅ | Premature stop |
+| `sysSpeedwalkFinished` | ✅ | Normal completion |
+
+**Mapper**
+
+| Event | Status | Notes |
+|---|---|---|
+| `mapOpenEvent` | ✅ | Mapper opened (`ScriptingEngine`) |
+| `mapModeChangeEvent` | 🚧 | No view/edit mode toggle in mudix's map panel yet — arg: "editing"/"viewing" |
+| `sysManualLocationSetEvent` | 🚧 | Fire from the map "set location" action — arg: roomID |
+| `sysMapAreaChanged` | 🚧 | Fire when the viewed area changes — args: newAreaID, prevAreaID |
+| `sysMapDownloadEvent` | 🚧 | No MMP map-protocol support (mudix uses binary maps + `downloadFile`) |
+| `sysMapWindowMousePressEvent` | 🚧 | Left-click on the map panel |
+
+**Windows / UI elements**
+
+| Event | Status | Notes |
+|---|---|---|
+| `sysWindowResizeEvent` | ✅ | Main output resize (`WindowManager` ResizeObserver) — args: width, height |
+| `sysUserWindowResizeEvent` | ✅ | User-window / miniconsole resize — args: width, height, name |
+| `sysConsoleSizeChanged` | 🚧 | Char-grid (not pixel) resize — args: name, columns, rows |
+| `sysWindowOverflowEvent` | 🚧 | Non-scrolling console overflows — args: name, overflowLines |
+| `sysBufferShrinkEvent` | 🚧 | Oldest lines trimmed at buffer limit — args: name, linesRemoved |
+| `sysWindowMousePressEvent` | 🚧 | Mouse press on a window — args: button, x, y, name |
+| `sysWindowMouseReleaseEvent` | 🚧 | Mouse release on a window |
+| `sysLabelDeleted` | 🚧 | Raise from `LabelManager.destroy` — arg: name |
+| `sysMiniConsoleDeleted` | 🚧 | Raise from miniconsole close — arg: name |
+| `sysCommandLineDeleted` | 🚧 | Blocked on the `createCommandLine` widget family — arg: name |
+| `sysScrollBoxDeleted` | 🚧 | No ScrollBox widget yet — arg: name |
+
+**Protocol / telnet**
+
+| Event | Status | Notes |
+|---|---|---|
+| `sysProtocolEnabled` | ✅ | Fired `"GMCP"` on GMCP negotiation (`gmcp.negotiated`); bundled `GMCP.lua` re-subscribes its modules here — arg: protocol |
+| `sysProtocolDisabled` | ✅ | Fired `"GMCP"` on disconnect when GMCP was active — arg: protocol |
+| `sysTelnetEvent` | 🚧 | Unsupported telnet option — args: type, option, message |
+
+**Drag & drop**
+
+| Event | Status | Notes |
+|---|---|---|
+| `sysDropEvent` | 🚧 | File dropped on a window; bundled `Other.lua`/`gui-drop` already listen — args: filepath, suffix, x, y, name |
+| `sysDropUrlEvent` | 🚧 | URL dropped on a window — args: url, schema, x, y, name |
+
+**Media / misc**
+
+| Event | Status | Notes |
+|---|---|---|
+| `sysAppStyleSheetChange` | ✅ | `setAppStyleSheet` (`ScriptingAPI`) — args: css, tag |
+| `sysPathChanged` | ✅ | `addFileWatch` — fires on VFS mutation of a watched path — arg: path |
+| `sysMediaFinished` | 🚧 | `SoundManager` has the `onended` hook but doesn't emit yet — args: name, path |
+| `sysSettingChanged` | 🚧 | Fire when a profile/app setting changes — args: setting, …value |
+| `sysSoundFinished` | ❌ | Obsolete in Mudlet 4.15 — superseded by `sysMediaFinished` |
+| `sysIrcMessage` | ❌ | No IRC client in mudix |
+
+> **Not Mudlet events** — do not implement under these names: `sysConnect` / `sysDisconnect` / `sysGmcpMessage` (Mudlet uses `sysConnectionEvent` / `sysDisconnectionEvent` and the `gmcp.<path>` event chain), `sysUserWindowCreated` / `sysUserWindowClosed`, `sysMapperLocationChanged`.
+>
+> **mudix-specific events** (fired by mudix, no Mudlet equivalent): `output` (per output line), `gmcp.<path>` chain (✅, the real GMCP mechanism — args: eventName, fullKey), `sysMapLoadEvent` (✅, after a binary map ingest), `sysSaveProfileError` (✅), `sysReadModuleEvent` / `sysSyncOnModule` (✅, module-sync internals).
 
 ---
 

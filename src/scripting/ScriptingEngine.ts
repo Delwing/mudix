@@ -106,6 +106,10 @@ export class ScriptingEngine {
     private readonly unsubs: (() => void)[] = [];
     private readonly api: ScriptingAPI;
     private promptPending = false;
+    // Tracks whether GMCP finished negotiating on the live connection, so the
+    // symmetric sysProtocolDisabled can fire on disconnect (mudix only ever
+    // negotiates GMCP). Reset on disconnect.
+    private gmcpNegotiated = false;
     private vfs: ProfileVFS | null = null;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
     private readonly mapOpen = new MapOpenNotifier(() => this.raiseEvent('mapOpenEvent'));
@@ -435,7 +439,9 @@ export class ScriptingEngine {
      * place (manifest holds the absolute VFS path). Zips/.mpackages extract into
      * the standard pkgDir. Raises sysInstall, sysInstallPackage and
      * sysInstallModule on success — sysInstallModule is the module-specific
-     * counterpart to sysInstallPackage.
+     * counterpart to sysInstallPackage. This method is reached only via the
+     * Lua `installModule()` binding, so it also raises Mudlet's
+     * `sysLuaInstallModule` (name, fileName) for ported-script parity.
      */
     installModuleFromPath(path: string): boolean {
         const vfs = this.vfs;
@@ -448,6 +454,7 @@ export class ScriptingEngine {
             useAppStore.getState().installPackage(this.connectionId, manifest, data);
             this.notifyPackageInstalled(manifest.name);
             this.raiseEvent('sysInstallModule', [manifest.name]);
+            this.raiseEvent('sysLuaInstallModule', [manifest.name, path]);
             void vfs.flush();
             return true;
         } catch (err) {
@@ -470,6 +477,9 @@ export class ScriptingEngine {
         }
         this.notifyPackageUninstalled(moduleName);
         this.raiseEvent('sysUninstallModule', [moduleName]);
+        // Reached only via the Lua `uninstallModule()` binding — also raise
+        // Mudlet's Lua-specific event for ported-script parity.
+        this.raiseEvent('sysLuaUninstallModule', [moduleName]);
         useAppStore.getState().uninstallPackage(this.connectionId, moduleName);
         if (this.vfs) {
             const vfs = this.vfs;
@@ -1509,8 +1519,31 @@ export class ScriptingEngine {
                     this.api.printError(`[scripting] line flush failed: ${err instanceof Error ? err.message : String(err)}`);
                 }
             }),
-            session.events.on('client.connect', () => this.emit('connect', [])),
-            session.events.on('client.disconnect', () => this.emit('disconnect', [])),
+            session.events.on('client.connect', () => {
+                // mudix's native `connect` plus the Mudlet-standard name — the
+                // bundled generic mapper and ported scripts register a
+                // sysConnectionEvent handler, so both must fire.
+                this.emit('connect', []);
+                this.emit('sysConnectionEvent', []);
+            }),
+            session.events.on('client.disconnect', () => {
+                this.emit('disconnect', []);
+                this.emit('sysDisconnectionEvent', []);
+                // Mudlet raises sysProtocolDisabled as protocols tear down. GMCP
+                // is the only protocol mudix negotiates, and it ends with the
+                // socket, so mirror the enabled/disabled pair here.
+                if (this.gmcpNegotiated) {
+                    this.gmcpNegotiated = false;
+                    this.emit('sysProtocolDisabled', ['GMCP']);
+                }
+            }),
+            // GMCP finished negotiating (server WILL → client DO). Mudlet's
+            // bundled GMCP.lua re-subscribes its registered modules on this
+            // event; without it Core.Supports.Add is never re-sent on reconnect.
+            session.events.on('gmcp.negotiated', () => {
+                this.gmcpNegotiated = true;
+                this.emit('sysProtocolEnabled', ['GMCP']);
+            }),
             session.events.on('gmcp', ({ path, value }) => {
                 // Mirrors Mudlet TLuaInterpreter::parseJSON: write into the
                 // Lua `gmcp` global first (additively — only the leaf is
