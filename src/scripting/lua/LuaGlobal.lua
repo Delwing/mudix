@@ -126,7 +126,7 @@ local packages = {
   "GMCP.lua",
   "KeyCodes.lua",
   "CursorShapes.lua",
-  -- "TTSValues.lua",    -- not yet adapted
+  "TTSValues.lua",
   "IDManager.lua",
 }
 

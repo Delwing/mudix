@@ -1184,3 +1184,49 @@ end
 function stopMusic(opts)
     __stopMusic(opts)
 end
+
+-- ── Text-to-speech array / nil-returning wrappers ──────────────────────────
+-- The simple tts* functions (ttsSpeak, ttsQueue, ttsSetRate, ...) are plain JS
+-- globals. The three below need re-shaping: wasmoon pushes JS arrays 0-indexed,
+-- so the list returns are walked into a 1-based Lua table, and ttsGetCurrentLine
+-- maps its `false` (not speaking) sentinel to Mudlet's (nil, reason) tuple.
+
+local function __tts_to_list(raw)
+    local out = {}
+    if type(raw) == 'table' then
+        local i = 0
+        while raw[i] ~= nil do
+            out[#out + 1] = raw[i]
+            i = i + 1
+        end
+        if #out == 0 then
+            for _, v in ipairs(raw) do out[#out + 1] = v end
+        end
+    end
+    return out
+end
+
+-- Mudlet ttsGetVoices() → 1-based table of available voice names.
+function ttsGetVoices()
+    return __tts_to_list(__ttsGetVoices())
+end
+
+-- Mudlet ttsGetQueue([index]) → with an index, the queued text at that 1-based
+-- position (or false when out of bounds); without one, the whole queue as a
+-- 1-based table.
+function ttsGetQueue(index)
+    if index ~= nil then
+        return __ttsGetQueue(index)
+    end
+    return __tts_to_list(__ttsGetQueue())
+end
+
+-- Mudlet ttsGetCurrentLine() → the text being spoken, or (nil, reason) when the
+-- engine is idle or errored.
+function ttsGetCurrentLine()
+    local line = __ttsGetCurrentLine()
+    if line == false then
+        return nil, "not speaking any text"
+    end
+    return line
+end

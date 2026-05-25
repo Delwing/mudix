@@ -638,18 +638,22 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `ttsSpeak(text)` | 🚧 | Web Speech API `SpeechSynthesis` |
-| `ttsQueue(text [, priority])` | 🚧 | |
-| `ttsClearQueue()` | 🚧 | |
-| `ttsPause()` | 🚧 | |
-| `ttsResume()` | 🚧 | |
-| `ttsSkip()` | 🚧 | |
-| `ttsGetVoices()` | 🚧 | `speechSynthesis.getVoices()` |
-| `ttsSetVoiceByName(name)` | 🚧 | |
-| `ttsSetRate(rate)` | 🚧 | |
-| `ttsSetPitch(pitch)` | 🚧 | |
-| `ttsSetVolume(vol)` | 🚧 | |
-| `ttsGetState()` | 🚧 | |
+| `ttsSpeak(text)` | ✅ | Web Speech API (`TtsManager`); speaks immediately, interrupting current. Strips angle brackets like Mudlet |
+| `ttsQueue(text [, index])` | ✅ | Inserts at 1-based `index` (default end); raises `ttsSpeechQueued(text, index)` |
+| `ttsClearQueue([index])` | ✅ | Clears whole queue or the 1-based `index` item (false if out of bounds) |
+| `ttsGetQueue([index])` | ✅ | Bridge.lua re-indexes to a 1-based table; `index` form returns one item or false |
+| `ttsPause()` | ✅ | |
+| `ttsResume()` | ✅ | |
+| `ttsSkip()` | ✅ | Stops current, advances to next queued |
+| `ttsGetVoices()` | ✅ | Bridge.lua re-indexes `speechSynthesis.getVoices()` names to a 1-based table |
+| `ttsGetCurrentVoice()` | ✅ | Selected voice name, or engine default |
+| `ttsGetCurrentLine()` | ✅ | Bridge.lua maps idle/errored to `(nil, "not speaking any text")` |
+| `ttsSetVoiceByName(name)` | ✅ | Returns bool; raises `ttsVoiceChanged` |
+| `ttsSetVoiceByIndex(index)` | ✅ | 1-based index into `ttsGetVoices()`; returns bool |
+| `ttsSetRate(rate)` / `ttsGetRate()` | ✅ | Mudlet range -1..1 (0 = normal); raises `ttsRateChanged`. Mapped to Web Speech range at speak time |
+| `ttsSetPitch(pitch)` / `ttsGetPitch()` | ✅ | Mudlet range -1..1; raises `ttsPitchChanged` |
+| `ttsSetVolume(vol)` / `ttsGetVolume()` | ✅ | Mudlet range 0..1; raises `ttsVolumeChanged` |
+| `ttsGetState()` | ✅ | `ttsSpeechReady`/`ttsSpeechStarted`/`ttsSpeechPaused`/`ttsSpeechError`/`ttsUnknownState`, raised as events on transitions |
 
 ---
 

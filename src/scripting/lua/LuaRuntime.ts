@@ -18,6 +18,7 @@ import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
 import {QT_CURSOR_NAME_TO_INT, QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
 import {qtKeyToDomCode, qtModifiersToList} from '../../mud/keybindings/qtKeys';
 import {HttpService} from '../http/HttpService';
+import {TtsManager} from '../../ui/tts/TtsManager';
 
 // All *.lua and *.json files under mudlet-lua/ are served via the VFS at
 // /lua/<relative-path>. Adding a new file to the directory tree automatically
@@ -97,6 +98,9 @@ export class LuaRuntime implements IScriptingRuntime {
     // a linked folder still need a ProfileVFS.resync() to be observed.
     private readonly watchedPaths = new Set<string>();
     private http!: HttpService;
+    // Web Speech text-to-speech backend (Mudlet ttsSpeak/ttsQueue/...). Raises
+    // tts* state + change events through emitEvent, same as HttpService.
+    private tts!: TtsManager;
     // Set by setupSqlBridge — forces every debounced SQL VFS snapshot to write
     // immediately. Called from saveProfile() so user code can ensure SQL state
     // is durable before the default 500 ms debounce window elapses.
@@ -2033,6 +2037,39 @@ export class LuaRuntime implements IScriptingRuntime {
             });
         });
 
+        // ── Text-to-speech (Mudlet ttsSpeak / ttsQueue / ttsSetRate / ...) ─────
+        // Web Speech API backend on this.tts. Fire-and-forget like sounds/HTTP;
+        // state transitions and setter changes raise tts* events via emitEvent.
+        // These globals are bound BEFORE LuaGlobal.lua loads Other.lua, so its
+        // `if not ttsSpeak` guard sees real implementations and skips installing
+        // the no-op dummy stubs.
+        this.tts = new TtsManager((event, args) => this.emitEvent(event, args));
+        this.lua.global.set('ttsSpeak', (text: unknown) => { this.tts.speak(String(text ?? '')); });
+        this.lua.global.set('ttsQueue', (text: unknown, index?: unknown) => {
+            this.tts.queue(String(text ?? ''), index === undefined ? undefined : Number(index));
+        });
+        this.lua.global.set('ttsClearQueue', (index?: unknown) =>
+            this.tts.clearQueue(index === undefined ? undefined : Number(index)));
+        this.lua.global.set('ttsPause', () => { this.tts.pause(); });
+        this.lua.global.set('ttsResume', () => { this.tts.resume(); });
+        this.lua.global.set('ttsSkip', () => { this.tts.skip(); });
+        this.lua.global.set('ttsGetState', () => this.tts.getState());
+        this.lua.global.set('ttsGetCurrentVoice', () => this.tts.getCurrentVoice());
+        this.lua.global.set('ttsSetVoiceByName', (name: unknown) => this.tts.setVoiceByName(String(name ?? '')));
+        this.lua.global.set('ttsSetVoiceByIndex', (index: unknown) => this.tts.setVoiceByIndex(Number(index)));
+        this.lua.global.set('ttsSetRate', (rate: unknown) => { this.tts.setRate(Number(rate)); });
+        this.lua.global.set('ttsSetPitch', (pitch: unknown) => { this.tts.setPitch(Number(pitch)); });
+        this.lua.global.set('ttsSetVolume', (volume: unknown) => { this.tts.setVolume(Number(volume)); });
+        this.lua.global.set('ttsGetRate', () => this.tts.getRate());
+        this.lua.global.set('ttsGetPitch', () => this.tts.getPitch());
+        this.lua.global.set('ttsGetVolume', () => this.tts.getVolume());
+        // Array / nil-returning forms — Bridge.lua re-indexes the 0-based JS
+        // arrays to 1-based Lua tables and maps a null current line to (nil, msg).
+        this.lua.global.set('__ttsGetVoices', () => this.tts.getVoices());
+        this.lua.global.set('__ttsGetQueue', (index?: unknown) =>
+            index === undefined ? this.tts.getQueue() : this.tts.getQueue(Number(index)));
+        this.lua.global.set('__ttsGetCurrentLine', () => this.tts.getCurrentLine() ?? false);
+
         // ── Window geometry ───────────────────────────────────────────────────
         // Returns [w, h] from JS; a Lua wrapper below unpacks it to two values.
         // __getUserWindowSize returns null when the window doesn't exist so
@@ -2858,6 +2895,7 @@ export class LuaRuntime implements IScriptingRuntime {
 
     destroy(): void {
         this.destroyed = true;
+        this.tts?.destroy();
         this.api.map.setMapEventDispatcher(null);
         this.api.map.setMapInfoEvaluator(null);
         this.api.map.clearMapInfoContributors();
