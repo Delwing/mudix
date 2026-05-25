@@ -597,6 +597,11 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setLabelStyleSheet', (name: string, css: string) => {
             this.api.labels.setStyleSheet(name, css == null ? '' : String(css));
         });
+        // Mudlet getLabelStyleSheet(name) → the CSS string last set (or "" when
+        // none). Returns "" for a missing label too, matching the Lua-side
+        // getLabelFormat consumer which only branches on the empty string.
+        this.lua.global.set('getLabelStyleSheet', (name: unknown) =>
+            this.api.labels.getStyleSheet(typeof name === 'string' ? name : '') ?? '');
         // Mudlet's setLabelClickCallback / setLabelDoubleClickCallback /
         // setLabelReleaseCallback / setLabelMoveCallback / setLabelOnEnter /
         // setLabelOnLeave / setLabelWheelCallback all share a shape: name + a
@@ -918,6 +923,23 @@ export class LuaRuntime implements IScriptingRuntime {
             return this.api.map.getRoomChar(rid);
         });
         this.lua.global.set('setRoomChar',  (id: number, c: string)   => this.api.map.setRoomChar(id, c));
+        // Mudlet lockRoom(roomID, lockIfTrue) → true on success. roomLocked
+        // returns the lock state, or nil when the room doesn't exist (Mudlet
+        // distinguishes the miss from an unlocked room).
+        this.lua.global.set('lockRoom',     (id: unknown, b: unknown)  => this.api.map.lockRoom(Number(id), !!b));
+        this.lua.global.set('roomLocked',   (id: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid) || !this.api.map.roomExists(rid)) return null;
+            return this.api.map.roomLocked(rid);
+        });
+        // Mudlet getRoomWeight(roomID) → the room's pathfinding weight, or no
+        // value when the room is missing (we hand back false). setRoomWeight
+        // returns true on success.
+        this.lua.global.set('getRoomWeight', (id: unknown) => {
+            const w = this.api.map.getRoomWeight(Number(id));
+            return w === undefined ? false : w;
+        });
+        this.lua.global.set('setRoomWeight', (id: unknown, w: unknown) => this.api.map.setRoomWeight(Number(id), Number(w)));
         // Mudlet `getRoomUserData(id, key [, fullErr])`. Default behaviour
         // returns the string value, or "" if either the room or key is missing.
         // With `fullErr=true` Mudlet differentiates the miss cases: returns
@@ -1000,6 +1022,25 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('addSpecialExit',    (from: number, to: number, cmd: string)=> this.api.map.addSpecialExit(from, to, cmd));
         this.lua.global.set('removeSpecialExit', (from: number, cmd: string)            => this.api.map.removeSpecialExit(from, cmd));
         this.lua.global.set('getSpecialExitsSwap',(id: number)                         => this.api.map.getSpecialExitsSwap(id));
+        // Mudlet getSpecialExits(roomID [, listAllExits]) → { [exitRoomID] =
+        // { [command] = "0"|"1" } }. The outer keys are room ids, which wasmoon
+        // hands to Lua as stringified keys; Bridge.lua re-keys them to integers.
+        this.lua.global.set('__getSpecialExits', (id: unknown, listAll?: unknown) =>
+            this.api.map.getSpecialExits(Number(id), !!listAll));
+        // Mudlet getExitWeights(roomID) → { [exit] = weight }; keys are short
+        // direction names or special-exit commands (already strings, so no
+        // re-keying needed).
+        this.lua.global.set('getExitWeights', (id: unknown) => this.api.map.getExitWeights(Number(id)));
+        // Mudlet setExitWeight(roomID, exitCommand, weight). exitCommand is a
+        // stock direction (1-12 or name) or a special-exit command; a numeric
+        // direction arriving as a regex-capture string is coerced back to a
+        // number so parseDirection recognizes it.
+        this.lua.global.set('setExitWeight', (id: unknown, cmd: unknown, w: unknown) => {
+            let dir: number | string;
+            if (typeof cmd === 'number') dir = cmd;
+            else { const s = String(cmd ?? ''); dir = /^\d+$/.test(s) ? Number(s) : s; }
+            return this.api.map.setExitWeight(Number(id), dir, Number(w));
+        });
         // Mudlet `getCustomLines(roomID)` → { [dir] = { attributes={color,style,arrow}, points=[{x,y,z},...] } }.
         // Returns nil when the room doesn't exist; wasmoon converts the JS
         // arrays/objects directly — the `points` array lands 0-indexed on the
@@ -1563,6 +1604,17 @@ export class LuaRuntime implements IScriptingRuntime {
             return this.api.exists(key, String(type ?? ''));
         });
 
+        // Mudlet isActive(name|id, type [, checkAncestors]) → count of active
+        // items matching the name (1/0 for an id). A number is treated as an id,
+        // a string as a name (same convention as `exists`). With checkAncestors
+        // every ancestor group must also be enabled for an item to count.
+        this.lua.global.set('isActive', (nameOrId: unknown, type: unknown, checkAncestors?: unknown) => {
+            const key = typeof nameOrId === 'number'
+                ? nameOrId
+                : String(nameOrId ?? '');
+            return this.api.isActive(key, String(type ?? ''), !!checkAncestors);
+        });
+
         // ── Async unzip ───────────────────────────────────────────────────────
         // Mudlet's unzipAsync is fire-and-forget: returns immediately, raises
         // sysUnzipDone(zipPath, destDir) on success or
@@ -1661,6 +1713,20 @@ export class LuaRuntime implements IScriptingRuntime {
                 throw new Error('setWindowWrap: bad argument #1 type (window name as string expected, got ' + typeof a + ')');
             }
             return this.api.setWindowWrap(a, Number(b));
+        });
+        // Mudlet getConsoleBufferSize([consoleName]) → linesLimit, batchSize.
+        // JS returns a 0-indexed [limit, batch] array (or nil for a missing
+        // console); Bridge.lua unpacks it to the two return values.
+        this.lua.global.set('__getConsoleBufferSize', (win?: unknown) =>
+            this.api.getConsoleBufferSize(typeof win === 'string' ? win : undefined));
+        // Mudlet setConsoleBufferSize([consoleName,] linesLimit, sizeOfBatchDeletion).
+        // A leading string is the console name; otherwise the args apply to the
+        // main window.
+        this.lua.global.set('setConsoleBufferSize', (a?: unknown, b?: unknown, c?: unknown) => {
+            if (typeof a === 'string') {
+                return this.api.setConsoleBufferSize(a, Number(b), c === undefined ? undefined : Number(c));
+            }
+            return this.api.setConsoleBufferSize(undefined, Number(a), b === undefined ? undefined : Number(b));
         });
         // getLines([window,] from, to) — JS array crosses wasmoon as a
         // 0-indexed Lua table; the Bridge.lua wrapper rebuilds it as a

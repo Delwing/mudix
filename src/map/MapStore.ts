@@ -13,6 +13,16 @@ const DIR_FIELD: Record<number, string> = {
     11: 'in', 12: 'out',
 };
 
+// Mudlet direction number → short name used to key per-exit weights. The binary
+// reader stores stock-exit weights under these short names (see pathfinding.ts
+// and mudlet-map-binary-reader's json-export), while special-exit weights are
+// keyed by the verbatim command string.
+const DIR_SHORT: Record<number, string> = {
+    1: 'n', 2: 'ne', 3: 'nw', 4: 'e', 5: 'w',
+    6: 's', 7: 'se', 8: 'sw', 9: 'up', 10: 'down',
+    11: 'in', 12: 'out',
+};
+
 // Mudlet exit/door APIs accept either an integer 1-12 or a long/short
 // direction name. Normalize either form to the canonical 1-12 index, or
 // undefined when the value isn't a recognized direction.
@@ -546,6 +556,51 @@ export class MapStore {
         return true;
     }
 
+    /**
+     * Mudlet `lockRoom(roomID, lockIfTrue)` — mark a room as locked so
+     * pathfinding routes around it (see {@link findPath}). Returns true on
+     * success, false when the room doesn't exist.
+     */
+    lockRoom(id: number, lock: boolean): boolean {
+        const r = this.rooms.get(id);
+        if (!r) return false;
+        r.isLocked = lock;
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `roomLocked(roomID)` — true when the room is locked, false when
+     * unlocked or the room doesn't exist (Mudlet returns nil for a missing
+     * room; the Lua binding re-shapes that case).
+     */
+    roomLocked(id: number): boolean {
+        return this.rooms.get(id)?.isLocked ?? false;
+    }
+
+    /**
+     * Mudlet `getRoomWeight(roomID)` — the room's pathfinding weight (cost to
+     * enter). Returns `undefined` when the room doesn't exist; the Lua binding
+     * turns that into Mudlet's "no return value" miss.
+     */
+    getRoomWeight(id: number): number | undefined {
+        return this.rooms.get(id)?.weight;
+    }
+
+    /**
+     * Mudlet `setRoomWeight(roomID, weight)` — set the room's pathfinding
+     * weight. Mudlet rejects negative weights (0 is allowed). Returns true on
+     * success, false when the room doesn't exist or the weight is invalid.
+     */
+    setRoomWeight(id: number, weight: number): boolean {
+        const r = this.rooms.get(id);
+        if (!r) return false;
+        if (!Number.isFinite(weight) || weight < 0) return false;
+        r.weight = weight;
+        this.notify();
+        return true;
+    }
+
     // ── Coordinates / position ────────────────────────────────────────────────
 
     getRoomsByPosition(areaId: number, x: number, y: number, z: number): number[] {
@@ -639,6 +694,90 @@ export class MapStore {
 
     getSpecialExitsSwap(id: number): Record<string, number> {
         return { ...(this.rooms.get(id)?.mSpecialExits ?? {}) };
+    }
+
+    /**
+     * Mudlet `getSpecialExits(roomID [, listAllExits])` — special exits keyed by
+     * destination room id: `{ [exitRoomID] = { [command] = "0"|"1" } }`, where
+     * "1" marks a locked exit. When several commands lead to the same room and
+     * `listAllExits` is false (the default), only the lowest-weight command is
+     * reported; pass `true` to list every command. Returns `{}` for a missing
+     * room. The lock flag follows this client's data model (special-exit locks
+     * are tracked by destination room id, see pathfinding.ts).
+     */
+    getSpecialExits(id: number, listAllExits = false): Record<number, Record<string, string>> {
+        const room = this.rooms.get(id);
+        if (!room) return {};
+        const locks = room.mSpecialExitLocks ?? [];
+        const weights = room.exitWeights ?? {};
+        // Group the commands leading to each destination room.
+        const byDest = new Map<number, string[]>();
+        for (const [cmd, dest] of Object.entries(room.mSpecialExits ?? {})) {
+            const list = byDest.get(dest);
+            if (list) list.push(cmd);
+            else byDest.set(dest, [cmd]);
+        }
+        const out: Record<number, Record<string, string>> = {};
+        for (const [dest, cmds] of byDest) {
+            const lock = locks.includes(dest) ? '1' : '0';
+            const inner: Record<string, string> = {};
+            if (listAllExits || cmds.length === 1) {
+                for (const cmd of cmds) inner[cmd] = lock;
+            } else {
+                // Pick the lowest-weight command to this destination (locks are
+                // per-destination here, so the unlocked/locked split Mudlet does
+                // is degenerate — every command shares the same lock state).
+                let best: string | null = null;
+                let bestWeight = Infinity;
+                for (const cmd of cmds) {
+                    const w = weights[cmd] ?? 1;
+                    if (w < bestWeight) { bestWeight = w; best = cmd; }
+                }
+                if (best != null) inner[best] = lock;
+            }
+            out[dest] = inner;
+        }
+        return out;
+    }
+
+    /**
+     * Mudlet `getExitWeights(roomID)` — per-exit weight overrides as
+     * `{ [exit] = weight }`. Stock exits are keyed by their short direction name
+     * ("n"/"ne"/"up"/…), special exits by the verbatim command. Returns `{}`
+     * when the room has no overrides or doesn't exist.
+     */
+    getExitWeights(id: number): Record<string, number> {
+        return { ...(this.rooms.get(id)?.exitWeights ?? {}) };
+    }
+
+    /**
+     * Mudlet `setExitWeight(roomID, exitCommand, weight)` — override the weight
+     * of a single exit. `exitCommand` is a stock direction (1-12 or a name) or a
+     * special-exit command. A weight of 0 resets the override (pathfinding falls
+     * back to the destination room's weight); negative weights are rejected.
+     * Returns false when the room doesn't exist, the exit can't be identified,
+     * or the weight is invalid.
+     */
+    setExitWeight(id: number, exitCommand: number | string, weight: number): boolean {
+        const room = this.rooms.get(id);
+        if (!room) return false;
+        if (!Number.isFinite(weight) || weight < 0) return false;
+        const dirInt = parseDirection(exitCommand);
+        let key: string;
+        if (dirInt != null) {
+            // Stock direction: the exit must actually exist on the room.
+            const field = DIR_FIELD[dirInt];
+            if ((room as unknown as Record<string, number>)[field] === -1) return false;
+            key = DIR_SHORT[dirInt];
+        } else if (typeof exitCommand === 'string' && exitCommand in room.mSpecialExits) {
+            key = exitCommand;
+        } else {
+            return false;
+        }
+        if (weight === 0) delete room.exitWeights[key];
+        else room.exitWeights[key] = weight;
+        this.notify();
+        return true;
     }
 
     // ── Custom exit lines ─────────────────────────────────────────────────────

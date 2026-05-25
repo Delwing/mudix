@@ -48,6 +48,14 @@ function getMainWindowSize()
     return t[0], t[1]
 end
 
+-- Mudlet getConsoleBufferSize([consoleName]) → linesLimit, sizeOfBatchDeletion.
+-- JS returns a 0-indexed [limit, batch] array (wasmoon convention), or nil when
+-- the named console doesn't exist.
+function getConsoleBufferSize(name)
+    local t = __getConsoleBufferSize(name)
+    if t then return t[0], t[1] end
+end
+
 -- Mudlet getConnectionInfo() → host (string), port (number), connected (bool).
 -- JS returns a 0-indexed [host, port, connected] array (wasmoon convention).
 function getConnectionInfo()
@@ -424,6 +432,27 @@ function getStopWatches()
                     decimalSeconds = e.decimalSeconds,
                 },
             }
+        end
+    end
+    return out
+end
+
+-- Mudlet getSpecialExits(roomID [, listAllExits]) → { [exitRoomID] =
+-- { [command] = "0"|"1" } }. JS hands the outer table over with stringified
+-- numeric room-id keys (wasmoon convention); re-key via tonumber so callers can
+-- index by integer destination room id. The inner command→lockState table is
+-- rebuilt off the proxy so callers never touch the wasmoon table directly.
+function getSpecialExits(roomId, listAllExits)
+    local raw = __getSpecialExits(roomId, listAllExits)
+    local out = {}
+    if type(raw) == 'table' then
+        for k, v in pairs(raw) do
+            local id = tonumber(k) or k
+            local inner = {}
+            if type(v) == 'table' then
+                for cmd, lock in pairs(v) do inner[cmd] = lock end
+            end
+            out[id] = inner
         end
     end
     return out

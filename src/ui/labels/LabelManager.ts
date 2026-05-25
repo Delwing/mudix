@@ -201,6 +201,15 @@ export class LabelManager {
         return true;
     }
 
+    /** Mudlet `getLabelStyleSheet(name)` — the Qt-style CSS last set via
+     *  {@link setStyleSheet}, or `""` when none is set. Returns `undefined`
+     *  when the label doesn't exist so the caller can distinguish that case. */
+    getStyleSheet(name: string): string | undefined {
+        const lbl = this.labels.get(name);
+        if (!lbl) return undefined;
+        return lbl.styleSheet ?? '';
+    }
+
     setClickCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;

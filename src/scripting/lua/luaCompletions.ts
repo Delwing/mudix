@@ -40,36 +40,6 @@ const LFS_COMPLETIONS: Completion[] = [
     fn('touch',      '(path)',                         'Create file if it does not exist'),
 ];
 
-// ── mudix (top-level) ─────────────────────────────────────────────────────────
-
-const MUDIX_TOP: Completion[] = [
-    fn('send',         '(text)',        'Send a command to the MUD'),
-    fn('echo',         '(text)',        'Print plain text to main output'),
-    fn('cecho',        '(text)',        'Print with Mudlet color tags  e.g. <red>text<reset>'),
-    fn('decho',        '(text)',        'Print with decimal RGB colors  e.g. <255,0,0>text'),
-    fn('hecho',        '(text)',        'Print with hex RGB colors  e.g. #FF0000text'),
-    fn('fg',           '(colorName)',   'Set foreground color by name'),
-    fn('bg',           '(colorName)',   'Set background color by name'),
-    fn('resetFormat',  '()',            'Reset all text formatting'),
-    fn('feedTriggers', '(text)',        'Feed text through the trigger pipeline'),
-    fn('deleteLine',   '([window])',    'Delete the current trigger line'),
-    fn('appendCmdLine','([window,] text)','Append text to the command bar, or to a userwindow command line when window given'),
-    fn('printCmdLine', '([window,] text)','Set command bar contents, or per-window contents when window given'),
-    fn('clearCmdLine', '([window])',    'Clear command bar, or per-window command line when window given'),
-    fn('getCmdLine',   '([window]) → string',   'Return the current text from command bar or named userwindow command line'),
-    fn('addCmdLineSuggestion',    '(suggestion)', 'Add a tab-completion suggestion to the command bar'),
-    fn('removeCmdLineSuggestion', '(suggestion)', 'Remove a previously added tab-completion suggestion'),
-    fn('clearCmdLineSuggestions', '()',           'Clear all tab-completion suggestions'),
-    fn('printerror',   '(text)',        'Print an error message'),
-    fn('on',           '(event, fn)',   "Register event handler. Events: 'connect' 'disconnect' 'output'"),
-    fn('off',          '(event, fn)',   'Remove a previously registered event handler'),
-    ns('windows',  'Window management API'),
-    ns('timers',   'Timer API'),
-    ns('aliases',  'Alias API'),
-    ns('triggers', 'Trigger API'),
-    ns('keys',     'Keybinding API'),
-];
-
 // ── string extensions ─────────────────────────────────────────────────────────
 
 const STRING_EXT: Completion[] = [
@@ -365,10 +335,13 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('enableKey',        '(name) → bool', 'Enable keybindings (and groups) matching name; cascades to children. false if none match.'),
     fn('disableKey',       '(name) → bool', 'Disable keybindings (and groups) matching name; cascades to children. false if none match.'),
     fn('exists',           '(name, type) → number', 'Count items with the given name. type: "alias", "trigger", "timer", "key"/"keybind", "button", "script"'),
+    fn('isActive',         '(name|id, type [, checkAncestors]) → number', 'Count active (enabled) items matching the name (1/0 for an id). With checkAncestors=true, every ancestor group must also be enabled. type as for exists.'),
     // Cursor / line inspection
     fn('getCurrentLine',  '([window])',    'Get current trigger line text'),
     fn('getLineNumber',   '([window])',    'Get cursor line number'),
     fn('getLineCount',    '([window])',    'Get total line count'),
+    fn('getConsoleBufferSize', '([window]) → linesLimit, batchSize', 'Get a console\'s scrollback line limit and batch-deletion size; nil when the console does not exist'),
+    fn('setConsoleBufferSize', '([window,] linesLimit [, batchSize]) → bool', 'Set a console\'s scrollback line limit (and batch-deletion size). Omit window for the main output'),
     fn('getLastLineNumber', '([window])',  'Get line number of the last line in the buffer'),
     fn('getColumnNumber', '([window])',    'Get cursor column'),
     fn('getColumnCount',  '([window]) → number', 'Get the displayable column count of a window — how many monospace characters fit horizontally in the rendered area. Unaffected by setWindowWrap.'),
@@ -537,6 +510,14 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('addSpecialExit',       '(from, to, cmd)',                   'Add a special/portal exit'),
     fn('removeSpecialExit',    '(from, cmd)',                       'Remove a special exit'),
     fn('getSpecialExitsSwap',  '(id) → {cmd=toId}',               'Get special exits (cmd→toId)'),
+    fn('getSpecialExits',      '(id [, listAllExits]) → {toId={cmd="0"|"1"}}',
+       'Get special exits keyed by destination room id; inner value is command→lock state ("1"=locked). With listAllExits=false (default), only the lowest-weight command to each room is listed; pass true to list every command.'),
+    fn('getExitWeights',       '(id) → {exit=weight}',             'Get per-exit weight overrides; keys are short direction names ("n"/"ne"/…) or special-exit commands'),
+    fn('setExitWeight',        '(id, exitCommand, weight) → bool',  'Override one exit\'s pathfinding weight. exitCommand is a stock direction (1-12 or name) or a special-exit command. weight 0 resets to the destination room\'s weight'),
+    fn('lockRoom',             '(id, lockIfTrue) → bool',           'Lock/unlock a room so pathfinding routes around it'),
+    fn('roomLocked',           '(id) → bool|nil',                   'Whether a room is locked; nil when the room does not exist'),
+    fn('getRoomWeight',        '(id) → weight',                     'Get a room\'s pathfinding weight (cost to enter)'),
+    fn('setRoomWeight',        '(id, weight) → bool',               'Set a room\'s pathfinding weight (0 or more)'),
     fn('getCustomLines',       '(id) → {dir={attributes={color,style,arrow},points={[0]={x,y,z},...}}} | nil',
        "Get the room's custom exit lines. Returns nil when the room doesn't exist, an empty table when there are no custom lines. Points are 0-indexed; style is one of 'solid line', 'dash line', 'dot line', 'dash dot line', 'dash dot dot line'."),
     fn('getDoors',             '(id) → {dir=val}',                 'Get doors on a room'),
@@ -605,6 +586,7 @@ const MUDLET_GLOBALS: Completion[] = [
        'Create a positioned overlay label on the parent window (default "main"). fillBackground and clickThrough accept 0/1 or true/false. Returns true on success, false if a label with that name already exists.'),
     fn('deleteLabel',         '(name) → bool',                       'Destroy a label by name. Returns true if the label existed.'),
     fn('setLabelStyleSheet',  '(name, css)',                         'Apply a Qt-style CSS string to a label. Background-color/border/font-size/etc. translate; Qt-specific selectors are dropped.'),
+    fn('getLabelStyleSheet',  '(name) → css',                        'Get the Qt-style CSS string last applied to a label (empty string when none).'),
     fn('setLabelClickCallback','(name, fn)',
        'Install a click handler on a label. fn may be a function or a Lua code string (compiled with loadstring). Replacing the callback leaks the prior closure in the registry.'),
     fn('setLabelToolTip',     '(name, text [, duration])',           'Set a tooltip on a label. duration is accepted for Mudlet compatibility but ignored (HTML title attribute has no per-tooltip duration).'),

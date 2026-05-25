@@ -195,7 +195,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `enableAlias(name)` | ✅ | Enable permanent alias by name |
 | `disableAlias(name)` | ✅ | Disable permanent alias by name |
 | `exists(name, type)` | ✅ | JS-exposed (`ScriptingAPI.exists`) |
-| `isActive(name, type)` | 🚧 | Check if item is currently enabled |
+| `isActive(name, type [, checkAncestors])` | ✅ | Count active items by name/id; `checkAncestors` requires ancestor groups enabled too |
 
 ---
 
@@ -359,8 +359,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `deleteMiniConsole(name)` | 🚧 | Remove overlay mini-console |
 | `deleteLabel(name)` | ✅ | Bridge.lua → `__deleteLabel` |
 | `deleteCommandLine(name)` | 🚧 | Remove overlay command line |
-| `setConsoleBufferSize(name, lines)` | 🚧 | Scrollback size limit |
-| `getConsoleBufferSize([window])` | 🚧 | |
+| `setConsoleBufferSize([window,] linesLimit [, batchSize])` | ✅ | Scrollback size limit — maps to `Console.setMaxLines`; batch size round-tripped |
+| `getConsoleBufferSize([window])` | ✅ | Bridge.lua unpacks `__getConsoleBufferSize` → linesLimit, batchSize; nil when the console is missing |
 | `getMainWindowSize()` | ✅ | Returns `window.innerWidth, window.innerHeight` |
 | `getUserWindowSize(name)` | ✅ | Bridge.lua → `__getUserWindowSize` |
 | `getMainConsoleWidth()` | ✅ | Pixel width of the main console: monospace cell width × (wrap columns + 1) |
@@ -386,8 +386,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `setLabelOnEnter(name, fn)` | ✅ | Bridge.lua |
 | `setLabelOnLeave(name, fn)` | ✅ | Bridge.lua |
 | `setLabelStyleSheet(name, css)` | ✅ | JS-exposed |
-| `getLabelStyleSheet(name)` | 🚧 | Read current CSS — also blocks `getLabelFormat` |
-| `getLabelFormat(name)` | ⚠️ | GUIUtils.lua defines it but depends on missing `getLabelStyleSheet` |
+| `getLabelStyleSheet(name)` | ✅ | JS-exposed; reads the CSS last set via `setLabelStyleSheet` (`""` when none) |
+| `getLabelFormat(name)` | ✅ | GUIUtils.lua; now resolves since `getLabelStyleSheet` is implemented |
 | `getLabelSizeHint(name)` | 🚧 | Return preferred size |
 | `setLabelCursor(name, shape)` | ✅ | JS-exposed |
 | `setLabelCustomCursor(name, path, x, y)` | 🚧 | CSS `cursor: url(...)` |
@@ -504,14 +504,18 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `setExit(fromID, toID, dir)` | ✅ | JS-exposed |
 | `addSpecialExit(fromID, toID, cmd)` | ✅ | JS-exposed |
 | `removeSpecialExit(fromID, cmd)` | ✅ | JS-exposed |
-| `getSpecialExits(roomID)` | ⚠️ | Only `getSpecialExitsSwap` is exposed today; the unswapped form is missing |
+| `getSpecialExits(roomID [, listAllExits])` | ✅ | Bridge.lua re-keys `__getSpecialExits` → `{[exitRoomID]={[cmd]="0"\|"1"}}`; lowest-weight command per room unless `listAllExits` |
+| `getSpecialExitsSwap(roomID)` | ✅ | JS-exposed; `{cmd=toId}` |
 | `getExitStubs(roomID)` | ✅ | JS-exposed; returns a 0-indexed table of stub direction numbers (wasmoon array convention, matches Mudlet) |
 | `getExitStubs1(roomID)` | ✅ | Bridge.lua wraps `getExitStubs` and re-indexes to a 1-based table |
 | `getCustomLines(roomID)` | ✅ | JS-exposed; `{ dir = { attributes={color,style,arrow}, points={[0]={x,y,z},...} } }`. Returns nil for missing rooms, empty table when none |
-| `lockRoom(roomID, bool)` | 🚧 | |
+| `lockRoom(roomID, bool)` | ✅ | JS-exposed; sets `room.isLocked` (honoured by pathfinding) |
+| `roomLocked(roomID)` | ✅ | JS-exposed; lock state, or nil when the room is missing |
 | `lockExit(roomID, dir, bool)` | ⚠️ | Pure-Lua wrapper in Other.lua stores into room user-data; not honoured by pathfinding (no `getPath` yet) |
-| `setRoomWeight(roomID, weight)` | 🚧 | |
-| `getRoomWeight(roomID)` | 🚧 | |
+| `setRoomWeight(roomID, weight)` | ✅ | JS-exposed; rejects negative weights |
+| `getRoomWeight(roomID)` | ✅ | JS-exposed; false when the room is missing |
+| `getExitWeights(roomID)` | ✅ | JS-exposed; `{exit=weight}` keyed by short direction name or special-exit command |
+| `setExitWeight(roomID, exitCommand, weight)` | ✅ | JS-exposed; weight 0 resets to destination-room weight; rejects negatives/unknown exits |
 | `getRoomUserData(roomID, key)` | ✅ | Bridge.lua → `__getRoomUserData` |
 | `setRoomUserData(roomID, key, value)` | ✅ | JS-exposed |
 | `getRoomUserDataKeys(roomID)` | ✅ | Bridge.lua → `__getRoomUserDataKeys`; re-indexes JS 0-based array to 1-based Lua table; `nil` when room missing |

@@ -268,6 +268,9 @@ class ScriptingLabelsAPI {
         const rewrite = this.cssRewriter();
         return this.manager.setStyleSheet(name, rewrite ? rewrite(css) : css);
     }
+    getStyleSheet(name: string): string | undefined {
+        return this.manager.getStyleSheet(name);
+    }
     setClickCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
         return this.manager.setClickCallback(name, fn);
     }
@@ -370,6 +373,7 @@ export class ScriptingAPI {
     private aliasToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private keyToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private existsCallback: ((nameOrId: string | number, type: string) => number) | null = null;
+    private isActiveCallback: ((nameOrId: string | number, type: string, checkAncestors: boolean) => number) | null = null;
     // Mudlet returns a numeric script id from permScript/permRegexTrigger/setScript;
     // -1 signals failure (missing parent group, unknown script name, etc.).
     private permScriptCallback: ((name: string, parent: string, code: string) => number) | null = null;
@@ -509,6 +513,10 @@ export class ScriptingAPI {
         this.existsCallback = fn;
     }
 
+    setIsActiveCallback(fn: ((nameOrId: string | number, type: string, checkAncestors: boolean) => number) | null): void {
+        this.isActiveCallback = fn;
+    }
+
     setPermScriptCallback(fn: ((name: string, parent: string, code: string) => number) | null): void {
         this.permScriptCallback = fn;
     }
@@ -617,6 +625,16 @@ export class ScriptingAPI {
 
     exists(nameOrId: string | number, type: string): number {
         return this.existsCallback?.(nameOrId, type) ?? 0;
+    }
+
+    /**
+     * Mudlet `isActive(name|id, type [, checkAncestors])` — count of *active*
+     * items matching the name (or 1/0 for an id). An item is active when its own
+     * enabled flag is set; with `checkAncestors` (default false) every ancestor
+     * group must be enabled too. Type strings mirror `exists`.
+     */
+    isActive(nameOrId: string | number, type: string, checkAncestors = false): number {
+        return this.isActiveCallback?.(nameOrId, type, checkAncestors) ?? 0;
     }
 
     permScript(name: string, parent: string, code: string): number {
@@ -1235,6 +1253,32 @@ export class ScriptingAPI {
 
     getLines(from: number, to: number, windowName?: string): string[] {
         return this.getConsole(windowName)?.getLines(from, to) ?? [];
+    }
+
+    /**
+     * Mudlet `getConsoleBufferSize([consoleName])` → (linesLimit, batchSize).
+     * Returns `null` when the named console doesn't exist so the Lua binding can
+     * hand back nil.
+     */
+    getConsoleBufferSize(windowName?: string): [number, number] | null {
+        const con = this.getConsole(windowName);
+        if (!con) return null;
+        return [con.maxLines, con.batchDeleteSize];
+    }
+
+    /**
+     * Mudlet `setConsoleBufferSize([consoleName], linesLimit, sizeOfBatchDeletion)`.
+     * Sets the scrollback cap (and the round-tripped batch-deletion size).
+     * Returns false when the named console doesn't exist.
+     */
+    setConsoleBufferSize(windowName: string | undefined, linesLimit: number, batchSize?: number): boolean {
+        const con = this.getConsole(windowName);
+        if (!con) return false;
+        if (Number.isFinite(linesLimit) && linesLimit > 0) con.setMaxLines(Math.floor(linesLimit));
+        if (batchSize !== undefined && Number.isFinite(batchSize) && batchSize > 0) {
+            con.setBatchDeleteSize(Math.floor(batchSize));
+        }
+        return true;
     }
 
     getColumnNumber(windowName?: string): number {

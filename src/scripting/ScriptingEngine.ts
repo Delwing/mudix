@@ -4,7 +4,7 @@ import {TriggerEngine, type TriggerNode} from '../mud/triggers/TriggerEngine';
 import type {TimerEngine} from '../mud/timers/TimerEngine';
 import type {KeyEngine, KeyNode} from '../mud/keybindings/KeyEngine';
 import type {ButtonNode, ScriptNode} from '../storage/schema';
-import {buildEffectivelyEnabledIds} from '../storage/schema';
+import {buildEffectivelyEnabledIds, isEffectivelyEnabled} from '../storage/schema';
 import {useAppStore} from '../storage';
 import type {FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer} from '../mud/text/FormatState';
@@ -641,6 +641,7 @@ export class ScriptingEngine {
             this.api.setAliasToggler((name, enabled) => this.toggleAliasByName(name, enabled));
             this.api.setKeyToggler((name, enabled) => this.toggleKeyByName(name, enabled));
             this.api.setExistsCallback((name, type) => this.existsByName(name, type));
+            this.api.setIsActiveCallback((name, type, checkAncestors) => this.isActiveByName(name, type, checkAncestors));
             this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
             this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
             this.api.setSetScriptCallback((name, code, pos) => this.setScriptByName(name, code, pos));
@@ -977,6 +978,41 @@ export class ScriptingEngine {
         }
         const name = String(nameOrId);
         return list.filter(i => i.name === name).length;
+    }
+
+    /**
+     * Mudlet `isActive(nameOrId, type [, checkAncestors])`. Returns the count of
+     * *active* items matching the name (1 or 0 for a numeric id). An item is
+     * active when its own enabled flag is set; with `checkAncestors` every
+     * ancestor group must be enabled too (isEffectivelyEnabled). Type aliases
+     * and the collection lookup mirror `existsByName`. Unknown types return 0.
+     */
+    isActiveByName(nameOrId: string | number, type: string, checkAncestors: boolean): number {
+        const store = useAppStore.getState();
+        const id = this.connectionId;
+        const list = ((): { id: string; name: string; enabled: boolean; parentId: string | null }[] => {
+            switch (type) {
+                case 'alias':   return store.connectionAliases[id]      ?? [];
+                case 'trigger': return store.connectionTriggers[id]     ?? [];
+                case 'timer':   return store.connectionTimers[id]       ?? [];
+                case 'key':
+                case 'keybind': return store.connectionKeybindings[id]  ?? [];
+                case 'button':  return store.connectionButtons[id]      ?? [];
+                case 'script':  return store.connectionScripts[id]      ?? [];
+                default:        return [];
+            }
+        })();
+        const isOn = (item: { enabled: boolean; parentId: string | null; id: string }): boolean =>
+            checkAncestors ? isEffectivelyEnabled(item, list) : item.enabled;
+        if (typeof nameOrId === 'number' && Number.isFinite(nameOrId)) {
+            for (const item of list) {
+                const n = this.uuidToNumericId.get(item.id);
+                if (n !== undefined && n === nameOrId) return isOn(item) ? 1 : 0;
+            }
+            return 0;
+        }
+        const name = String(nameOrId);
+        return list.filter(i => i.name === name && isOn(i)).length;
     }
 
     /**

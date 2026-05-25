@@ -21,6 +21,11 @@ export class Console {
     // line's length, so moves into shorter lines silently snap to end.
     private cursorCol = 0;
     private _maxLines = 1000;
+    // Mudlet's setConsoleBufferSize takes a "size of batch deletion" — how many
+    // lines it drops at once when the cap is exceeded. mudix evicts lazily down
+    // to _maxLines (the observable cap is identical), but we round-trip the
+    // value so getConsoleBufferSize reports back what a script set.
+    private _batchDeleteSize = 1000;
     // Mudlet's TConsole treats `\n` as cursor advance — `moveCursorEnd` followed
     // by `echo("\n")` advances past the last line without producing a blank row.
     // Mudix completes the (empty) partial on `\n` and emits a blank message.
@@ -49,6 +54,9 @@ export class Console {
 
     get maxLines(): number { return this._maxLines; }
     setMaxLines(n: number): void { this._maxLines = n; this.evict(); }
+
+    get batchDeleteSize(): number { return this._batchDeleteSize; }
+    setBatchDeleteSize(n: number): void { this._batchDeleteSize = n; }
 
     // ── Output ────────────────────────────────────────────────────────────────
 
