@@ -10,6 +10,7 @@ import { AnsiAwareBuffer, type FormatColor, type FormatStateSnapshot, type Forma
 import { namedColorToState } from '../mud/text/colorParsers';
 import { colorCodes } from '../mud/text/colors';
 import { Console } from '../mud/text/Console';
+import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
 import { useAppStore, selectProfileField } from '../storage';
 import {
     getUniversalDefaultFonts,
@@ -311,6 +312,9 @@ export class ScriptingAPI {
     profileName = '';
     readonly timers: TimerEngine;
     readonly keys: KeyEngine;
+    /** Mudlet-compatible stopwatch registry (createStopWatch & friends).
+     *  Persistent watches survive reloads via localStorage keyed by connection. */
+    readonly stopwatches: StopwatchManager;
 
     private readonly mainConsole = new Console();
 
@@ -364,6 +368,7 @@ export class ScriptingAPI {
     private triggerStayOpenSetter: ((name: string, lines: number) => boolean) | null = null;
     private timerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private aliasToggler: ((name: string, enabled: boolean) => boolean) | null = null;
+    private keyToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private existsCallback: ((nameOrId: string | number, type: string) => number) | null = null;
     // Mudlet returns a numeric script id from permScript/permRegexTrigger/setScript;
     // -1 signals failure (missing parent group, unknown script name, etc.).
@@ -391,6 +396,7 @@ export class ScriptingAPI {
         this.triggers = triggerEngine;
         this.timers = timerEngine;
         this.keys = keyEngine;
+        this.stopwatches = new StopwatchManager(localStorageStopwatchStore(connectionId));
         session.consoles.set('main', this.mainConsole);
     }
 
@@ -495,6 +501,10 @@ export class ScriptingAPI {
         this.aliasToggler = fn;
     }
 
+    setKeyToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
+        this.keyToggler = fn;
+    }
+
     setExistsCallback(fn: ((nameOrId: string | number, type: string) => number) | null): void {
         this.existsCallback = fn;
     }
@@ -561,6 +571,48 @@ export class ScriptingAPI {
 
     disableAlias(name: string): boolean {
         return this.aliasToggler?.(name, false) ?? false;
+    }
+
+    enableKey(name: string): boolean {
+        return this.keyToggler?.(name, true) ?? false;
+    }
+
+    disableKey(name: string): boolean {
+        return this.keyToggler?.(name, false) ?? false;
+    }
+
+    /**
+     * Mudlet `getOS()` — the platform name scripts branch on. Mudlet returns
+     * the native OS ("windows"/"mac"/"linux"/…); in the browser we report the
+     * underlying OS sniffed from the user agent so platform-specific scripts
+     * (e.g. mac vs. windows keybinding hints, the bundled accessibility
+     * stylesheet) behave sensibly. "unknown" when it can't be determined.
+     */
+    getOS(): string {
+        if (typeof navigator === 'undefined') return 'unknown';
+        const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+        const raw = (nav.userAgentData?.platform || nav.platform || nav.userAgent || '').toLowerCase();
+        if (raw.includes('win')) return 'windows';
+        if (raw.includes('mac') || raw.includes('iphone') || raw.includes('ipad') || raw.includes('ios')) return 'mac';
+        if (raw.includes('android') || raw.includes('linux') || raw.includes('cros')) return 'linux';
+        if (raw.includes('freebsd')) return 'freebsd';
+        if (raw.includes('openbsd')) return 'openbsd';
+        if (raw.includes('netbsd')) return 'netbsd';
+        return 'unknown';
+    }
+
+    /**
+     * Mudlet `getWindowsCodepage()` — on native Windows this reads the active
+     * ANSI code page (ACP) from the registry as a string; the bundled
+     * utf8_filenames.lua consults it (when getOS() == "windows") to decide
+     * whether to transcode filenames from UTF-8 to a legacy ANSI page. The
+     * browser VFS is always UTF-8, whose code page number is 65001, so we report
+     * that on every platform. utf8_filenames keys its mapping table by legacy
+     * ANSI page numbers (1250/1252/932/…), none of which is 65001 — so reporting
+     * 65001 makes it correctly skip transcoding rather than corrupt UTF-8 paths.
+     */
+    getWindowsCodepage(): string {
+        return '65001';
     }
 
     exists(nameOrId: string | number, type: string): number {

@@ -179,7 +179,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `denyCurrentSend()` | ✅ | JS-exposed; cancels the currently-dispatched send |
 | `appendCmdLine(text)` | ✅ | Append text to main command bar |
 | `setCmdLine(text)` | ✅ | Set main command bar text (`sendCmdLine`/`printCmdLine`) |
-| `getCmdLine([name])` | 🚧 | Read current command bar text |
+| `getCmdLine([name])` | ✅ | JS-exposed; reads the live main bar or a named overlay command line |
 | `clearCmdLine([name])` | ⚠️ | JS-exposed but only operates on the main command bar; named overlay widgets not yet wired |
 | `feedTelnet(data)` | 🚧 | Feed raw telnet bytes into pipeline |
 
@@ -240,8 +240,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `tempKey(modifier, key, code)` | ✅ | Temporary keybinding |
 | `killKey(id)` | ✅ | Delete keybinding by ID |
 | `permKey(name, parent, modifier, key, code)` | ⚠️ | Permanent keybindings exist; no Lua creation API yet |
-| `enableKey(name)` | 🚧 | Enable permanent keybinding by name |
-| `disableKey(name)` | 🚧 | Disable permanent keybinding by name |
+| `enableKey(name)` | ✅ | Enable keybindings (and groups) matching name; cascades to children |
+| `disableKey(name)` | ✅ | Disable keybindings (and groups) matching name; cascades to children |
 
 ---
 
@@ -249,14 +249,15 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 
 | Function | Status | Notes |
 |---|---|---|
-| `createStopWatch([name])` | 🚧 | `performance.now()`-based high-res stopwatch |
-| `startStopWatch(id)` | 🚧 | |
-| `stopStopWatch(id)` | 🚧 | Returns elapsed seconds |
-| `resetStopWatch(id)` | 🚧 | |
-| `getStopWatchTime(id)` | 🚧 | Elapsed ms without stopping |
-| `adjustStopWatch(id, seconds)` | 🚧 | |
-| `deleteStopWatch(id)` | 🚧 | |
-| `getStopWatches()` | 🚧 | Table of all stopwatches |
+| `createStopWatch([name], [autostart])` | ✅ | `performance.now()`-based high-res stopwatch (`StopwatchManager`). Accepts watchID or name everywhere. Named watches default autostart off |
+| `startStopWatch(id\|name [, resetAndRestart])` | ✅ | Bare numeric id resets+restarts (legacy); name form resumes |
+| `stopStopWatch(id\|name)` | ✅ | Returns elapsed seconds |
+| `resetStopWatch(id\|name)` | ✅ | Zeroes elapsed; a running watch keeps running |
+| `getStopWatchTime(id\|name)` | ✅ | Elapsed seconds without stopping |
+| `adjustStopWatch(id\|name, seconds)` | ✅ | Add (or subtract) seconds |
+| `deleteStopWatch(id\|name)` | ✅ | |
+| `getStopWatches()` | ✅ | Bridge.lua re-keys to integer ids → `{ name, isRunning, isPersistent, elapsedTime }` |
+| `setStopWatchPersistence(id\|name, state)` | ✅ | Persistent watches saved to localStorage (per connection) and restored on reload; a running one keeps counting across reloads. Uses wall-clock `Date.now()` |
 
 ---
 
@@ -440,7 +441,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `setFontSize([window,] size)` | ✅ | Bridge.lua → `__setFontSize` |
 | `getFontSize([window])` | ✅ | Bridge.lua → `__getFontSize` |
 | `calcFontSize(size[, family]) \| calcFontSize(windowName)` | ✅ | Bridge.lua → `__calcFontSize`; canvas-2D measurement of a monospace cell, falls back to the App.css `--font-mono` stack when no family is set |
-| `getAvailableFonts()` | 🚧 | `document.fonts` API |
+| `getAvailableFonts()` | ✅ | JS-exposed; set-style `{[family]=true}` merging web-safe families, FontFaceSet registrations, the profile font, and Local Font Access results |
 | `setMiniConsoleFontSize(name, size)` | ✅ | Bridge.lua → `__setMiniConsoleFontSize`; reuses `WindowManager.setFontSize` but rejects non-miniconsole targets to match Mudlet's CONSOLE-only check |
 | `setAppStyleSheet(css)` | ✅ | JS-exposed — installs/replaces a CSS block in `document.head`, raises `sysAppStyleSheetChange` |
 | `setUserWindowStyleSheet(name, css)` | ✅ | JS-exposed |
@@ -596,14 +597,15 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 |---|---|---|
 | `getProfileName()` | ✅ | JS-exposed |
 | `getNetworkLatency()` | ✅ | JS-exposed |
-| `getOS()` | 🚧 | Returns `"web"` |
+| `getOS()` | ✅ | Sniffs the underlying OS from the user agent → `"windows"`/`"mac"`/`"linux"`/`"freebsd"`/`"openbsd"`/`"netbsd"`/`"unknown"` |
+| `getWindowsCodepage()` | ✅ | Returns `"65001"` (UTF-8) on every platform — the browser VFS is always UTF-8, so the bundled `utf8_filenames.lua` skips legacy-ANSI transcoding |
 | `getMudletVersion()` | ✅ | Bridge.lua — supports `nil`/`"string"`/`"major"`/`"minor"`/`"revision"`/`"build"`/`"table"` modes |
 | `debug(text)` | ⚠️ | `debugc` is JS-exposed (`console.log`); Mudlet name `debug` not aliased |
 | `remember(varname)` | ✅ | Other.lua (persists into `SavedVariables.lua` via VFS) |
 | `saveVars()` / `loadVars()` | ✅ | Other.lua |
 | `shms(seconds)` | ✅ | DateTime.lua |
 | `xor(a, b)` | ✅ | Other.lua |
-| `compare(a, b)` | 🚧 | Deep equality, pure Lua |
+| `compare(a, b)` | ✅ | Other.lua — alias for `_comp` deep equality |
 | `f(str)` | ✅ | StringUtils.lua (see String section) |
 | `openUrl(url)` | ✅ | JS-exposed — `window.open(url, '_blank')`; a `file:` prefix routes to the VFS file browser (matches Mudlet's `openMudletHomeDir`) |
 | `showNotification(title, text)` | ✅ | Web Notifications API; gated on the Settings opt-in (`client.notificationsEnabled`) which is where the permission prompt is raised. Optional expiry auto-closes |
@@ -684,7 +686,6 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | Multi-profile management (`loadProfile`, `getProfiles`) | Single-connection web app |
 | `setAppStyleSheet(css)` | Qt application-wide CSS |
 | `spawn()` subprocess | No subprocess in browser |
-| `getWindowsCodepage()` | Windows-only |
 | `sendATCP(msg)` | Legacy protocol |
 | Module/package installation (`installModule`, etc.) | No package ecosystem |
 | `raiseGlobalEvent` | Multi-profile only |

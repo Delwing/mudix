@@ -235,6 +235,70 @@ export class LuaRuntime implements IScriptingRuntime {
 
         this.lua.global.set('getEpoch', () => Date.now() / 1000);
 
+        // Mudlet getOS() → platform name scripts branch on. We sniff the
+        // underlying OS so windows/mac-specific scripts behave; Mudlet's
+        // optional 2nd "version" return isn't provided (mudlet.supports.osVersion
+        // gates its use, so a single return is safe).
+        this.lua.global.set('getOS', () => this.api.getOS());
+
+        // Mudlet getWindowsCodepage() → active ANSI code page string. The browser
+        // VFS is UTF-8 (code page 65001) on every host, which is what we report —
+        // it lets the bundled utf8_filenames.lua skip legacy-ANSI transcoding
+        // instead of erroring or corrupting UTF-8 paths.
+        this.lua.global.set('getWindowsCodepage', () => this.api.getWindowsCodepage());
+
+        // ── Stopwatches ───────────────────────────────────────────────────────
+        // Mudlet stopwatch family. Every function accepts a numeric watchID or a
+        // string name; Mudlet's lua_isnumber treats a numeric string (e.g. "5",
+        // common from a trigger capture) as an id, so resolveWatchArg coerces
+        // those to numbers while leaving real names and the empty string (=first
+        // unnamed watch) as strings.
+        const resolveWatchArg = (v: unknown): number | string => {
+            const s = typeof v === 'string' ? v : String(v ?? '');
+            if (s.trim() === '') return '';
+            const n = typeof v === 'number' ? v : Number(s);
+            return Number.isFinite(n) ? Math.trunc(n) : s;
+        };
+        // createStopWatch([name] | [autostart], [autostart]). A string first arg
+        // names the watch and defaults autostart off; a boolean is the autostart
+        // flag; nothing autostarts an unnamed watch. Returns the id, or false if
+        // the name is already taken.
+        this.lua.global.set('createStopWatch', (a?: unknown, b?: unknown) => {
+            let name = '';
+            let autoStart = true;
+            if (typeof a === 'string') { name = a; autoStart = false; }
+            else if (typeof a === 'boolean') { autoStart = a; }
+            if (typeof b === 'boolean') autoStart = b;
+            return this.api.stopwatches.create(name, autoStart) ?? false;
+        });
+        // startStopWatch(id|name, [resetAndRestart]). A bare numeric id resets to
+        // zero and restarts (legacy behaviour); the name form just resumes.
+        this.lua.global.set('startStopWatch', (a: unknown, b?: unknown) => {
+            const arg = resolveWatchArg(a);
+            const resetAndRestart = typeof arg === 'number'
+                ? (b === undefined ? true : !!b)
+                : false;
+            return this.api.stopwatches.start(arg, resetAndRestart);
+        });
+        // stopStopWatch / getStopWatchTime return elapsed seconds (false on miss).
+        this.lua.global.set('stopStopWatch', (a: unknown) =>
+            this.api.stopwatches.stop(resolveWatchArg(a)) ?? false);
+        this.lua.global.set('getStopWatchTime', (a: unknown) =>
+            this.api.stopwatches.getTime(resolveWatchArg(a)) ?? false);
+        this.lua.global.set('resetStopWatch', (a: unknown) =>
+            this.api.stopwatches.reset(resolveWatchArg(a)));
+        this.lua.global.set('adjustStopWatch', (a: unknown, b: unknown) =>
+            this.api.stopwatches.adjust(resolveWatchArg(a), Number(b)));
+        this.lua.global.set('deleteStopWatch', (a: unknown) =>
+            this.api.stopwatches.delete(resolveWatchArg(a)));
+        // setStopWatchPersistence(id|name, state). Persistent watches are saved
+        // to localStorage (keyed per connection) and restored on the next load.
+        this.lua.global.set('setStopWatchPersistence', (a: unknown, b: unknown) =>
+            this.api.stopwatches.setPersistence(resolveWatchArg(a), !!b));
+        // getStopWatches → record keyed by stringified id; Bridge.lua re-keys to
+        // integer ids and rebuilds the nested table off the wasmoon proxy.
+        this.lua.global.set('__getStopWatches', () => this.api.stopwatches.getAll());
+
         // Mudlet getMainConsoleWidth() → pixel width of the main console text area.
         this.lua.global.set('getMainConsoleWidth', () => this.api.getMainConsoleWidth());
 
@@ -1484,6 +1548,8 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('disableTimer', (name: string) => this.api.disableTimer(String(name ?? '')));
         this.lua.global.set('enableAlias', (name: string) => this.api.enableAlias(String(name ?? '')));
         this.lua.global.set('disableAlias', (name: string) => this.api.disableAlias(String(name ?? '')));
+        this.lua.global.set('enableKey', (name: string) => this.api.enableKey(String(name ?? '')));
+        this.lua.global.set('disableKey', (name: string) => this.api.disableKey(String(name ?? '')));
 
         // Mudlet `exists(nameOrId, type)`. With a string, returns the count of
         // items matching the name; with a number, returns 1 if a perm item

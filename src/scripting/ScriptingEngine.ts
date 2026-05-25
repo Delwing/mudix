@@ -639,6 +639,7 @@ export class ScriptingEngine {
             this.api.setTriggerStayOpenSetter((name, lines) => this.setTriggerStayOpenByName(name, lines));
             this.api.setTimerToggler((name, enabled) => this.toggleTimerByName(name, enabled));
             this.api.setAliasToggler((name, enabled) => this.toggleAliasByName(name, enabled));
+            this.api.setKeyToggler((name, enabled) => this.toggleKeyByName(name, enabled));
             this.api.setExistsCallback((name, type) => this.existsByName(name, type));
             this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
             this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
@@ -828,7 +829,7 @@ export class ScriptingEngine {
         const installed = useAppStore.getState().connectionPackages[this.connectionId] ?? [];
         const manifest = installed.find(p => p.name === packageName);
         if (!manifest) {
-            this.api.printError(`[uninstallPackage] package not installed: ${packageName}`);
+            // Mudlet silently no-ops when the package isn't installed.
             return false;
         }
         this.notifyPackageUninstalled(packageName);
@@ -923,6 +924,23 @@ export class ScriptingEngine {
             .filter(a => a.enabled !== enabled)
             .map(a => ({ id: a.id, patch: { enabled } }));
         if (patches.length > 0) store.updateAliases(this.connectionId, patches);
+        return true;
+    }
+
+    /**
+     * Toggle keybindings' enabled flag by name (Mudlet enableKey/disableKey).
+     * Mudlet matches every key (or group) sharing the name. The store has no
+     * batch keybinding update, so matches are flipped one at a time; the store
+     * subscription coalesces the resulting KeyEngine reloads within the tick.
+     */
+    toggleKeyByName(name: string, enabled: boolean): boolean {
+        const store = useAppStore.getState();
+        const keys = store.connectionKeybindings[this.connectionId] ?? [];
+        const targets = keys.filter(k => k.name === name);
+        if (targets.length === 0) return false;
+        for (const k of targets) {
+            if (k.enabled !== enabled) store.updateKeybinding(this.connectionId, k.id, { enabled });
+        }
         return true;
     }
 

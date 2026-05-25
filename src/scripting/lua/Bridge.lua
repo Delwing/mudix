@@ -399,6 +399,36 @@ function getMapEvents()
     return out
 end
 
+-- Mudlet getStopWatches() → { [watchID] = { name, isRunning, isPersistent,
+-- elapsedTime = {...} } }. JS hands ids over as stringified keys (wasmoon
+-- convention); re-key via tonumber to integer ids and rebuild each record off
+-- the proxy so callers never touch the wasmoon table directly.
+function getStopWatches()
+    local raw = __getStopWatches()
+    local out = {}
+    if type(raw) == 'table' then
+        for k, v in pairs(raw) do
+            local id = tonumber(k) or k
+            local e = v.elapsedTime or {}
+            out[id] = {
+                name = v.name,
+                isRunning = v.isRunning,
+                isPersistent = v.isPersistent,
+                elapsedTime = {
+                    negative = e.negative,
+                    days = e.days,
+                    hours = e.hours,
+                    minutes = e.minutes,
+                    seconds = e.seconds,
+                    milliSeconds = e.milliSeconds,
+                    decimalSeconds = e.decimalSeconds,
+                },
+            }
+        end
+    end
+    return out
+end
+
 -- Mudlet getMapLabels(areaID) → { [labelID] = labelText }. JS hands the
 -- per-area label record over with stringified numeric keys (wasmoon
 -- convention); re-key via tonumber so scripts can index by integer label id
