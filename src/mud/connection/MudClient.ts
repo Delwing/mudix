@@ -33,6 +33,20 @@ export interface MudClientOptions {
 
 const DEFAULT_PROMPT_TIMEOUT_MS = 300;
 
+/** Converts raw bytes into a Latin-1 byte-string (charCode === byte for 0..255),
+ *  exactly what atob() used to yield for the downstream telnet/MCCP pipeline.
+ *  NB: TextDecoder('latin1') is *not* equivalent — that label maps to
+ *  windows-1252 and mangles bytes 0x80–0x9F, so we map by hand. Chunked to stay
+ *  within String.fromCharCode's argument limit on large frames. */
+function bytesToLatin1(bytes: Uint8Array): string {
+    let binary = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    return binary;
+}
+
 export class MudClient {
     private socket!: WebSocket;
     private readonly eventBus: EventBus<MudClientEvents>;
@@ -139,11 +153,15 @@ export class MudClient {
 
         try {
             this.socket = new WebSocket(this.url);
+            // Receive raw binary frames instead of base64 text. The proxy worker
+            // sends bytes directly; decoding base64 on every frame was the bulk
+            // of its (and our) per-message CPU cost.
+            this.socket.binaryType = "arraybuffer";
 
-            this.socket.onmessage = (event: MessageEvent<string>) => {
+            this.socket.onmessage = (event: MessageEvent<ArrayBuffer>) => {
                 try {
-                    if (event.data.length === 0) return;
-                    const decodedData = atob(event.data);
+                    if (event.data.byteLength === 0) return;
+                    const decodedData = bytesToLatin1(new Uint8Array(event.data));
                     const data = this.mccpHandler.processData(decodedData);
                     if (data.includes(GMCP_WILL)) {
                         this.sendRaw(GMCP_DO);
@@ -238,7 +256,7 @@ export class MudClient {
             this.eventBus.emit('socket.outgoing', message);
         }
         try {
-            this.socket.send(btoa(message + "\r\n"));
+            this.sendBytes(message + "\r\n");
         } catch (error) {
             console.error('Error sending message:', error);
             this.eventBus.emit('error', error);
@@ -250,10 +268,20 @@ export class MudClient {
             return;
         }
         try {
-            this.socket.send(btoa(data));
+            this.sendBytes(data);
         } catch (error) {
             console.error('Error sending raw data:', error);
         }
+    }
+
+    /** Encodes a Latin-1 byte-string to raw bytes and sends it as a binary
+     *  WebSocket frame. The proxy worker expects binary, not base64. */
+    private sendBytes(payload: string): void {
+        const bytes = new Uint8Array(payload.length);
+        for (let i = 0; i < payload.length; i++) {
+            bytes[i] = payload.charCodeAt(i) & 0xff;
+        }
+        this.socket.send(bytes);
     }
 
     sendGmcp(path: string, payload: unknown = {}): void {
@@ -261,7 +289,7 @@ export class MudClient {
             return;
         }
         try {
-            this.socket.send(btoa(encodeGmcp(path, payload)));
+            this.sendBytes(encodeGmcp(path, payload));
         } catch (error) {
             console.error('Error sending GMCP message:', error);
             this.eventBus.emit('error', error);
@@ -273,7 +301,7 @@ export class MudClient {
             return;
         }
         try {
-            this.socket.send(btoa(encodeGmcpRaw(message)));
+            this.sendBytes(encodeGmcpRaw(message));
         } catch (error) {
             console.error('Error sending GMCP message:', error);
             this.eventBus.emit('error', error);

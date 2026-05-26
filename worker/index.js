@@ -15,14 +15,6 @@ const STRIPPED_REQUEST_HEADERS = new Set([
     'keep-alive', 'transfer-encoding', 'upgrade',
 ]);
 
-function uint8ToBase64(bytes) {
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-}
-
 // WebSocket close.reason has a 123-byte limit; trimming defensively.
 function clipReason(text) {
     const str = String(text ?? '').slice(0, 120);
@@ -144,7 +136,9 @@ export default {
                     const { done, value } = await reader.read();
                     if (done) break;
                     if (server.readyState === WebSocket.OPEN) {
-                        server.send(uint8ToBase64(value));
+                        // Binary WebSocket frame — `value` is the raw byte view
+                        // straight from the TCP socket; no base64 transcoding.
+                        server.send(value);
                     }
                 }
                 // Clean EOF — TCP peer closed the connection normally.
@@ -160,7 +154,8 @@ export default {
         server.addEventListener('message', async (event) => {
             if (tcpClosed) return;
             try {
-                const bytes = Uint8Array.from(atob(event.data), c => c.charCodeAt(0));
+                // Client sends binary frames; event.data is an ArrayBuffer.
+                const bytes = new Uint8Array(event.data);
                 await writer.write(bytes);
             } catch (err) {
                 tcpClosed = true;

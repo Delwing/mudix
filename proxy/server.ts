@@ -154,7 +154,8 @@ wss.on('connection', (ws, req) => {
 
     tcp.on('data', (chunk: Buffer) => {
         if (ws.readyState === WebSocket.OPEN) {
-            ws.send(chunk.toString('base64'));
+            // Binary frame — raw bytes, no base64 (matches the client + worker).
+            ws.send(chunk, { binary: true });
         }
     });
 
@@ -173,7 +174,13 @@ wss.on('connection', (ws, req) => {
     ws.on('message', (data) => {
         if (!tcp.writable) return;
         try {
-            tcp.write(Buffer.from(data.toString(), 'base64'));
+            // Client sends binary frames; `data` is a Buffer (or fragments).
+            const bytes = Array.isArray(data)
+                ? Buffer.concat(data)
+                : Buffer.isBuffer(data)
+                    ? data
+                    : Buffer.from(data as ArrayBuffer);
+            tcp.write(bytes);
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             console.error('[proxy] Failed to forward message:', message);
