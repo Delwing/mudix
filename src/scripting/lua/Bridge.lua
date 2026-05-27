@@ -917,6 +917,13 @@ do
     function tempPromptTrigger(fn, expirationCount)
         return _prompt(__mudix_register_cb(__mudix_to_fn(fn, "tempPromptTrigger", 1)), expirationCount)
     end
+    -- tempLineTrigger(from, howMany, code|fn) — position-based, no pattern. Fires
+    -- on `howMany` lines starting `from` lines ahead (from=1 = next line), then
+    -- self-expires. The code/function to run is arg #3.
+    local _line = __mudix_tempLineTrigger
+    function tempLineTrigger(from, howMany, fn)
+        return _line(from, howMany, __mudix_register_cb(__mudix_to_fn(fn, "tempLineTrigger", 3)))
+    end
 end
 
 do
@@ -1148,6 +1155,84 @@ do
             for _, h in ipairs(hints) do hs[#hs+1] = tostring(h) end
         end
         return _raw(win, text, table.concat(cs, SEP), table.concat(hs, SEP), fmt)
+    end
+end
+
+-- insertPopup: identical overload handling + table flatten to echoPopup, but
+-- inserts the popup span at the cursor instead of appending. cinsertPopup /
+-- dinsertPopup / hinsertPopup (GUIUtils.lua) route here via xEcho with the
+-- commands/hints as Lua tables.
+--   insertPopup(text, {cmds}, {hints})               -- 3 args, no window
+--   insertPopup(text, {cmds}, {hints}, useFmt)        -- 4 args, no window
+--   insertPopup(window, text, {cmds}, {hints})        -- 4 args, with window
+--   insertPopup(window, text, {cmds}, {hints}, fmt)   -- 5 args, full form
+do
+    local _raw = insertPopup
+    local SEP = '\1'
+    insertPopup = function(...)
+        local n = select('#', ...)
+        local a1, a2, a3, a4, a5 = ...
+        local win, text, cmds, hints, fmt
+        if n <= 2 then
+            return
+        elseif n == 3 then
+            win, text, cmds, hints, fmt = "main", a1, a2, a3, nil
+        elseif n == 4 then
+            if type(a2) == 'table' then
+                win, text, cmds, hints, fmt = "main", a1, a2, a3, a4
+            else
+                win, text, cmds, hints, fmt = a1, a2, a3, a4, nil
+            end
+        else
+            win, text, cmds, hints, fmt = a1, a2, a3, a4, a5
+        end
+        if not text or text == '' then return end
+        local cs, hs = {}, {}
+        if type(cmds) == 'table' then
+            for _, c in ipairs(cmds) do cs[#cs+1] = tostring(c) end
+        end
+        if type(hints) == 'table' then
+            for _, h in ipairs(hints) do hs[#hs+1] = tostring(h) end
+        end
+        return _raw(win, text, table.concat(cs, SEP), table.concat(hs, SEP), fmt)
+    end
+end
+
+-- setPopup([window,] {commands}, {hints}): attach a right-click popup to the
+-- current selection. Flatten the command/hint tables to \x01 strings.
+--   setPopup({cmds}, {hints})           -- no window
+--   setPopup(window, {cmds}, {hints})   -- with window (string first arg)
+do
+    local _raw = setPopup
+    local SEP = '\1'
+    setPopup = function(a, b, c)
+        local win, cmds, hints
+        if type(a) == 'string' then
+            win, cmds, hints = a, b, c
+        else
+            win, cmds, hints = "main", a, b
+        end
+        local cs, hs = {}, {}
+        if type(cmds) == 'table' then
+            for _, x in ipairs(cmds) do cs[#cs+1] = tostring(x) end
+        end
+        if type(hints) == 'table' then
+            for _, x in ipairs(hints) do hs[#hs+1] = tostring(x) end
+        end
+        return _raw(win, table.concat(cs, SEP), table.concat(hs, SEP))
+    end
+end
+
+-- sendMSDP(variable [, value, ...]): pack the variadic values into a \x01
+-- string so the JS binding gets a stable shape regardless of wasmoon's
+-- vararg handling. An empty value list concats to "" → no MSDP_VAL groups.
+do
+    local _raw = __mudix_sendMSDP
+    function sendMSDP(variable, ...)
+        local vals = {...}
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(vals[i]) end
+        return _raw(tostring(variable or ""), table.concat(parts, '\1'))
     end
 end
 

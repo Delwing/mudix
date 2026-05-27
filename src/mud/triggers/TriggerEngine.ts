@@ -237,8 +237,14 @@ export class TriggerEngine {
         | { kind: 'startOfLine'; pattern: string; fn: TempFn }
         | { kind: 'exactMatch'; pattern: string; fn: TempFn }
         | { kind: 'prompt'; fn: TempFn }
+        | { kind: 'line'; countdown: number; remaining: number; skipFirst: boolean; fn: TempFn }
     >();
     private nextId = 1;
+    // True while processTemp is iterating. A `line` temp trigger created during
+    // a handler (mid-pass) sets skipFirst so it doesn't tick on the line it was
+    // created on — `from` then counts from the next line regardless of whether
+    // the trigger was created from a handler, timer, or alias.
+    private inProcessTemp = false;
     private permCompiled: CompiledEntry[] = [];
     private allById = new Map<string, TriggerNode>();
 
@@ -314,6 +320,27 @@ export class TriggerEngine {
             if (entry.kind === 'regex') entry.re.destroy();
             this.temp.delete(id);
         };
+    }
+
+    /**
+     * Mudlet `tempLineTrigger(from, howMany, fn)`. A position-based trigger with
+     * no pattern: it fires `fn([lineText])` on `howMany` consecutive lines,
+     * starting `from` lines ahead (`from = 1` → the next line). It self-expires
+     * after the last fire. When created from within a handler, the line on which
+     * it was created is skipped (see `inProcessTemp`/`skipFirst`) so `from`
+     * counts from the next line in every creation context. Returns a disposer
+     * for early cancellation.
+     */
+    addTempLine(from: number, howMany: number, fn: TempFn): () => void {
+        const id = this.nextId++;
+        this.temp.set(id, {
+            kind: 'line',
+            countdown: Math.max(1, Math.trunc(from) || 1),
+            remaining: Math.max(1, Math.trunc(howMany) || 1),
+            skipFirst: this.inProcessTemp,
+            fn,
+        });
+        return () => { this.temp.delete(id); };
     }
 
     loadPerm(items: TriggerNode[]): void {
@@ -449,7 +476,26 @@ export class TriggerEngine {
     // ── Temp triggers (session-scoped, created by scripts) ────────────────────
 
     processTemp(line: string, isPrompt = false): void {
-        for (const entry of this.temp.values()) {
+        this.inProcessTemp = true;
+        try {
+            this.processTempEntries(line, isPrompt);
+        } finally {
+            this.inProcessTemp = false;
+        }
+    }
+
+    private processTempEntries(line: string, isPrompt: boolean): void {
+        for (const [id, entry] of this.temp) {
+            if (entry.kind === 'line') {
+                // Position-based: skip the creation-line tick, count down `from`,
+                // then fire on each of the next `remaining` lines, self-expiring.
+                if (entry.skipFirst) { entry.skipFirst = false; continue; }
+                if (entry.countdown > 1) { entry.countdown--; continue; }
+                entry.fn([line]);
+                entry.remaining--;
+                if (entry.remaining <= 0) this.temp.delete(id);
+                continue;
+            }
             if (entry.kind === 'prompt') {
                 if (isPrompt) entry.fn([line]);
                 continue;

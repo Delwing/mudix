@@ -133,6 +133,10 @@ export class ScriptingEngine {
     // Pending debounced XML writes for sync-enabled modules (key: module name).
     private moduleSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private static readonly MODULE_SYNC_DEBOUNCE_MS = 500;
+    // sysExitEvent must fire exactly once per engine — either on teardown
+    // (destroy) or on page unload, whichever comes first.
+    private exitFired = false;
+    private readonly beforeUnload = () => this.fireExit();
 
     // Mudlet's permScript/permRegexTrigger/setScript return a numeric script id;
     // our store keys nodes by UUID. Hand each UUID a stable monotonic int when
@@ -163,6 +167,13 @@ export class ScriptingEngine {
         // Let WindowManager raise system events (e.g. sysUserWindowResizeEvent)
         // through the same path as everything else.
         session.windows.onRaiseEvent = (event, args) => this.raiseEvent(event, args);
+        // SoundManager raises sysMediaFinished(name, path) when a source ends.
+        session.sounds.onMediaFinished = (name, path) =>
+            this.raiseEvent('sysMediaFinished', [name, path]);
+        // Mudlet fires sysExitEvent as the profile shuts down. The engine is
+        // torn down on connection switch/unmount (destroy), but a full page
+        // unload skips React cleanup — cover that with a beforeunload hook.
+        window.addEventListener('beforeunload', this.beforeUnload);
         this.runtimeReady = this.initRuntime(connectionId);
         this.attachToStore(session);
     }
@@ -455,6 +466,10 @@ export class ScriptingEngine {
             this.notifyPackageInstalled(manifest.name);
             this.raiseEvent('sysInstallModule', [manifest.name]);
             this.raiseEvent('sysLuaInstallModule', [manifest.name, path]);
+            // Mudlet raises sysSyncInstallModule for modules flagged to sync
+            // (so sibling profiles reload them). mudix is single-profile, so
+            // this fires locally for ported scripts that listen on it.
+            if (manifest.sync) this.raiseEvent('sysSyncInstallModule', [manifest.name, path]);
             void vfs.flush();
             return true;
         } catch (err) {
@@ -480,6 +495,9 @@ export class ScriptingEngine {
         // Reached only via the Lua `uninstallModule()` binding — also raise
         // Mudlet's Lua-specific event for ported-script parity.
         this.raiseEvent('sysLuaUninstallModule', [moduleName]);
+        // Mudlet's sync-module counterpart, fired for sync-flagged modules
+        // (see sysSyncInstallModule above for the single-profile caveat).
+        if (pkg.sync) this.raiseEvent('sysSyncUninstallModule', [moduleName]);
         useAppStore.getState().uninstallPackage(this.connectionId, moduleName);
         if (this.vfs) {
             const vfs = this.vfs;
@@ -1239,6 +1257,13 @@ export class ScriptingEngine {
         this.emit(event, args);
     }
 
+    /** Raise sysExitEvent at most once, while the Lua runtime is still alive. */
+    private fireExit(): void {
+        if (this.exitFired) return;
+        this.exitFired = true;
+        this.raiseEvent('sysExitEvent');
+    }
+
     notifyMapOpen(): void {
         this.mapOpen.notify();
     }
@@ -1250,6 +1275,9 @@ export class ScriptingEngine {
     }
 
     destroy(): void {
+        // Fire sysExitEvent before any teardown, while handlers can still run.
+        window.removeEventListener('beforeunload', this.beforeUnload);
+        this.fireExit();
         for (const t of this.moduleSyncTimers.values()) clearTimeout(t);
         this.moduleSyncTimers.clear();
         this.storeUnsub?.();
@@ -1257,6 +1285,7 @@ export class ScriptingEngine {
         for (const unsub of this.unsubs) unsub();
         this.unsubs.length = 0;
         this.session.windows.onRaiseEvent = undefined;
+        this.session.sounds.onMediaFinished = undefined;
         this.runtimes.lua?.destroy();
         this.runtimes.lua = null;
         this.triggerEngine.setLuaEval(null);

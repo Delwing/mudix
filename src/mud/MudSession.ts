@@ -126,6 +126,18 @@ export class MudSession {
         this.client?.sendGmcpRaw(message);
     }
 
+    sendMSDP(variable: string, values: string[]): boolean {
+        return this.client?.sendMSDP(variable, values) ?? false;
+    }
+
+    sendSocket(data: string): boolean {
+        return this.client?.sendSocket(data) ?? false;
+    }
+
+    feedTelnet(data: string): void {
+        this.client?.feedTelnet(data);
+    }
+
     /** Updates both the active client (if any) and the stored options so the
      *  setting survives a reconnect. */
     setPromptTimeoutMs(ms: number): void {

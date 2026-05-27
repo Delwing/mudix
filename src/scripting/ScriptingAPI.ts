@@ -395,6 +395,17 @@ export class ScriptingAPI {
 
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
+    // Session-global rich-text clipboard — mirrors Mudlet's host-wide
+    // mClipboard. `copy()` fills it from the current selection (formatting
+    // preserved); `paste()`/`appendBuffer()` read from it.
+    private clipboard: AnsiAwareBuffer | null = null;
+
+    // Names of off-screen text buffers created via `createBuffer`. Their
+    // backing Console lives in `session.consoles` like any window console, but
+    // has no panel — so output to them is never pushed to the WindowManager
+    // (which would force a panel open). See `drainWindowConsole`.
+    private buffers = new Set<string>();
+
     constructor(
         private readonly session: MudSession,
         aliasEngine: AliasEngine,
@@ -432,6 +443,25 @@ export class ScriptingAPI {
 
     sendGmcp(message: string): void {
         this.session.sendGmcpRaw(message);
+    }
+
+    /** Mudlet `sendMSDP(variable, ...values)`. Frames an MSDP subnegotiation
+     *  (`IAC SB MSDP MSDP_VAR <var> [MSDP_VAL <val>]... IAC SE`) and sends it. */
+    sendMSDP(variable: string, values: string[]): boolean {
+        return this.session.sendMSDP(variable, values);
+    }
+
+    /** Mudlet `sendSocket(data)`. Sends a literal byte-string over the socket
+     *  with no telnet/encoding processing (each char is one byte). */
+    sendSocket(data: string): boolean {
+        return this.session.sendSocket(data);
+    }
+
+    /** Mudlet `feedTelnet(data)`. Injects raw server bytes into the inbound
+     *  pipeline as if received from the MUD (telnet stripping → ANSI →
+     *  triggers → render). */
+    feedTelnet(data: string): void {
+        this.session.feedTelnet(data);
     }
 
     setSendRequestDispatcher(fn: ((text: string) => boolean) | null): void {
@@ -706,7 +736,14 @@ export class ScriptingAPI {
         }
     }
 
-    echoPopup(text: string, cmds: string[], hints: string[], win?: string): void {
+    /**
+     * Build a {@link FormatHyperlink} whose right-click handler opens a context
+     * menu listing `cmds` (labelled by `hints`, falling back to the command
+     * text). Shared by `echoPopup`/`insertPopup`/`setPopup` — those three differ
+     * only in whether the styled span is appended, inserted at the cursor, or
+     * applied to the current selection.
+     */
+    private buildPopupHyperlink(cmds: string[], hints: string[]): FormatHyperlink {
         const onContextMenu = (ev: MouseEvent) => {
             ev.preventDefault();
             document.getElementById('mudix-popup-menu')?.remove();
@@ -742,9 +779,12 @@ export class ScriptingAPI {
             setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
         };
 
-        const hyperlink: FormatHyperlink = { onContextMenu, title: hints[0] ?? '' };
+        return { onContextMenu, title: hints[0] ?? '' };
+    }
+
+    echoPopup(text: string, cmds: string[], hints: string[], win?: string): void {
         const con = this.outputConsole(win);
-        con.format.hyperlink = hyperlink;
+        con.format.hyperlink = this.buildPopupHyperlink(cmds, hints);
         con.echo(text);
         con.format.hyperlink = undefined;
         if (!win || win === 'main') {
@@ -752,6 +792,47 @@ export class ScriptingAPI {
         } else {
             this.drainWindowConsole(win, con);
         }
+    }
+
+    /**
+     * Mudlet `insertPopup([window,] text, {commands}, {hints})`. Like
+     * `insertText`/`insertLink`, but the inserted span carries a right-click
+     * popup menu of `cmds`. Inserts at the cursor on the current line and
+     * preserves the surrounding pen state; degrades to `echoPopup` when no
+     * backing buffer is available (empty console / sub-window without a buffer).
+     */
+    insertPopup(text: string, cmds: string[], hints: string[], win?: string): void {
+        if (!text) return;
+        const con = this.getConsole(win);
+        const buf = con?.getBuffer();
+        if (con && buf) {
+            const state: FormatStateSnapshot = con.format.toSnapshot();
+            state.hyperlink = this.buildPopupHyperlink(cmds, hints);
+            const at = Math.max(0, Math.min(con.getCursorColumn(), buf.text.length));
+            buf.insert(at, text, state);
+            if (!this.inTriggerProcessing) buf.rerender();
+            return;
+        }
+        this.echoPopup(text, cmds, hints, win);
+    }
+
+    /**
+     * Mudlet `setPopup([window,] {commands}, {hints})`. Attaches a right-click
+     * popup menu to the current selection — preserves the selection's existing
+     * colors/attributes (like `setLink`, unlike the homogenizing color setters).
+     * `commands` are Lua code strings run when the matching menu entry is
+     * chosen. Returns false when there is no selection (or it belongs to a
+     * different window).
+     */
+    setPopup(cmds: string[], hints: string[], win?: string): boolean {
+        if (!this.selection) return false;
+        if (win !== undefined && !this.selectionMatches(win)) return false;
+        const sel = this.selection;
+        const buf = this.resolveBuffer(sel.windowName);
+        if (!buf) return false;
+        buf.setHyperlink([sel.start, sel.start + sel.length], this.buildPopupHyperlink(cmds, hints));
+        if (!this.inTriggerProcessing) buf.rerender();
+        return true;
     }
 
     setExecuteScript(fn: ((code: string) => void) | null): void {
@@ -841,8 +922,7 @@ export class ScriptingAPI {
         reverse: boolean,
         blinkMode: 'none' | 'slow' | 'fast',
     ): boolean {
-        const isMain = !windowName || windowName === 'main';
-        if (!isMain && !this.session.windows.has(windowName!)) return false;
+        if (!this.consoleExists(windowName)) return false;
 
         const snapshot: FormatStateSnapshot = {
             foreground: { space: 'rgb', r: fg.r, g: fg.g, b: fg.b },
@@ -891,8 +971,13 @@ export class ScriptingAPI {
     resetFormat(windowName?: string): void {
         // Mudlet TConsole::reset(): deselect + reset pen state to defaults.
         // It does NOT touch the buffer — selections lose their pointer here,
-        // but characters keep whatever format was applied to them.
-        this.selection = null;
+        // but characters keep whatever format was applied to them. Selection is
+        // per-console in Mudlet, so only drop it when it belongs to this window
+        // (mirrors `deselect`): echoing to one window — e.g. cecho/decho/hecho,
+        // which call resetFormat internally — must not clear a selection made
+        // in another, which would break selectCurrentLine(buf) → copy(buf) when
+        // unrelated output goes to main in between.
+        if (this.selectionMatches(windowName)) this.selection = null;
         this.outputConsole(windowName).resetFormat();
     }
 
@@ -942,9 +1027,7 @@ export class ScriptingAPI {
      * exists, even with no history yet).
      */
     selectCurrentLine(windowName?: string): boolean {
-        if (windowName && windowName !== 'main' && !this.session.windows.has(windowName)) {
-            return false;
-        }
+        if (!this.consoleExists(windowName)) return false;
         const line = this.getConsole(windowName)?.getLine() ?? '';
         this.selection = { windowName, start: 0, length: line.length };
         return true;
@@ -1199,9 +1282,7 @@ export class ScriptingAPI {
      * an empty string for the main window (always present, may have no line yet).
      */
     getCurrentLine(windowName?: string): string | null {
-        if (windowName && windowName !== 'main' && !this.session.windows.has(windowName)) {
-            return null;
-        }
+        if (!this.consoleExists(windowName)) return null;
         return this.getConsole(windowName)?.getLine() ?? '';
     }
 
@@ -1262,6 +1343,16 @@ export class ScriptingAPI {
 
     getLines(from: number, to: number, windowName?: string): string[] {
         return this.getConsole(windowName)?.getLines(from, to) ?? [];
+    }
+
+    /**
+     * Mudlet `wrapLine([window,] lineNumber)`. Re-displays the line at
+     * `lineNumber` (0-indexed, like getLineNumber/getLineCount), re-interpreting
+     * its embedded `\n` and re-wrapping to the current width. Returns false when
+     * the window or line doesn't exist.
+     */
+    wrapLine(lineNumber: number, windowName?: string): boolean {
+        return this.getConsole(windowName)?.wrapLine(lineNumber) ?? false;
     }
 
     /**
@@ -1462,6 +1553,10 @@ export class ScriptingAPI {
     clearWindow(name?: string): void {
         if (!name || name === 'main') {
             this.session.events.emit('script.clearwindow');
+        } else if (this.buffers.has(name)) {
+            // Off-screen buffer: WindowManager.clear no-ops (no panel), so clear
+            // the backing console directly.
+            this.getConsole(name)?.clear();
         } else {
             this.session.windows.clear(name);
         }
@@ -1505,7 +1600,84 @@ export class ScriptingAPI {
         if (!name || name === 'main') return false;
         if (!this.session.windows.isMiniConsole(name)) return false;
         this.session.windows.close(name);
+        this.eventRaiser?.('sysMiniConsoleDeleted', [name]);
         return true;
+    }
+
+    /**
+     * Mudlet `createBuffer(name)`. Registers a named off-screen console for
+     * formatting and storing rich text — like a miniconsole, but never shown
+     * on screen (no dock panel). echo/cecho/format/selection target it by name;
+     * `copy` + `appendBuffer` move formatted text in and out. Idempotent and a
+     * no-op when the name is taken by `main` or an existing on-screen window.
+     */
+    createBuffer(name: string): void {
+        if (!name || name === 'main') return;
+        if (this.session.windows.has(name)) return;
+        this.buffers.add(name);
+        // Register the backing console so echo/selection resolve it by name.
+        this.outputConsole(name);
+    }
+
+    /** True when `name` is an off-screen buffer created via createBuffer. */
+    isBuffer(name: string): boolean {
+        return this.buffers.has(name);
+    }
+
+    /**
+     * Mudlet `copy([window])`. Copies the current selection of the resolved
+     * console — including all formatting — into the session clipboard, a single
+     * rich-text buffer shared with `paste`/`appendBuffer` (Mudlet's host-global
+     * mClipboard). No-op when there's no selection, or when `window` is given
+     * but doesn't own the active selection.
+     */
+    copy(windowName?: string): void {
+        if (!this.selection) return;
+        if (windowName !== undefined && !this.selectionMatches(windowName)) return;
+        const buf = this.resolveBuffer(this.selection.windowName);
+        if (!buf) return;
+        const start = Math.max(0, Math.min(this.selection.start, buf.length));
+        const end = Math.max(start, Math.min(this.selection.start + this.selection.length, buf.length));
+        const slice = buf.clone();
+        slice.remove([end, slice.length]);
+        slice.remove([0, start]);
+        this.clipboard = slice;
+    }
+
+    /**
+     * Mudlet `appendBuffer([window])`. Appends the clipboard's rich text (from
+     * the last `copy()`) as a new line at the end of the named console's buffer.
+     * No-op until something has been copied. Mirrors TConsole::appendBuffer.
+     */
+    appendBuffer(windowName?: string): void {
+        if (!this.clipboard) return;
+        const isMain = !windowName || windowName === 'main';
+        const con = this.outputConsole(windowName);
+        con.appendBuffer(this.clipboard.clone());
+        if (isMain) this.drainMain();
+        else this.drainWindowConsole(windowName!, con);
+    }
+
+    /**
+     * Mudlet `paste([window])`. Inserts the clipboard at the cursor's current
+     * column when the cursor sits above the last line; otherwise appends it as
+     * a new line at the end (TConsole::paste semantics). No-op without a prior
+     * copy().
+     */
+    paste(windowName?: string): void {
+        if (!this.clipboard) return;
+        const con = this.outputConsole(windowName);
+        const buf = con.getBuffer();
+        if (buf && con.getLineNumber() < con.getLineCount()) {
+            const at = Math.max(0, Math.min(con.getCursorColumn(), buf.text.length));
+            buf.insertBuffer(at, this.clipboard.clone());
+            if (!this.inTriggerProcessing) buf.rerender();
+            return;
+        }
+        const isMain = !windowName || windowName === 'main';
+        con.appendBuffer(this.clipboard.clone());
+        if (isMain) this.drainMain();
+        else this.drainWindowConsole(windowName!, con);
     }
 
     /**
@@ -2442,6 +2614,17 @@ export class ScriptingAPI {
         return this.session.consoles.get(name ?? 'main') ?? null;
     }
 
+    /**
+     * Whether `windowName` is addressable for text/selection ops. True for the
+     * main window, any on-screen window, and off-screen buffers (createBuffer) —
+     * all of which back a Console. Used by the read/select methods instead of a
+     * bare `windows.has`, which is false for buffers (they have no panel).
+     */
+    private consoleExists(windowName: string | undefined): boolean {
+        if (!windowName || windowName === 'main') return true;
+        return this.session.windows.has(windowName) || this.buffers.has(windowName);
+    }
+
     /** Returns the Console for a window, creating and registering one on demand. */
     private outputConsole(win?: string): Console {
         if (!win || win === 'main') return this.mainConsole;
@@ -2454,6 +2637,13 @@ export class ScriptingAPI {
     }
 
     private drainWindowConsole(win: string, con: Console): void {
+        // Off-screen buffers (createBuffer) keep their content in the Console's
+        // history only — never push to the WindowManager, which would force a
+        // panel open. Drain pending into the void so it can't grow unbounded.
+        if (this.buffers.has(win)) {
+            con.takeLines();
+            return;
+        }
         for (const line of con.takeLines()) {
             this.session.windows.pushBuffer(win, line);
         }

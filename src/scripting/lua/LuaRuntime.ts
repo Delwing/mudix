@@ -363,14 +363,15 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet `windowType(name)` → kind string. Returns `(nil, errMsg)` when
         // the name doesn't resolve. The raw entry point hands JS `null` for the
         // miss case; the Bridge.lua wrapper re-shapes it into the multi-return.
-        // mudix has no "buffer", "commandline", or "textedit" concepts, so those
-        // kinds are not reported.
+        // mudix has no "commandline" or "textedit" concepts, so those kinds are
+        // not reported; off-screen buffers (createBuffer) report "buffer".
         this.lua.global.set('__windowType', (window: unknown) => {
             if (typeof window !== 'string') return null;
             if (window === 'main') return 'main';
             if (this.api.labels.has(window)) return 'label';
             if (this.api.windows.isMiniConsole(window)) return 'miniconsole';
             if (this.api.windows.has(window)) return 'userwindow';
+            if (this.api.isBuffer(window)) return 'buffer';
             return null;
         });
         // Mudlet `openUserWindow(name, [restoreLayout, autoDock, dockingArea]) → true`.
@@ -464,6 +465,23 @@ export class LuaRuntime implements IScriptingRuntime {
         // dock panels, unknown names).
         this.lua.global.set('deleteMiniConsole', (name: unknown) =>
             typeof name === 'string' ? this.api.deleteMiniConsole(name) : false);
+        // Mudlet `createBuffer(name)`. Off-screen text buffer (no panel) for
+        // formatting/storing rich text — like a hidden miniconsole.
+        this.lua.global.set('createBuffer', (name: unknown) => {
+            if (typeof name === 'string') this.api.createBuffer(name);
+        });
+        // Mudlet `copy([window])`. Copies the current selection (with formatting)
+        // into the session clipboard for paste()/appendBuffer().
+        this.lua.global.set('copy', (name?: unknown) =>
+            this.api.copy(typeof name === 'string' ? name : undefined));
+        // Mudlet `paste([window])`. Pastes the clipboard at the cursor (or
+        // appends at the end when the cursor is on the last line).
+        this.lua.global.set('paste', (name?: unknown) =>
+            this.api.paste(typeof name === 'string' ? name : undefined));
+        // Mudlet `appendBuffer([window])`. Appends the copied rich text as a new
+        // line to the named window/buffer (defaults to main).
+        this.lua.global.set('appendBuffer', (name?: unknown) =>
+            this.api.appendBuffer(typeof name === 'string' ? name : undefined));
         // createMapper has two calling conventions:
         //   createMapper(x, y, w, h)             — 4 args, embedded in main window
         //   createMapper(parent, x, y, w, h)     — 5 args, embedded in a userwindow
@@ -604,8 +622,13 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         // Mudlet deleteLabel(name) → true on success, (false, errMsg) when the
         // label doesn't exist. Bridge.lua wraps the bool into the multi-return.
-        this.lua.global.set('__deleteLabel', (name: unknown) =>
-            typeof name === 'string' && this.api.labels.destroy(name));
+        // Raises sysLabelDeleted(name) on success, matching Mudlet.
+        this.lua.global.set('__deleteLabel', (name: unknown) => {
+            if (typeof name !== 'string') return false;
+            const ok = this.api.labels.destroy(name);
+            if (ok) this.emitEvent('sysLabelDeleted', [name]);
+            return ok;
+        });
         // setLabelStyleSheet(name, css) — Qt-style CSS string, applied to the
         // label DIV. Used by Mudlet's setGaugeStyleSheet via the _back/_front/_text
         // labels.
@@ -1272,6 +1295,13 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('feedTriggers',(text: string)  => this.api.feedTriggers(text));
         this.lua.global.set('deleteLine',  (win?: string)  => this.api.deleteLine(win));
+        // Mudlet `wrapLine([window,] lineNumber)`. Re-displays a line, re-wrapping
+        // it and interpreting embedded \n. Overloaded: a string first arg is the
+        // window (lineNumber follows); a number first arg targets the main window.
+        this.lua.global.set('wrapLine', (a: unknown, b?: unknown) => {
+            if (typeof a === 'string') return this.api.wrapLine(Number(b), a);
+            return this.api.wrapLine(Number(a));
+        });
         // Mudlet `printError(msg, [showStackTrace], [haltExecution])`. mudix
         // routes every script-emitted error through the same logging path so
         // there's no JS-level stack to render; we accept the optional flags for
@@ -1336,6 +1366,26 @@ export class LuaRuntime implements IScriptingRuntime {
             this.api.echoPopup(textStr, cmdsArr, hintsArr, winStr);
         });
 
+        // insertPopup primitive — same \x01-flatten convention as echoPopup, but
+        // inserts the popup span at the cursor instead of appending. The Lua
+        // wrapper (Bridge.lua) handles overload disambiguation + table flatten;
+        // cinsertPopup/dinsertPopup/hinsertPopup (GUIUtils.lua) route here via xEcho.
+        this.lua.global.set('insertPopup', (win: unknown, text: unknown, cmds: unknown, hints: unknown, _fmt?: unknown) => {
+            const textStr = text as string;
+            if (!textStr) return;
+            const split = (s: unknown) => s ? String(s).split('\x01').filter(Boolean) : [];
+            const winStr = (win && win !== 'main') ? win as string : undefined;
+            this.api.insertPopup(textStr, split(cmds), split(hints), winStr);
+        });
+
+        // setPopup primitive — attaches a popup to the current selection. The Lua
+        // wrapper normalizes the optional window arg and flattens cmds/hints.
+        this.lua.global.set('setPopup', (win: unknown, cmds: unknown, hints: unknown) => {
+            const split = (s: unknown) => s ? String(s).split('\x01').filter(Boolean) : [];
+            const winStr = (win && win !== 'main') ? win as string : undefined;
+            return this.api.setPopup(split(cmds), split(hints), winStr);
+        });
+
         // Mudlet `openWebPage(url) → bool`. Opens the URL in the user's
         // default browser; returns false when the popup is blocked or the URL
         // is empty.
@@ -1369,6 +1419,25 @@ export class LuaRuntime implements IScriptingRuntime {
             const tail = what != null ? ' ' + String(what) : '';
             this.api.sendGmcp(body + tail);
         });
+        // Mudlet `sendMSDP(variable [, value, ...])`. The Bridge.lua wrapper
+        // packs the variadic values into a \x01-delimited string (wasmoon's
+        // varargs handling is unreliable); we split them back here. Frames as
+        // IAC SB MSDP MSDP_VAR var [MSDP_VAL val]... IAC SE.
+        this.lua.global.set('__mudix_sendMSDP', (variable: unknown, valuesStr?: unknown) => {
+            const v = String(variable ?? '');
+            if (!v) return false;
+            const s = valuesStr != null ? String(valuesStr) : '';
+            const values = s.length === 0 ? [] : s.split('\x01');
+            return this.api.sendMSDP(v, values);
+        });
+        // Mudlet `sendSocket(data)`: send literal bytes over the socket, no
+        // telnet/encoding processing.
+        this.lua.global.set('sendSocket', (data: unknown) => this.api.sendSocket(String(data ?? '')));
+        // Mudlet `feedTelnet(data)`: inject raw server bytes into the inbound
+        // pipeline as if received from the MUD.
+        this.lua.global.set('feedTelnet', (data: unknown) => { this.api.feedTelnet(String(data ?? '')); });
+        // Mudlet `disconnect()`: drop the current connection.
+        this.lua.global.set('disconnect', () => { this.api.disconnect(); });
         // Cancels the in-flight sysDataSendRequest dispatch. Only meaningful while
         // a sysDataSendRequest handler is on the stack — flag is reset before each send.
         this.lua.global.set('denyCurrentSend', () => { this._denyCurrentSend = true; });
@@ -1968,6 +2037,34 @@ export class LuaRuntime implements IScriptingRuntime {
         // placeholder the 'prompt' kind ignores.
         this.lua.global.set('__mudix_tempPromptTrigger', (cbId: number, expirationCount?: number) =>
             installTempTrigger('', cbId, 'prompt', expirationCount, 'tempPromptTrigger'));
+        // tempLineTrigger(from, howMany, fn) — position-based, no pattern. Fires
+        // on `howMany` lines starting `from` lines ahead (from=1 = next line),
+        // then self-expires. The TriggerEngine handles the line countdown; here
+        // we mirror it with a `fires` counter so the callback is released after
+        // the final fire (or earlier via killTrigger).
+        this.lua.global.set('__mudix_tempLineTrigger', (from: unknown, howMany: unknown, cbId: number) => {
+            const id = this.nextTempId++;
+            const total = Math.max(1, Math.trunc(Number(howMany)) || 1);
+            let fires = 0;
+            let killed = false;
+            let unsub: () => void = () => {};
+            const kill = () => {
+                if (killed) return;
+                killed = true;
+                unsub();
+                releaseCb(cbId);
+                this.tempIds.delete(id);
+            };
+            unsub = this.api.triggers.addTempLine(Number(from), Number(howMany), (matches) => {
+                if (killed) return;
+                this.setMatches(matches);
+                dispatchCb(cbId, 'tempLineTrigger');
+                fires++;
+                if (fires >= total) kill();
+            });
+            this.tempIds.set(id, kill);
+            return id;
+        });
         this.lua.global.set('killTrigger', (idOrName: number | string) => {
             if (typeof idOrName === 'string') return this.api.killByName('trigger', idOrName);
             const unsub = this.tempIds.get(idOrName);

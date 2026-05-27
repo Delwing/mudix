@@ -11,6 +11,13 @@ export const GMCP_SE = "\xF0";
 // MCCP2 (Mud Client Compression Protocol v2)
 export const MCCP2_OPTION = 0x56; // Telnet option 86
 
+// MSDP (Mud Server Data Protocol) — telnet option 69, with MSDP_VAR/MSDP_VAL
+// framing bytes inside the IAC SB … IAC SE subnegotiation. (IAC/SB/SE reuse the
+// GMCP_* byte constants above — they are the generic telnet command bytes.)
+export const OPT_MSDP = "\x45"; // 69
+export const MSDP_VAR = "\x01"; // 1
+export const MSDP_VAL = "\x02"; // 2
+
 // GMCP (Generic MUD Communication Protocol) negotiation sequences
 export const GMCP_WILL = "\xFF\xFB\xC9"; // IAC WILL GMCP - server offers GMCP
 export const GMCP_DO   = "\xFF\xFD\xC9"; // IAC DO GMCP   - client requests GMCP

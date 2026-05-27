@@ -101,6 +101,22 @@ export class Console {
         this.evict();
     }
 
+    /**
+     * Append a pre-formatted buffer as a new complete line — mirrors Mudlet's
+     * TConsole::appendBuffer, the primitive behind the `appendBuffer`/`paste`
+     * clipboard functions. Unlike `appendLine` (network pipeline) this also
+     * enqueues into `pending` so the line reaches the renderer through the
+     * normal drain path; the cursor resets to the end so a following
+     * `selectCurrentLine` sees the pasted line.
+     */
+    appendBuffer(buffer: AnsiAwareBuffer): void {
+        this.history.push(buffer);
+        this.pending.push(buffer);
+        this.cursorIdx = -1;
+        this.cursorCol = 0;
+        this.evict();
+    }
+
     private evict(): void {
         while (this.history.length > this._maxLines) {
             const evicted = this.history.shift()!;
@@ -225,5 +241,25 @@ export class Console {
 
     getLines(from: number, to: number): string[] {
         return this.history.slice(from - 1, to).map(b => b.text);
+    }
+
+    /**
+     * Mudlet `wrapLine(lineNumber)` — re-display the line at `lineNumber`
+     * (0-indexed, matching getLineNumber/getLineCount), re-interpreting its
+     * embedded `\n` characters and re-wrapping to the current width. mudix
+     * renders each line buffer with CSS `white-space: pre-wrap`, and the
+     * rendered DOM node holds the very same buffer object as history (set via
+     * `notifyRender`), so re-rendering that buffer in place is what makes any
+     * `\n` show as line breaks — the documented use case after a `deleteLine()`
+     * + `echo()` sequence left un-displayed newlines in the buffer. Returns
+     * false when `lineNumber` is out of range.
+     */
+    wrapLine(lineNumber: number): boolean {
+        if (!Number.isFinite(lineNumber)) return false;
+        const idx = Math.trunc(lineNumber);
+        const buf = this.history[idx];
+        if (!buf) return false;
+        buf.rerender();
+        return true;
     }
 }

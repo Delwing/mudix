@@ -184,6 +184,13 @@ export class SoundManager {
     private loader: LoaderFn = defaultLoader;
     /** 0..1, applied as an extra multiplier on every source's gain. */
     private masterVolume = 1;
+    /**
+     * Raised when a tracked source ends — whether it played out naturally or
+     * was stopped. ScriptingEngine wires this to raise Mudlet's
+     * `sysMediaFinished(name, path)`. `stopAll()` nulls each source's onended
+     * before stopping, so engine teardown never fires it.
+     */
+    onMediaFinished?: (name: string, path: string) => void;
 
     setLoader(fn: LoaderFn | null): void {
         // Different profiles can resolve the same VFS-relative path (e.g.
@@ -378,6 +385,11 @@ export class SoundManager {
         source.onended = () => {
             this.active.delete(id);
             if (kind === 'music') this.updateMediaSessionState();
+            // Mudlet's sysMediaFinished args are (name, path). We resolve a path
+            // for playback, so split it into the trailing filename and the full
+            // path the script passed in.
+            const filename = name.split(/[\\/]/).pop() || name;
+            this.onMediaFinished?.(filename, name);
         };
 
         if (kind === 'music') this.updateMediaSessionState(name);

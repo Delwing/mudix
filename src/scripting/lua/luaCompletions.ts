@@ -152,6 +152,10 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('send',         '(text)',           'Send a command to the MUD'),
     fn('sendAll',      '(...)',            'Send multiple commands'),
     fn('sendGMCP',     '(message)',        'Send a GMCP message (e.g. `Module.Sub args`)'),
+    fn('sendMSDP',     '(variable [, value, ...])', 'Send an MSDP variable request/update (IAC SB MSDP …)'),
+    fn('sendSocket',   '(data)',           'Send literal bytes over the socket (no telnet/encoding processing)'),
+    fn('feedTelnet',   '(data)',           'Inject raw server bytes into the inbound pipeline as if received from the MUD'),
+    fn('disconnect',   '()',               'Drop the current connection'),
     fn('denyCurrentSend', '()',            'Inside a sysDataSendRequest handler, cancels the in-flight command'),
     fn('echo',         '([window,] text)', 'Print plain text (optional window name as 1st arg)'),
     fn('cecho',        '([window,] text)', 'Print with Mudlet color tags'),
@@ -162,6 +166,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('resetFormat',  '()',               'Reset text formatting'),
     fn('feedTriggers', '(text)',           'Feed text through triggers'),
     fn('deleteLine',   '([window])',       'Delete current trigger line'),
+    fn('wrapLine',     '([window,] lineNumber)', 'Re-display a line (0-indexed), re-interpreting embedded \\n and re-wrapping'),
     fn('insertText',   '([window,] text)', 'Insert text at trigger cursor'),
     fn('cinsertText',  '([window,] text)', 'Insert Mudlet-color-tagged text at trigger cursor'),
     fn('dinsertText',  '([window,] text)', 'Insert decimal-RGB-formatted text at trigger cursor'),
@@ -222,6 +227,10 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('createMiniConsole', '([parent,] name, x, y, w, h) → bool', 'Create a positioned floating text panel; calling again repositions it'),
     fn('deleteMiniConsole', '(name) → bool', 'Destroy a mini-console created by createMiniConsole. Returns false for the main window, dock panels, or an unknown name.'),
     fn('createMapper',      '([parent,] x, y, w, h) → bool',        'Create a positioned mapper widget embedded in the main window or a userwindow (shares state with the dock widget). Singleton — calling again repositions it.'),
+    fn('createBuffer',    '(name)',        'Create a named off-screen text buffer (like a hidden miniconsole) for formatting/storing rich text'),
+    fn('copy',            '([window])',    'Copy the current selection (with formatting) into the clipboard for paste()/appendBuffer()'),
+    fn('paste',           '([window])',    'Paste the copied rich text at the cursor (or append at the end of the last line)'),
+    fn('appendBuffer',    '([window])',    'Append the copied rich text (see copy) as a new line to a window or buffer'),
     fn('clearWindow',     '([name])',      'Clear window contents'),
     fn('setUserWindowTitle', '(name, title)', 'Set user window title'),
     fn('setUserWindowStyleSheet', '(name, css)', 'Apply Qt-style CSS to a userwindow viewport. `QWidget { … }` (and bare declarations) auto-scope to that window so padding/background actually affect it; non-QWidget selectors are dropped.'),
@@ -482,10 +491,13 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('cechoPopup',        '([window,] text, {commands}, {hints} [, useCurrentFmt])', 'Echo Mudlet-color-tag text with a right-click popup of commands/hints'),
     fn('dechoPopup',        '([window,] text, {commands}, {hints} [, useCurrentFmt])', 'Echo decimal-RGB text with a right-click popup of commands/hints'),
     fn('hechoPopup',        '([window,] text, {commands}, {hints} [, useCurrentFmt])', 'Echo hex-RGB text with a right-click popup of commands/hints'),
+    fn('echoPopup',         '([window,] text, {commands}, {hints})', 'Echo text carrying a right-click popup menu of commands (labelled by hints)'),
+    fn('insertPopup',       '([window,] text, {commands}, {hints})', 'Insert text at the cursor carrying a right-click popup menu of commands'),
     fn('cinsertPopup',      '([window,] text, {commands}, {hints} [, useCurrentFmt])', 'Insert Mudlet-color-tag text at cursor with a right-click popup'),
     fn('dinsertPopup',      '([window,] text, {commands}, {hints} [, useCurrentFmt])', 'Insert decimal-RGB text at cursor with a right-click popup'),
     fn('hinsertPopup',      '([window,] text, {commands}, {hints} [, useCurrentFmt])', 'Insert hex-RGB text at cursor with a right-click popup'),
     fn('setLink',           '([window,] cmd, tooltip)',         'Apply a clickable link to the current selection. cmd is Lua code or a function.'),
+    fn('setPopup',          '([window,] {commands}, {hints})',  'Attach a right-click popup menu (commands labelled by hints) to the current selection'),
     // Map
     fn('centerview',           '(roomId)',                         'Center map on a room'),
     fn('getPlayerRoom',        '() → id|nil',                      'Get the player\'s current room id (set by centerview); nil when unset or the room no longer exists'),
@@ -666,8 +678,8 @@ const GLOBAL_COMPLETIONS: Completion[] = [
 // reference UI stays in sync with autocomplete without duplicating data.
 
 export interface ReferenceGroup {
-    title:   string;        // e.g. "mudix.windows", "string", "globals"
-    prefix:  string;        // dotted prefix prepended when inserting (e.g. "mudix.windows.")
+    title:   string;        // e.g. "string", "table", "globals"
+    prefix:  string;        // dotted prefix prepended when inserting (e.g. "string.")
     entries: Completion[];
 }
 

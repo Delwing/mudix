@@ -7,6 +7,7 @@ import {
     EchoHandler,
     encodeGmcp,
     encodeGmcpRaw,
+    encodeMsdp,
     GMCP_DO,
     GMCP_WILL,
     MccpHandler,
@@ -306,6 +307,47 @@ export class MudClient {
             console.error('Error sending GMCP message:', error);
             this.eventBus.emit('error', error);
         }
+    }
+
+    /** Mudlet `sendMSDP(variable, ...values)`. Frames + sends an MSDP
+     *  subnegotiation. Returns false when the socket isn't open. */
+    sendMSDP(variable: string, values: string[]): boolean {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+        try {
+            this.sendBytes(encodeMsdp(variable, values));
+            return true;
+        } catch (error) {
+            console.error('Error sending MSDP message:', error);
+            this.eventBus.emit('error', error);
+            return false;
+        }
+    }
+
+    /** Mudlet `sendSocket(data)`. Sends literal bytes over the socket with no
+     *  telnet/encoding processing (each char becomes one byte). Returns false
+     *  when the socket isn't open. */
+    sendSocket(data: string): boolean {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+        try {
+            this.sendBytes(data);
+            return true;
+        } catch (error) {
+            console.error('Error in sendSocket:', error);
+            this.eventBus.emit('error', error);
+            return false;
+        }
+    }
+
+    /** Mudlet `feedTelnet(data)`. Injects raw bytes into the inbound pipeline
+     *  as if they had arrived from the server — they pass through telnet
+     *  stripping, ANSI parsing, the trigger pipeline, and rendering. `data` is
+     *  treated as a Latin-1 byte-string (matching incoming-frame handling). */
+    feedTelnet(data: string): void {
+        this.processIncomingData(data);
     }
 
     output(text?: string | AnsiAwareBuffer, type?: string, timestamp?: number): void {

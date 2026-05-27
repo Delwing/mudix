@@ -8,9 +8,8 @@ Status legend:
 
 > Many APIs become "free" as soon as a single primitive is added. The known blockers right now:
 > - `createCommandLine` — blocks `Geyser.CommandLine` and the whole overlay command-line widget family.
-> - `insertPopup` / `setPopup` — block `cinsertPopup`/`dinsertPopup`/`hinsertPopup`.
-> - `getLabelStyleSheet` — blocks `getLabelFormat` returning correct values.
-> - `getPath` — blocks pathfinding-aware speedwalk (the runner itself works).
+> - ~~`getLabelStyleSheet` — blocks `getLabelFormat` returning correct values.~~ (resolved)
+> - ~~`insertPopup` / `setPopup` — block `cinsertPopup`/`dinsertPopup`/`hinsertPopup`.~~ (resolved — `insertPopup`/`setPopup` implemented)
 
 ---
 
@@ -61,7 +60,7 @@ A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gaug
 | `hreplace(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `insertText([window,] text)` | ✅ | JS-exposed |
 | `cinsertText([window,] text)` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → insertText) |
-| `wrapLine([window,] linenum)` | 🚧 | Re-wrap a line |
+| `wrapLine([window,] linenum)` | ✅ | JS-exposed; re-renders the line buffer (0-indexed) so embedded `\n` is interpreted and the line re-wraps. mudix renders with `white-space: pre-wrap`, so re-rendering the shared buffer is the re-wrap |
 | `scrollUp([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
 | `scrollDown([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
 | `showColors([columns])` | ✅ | Pure Lua via GUIUtils.lua |
@@ -109,8 +108,8 @@ A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gaug
 | `setUnderline([window,] bool)` | ✅ | JS-exposed |
 | `setStrikeOut([window,] bool)` | ✅ | JS-exposed |
 | `setReverse([window,] bool)` | ✅ | Toggle reverse video — sets `FormatState.inverse` on pen + selection (renderer swaps fg/bg) |
-| `setTextFormat([window,] ...)` | 🚧 | Set all formatting in one call |
-| `getTextFormat([window])` | 🚧 | Get current formatting |
+| `setTextFormat([window,] ...)` | ✅ | JS-exposed (`r1,g1,b1,r2,g2,b2,bold,underline,italics[,strikeout,overline,reverse,blink]`) |
+| `getTextFormat([window])` | ✅ | Bridge.lua → `__getTextFormat` → documented attribute table |
 | `setCommandBackgroundColor([window,] r,g,b[,a])` | ✅ | Patches the `inputBackground` profile field (rgba 0..255 → CSS). Main bar only; non-"main" window ignored |
 | `setCommandForegroundColor([window,] r,g,b[,a])` | ✅ | Patches the `inputForeground` profile field. Main bar only |
 | `setBackgroundColor([window,] r,g,b,a)` | ✅ | JS-exposed |
@@ -163,9 +162,10 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `cechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
 | `dechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
 | `hechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
-| `insertPopup([window,] text, cmds, hints)` | 🚧 | Insert popup at cursor — primitive missing (blocks `cinsertPopup`/`dinsertPopup`/`hinsertPopup`) |
+| `insertPopup([window,] text, cmds, hints)` | ✅ | JS-exposed; Bridge.lua flattens cmds/hints tables. `cinsertPopup`/`dinsertPopup`/`hinsertPopup` (GUIUtils.lua) now route here via `xEcho` |
+| `cinsertPopup`/`dinsertPopup`/`hinsertPopup` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → `insertPopup`) |
 | `setLink([window,] cmd, hint)` | ✅ | JS-exposed; Bridge.lua maps function `cmd` to a callback id |
-| `setPopup([window,] cmds, hints)` | 🚧 | Make selection a popup |
+| `setPopup([window,] cmds, hints)` | ✅ | JS-exposed; applies a right-click popup to the current selection (preserves its formatting, like `setLink`) |
 
 ---
 
@@ -181,7 +181,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `setCmdLine(text)` | ✅ | Set main command bar text (`sendCmdLine`/`printCmdLine`) |
 | `getCmdLine([name])` | ✅ | JS-exposed; reads the live main bar or a named overlay command line |
 | `clearCmdLine([name])` | ⚠️ | JS-exposed but only operates on the main command bar; named overlay widgets not yet wired |
-| `feedTelnet(data)` | 🚧 | Feed raw telnet bytes into pipeline |
+| `feedTelnet(data)` | ✅ | JS-exposed; injects raw bytes into `MudClient.processIncomingData` (telnet strip → ANSI → triggers → render). Unlike Mudlet (loopback only when unconnected), mudix feeds the live inbound pipeline |
 
 ---
 
@@ -209,14 +209,14 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `tempBeginOfLineTrigger(pattern, code)` | ✅ | Literal prefix (`String.prototype.startsWith`), NOT regex `^` — matches Mudlet's `match_begin_of_line_substring` |
 | `tempExactMatchTrigger(pattern, code)` | ✅ | Full-line exact match |
 | `tempColorTrigger(fg, bg, code)` | 🚧 | Match on ANSI color in line |
-| `tempLineTrigger(from, count, code)` | 🚧 | Fire on N consecutive lines |
+| `tempLineTrigger(from, count, code)` | ✅ | Position-based (no pattern): `TriggerEngine.addTempLine` fires on `count` lines starting `from` lines ahead (from=1 = next line), then self-expires. Bridge.lua wraps `__mudix_tempLineTrigger` |
 | `tempPromptTrigger(code)` | ✅ | Bridge.lua wraps `__mudix_tempPromptTrigger`; fires on lines flagged as a prompt (GA/EOR). expirationCount honoured |
 | `permRegexTrigger(name, parent, pattern, code)` | ⚠️ | `__mudix_permRegexTrigger`/`permRegexTrigger` exist; full Lua API still limited |
 | `permSubstringTrigger(name, parent, pattern, code)` | ⚠️ | Same |
 | `enableTrigger(name)` | ✅ | JS-exposed |
 | `disableTrigger(name)` | ✅ | JS-exposed |
-| `killTrigger(name)` | 🚧 | Delete named permanent trigger (numeric-ID form ✅) |
-| `setTriggerStayOpen(name, lines)` | 🚧 | Keep trigger active for N extra lines |
+| `killTrigger(name)` | ✅ | JS-exposed; string → `killByName('trigger', name)`, numeric → temp-trigger disposer |
+| `setTriggerStayOpen(name, lines)` | ✅ | JS-exposed; `TriggerEngine.setStayOpen` extends the named chain head's open window by `lines` (transient, not persisted) |
 
 ---
 
@@ -285,7 +285,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | Event | Status | Notes |
 |---|---|---|
 | `sysLoadEvent` | ✅ | After the initial script load (`ScriptingEngine.start`) |
-| `sysExitEvent` | 🚧 | Profile shutdown — hook `beforeunload`/disconnect teardown to fire it |
+| `sysExitEvent` | ✅ | Fired once at `ScriptingEngine.destroy()` (connection switch/unmount) or on `window` `beforeunload`, whichever comes first — before the Lua runtime tears down so handlers (e.g. Geyser autosave) still run |
 | `sysConnectionEvent` | ✅ | Fired on connect (`ScriptingEngine` bridge), alongside mudix's native `connect` |
 | `sysDisconnectionEvent` | ✅ | Fired on disconnect, alongside mudix's native `disconnect` |
 | `sysProfileFocusChangeEvent` | 🚧 | Could fire on active-connection (tab) focus change — arg: isFocused |
@@ -308,8 +308,8 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysUninstallModule` | ✅ | Before module uninstall — arg: name |
 | `sysLuaInstallModule` | ✅ | Fired by the Lua `installModule()` path — args: name, fileName |
 | `sysLuaUninstallModule` | ✅ | Fired by the Lua `uninstallModule()` path — arg: name |
-| `sysSyncInstallModule` | 🚧 | mudix has a non-standard `sysSyncOnModule`; add the Mudlet `sysSyncInstallModule` name |
-| `sysSyncUninstallModule` | 🚧 | No equivalent fired yet |
+| `sysSyncInstallModule` | ✅ | Fired by `installModuleFromPath` for sync-flagged modules — args: name, fileName. Single-profile, so fires locally (no sibling-profile propagation) |
+| `sysSyncUninstallModule` | ✅ | Fired by `uninstallModuleByName` for sync-flagged modules — arg: name |
 
 **HTTP / download**
 
@@ -357,8 +357,8 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysBufferShrinkEvent` | 🚧 | Oldest lines trimmed at buffer limit — args: name, linesRemoved |
 | `sysWindowMousePressEvent` | 🚧 | Mouse press on a window — args: button, x, y, name |
 | `sysWindowMouseReleaseEvent` | 🚧 | Mouse release on a window |
-| `sysLabelDeleted` | 🚧 | Raise from `LabelManager.destroy` — arg: name |
-| `sysMiniConsoleDeleted` | 🚧 | Raise from miniconsole close — arg: name |
+| `sysLabelDeleted` | ✅ | Fired on a successful `deleteLabel` (the `__deleteLabel` binding) — arg: name |
+| `sysMiniConsoleDeleted` | ✅ | Fired on a successful `deleteMiniConsole` (`ScriptingAPI` eventRaiser) — arg: name |
 | `sysCommandLineDeleted` | 🚧 | Blocked on the `createCommandLine` widget family — arg: name |
 | `sysScrollBoxDeleted` | 🚧 | No ScrollBox widget yet — arg: name |
 
@@ -383,7 +383,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 |---|---|---|
 | `sysAppStyleSheetChange` | ✅ | `setAppStyleSheet` (`ScriptingAPI`) — args: css, tag |
 | `sysPathChanged` | ✅ | `addFileWatch` — fires on VFS mutation of a watched path — arg: path |
-| `sysMediaFinished` | 🚧 | `SoundManager` has the `onended` hook but doesn't emit yet — args: name, path |
+| `sysMediaFinished` | ✅ | Fired from `SoundManager`'s `onended` when a sound/music source ends or is stopped — args: name (filename), path (as passed) |
 | `sysSettingChanged` | 🚧 | Fire when a profile/app setting changes — args: setting, …value |
 | `sysSoundFinished` | ❌ | Obsolete in Mudlet 4.15 — superseded by `sysMediaFinished` |
 | `sysIrcMessage` | ❌ | No IRC client in mudix |
@@ -400,12 +400,12 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 |---|---|---|
 | `gmcp` table | ✅ | Auto-populated from incoming GMCP packets |
 | `sendGMCP(message)` | ✅ | JS-exposed (frames as IAC SB GMCP …) |
-| `sendMSDP(var, ...)` | 🚧 | MSDP variable request |
-| `sendSocket(data)` | 🚧 | Send raw bytes over socket |
+| `sendMSDP(var, ...)` | ✅ | JS-exposed; frames `IAC SB MSDP MSDP_VAR var [MSDP_VAL val]… IAC SE` (`encodeMsdp`). Bridge.lua packs varargs |
+| `sendSocket(data)` | ✅ | JS-exposed; sends literal bytes over the socket (no telnet/encoding processing) |
 | `getConnectionInfo()` | ✅ | Bridge.lua unpacks `__getConnectionInfo` → host, port, connected (mud-mode config or parsed websocket URL) |
 | `getNetworkLatency()` | ✅ | JS-exposed |
 | `connectToServer(host, port)` | 🚧 | Connect from Lua |
-| `disconnect()` | ⚠️ | JS-side method exists on `ScriptingAPI`; not bound as a top-level Lua global yet |
+| `disconnect()` | ✅ | JS-exposed and bound as a top-level Lua global (`ScriptingAPI.disconnect` → `MudSession.disconnect`) |
 | `addSupportedTelnetOption(option)` | 🚧 | Advertise a custom telnet option via the WebSocket proxy |
 | `sendATCP(msg)` | ❌ | Legacy protocol, no plans |
 
@@ -445,8 +445,10 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `createLabel(name, x, y, w, h, passthrough)` | ✅ | JS-exposed |
 | `createGauge(name, x, y, w, h, parent)` | ✅ | Pure Lua via GUIUtils.lua (3× `createLabel` + `setBackgroundColor`) |
 | `createCommandLine(name, x, y, w, h)` | 🚧 | Absolutely-positioned extra input widget |
-| `createBuffer(name)` | 🚧 | Off-screen text buffer (no position) |
-| `appendBuffer(name)` | 🚧 | Paste buffer content into a window |
+| `createBuffer(name)` | ✅ | Off-screen text buffer (no panel) — registers a named Console in `session.consoles`; output to it stays in history (never opens a panel) and is selectable/copyable. `windowType` reports `"buffer"` |
+| `appendBuffer([window])` | ✅ | Appends the clipboard (from `copy()`) as a new line to the named console (`Console.appendBuffer`) |
+| `copy([window])` | ✅ | Copies the current selection (with formatting) into the session clipboard (Mudlet's host-global `mClipboard`) |
+| `paste([window])` | ✅ | Pastes the clipboard at the cursor, or appends at end when on the last line |
 | `echoUserWindow(name, text)` | ✅ | Alias for `mudix.windows.write` |
 | `deleteMiniConsole(name)` | ✅ | JS-exposed; closes the panel via `WindowManager.close`. Rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
 | `deleteLabel(name)` | ✅ | Bridge.lua → `__deleteLabel` |
@@ -572,7 +574,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 |---|---|---|
 | `centerview(roomID)` | ✅ | JS-exposed; sets the player room as a side effect (matches Mudlet) |
 | `getPlayerRoom()` | ✅ | Returns the id last passed to `centerview`; `nil` when unset or the room was deleted |
-| `getPath(fromID, toID)` | 🚧 | Pathfinding; populates `speedWalkDir`/`speedWalkPath` |
+| `getPath(fromID, toID)` | ✅ | A* via `__getPath` → `api.map.findPath`; Bridge.lua resets+populates `speedWalkPath`/`speedWalkDir`/`speedWalkWeight` (1-indexed) and unpacks Mudlet's `(true, totalWeight)` / `(false, -1, errMsg)` multi-return |
 | `speedwalk(roomID [, walkcmd, delay])` | ✅ | Pure Lua via Other.lua (uses `send` + `tempTimer`) |
 | `pauseSpeedwalk()` | ✅ | Pure Lua via Other.lua |
 | `resumeSpeedwalk()` | ✅ | Pure Lua via Other.lua |
@@ -603,7 +605,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `getCustomLines(roomID)` | ✅ | JS-exposed; `{ dir = { attributes={color,style,arrow}, points={[0]={x,y,z},...} } }`. Returns nil for missing rooms, empty table when none |
 | `lockRoom(roomID, bool)` | ✅ | JS-exposed; sets `room.isLocked` (honoured by pathfinding) |
 | `roomLocked(roomID)` | ✅ | JS-exposed; lock state, or nil when the room is missing |
-| `lockExit(roomID, dir, bool)` | ⚠️ | Pure-Lua wrapper in Other.lua stores into room user-data; not honoured by pathfinding (no `getPath` yet) |
+| `lockExit(roomID, dir, bool)` | ⚠️ | Pure-Lua wrapper in Other.lua stores into room user-data; `getPath` honours `room.exitLocks` but the wrapper doesn't write there yet, so locks set via Lua aren't seen by pathfinding |
 | `setRoomWeight(roomID, weight)` | ✅ | JS-exposed; rejects negative weights |
 | `getRoomWeight(roomID)` | ✅ | JS-exposed; false when the room is missing |
 | `getExitWeights(roomID)` | ✅ | JS-exposed; `{exit=weight}` keyed by short direction name or special-exit command |
