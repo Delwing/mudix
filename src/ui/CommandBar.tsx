@@ -145,8 +145,10 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (isComposingRef.current) return;
-        if (!command) return;
-        if (!passwordMode) pushHistory(command);
+        // Empty Enter is still sent — many MUDs treat a bare newline as a
+        // meaningful command (continue prompts, "look" repeats). Just don't
+        // record blanks in history.
+        if (command && !passwordMode) pushHistory(command);
         draftRef.current = command;
         setCursor(-1);
         setGhostHidden(false);

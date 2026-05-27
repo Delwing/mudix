@@ -32,6 +32,18 @@ export const MSDP_DO   = "\xFF\xFD\x45"; // IAC DO MSDP   - client requests MSDP
 export const GMCP_WILL = "\xFF\xFB\xC9"; // IAC WILL GMCP - server offers GMCP
 export const GMCP_DO   = "\xFF\xFD\xC9"; // IAC DO GMCP   - client requests GMCP
 
+// TERMINAL-TYPE (RFC 1091) / MTTS. Servers send IAC DO TTYPE and expect the
+// client to identify itself before they continue negotiating (e.g. offering
+// MSDP/GMCP). The subnegotiation cycle is: server SB TTYPE SEND IAC SE, client
+// replies SB TTYPE IS <name> IAC SE — repeated to walk through client name,
+// terminal type, and the MTTS capability bitvector.
+export const TTYPE_COMMAND_CODE = 24;       // telnet option 24
+export const OPT_TTYPE   = "\x18";          // 24
+export const TTYPE_IS    = "\x00";          // 0 — "this IS my type"
+export const TTYPE_SEND  = "\x01";          // 1 — "SEND me your type"
+export const TTYPE_DO    = "\xFF\xFD\x18";  // IAC DO TTYPE   - server requests our type
+export const TTYPE_WILL  = "\xFF\xFB\x18";  // IAC WILL TTYPE - client agrees to send it
+
 // Telnet ECHO option (RFC 857)
 export const ECHO_WILL = "\xFF\xFB\x01"; // IAC WILL ECHO - server will echo (suppress local echo)
 export const ECHO_WONT = "\xFF\xFC\x01"; // IAC WONT ECHO - server won't echo (restore local echo)

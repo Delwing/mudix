@@ -19,6 +19,15 @@ import {
     stripTelnetSequences,
     TELNET_GA,
     TELNET_EOR,
+    TTYPE_COMMAND_CODE,
+    TTYPE_DO,
+    TTYPE_WILL,
+    TTYPE_IS,
+    TTYPE_SEND,
+    OPT_TTYPE,
+    GMCP_IAC,
+    GMCP_SB,
+    GMCP_SE,
 } from "../protocol";
 import type { MudClientEvents } from "../events";
 
@@ -83,6 +92,10 @@ export class MudClient {
     /** True once the WebSocket handshake has completed; used to differentiate
      *  "failed to connect" from "connection lost mid-session" in close events. */
     private opened = false;
+    /** MTTS cycle position. The server issues SB TTYPE SEND repeatedly; we walk
+     *  through client name (0), terminal type (1), then the MTTS bitvector (2+).
+     *  Reset on each connect(). */
+    private ttypeStep = 0;
 
     commandEcho: boolean;
 
@@ -125,6 +138,7 @@ export class MudClient {
             const code = subneg.charCodeAt(0);
             if (code === GMCP_COMMAND_CODE) this.gmcpStream(subneg);
             else if (code === MSDP_COMMAND_CODE) this.msdpStream(subneg);
+            else if (code === TTYPE_COMMAND_CODE) this.respondTerminalType(subneg);
         });
         this.mccpHandler = new MccpHandler((data) => this.sendRaw(data));
         this.mccpHandler.enabled = mccpEnabled;
@@ -169,6 +183,7 @@ export class MudClient {
         this.textDecoder = new TextDecoder('utf-8', { fatal: false });
         this.pendingLineTail = "";
         this.gaDriver = false;
+        this.ttypeStep = 0;
         this.clearTailTimer();
 
         try {
@@ -183,13 +198,40 @@ export class MudClient {
                     if (event.data.byteLength === 0) return;
                     const decodedData = bytesToLatin1(new Uint8Array(event.data));
                     const data = this.mccpHandler.processData(decodedData);
+                    if (debugTelnetEnabled()) {
+                        logTelnetNegotiation('raw', decodedData);
+                        if (data !== decodedData) logTelnetNegotiation('post-mccp', data);
+                    }
                     if (data.includes(GMCP_WILL)) {
+                        // Server offers GMCP (IAC WILL GMCP) → we accept (IAC DO GMCP).
                         this.sendRaw(GMCP_DO);
+                        this.eventBus.emit('gmcp.negotiated');
+                    } else if (data.includes(GMCP_DO)) {
+                        // Server requests we enable GMCP (IAC DO GMCP) → we accept
+                        // (IAC WILL GMCP). Mirrors the MSDP handling below: telnet
+                        // negotiation is symmetric, so handle both directions.
+                        this.sendRaw(GMCP_WILL);
                         this.eventBus.emit('gmcp.negotiated');
                     }
                     if (data.includes(MSDP_WILL)) {
+                        // Server offers MSDP (IAC WILL MSDP) → we accept (IAC DO MSDP).
                         this.sendRaw(MSDP_DO);
                         this.eventBus.emit('msdp.negotiated');
+                    } else if (data.includes(MSDP_DO)) {
+                        // Server requests we enable MSDP (IAC DO MSDP) → we accept
+                        // (IAC WILL MSDP). Telnet negotiation is symmetric and many
+                        // servers (e.g. Legends of Kallisti) start MSDP this way; without
+                        // this branch we'd never reply and never fire msdp.negotiated.
+                        this.sendRaw(MSDP_WILL);
+                        this.eventBus.emit('msdp.negotiated');
+                    }
+                    if (data.includes(TTYPE_DO)) {
+                        // Server asks us to identify our terminal (IAC DO TTYPE).
+                        // Agree (IAC WILL TTYPE); the actual name/type/MTTS values
+                        // follow via the SB TTYPE SEND subnegotiation handled in
+                        // respondTerminalType(). Many MUDs (e.g. Kallisti) won't
+                        // offer MSDP/GMCP until this handshake completes.
+                        this.sendRaw(TTYPE_WILL);
                     }
                     this.echoHandler.processData(data);
                     this.eventBus.emit('socket.incoming', data);
@@ -346,6 +388,20 @@ export class MudClient {
             this.eventBus.emit('error', error);
             return false;
         }
+    }
+
+    /** Reply to a TERMINAL-TYPE / MTTS subnegotiation. `subneg` is the SB body
+     *  with the option byte (24) at [0]; [1] is the request kind (1 = SEND). We
+     *  answer `IAC SB TTYPE IS <value> IAC SE`, cycling client name → terminal
+     *  type → MTTS capability bitvector on successive SENDs, then repeating the
+     *  last value to signal the list is exhausted (RFC 1091 + the MTTS standard). */
+    private respondTerminalType(subneg: string): void {
+        if (subneg.charCodeAt(1) !== TTYPE_SEND.charCodeAt(0)) return; // only handle SEND
+        // MTTS bits we advertise: ANSI(1) + UTF-8(4) + 256 COLORS(8) + TRUECOLOR(256) = 269.
+        const cycle = ['Mudix', 'XTERM-256COLOR', 'MTTS 269'];
+        const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
+        if (this.ttypeStep < cycle.length - 1) this.ttypeStep++;
+        this.sendRaw(GMCP_IAC + GMCP_SB + OPT_TTYPE + TTYPE_IS + value + GMCP_IAC + GMCP_SE);
     }
 
     /** Mudlet `sendSocket(data)`. Sends literal bytes over the socket with no
@@ -538,6 +594,52 @@ function formatCloseError(event: CloseEvent, wasOpened: boolean): string {
 function clampPromptTimeout(ms: number): number {
     if (!Number.isFinite(ms) || ms < 0) return DEFAULT_PROMPT_TIMEOUT_MS;
     return Math.min(ms, 5000);
+}
+
+/**
+ * Diagnostic gate — enable via `localStorage.setItem('mudix.debugTelnet', '1')`
+ * in the browser console to log every telnet command/subnegotiation byte seen
+ * on each incoming frame. Used to investigate protocol-negotiation issues
+ * (GMCP/MSDP/MCCP not enabling) by revealing exactly what the server sends.
+ */
+function debugTelnetEnabled(): boolean {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem('mudix.debugTelnet') === '1';
+    } catch {
+        return false;
+    }
+}
+
+const TELNET_CMD_NAMES: Record<number, string> = {
+    239: 'EOR', 240: 'SE', 241: 'NOP', 249: 'GA', 250: 'SB',
+    251: 'WILL', 252: 'WONT', 253: 'DO', 254: 'DONT',
+};
+const TELNET_OPT_NAMES: Record<number, string> = {
+    1: 'ECHO', 3: 'SGA', 24: 'TTYPE', 25: 'EOR', 31: 'NAWS', 32: 'TSPEED',
+    69: 'MSDP', 70: 'MSSP', 85: 'MCCP1', 86: 'MCCP2', 90: 'MSP', 91: 'MXP',
+    93: 'ZMP', 201: 'GMCP', 255: 'IAC',
+};
+
+/** Scan a Latin-1 byte-string for telnet IAC sequences and log them in
+ *  human-readable form. Logs SB option codes too (e.g. `SB GMCP` / `SB MSDP`). */
+function logTelnetNegotiation(label: string, s: string): void {
+    const seqs: string[] = [];
+    for (let i = 0; i < s.length; i++) {
+        if (s.charCodeAt(i) !== 0xFF) continue; // not IAC
+        const cmd = s.charCodeAt(i + 1);
+        if (cmd === 250) { // SB <opt> ... — just name the option
+            const opt = s.charCodeAt(i + 2);
+            seqs.push(`SB ${TELNET_OPT_NAMES[opt] ?? opt}`);
+        } else if (cmd >= 251 && cmd <= 254) { // WILL/WONT/DO/DONT <opt>
+            const opt = s.charCodeAt(i + 2);
+            seqs.push(`${TELNET_CMD_NAMES[cmd]} ${TELNET_OPT_NAMES[opt] ?? opt}`);
+        } else if (TELNET_CMD_NAMES[cmd]) {
+            seqs.push(TELNET_CMD_NAMES[cmd]);
+        }
+    }
+    // eslint-disable-next-line no-console
+    console.debug(`[mudix.telnet ${label}] bytes=${s.length}`,
+        seqs.length ? seqs.join(' | ') : '(no IAC sequences)');
 }
 
 /**
