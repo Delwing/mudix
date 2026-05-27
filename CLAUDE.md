@@ -79,7 +79,9 @@ Layout is serialized per-connection to Zustand with a 400ms debounce. On restore
 
 ### Storage
 
-**`AppStore`** (`src/storage/appStore.ts`): Zustand with `persist` middleware → `localStorage` key `mudix_v1`. Schema versioning with migration logic (currently v5). Only these keys are persisted: `connections`, `ui`, `connectionLayouts`, `connectionScripts`, `connectionAliases`.
+**`AppStore`** (`src/storage/appStore.ts`): Zustand with `persist` middleware → `localStorage` key `mudix_v1`. Schema versioning with migration logic. The full per-connection state lives in the in-memory store, but `partialize` persists to `localStorage` **only** the global index + the small UI/layout slices read synchronously before any VFS mounts: `connections`, `client`, `connectionProfile`, `connectionWindowHints`, `connectionDockExtents`, `connectionScriptEditorBounds`, `connectionModalBounds`, `connectionLayoutSnapshots`.
+
+**Per-profile automation data in the VFS** (`src/storage/profileVfsData.ts`): the bulky tree slices — `connectionScripts`, `connectionAliases`, `connectionTriggers`, `connectionTimers`, `connectionKeybindings`, `connectionButtons`, `connectionPackages` — are **not** in localStorage. They're persisted to a single hidden JSON file (`.mudix/profile.json`) inside each profile's own VFS. `ScriptingEngine` owns the lifecycle: `loadProfileData()` seeds the store on profile open (after the VFS mounts, before default-package install), and a debounced `saveProfileData()` writes back whenever those slices change. The store API and all consumers are unchanged — only the persistence layer differs.
 
 **`mapStorage`** (`src/storage/mapStorage.ts`): Separate IndexedDB (`mudix_maps` DB) for Mudlet binary map data. Async `saveMap(ArrayBuffer)` / `loadMap()`.
 

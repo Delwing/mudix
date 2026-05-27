@@ -6,6 +6,7 @@ import type {KeyEngine, KeyNode} from '../mud/keybindings/KeyEngine';
 import type {ButtonNode, ScriptNode} from '../storage/schema';
 import {buildEffectivelyEnabledIds, isEffectivelyEnabled} from '../storage/schema';
 import {useAppStore} from '../storage';
+import {loadProfileData, saveProfileData} from '../storage/profileVfsData';
 import type {FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer} from '../mud/text/FormatState';
 import {ScriptingAPI} from './ScriptingAPI';
@@ -134,10 +135,14 @@ export class ScriptingEngine {
     // Pending debounced XML writes for sync-enabled modules (key: module name).
     private moduleSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private static readonly MODULE_SYNC_DEBOUNCE_MS = 500;
+    // Pending debounced write of this profile's automation data to its VFS
+    // (.mudix/profile.json). Coalesces bursts of store mutations into one write.
+    private profileDataSaveTimer: ReturnType<typeof setTimeout> | null = null;
+    private static readonly PROFILE_DATA_SAVE_DEBOUNCE_MS = 1000;
     // sysExitEvent must fire exactly once per engine — either on teardown
     // (destroy) or on page unload, whichever comes first.
     private exitFired = false;
-    private readonly beforeUnload = () => this.fireExit();
+    private readonly beforeUnload = () => { this.fireExit(); this.flushProfileData(); };
 
     // Mudlet's permScript/permRegexTrigger/setScript return a numeric script id;
     // our store keys nodes by UUID. Hand each UUID a stable monotonic int when
@@ -203,6 +208,16 @@ export class ScriptingEngine {
             // but the await is what guarantees this.vfs is non-null below.
             await this.runtimeReady.catch(() => { /* runtime failure already surfaced */ });
 
+            // Seed the store with this profile's automation data (scripts, aliases,
+            // triggers, …) from its VFS (.mudix/profile.json). Runs before the
+            // default-package install and the apply* calls below so the loaded
+            // nodes participate in the very first runtime load. No-op for a fresh
+            // profile (file absent). Happens before the subscription is attached,
+            // so the hydrate itself doesn't trigger a write-back.
+            if (this.vfs) {
+                loadProfileData(this.vfs, this.connectionId);
+            }
+
             // Install Mudlet's default packages (run-lua-code, …) into fresh profiles.
             // Idempotent: skips packages already in the store, so existing profiles
             // also pick up newly-added defaults on next open. Runs before
@@ -256,6 +271,7 @@ export class ScriptingEngine {
                 const keysChanged     = state.connectionKeybindings[id]  !== prevState.connectionKeybindings[id];
                 const triggersChanged = state.connectionTriggers[id]     !== prevState.connectionTriggers[id];
                 const buttonsChanged  = state.connectionButtons[id]      !== prevState.connectionButtons[id];
+                const packagesChanged = state.connectionPackages[id]     !== prevState.connectionPackages[id];
 
                 if (scriptsChanged) this.applyScriptsFromStore();
                 if (aliasesChanged) this.applyAliasesFromStore();
@@ -263,12 +279,23 @@ export class ScriptingEngine {
                 if (keysChanged)    this.applyKeybindingsFromStore();
                 if (this.triggersReady && triggersChanged) this.scheduleTriggerApply();
 
+                const automationChanged = scriptsChanged || aliasesChanged || timersChanged
+                    || keysChanged || triggersChanged || buttonsChanged || packagesChanged;
+
+                // Persist this profile's automation data to its VFS on any change.
+                if (automationChanged) this.scheduleProfileDataSave();
+
                 // Sync-on-edit for modules: any tagged-node mutation schedules
                 // a debounced XML rewrite for affected modules.
-                if (scriptsChanged || aliasesChanged || timersChanged || keysChanged || triggersChanged || buttonsChanged) {
+                if (automationChanged) {
                     this.scheduleModuleSyncForChanges(state, prevState);
                 }
             });
+
+            // Capture the merged boot state (loaded file + freshly-installed default
+            // packages + reloaded modules) once, since those mutations ran before
+            // the subscription was attached and so didn't schedule a write.
+            if (this.vfs) this.scheduleProfileDataSave();
         };
         const safeStart = () => {
             start().catch(err => console.warn('[ScriptingEngine] start failed:', err));
@@ -337,6 +364,37 @@ export class ScriptingEngine {
             });
         }, ScriptingEngine.MODULE_SYNC_DEBOUNCE_MS);
         this.moduleSyncTimers.set(moduleName, timer);
+    }
+
+    /** Debounce a write of this profile's automation data to its VFS. */
+    private scheduleProfileDataSave(): void {
+        if (!this.vfs) return;
+        if (this.profileDataSaveTimer) clearTimeout(this.profileDataSaveTimer);
+        this.profileDataSaveTimer = setTimeout(() => {
+            this.profileDataSaveTimer = null;
+            this.flushProfileData();
+        }, ScriptingEngine.PROFILE_DATA_SAVE_DEBOUNCE_MS);
+    }
+
+    /** Write this profile's automation data to its VFS now. */
+    private flushProfileData(): void {
+        const vfs = this.vfs;
+        if (!vfs) return;
+        if (this.profileDataSaveTimer) {
+            clearTimeout(this.profileDataSaveTimer);
+            this.profileDataSaveTimer = null;
+        }
+        try {
+            saveProfileData(vfs, this.connectionId);
+            // writeFile only updates the RAM cache; both IDB- and folder-backed
+            // mounts persist to the backend on flush(). Drain now so the write is
+            // durable immediately rather than waiting for an unrelated flush
+            // (matches every other VFS write site, e.g. package install). On
+            // destroy() the subsequent oldVfs.flush() covers the same data too.
+            void vfs.flush();
+        } catch (err) {
+            console.warn('[ScriptingEngine] profile data save failed:', err);
+        }
     }
 
     /**
@@ -1279,6 +1337,8 @@ export class ScriptingEngine {
         // Fire sysExitEvent before any teardown, while handlers can still run.
         window.removeEventListener('beforeunload', this.beforeUnload);
         this.fireExit();
+        // Drain any pending automation-data write before the VFS is torn down.
+        this.flushProfileData();
         for (const t of this.moduleSyncTimers.values()) clearTimeout(t);
         this.moduleSyncTimers.clear();
         this.storeUnsub?.();
@@ -1287,6 +1347,16 @@ export class ScriptingEngine {
         this.unsubs.length = 0;
         this.session.windows.onRaiseEvent = undefined;
         this.session.sounds.onMediaFinished = undefined;
+        // Stop everything that can fire a Lua callback BEFORE closing the VM.
+        // The timer engine is the only autonomous async caller into Lua (a
+        // tempTimer's setTimeout → dispatchCb); line feed and key bindings are
+        // pull-based and already severed above (flushLines unsub), and HTTP/
+        // sound/TTS/map events route through guarded paths or nulled dispatchers.
+        // This runs after fireExit so a timer scheduled by a sysExitEvent handler
+        // is cleared too. (TimerEngine.destroy is idempotent — useEngines also
+        // calls it.) Without this, a timer firing post-close hits a freed
+        // lua_State → WASM out-of-bounds abort → broken teardown → app hang.
+        this.timerEngine.destroy();
         this.runtimes.lua?.destroy();
         this.runtimes.lua = null;
         this.triggerEngine.setLuaEval(null);

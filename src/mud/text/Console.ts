@@ -244,6 +244,20 @@ export class Console {
     }
 
     /**
+     * Mudlet `getTimestamp(lineNumber)` — the wall-clock time (epoch ms) the
+     * line entered the buffer. `lineNumber` is 1-based to match `getLines`
+     * (Mudlet's timeBuffer reserves index 0); omit it to read the current
+     * cursor line. Returns null when the line is out of range or the buffer
+     * is empty. Formatting into Mudlet's "hh:mm:ss.zzz" string happens one
+     * layer up, in ScriptingAPI.
+     */
+    getLineTimestamp(lineNumber?: number): number | null {
+        const idx = lineNumber === undefined ? this.cursor : Math.trunc(lineNumber) - 1;
+        if (idx < 0) return null;
+        return this.history[idx]?.timestamp ?? null;
+    }
+
+    /**
      * Mudlet `wrapLine(lineNumber)` — re-display the line at `lineNumber`
      * (0-indexed, matching getLineNumber/getLineCount), re-interpreting its
      * embedded `\n` characters and re-wrapping to the current width. mudix

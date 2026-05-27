@@ -85,7 +85,35 @@ interface AppStore extends AppSchema {
     installPackage: (connectionId: string, manifest: PackageManifest, data: MudletImportResult) => void;
     uninstallPackage: (connectionId: string, packageName: string) => void;
     updatePackageManifest: (connectionId: string, packageName: string, patch: Partial<Omit<PackageManifest, 'name'>>) => void;
+    /** Replace the VFS-persisted automation slices for one connection in a single
+     *  set(). Called once on profile open, after its VFS mounts, to seed the
+     *  store from `.mudix/profile.json`. Missing keys reset to empty arrays. */
+    hydrateConnectionData: (connectionId: string, data: PersistedConnectionData) => void;
 }
+
+/** The per-connection slices persisted in the profile VFS (see profileVfsData.ts). */
+interface PersistedConnectionData {
+    scripts?: ScriptNode[];
+    aliases?: AliasNode[];
+    triggers?: TriggerNode[];
+    timers?: TimerNode[];
+    keybindings?: KeyNode[];
+    buttons?: ButtonNode[];
+    packages?: PackageManifest[];
+}
+
+/** The subset of AppSchema actually persisted to localStorage (see `partialize`).
+ *  The seven automation slices live in each profile's VFS instead. */
+type PersistedAppSchema = Pick<AppSchema,
+    | 'connections'
+    | 'client'
+    | 'connectionProfile'
+    | 'connectionWindowHints'
+    | 'connectionDockExtents'
+    | 'connectionScriptEditorBounds'
+    | 'connectionModalBounds'
+    | 'connectionLayoutSnapshots'
+>;
 
 export const useAppStore = create<AppStore>()(
     persist(
@@ -515,18 +543,33 @@ export const useAppStore = create<AppStore>()(
                     connectionPackages:    { ...s.connectionPackages,    [connectionId]: (s.connectionPackages[connectionId] ?? []).filter(p => p.name !== packageName) },
                 };
             }),
+            hydrateConnectionData: (connectionId, data) => set(s => ({
+                connectionScripts:     { ...s.connectionScripts,     [connectionId]: data.scripts     ?? [] },
+                connectionAliases:     { ...s.connectionAliases,     [connectionId]: data.aliases     ?? [] },
+                connectionTriggers:    { ...s.connectionTriggers,    [connectionId]: data.triggers    ?? [] },
+                connectionTimers:      { ...s.connectionTimers,      [connectionId]: data.timers      ?? [] },
+                connectionKeybindings: { ...s.connectionKeybindings, [connectionId]: data.keybindings ?? [] },
+                connectionButtons:     { ...s.connectionButtons,     [connectionId]: data.buttons     ?? [] },
+                connectionPackages:    { ...s.connectionPackages,    [connectionId]: data.packages    ?? [] },
+            })),
         }),
         {
             name: 'mudix_v1',
-            version: 19,
+            version: 20,
             // Coalesce rapid mutations (e.g. an enableTrigger that touches N
             // matching nodes, or a script edit firing on every keystroke) into
             // one JSON.stringify + localStorage write. createJSONStorage runs
             // the stringify before our adapter sees the value, so we implement
             // PersistStorage directly to defer serialization until flush time.
-            storage: createDebouncedJsonStorage<AppSchema>(5000),
-            partialize: ({ connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages, connectionLayoutSnapshots }) => ({
-                connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScripts, connectionAliases, connectionTriggers, connectionTimers, connectionKeybindings, connectionButtons, connectionScriptEditorBounds, connectionModalBounds, connectionPackages, connectionLayoutSnapshots,
+            storage: createDebouncedJsonStorage<PersistedAppSchema>(5000),
+            // v20: the seven automation slices (scripts/aliases/triggers/timers/
+            // keybindings/buttons/packages) are no longer persisted here — they
+            // live in each profile's VFS (.mudix/profile.json, see profileVfsData.ts),
+            // loaded/saved by ScriptingEngine. Only the global index (connections,
+            // client) and the small UI/layout slices that are read synchronously
+            // before the VFS mounts stay in localStorage.
+            partialize: ({ connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScriptEditorBounds, connectionModalBounds, connectionLayoutSnapshots }) => ({
+                connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScriptEditorBounds, connectionModalBounds, connectionLayoutSnapshots,
             }),
             migrate: (saved, version) => {
                 const s = saved as Partial<AppSchema> & { connections?: any[]; ui?: any };
@@ -538,30 +581,6 @@ export const useAppStore = create<AppStore>()(
                     }
                     return c as MudConnection;
                 });
-
-                // v11: trigger patterns migrated from string[] to TriggerPattern[].
-                // v12: added fireLength (chain length), multipleMatches, highlight, command fields to TriggerNode.
-                // v13: added multiline, delta, isFilter fields to TriggerNode.
-                // For version < 10 all tree data was intentionally reset (tree structure change in v10).
-                const rawTriggers: Record<string, any[]> = version >= 10 ? ((s as any).connectionTriggers ?? {}) : {};
-                const connectionTriggers = Object.fromEntries(
-                    Object.entries(rawTriggers).map(([connId, triggers]) => [
-                        connId,
-                        triggers.map((t: any) => ({
-                            ...t,
-                            patterns: Array.isArray(t.patterns)
-                                ? t.patterns.map((p: any) =>
-                                    typeof p === 'string' ? { text: p, type: 'regex' } : p
-                                )
-                                : [],
-                            fireLength: t.fireLength ?? 0,
-                            multipleMatches: t.multipleMatches ?? false,
-                            multiline: t.multiline ?? false,
-                            delta: t.delta ?? 0,
-                            isFilter: t.isFilter ?? false,
-                        })),
-                    ])
-                );
 
                 // v18: split legacy `ui` (one shared UISettings) into client (theme only)
                 // and per-connection profile overrides. Theme moves up to client; every
@@ -608,21 +627,16 @@ export const useAppStore = create<AppStore>()(
                     connectionProfile,
                     connectionWindowHints: s.connectionWindowHints ?? {},
                     connectionDockExtents: s.connectionDockExtents ?? {},
-                    // For version >= 10 preserve all tree data (tree structure was already correct).
-                    // For version < 10 tree data is reset (structure changed in v10).
+                    // v20: automation data (scripts/aliases/triggers/timers/keybindings/
+                    // buttons/packages) moved out of localStorage into each profile's VFS
+                    // (.mudix/profile.json). Any pre-v20 localStorage copies are
+                    // intentionally dropped (fresh start) — they fall through to
+                    // APP_DEFAULTS' empty maps above. The small UI/layout bounds below
+                    // are read synchronously before the VFS mounts, so they stay here.
                     ...(version >= 10 ? {
-                        connectionScripts: s.connectionScripts ?? {},
-                        connectionAliases: s.connectionAliases ?? {},
-                        connectionTimers: s.connectionTimers ?? {},
-                        connectionKeybindings: s.connectionKeybindings ?? {},
                         connectionScriptEditorBounds: s.connectionScriptEditorBounds ?? {},
                         connectionModalBounds: s.connectionModalBounds ?? {},
                     } : {}),
-                    // v17: introduced connectionButtons (Mudlet-style toolbars/buttons).
-                    connectionButtons: (s as Partial<AppSchema>).connectionButtons ?? {},
-                    // v15: introduced connectionPackages (manifest of installed Mudlet packages).
-                    connectionPackages: (s as Partial<AppSchema>).connectionPackages ?? {},
-                    connectionTriggers,
                 };
             },
         },

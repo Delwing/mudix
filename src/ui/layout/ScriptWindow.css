@@ -1,9 +1,12 @@
-/* Portal root for floating windows — position:fixed so dock layout shifts never affect them */
+/* Portal root for floating windows — position:fixed so dock layout shifts never affect them.
+   Sits above panel content and label overlays (z:30) but below app modals (.resizable-modal
+   z:40, .modal-overlay z:50) so the Scripts editor and other chrome stay on top of
+   script-created windows/miniconsoles. */
 .floating-window-root {
     position: fixed;
     inset: 0;
     pointer-events: none;
-    z-index: 500;
+    z-index: 35;
     overflow: hidden;
 }
 

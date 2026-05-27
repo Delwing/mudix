@@ -1,3 +1,5 @@
+import { cssEscape } from './qtCss';
+
 export interface LabelCreateOptions {
     /** Parent window id ('main' for main viewport). Defaults to 'main'. */
     parent?: string;
@@ -139,6 +141,24 @@ export class LabelManager {
         lbl.width = safeCoord(width); lbl.height = safeCoord(height);
         this.notify(lbl.parent);
         return true;
+    }
+
+    /** Mudlet `getLabelSizeHint(name)` → the label's preferred `{width,height}`.
+     *  Mudlet returns the QLabel sizeHint (the size its content wants); the
+     *  browser analogue is the rendered node's content extent
+     *  (`scrollWidth`/`scrollHeight`), read off the `data-mudix-label` element.
+     *  Falls back to the configured geometry when the label isn't in the DOM
+     *  yet (hidden, or rendered before mount). null when no such label. */
+    getSizeHint(name: string): { width: number; height: number } | null {
+        const lbl = this.labels.get(name);
+        if (!lbl) return null;
+        if (typeof document !== 'undefined') {
+            const el = document.querySelector(
+                `[data-mudix-label="${cssEscape(name)}"]`,
+            ) as HTMLElement | null;
+            if (el) return { width: el.scrollWidth, height: el.scrollHeight };
+        }
+        return { width: lbl.width, height: lbl.height };
     }
 
     show(name: string): boolean {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MapRenderer, createSettings } from 'mudlet-map-renderer';
 import type { RoomContextMenuEventDetail, Settings as MapRendererSettings } from 'mudlet-map-renderer';
-import type { WindowManager } from '../WindowManager';
+import type { WindowManager, MapControl } from '../WindowManager';
 import type { MapEventEntry, MapInfoResult } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
 import { MudletHighlightOverlay } from '../../../map/MudletHighlightOverlay';
@@ -25,6 +25,11 @@ function applyMapperSettings(target: MapRendererSettings, mapper: MapperSettings
 }
 
 type MapStatus = 'loading' | 'empty' | 'ready' | 'error';
+
+/** Mudlet's hard floor for the 2D map zoom (T2DMap csmMinXYZoom): the shorter
+ *  viewport edge may never span fewer than this many map units, i.e. you can't
+ *  zoom in any closer. Mirrored here so wheel/pinch zoom obeys the same limit. */
+const MUDLET_MIN_MAP_ZOOM = 3;
 
 interface MapPanelProps {
     id: string;
@@ -220,7 +225,26 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // clobbering the view we just restored.
         currentAreaRef.current = restoredArea;
         currentLevelRef.current = restoredLevel;
-        renderer.drawArea(restoredArea, restoredLevel);
+        // drawArea → state.setArea unconditionally re-emits 'area', forcing a
+        // full scene rebuild (createExits is ~280ms on the Arkadia map) even
+        // when the displayed area is identical. At boot syncFromStore fires
+        // from several triggers — the map-load subscribe handler, the
+        // registerMapLoadCallback, and the deferred idle build — so without a
+        // guard the same scene is built two or three times. Skip the rebuild
+        // when area + level + the reader's area instance/version all match what
+        // the renderer last drew, mirroring the guard MapState.setPosition
+        // already applies (instance identity catches a MudixMapReader inner
+        // rebuild; version catches an in-place markDirty).
+        const targetArea = reader.getArea(restoredArea);
+        const st = renderer.state;
+        const sceneUnchanged =
+            st.currentArea === restoredArea &&
+            st.currentZIndex === restoredLevel &&
+            st.currentAreaInstance === targetArea &&
+            st.currentAreaVersion === targetArea.getVersion();
+        if (!sceneUnchanged) {
+            renderer.drawArea(restoredArea, restoredLevel);
+        }
         syncPositionMarker(restoredArea, restoredLevel);
         recomputeMapInfos();
         // Only fit on the first successful render; afterwards preserve user pan/zoom.
@@ -280,7 +304,72 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         const onCameraChange = () => { if (needsFitRef.current) saveViewState(); };
         renderer.camera.on('change', onCameraChange);
 
+        // Enforce Mudlet's zoom-in ceiling: the shorter viewport edge may never
+        // span fewer than MUDLET_MIN_MAP_ZOOM map units. The renderer's camera
+        // only clamps a zoom-out floor (minZoom), so wheel/pinch could otherwise
+        // zoom in indefinitely. Mudlet additionally does NOT pan the view on a
+        // wheel tick that is fully clamped (T2DMap only shifts the center inside
+        // its "zoom actually changed" branch), whereas the renderer's wheel
+        // handler always pans toward the cursor first — so a naive zoom clamp
+        // leaves the map drifting cursor-ward without zooming.
+        //
+        // To match Mudlet we snapshot the camera in a capture-phase wheel
+        // listener (it runs before the renderer's bubble listener on the canvas
+        // element), then, in the synchronous 'zoom' event, redo the zoom from
+        // that snapshot clamped to the cap. zoomToPoint reproduces the
+        // cursor-focal pan for the part of the delta that fits under the cap and
+        // applies zero pan once already at the limit. All of this runs before
+        // the backend's rAF repaint, so no drifted/over-zoomed frame is painted.
+        const panelEl = containerRef.current.parentElement;
+        let wheelSnap: { zoom: number; x: number; y: number; sx: number; sy: number } | null = null;
+        const onWheelCapture = (e: WheelEvent) => {
+            const cam = renderer.camera;
+            const rect = containerRef.current?.getBoundingClientRect();
+            wheelSnap = {
+                zoom: cam.zoom,
+                x: cam.position.x,
+                y: cam.position.y,
+                sx: e.clientX - (rect?.left ?? 0),
+                sy: e.clientY - (rect?.top ?? 0),
+            };
+        };
+        panelEl?.addEventListener('wheel', onWheelCapture, { capture: true, passive: true });
+
+        const onZoom = () => {
+            const cam = renderer.camera;
+            const shorter = Math.min(cam.width, cam.height);
+            if (shorter <= 0) { wheelSnap = null; return; }
+            const curZoom = renderer.getZoom();
+            const base = curZoom > 0 ? cam.getScale() / curZoom : 75;
+            const maxRendererZoom = shorter / (base * MUDLET_MIN_MAP_ZOOM);
+            if (curZoom <= maxRendererZoom) { wheelSnap = null; return; }
+            if (wheelSnap) {
+                // Rewind to the pre-tick transform, then redo the zoom clamped
+                // to the cap about the cursor: this pans only for the part of
+                // the requested delta that stays within the limit, and not at
+                // all once the snapshot was already at the cap.
+                cam.zoom = wheelSnap.zoom;
+                cam.position = { x: wheelSnap.x, y: wheelSnap.y };
+                if (!cam.zoomToPoint(maxRendererZoom, wheelSnap.sx, wheelSnap.sy)) {
+                    // Already at the cap: zoom is unchanged so zoomToPoint did
+                    // not repaint, but the renderer's pre-clamp wheel pan has
+                    // already pushed the Konva stage off. Force a viewport
+                    // re-apply from the restored (pre-tick) center so the stage
+                    // doesn't keep rendering the drifted transform.
+                    const b = cam.getViewportBounds();
+                    cam.panToMapPoint((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2);
+                }
+                wheelSnap = null;
+            } else {
+                // Non-wheel path (touch pinch): clamp about the viewport center.
+                renderer.zoomToCenter(maxRendererZoom);
+            }
+        };
+        renderer.events.on('zoom', onZoom);
+
         return () => {
+            renderer.events.off('zoom', onZoom);
+            panelEl?.removeEventListener('wheel', onWheelCapture, { capture: true });
             renderer.camera.off('change', onCameraChange);
             renderer.destroy();
             rendererRef.current = null;
@@ -504,6 +593,72 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         const handler = (roomId: number) => centerViewImplRef.current(roomId);
         manager.registerMapCallback(id, handler);
         return () => manager.unregisterMapCallback(id);
+    }, [id, manager]);
+
+    // Lua getMapZoom/setMapZoom/updateMap reach the renderer through here. The
+    // impl is held in a ref so the registered control always sees the latest
+    // renderer/syncFromStore without re-registering on every render. setZoom
+    // re-centers + repaints the same way the resize handler does (the renderer
+    // repaints on a camera move, not on setZoom alone).
+    //
+    // Zoom is expressed in Mudlet units: the value is the number of map (room)
+    // units visible across the *shorter* edge of the viewport — matching
+    // Mudlet's T2DMap, where the shorter widget edge always spans exactly `zoom`
+    // units (zoom=3 → 3 rooms across, zoom=100 → ~100; larger = more map = zoomed
+    // out). The renderer instead works in pixels-per-room-unit
+    // (camera.getScale() === BASE_SCALE * rendererZoom), so we convert at this
+    // boundary: pxPerUnit = shorterEdge / mudletZoom.
+    const mapControlImplRef = useRef<MapControl>({ getZoom: () => null, setZoom: () => {}, redraw: () => {} });
+    mapControlImplRef.current = {
+        getZoom: () => {
+            const renderer = rendererRef.current;
+            if (!renderer) return null;
+            const cam = renderer.camera;
+            const shorter = Math.min(cam.width, cam.height);
+            const scale = cam.getScale(); // pixels per room unit
+            if (shorter <= 0 || scale <= 0) return null;
+            return shorter / scale;
+        },
+        setZoom: (zoom: number) => {
+            const renderer = rendererRef.current;
+            if (!renderer || !Number.isFinite(zoom) || zoom <= 0) return;
+            const cam = renderer.camera;
+            const shorter = Math.min(cam.width, cam.height);
+            if (shorter <= 0) return;
+            // Recover the renderer's pixels-per-unit-at-zoom-1 from the live
+            // camera (getScale() === base * rendererZoom) rather than hardcoding
+            // the library's BASE_SCALE constant, then solve for the rendererZoom
+            // that makes `zoom` room units fill the shorter edge.
+            const curZoom = renderer.getZoom();
+            const base = curZoom > 0 ? cam.getScale() / curZoom : 75;
+            const rendererZoom = shorter / (base * zoom);
+            if (!Number.isFinite(rendererZoom) || rendererZoom <= 0) return;
+            // fitArea pins camera.minZoom to the fit zoom, which would clamp a
+            // zoom-out request; lower the floor so an explicit setMapZoom is
+            // honored (and the user can wheel back out that far afterwards).
+            if (rendererZoom < renderer.minZoom) renderer.minZoom = rendererZoom;
+            const bounds = renderer.getViewportBounds();
+            const cx = (bounds.minX + bounds.maxX) / 2;
+            const cy = (bounds.minY + bounds.maxY) / 2;
+            renderer.setZoom(rendererZoom);
+            renderer.camera.panToMapPoint(cx, cy);
+        },
+        redraw: () => {
+            try { syncFromStore(); }
+            catch (e) {
+                setErrorMsg(e instanceof Error ? e.message : String(e));
+                setStatus('error');
+            }
+        },
+    };
+    useEffect(() => {
+        const ctrl: MapControl = {
+            getZoom: () => mapControlImplRef.current.getZoom(),
+            setZoom: (z) => mapControlImplRef.current.setZoom(z),
+            redraw: () => mapControlImplRef.current.redraw(),
+        };
+        manager.registerMapControl(id, ctrl);
+        return () => manager.unregisterMapControl(id);
     }, [id, manager]);
 
     const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -355,8 +355,8 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysConsoleSizeChanged` | 🚧 | Char-grid (not pixel) resize — args: name, columns, rows |
 | `sysWindowOverflowEvent` | 🚧 | Non-scrolling console overflows — args: name, overflowLines |
 | `sysBufferShrinkEvent` | 🚧 | Oldest lines trimmed at buffer limit — args: name, linesRemoved |
-| `sysWindowMousePressEvent` | 🚧 | Mouse press on a window — args: button, x, y, name |
-| `sysWindowMouseReleaseEvent` | 🚧 | Mouse release on a window |
+| `sysWindowMousePressEvent` | ✅ | Mouse press on a window — args: button, x, y, name. `WindowManager.observeMouse` attaches mousedown listeners to each viewport ('main' + user windows); button is Mudlet-numbered (1=left, 2=right, 3=middle, 4=back, 5=forward, 0=other), x/y are pixels relative to the window |
+| `sysWindowMouseReleaseEvent` | ✅ | Mouse release on a window — same args; fired from the matching mouseup listener |
 | `sysLabelDeleted` | ✅ | Fired on a successful `deleteLabel` (the `__deleteLabel` binding) — arg: name |
 | `sysMiniConsoleDeleted` | ✅ | Fired on a successful `deleteMiniConsole` (`ScriptingAPI` eventRaiser) — arg: name |
 | `sysCommandLineDeleted` | 🚧 | Blocked on the `createCommandLine` widget family — arg: name |
@@ -405,7 +405,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sendSocket(data)` | ✅ | JS-exposed; sends literal bytes over the socket (no telnet/encoding processing) |
 | `getConnectionInfo()` | ✅ | Bridge.lua unpacks `__getConnectionInfo` → host, port, connected (mud-mode config or parsed websocket URL) |
 | `getNetworkLatency()` | ✅ | JS-exposed |
-| `connectToServer(host, port)` | 🚧 | Connect from Lua |
+| `connectToServer(host, port [, save])` | ✅ | JS-exposed (`ScriptingAPI.connectToServer`); builds the proxy `?host=&port=` URL the connection screen uses and (re)connects the live session. `save` persists host/port onto the active connection (mud-mode). Rejects out-of-range ports |
 | `disconnect()` | ✅ | JS-exposed and bound as a top-level Lua global (`ScriptingAPI.disconnect` → `MudSession.disconnect`) |
 | `addSupportedTelnetOption(option)` | 🚧 | Advertise a custom telnet option via the WebSocket proxy |
 | `sendATCP(msg)` | ❌ | Legacy protocol, no plans |
@@ -461,8 +461,8 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `getMainConsoleWidth()` | ✅ | Pixel width of the main console: monospace cell width × (wrap columns + 1) |
 | `setWindowWrap(name, col)` | ✅ | JS-exposed |
 | `windowType(name)` | ✅ | Bridge.lua → `__windowType` |
-| `disableScrollBar(name)` | 🚧 | |
-| `enableScrollBar(name)` | 🚧 | |
+| `disableScrollBar(name)` | ✅ | JS-exposed (`ScriptingAPI.disableScrollBar`) |
+| `enableScrollBar(name)` | ✅ | JS-exposed (`ScriptingAPI.enableScrollBar`) |
 | `hasFocus([window])` | ✅ | JS-exposed; `document.activeElement` check. No name = command bar; a name targets the registered overlay element |
 | `saveWindowLayout()` | ✅ | JS-exposed; snapshots window hints + dock extents into `connectionLayoutSnapshots` in the app store |
 | `loadWindowLayout()` | ✅ | JS-exposed; re-applies the saved snapshot — re-positions live windows and reopens saved-visible windows that are currently closed |
@@ -483,14 +483,14 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `setLabelStyleSheet(name, css)` | ✅ | JS-exposed |
 | `getLabelStyleSheet(name)` | ✅ | JS-exposed; reads the CSS last set via `setLabelStyleSheet` (`""` when none) |
 | `getLabelFormat(name)` | ✅ | GUIUtils.lua; now resolves since `getLabelStyleSheet` is implemented |
-| `getLabelSizeHint(name)` | 🚧 | Return preferred size |
+| `getLabelSizeHint(name)` | ✅ | Bridge.lua → `__getLabelSizeHint` → `width, height`. Browser analogue of Qt's sizeHint: the rendered label node's content extent (`scrollWidth`/`scrollHeight`), falling back to the configured geometry when the label isn't in the DOM. `(nil, errMsg)` when no such label |
 | `setLabelCursor(name, shape)` | ✅ | JS-exposed |
 | `setLabelCustomCursor(name, path[, hotX, hotY])` | ✅ | JS-exposed; CSS `cursor: url(...) hotX hotY, auto`. Path resolved through the VFS-aware rewriter |
 | `resetLabelCursor(name)` | ✅ | JS-exposed |
 | `setLabelToolTip(name, text, delay)` | ✅ | JS-exposed |
 | `resetLabelToolTip(name)` | ✅ | JS-exposed |
 | `setBackgroundImage(name, path)` | ✅ | Pure Lua via GUIUtils.lua → `setLabelStyleSheet` |
-| `resetBackgroundImage(name)` | 🚧 | |
+| `resetBackgroundImage(name)` | ✅ | JS-exposed (`ScriptingAPI.resetBackgroundImage`); clears the label's (or window's) background image |
 
 ---
 
@@ -588,8 +588,8 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `getRooms()` | ✅ | JS-exposed |
 | `getAreaTable()` | ✅ | JS-exposed |
 | `getAreaRooms(areaID)` | ✅ | JS-exposed |
-| `highlightRoom(roomID, ...)` | 🚧 | Color highlight on map |
-| `unHighlightRoom(roomID)` | 🚧 | |
+| `highlightRoom(roomID, ...)` | ✅ | JS-exposed → `api.map.highlightRoom` (color1/color2 + radius + alpha) |
+| `unHighlightRoom(roomID)` | ✅ | JS-exposed → `api.map.unHighlightRoom` |
 | `roomExists(roomID)` | ✅ | JS-exposed |
 | `addRoom(roomID)` | ✅ | JS-exposed |
 | `deleteRoom(roomID)` | ✅ | JS-exposed |
@@ -619,8 +619,8 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `loadMap(path)` | ✅ | JS-exposed |
 | `saveMap(path)` | ✅ | JS-exposed; serialises MapStore via `writeMapToBuffer` and writes to VFS / IDB |
 | `saveJsonMap(path)` / `loadJsonMap(path)` | 🚧 | JSON map format |
-| `updateMap()` | 🚧 | Force redraw |
-| `getMapZoom()` / `setMapZoom(level)` | 🚧 | |
+| `updateMap()` | ✅ | JS-exposed; forces the map panel to re-read MapStore and redraw (via the registered `MapControl.redraw`) |
+| `getMapZoom([areaID])` / `setMapZoom(zoom[, areaID])` | ✅ | JS-exposed via a `MapControl` registered by MapPanel (`get/setZoom` + recenter/redraw). Mudlet-compatible zoom semantics: the value is the number of map units visible across the viewport's **shorter edge** (zoom=3 → 3 rooms across, larger = zoomed out), converted to/from the renderer's pixels-per-room-unit at the panel boundary. `setMapZoom` enforces Mudlet's minimum of 3.0. mudix has a single shared 2D view, so `areaID` is accepted for compat but applies to the current view. `getMapZoom` returns nil / `setMapZoom` returns false when no map panel is open |
 | All other mapper functions | 🚧 | ~90 total — implement incrementally |
 
 ---
@@ -671,7 +671,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 |---|---|---|
 | `getTime([returnAsTable, format])` | ✅ | Bridge.lua — full Qt QDateTime token formatting |
 | `getEpoch()` | ✅ | JS-exposed (`Date.now() / 1000`) |
-| `getTimestamp([linenum])` | 🚧 | Timestamp stored per output line |
+| `getTimestamp([window,] lineNumber)` | ✅ | Bridge.lua → `__getTimestamp` → "hh:mm:ss.zzz" string. Each `AnsiAwareBuffer` carries a construction-time `timestamp`; `Console.getLineTimestamp` reads it (1-based, matching `getLines`; omit for the current line). `(nil, errMsg)` when out of range |
 
 ---
 
@@ -681,10 +681,10 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 |---|---|---|
 | `io.exists(path)` | ✅ | Other.lua (uses `io.open`) backed by ProfileVFS |
 | `io.open(path, mode)` | ✅ | LuaRuntime VFS bridge (`__vfs_io_open__` etc.) |
-| `addFileWatch(path)` | 🚧 | Watch VFS path for changes |
-| `removeFileWatch(path)` | 🚧 | |
+| `addFileWatch(path)` | ✅ | JS-exposed; tracks resolved VFS paths and fires `sysPathChanged` on mutation |
+| `removeFileWatch(path)` | ✅ | JS-exposed; stops watching a path |
 | `getMudletHomeDir()` | ✅ | VFS.lua — alias for `getMudixProfilePath()` |
-| `invokeFileDialog(type, title)` | 🚧 | Native `<input type="file">` picker |
+| `invokeFileDialog(type, title)` | 🚧 | **Blocked on a sync/async design decision.** Mudlet returns the selected path *synchronously* (`QFileDialog::getOpenFileName` blocks); every browser picker (`<input type=file>`, `showOpenFilePicker`) is async, and a Promise can't block the Lua call to honour `local path = invokeFileDialog(...)`. Needs an event-based (`sys*` completion event) or coroutine design first |
 | `table.save(filename, t)` | ✅ | See Table Utilities |
 | `table.load(filename)` | ✅ | See Table Utilities |
 

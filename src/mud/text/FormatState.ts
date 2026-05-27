@@ -425,6 +425,12 @@ export class AnsiAwareBuffer {
      *  trigger pipeline before triggers run; defaults to false. */
     isPrompt = false;
 
+    /** Wall-clock time (epoch ms) the line was created. Mudlet stamps every
+     *  buffer line with a QTime; `getTimestamp(lineNumber)` reads it back. A
+     *  buffer is built right as its line is echoed/received, so construction
+     *  time is the line's timestamp. */
+    timestamp = Date.now();
+
     removeFromDom(): void {
         const container = this._renderContainer;
         if (!container) return;

@@ -28,6 +28,15 @@ interface ScrollState {
     scrollingEnabled: boolean;
 }
 
+/** Live handle onto a mounted map renderer, registered by MapPanel. Backs the
+ *  Lua getMapZoom/setMapZoom/updateMap APIs, which need to read and drive the
+ *  renderer state that lives inside the React component. */
+export interface MapControl {
+    getZoom: () => number | null;
+    setZoom: (zoom: number) => void;
+    redraw: () => void;
+}
+
 const DEFAULT_SCROLL_STATE: ScrollState = {
     scrollBarVisible: true,
     horizontalScrollBarVisible: false,
@@ -35,6 +44,20 @@ const DEFAULT_SCROLL_STATE: ScrollState = {
 };
 
 const TEXT_BUFFER_LIMIT = 5000;
+
+/** Map a DOM MouseEvent.button to Mudlet's button number for
+ *  sysWindowMousePress/ReleaseEvent. DOM: 0=left,1=middle,2=right,3=back,
+ *  4=forward → Mudlet: 1=left,2=right,3=middle,4=back,5=forward (0 otherwise). */
+function mouseButtonNumber(button: number): number {
+    switch (button) {
+        case 0: return 1; // left
+        case 2: return 2; // right
+        case 1: return 3; // middle
+        case 3: return 4; // back
+        case 4: return 5; // forward
+        default: return 0;
+    }
+}
 
 const DEFAULT_SIZE: Record<'text' | 'html' | 'map', { w: number; h: number }> = {
     text: { w: 400, h: 300 },
@@ -76,6 +99,10 @@ export class WindowManager {
      *  state (the Lua callback). */
     private readonly cmdLineState = new Map<string, WindowCmdLineState>();
     private readonly mapCallbacks  = new Map<string, (roomId: number) => void>();
+    private readonly mapControls   = new Map<string, MapControl>();
+    /** Per-window teardown for the mousedown/mouseup listeners observeMouse
+     *  attaches. Keyed by window id ('main' for the central output). */
+    private readonly mouseCleanups = new Map<string, () => void>();
     private mapLoadCallback: ((buf?: ArrayBuffer) => boolean) | null = null;
     /** Single in-flight bootstrap promise — both ScriptingEngine.start (which
      *  awaits the map before applying scripts, Mudlet parity) and MapPanel on
@@ -273,6 +300,7 @@ export class WindowManager {
     registerViewport(id: string, element: HTMLElement): void {
         this.viewports.set(id, element);
         this.observeResize(id, element);
+        this.observeMouse(id, element);
         // Re-render: parented miniconsoles whose parent just mounted need a
         // chance to portal into the freshly registered viewport.
         this.notify();
@@ -302,11 +330,15 @@ export class WindowManager {
      */
     registerMainViewport(element: HTMLElement | null): void {
         this.mainViewportEl = element;
-        if (element) this.observeResize('main', element);
-        else {
+        if (element) {
+            this.observeResize('main', element);
+            this.observeMouse('main', element);
+        } else {
             this.resizeObservers.get('main')?.disconnect();
             this.resizeObservers.delete('main');
             this.lastEmittedSize.delete('main');
+            this.mouseCleanups.get('main')?.();
+            this.mouseCleanups.delete('main');
         }
         // Main-parented miniconsoles portal into this element; re-render so the
         // FloatingWindowLayer picks up the new (or cleared) target.
@@ -379,6 +411,8 @@ export class WindowManager {
         this.resizeObservers.get(id)?.disconnect();
         this.resizeObservers.delete(id);
         this.lastEmittedSize.delete(id);
+        this.mouseCleanups.get(id)?.();
+        this.mouseCleanups.delete(id);
     }
 
     /** Watch `element` for size changes and raise sysUserWindowResizeEvent
@@ -411,6 +445,29 @@ export class WindowManager {
         this.resizeObservers.set(id, observer);
     }
 
+    /** Raise Mudlet's sysWindowMousePress/ReleaseEvent for clicks anywhere on a
+     *  window's box. Args mirror Mudlet: (button, x, y, name) where button is
+     *  1=left, 2=right, 3=middle, 4=back, 5=forward (0 = anything else), x/y are
+     *  pixel coordinates relative to the window, and name is the window id
+     *  ('main' for the central output). */
+    private observeMouse(id: string, element: HTMLElement): void {
+        this.mouseCleanups.get(id)?.();
+        const fire = (event: string) => (e: MouseEvent) => {
+            const rect = element.getBoundingClientRect();
+            const x = Math.round(e.clientX - rect.left);
+            const y = Math.round(e.clientY - rect.top);
+            this.onRaiseEvent?.(event, [mouseButtonNumber(e.button), x, y, id]);
+        };
+        const onDown = fire('sysWindowMousePressEvent');
+        const onUp = fire('sysWindowMouseReleaseEvent');
+        element.addEventListener('mousedown', onDown);
+        element.addEventListener('mouseup', onUp);
+        this.mouseCleanups.set(id, () => {
+            element.removeEventListener('mousedown', onDown);
+            element.removeEventListener('mouseup', onUp);
+        });
+    }
+
     registerMapCallback(id: string, cb: (roomId: number) => void): void {
         this.mapCallbacks.set(id, cb);
     }
@@ -424,6 +481,47 @@ export class WindowManager {
         // effect, so getPlayerRoom() returns this id afterwards.
         this.mapStore.setPlayerRoom(roomId);
         for (const cb of this.mapCallbacks.values()) cb(roomId);
+    }
+
+    registerMapControl(id: string, ctrl: MapControl): void {
+        this.mapControls.set(id, ctrl);
+    }
+
+    unregisterMapControl(id: string): void {
+        this.mapControls.delete(id);
+    }
+
+    /** Live zoom of the displayed 2D map, or null when no map panel is mounted.
+     *  mudix shows one area at a time through a single shared renderer, so the
+     *  Mudlet `areaID` argument has no per-area analogue here — callers get the
+     *  current view's zoom regardless. */
+    getMapZoom(): number | null {
+        for (const c of this.mapControls.values()) {
+            const z = c.getZoom();
+            if (z != null) return z;
+        }
+        return null;
+    }
+
+    /** Set the displayed map's zoom and redraw. Returns false when no map panel
+     *  is mounted to receive the change. */
+    setMapZoom(zoom: number): boolean {
+        let applied = false;
+        for (const c of this.mapControls.values()) {
+            c.setZoom(zoom);
+            applied = true;
+        }
+        return applied;
+    }
+
+    /** Force the map to re-read MapStore and redraw (Mudlet `updateMap`). */
+    updateMap(): boolean {
+        let redrawn = false;
+        for (const c of this.mapControls.values()) {
+            c.redraw();
+            redrawn = true;
+        }
+        return redrawn;
     }
 
     /** Set by MapPanel on mount; cleared on unmount. The callback parses+renders

@@ -11,7 +11,7 @@ import { namedColorToState } from '../mud/text/colorParsers';
 import { colorCodes } from '../mud/text/colors';
 import { Console } from '../mud/text/Console';
 import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
-import { useAppStore, selectProfileField } from '../storage';
+import { useAppStore, selectProfileField, connectionUrl } from '../storage';
 import {
     getUniversalDefaultFonts,
     getRegisteredFontFamilies,
@@ -42,6 +42,13 @@ function rgbaCss(r: number, g: number, b: number, a = 255): string {
     const ch = (n: number) => Math.max(0, Math.min(255, Math.round(Number(n) || 0)));
     const alpha = Math.max(0, Math.min(1, (Number(a) || 0) / 255));
     return `rgba(${ch(r)}, ${ch(g)}, ${ch(b)}, ${alpha})`;
+}
+
+/** Format an epoch-ms timestamp as Mudlet's "hh:mm:ss.zzz" (local time). */
+function formatLineTimestamp(ms: number): string {
+    const d = new Date(ms);
+    const p = (n: number, w = 2) => String(n).padStart(w, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
 function formatColorToRgb(color: FormatColor | undefined): [number, number, number] | null {
@@ -279,6 +286,9 @@ class ScriptingLabelsAPI {
     }
     getStyleSheet(name: string): string | undefined {
         return this.manager.getStyleSheet(name);
+    }
+    getSizeHint(name: string): { width: number; height: number } | null {
+        return this.manager.getSizeHint(name);
     }
     setClickCallback(name: string, fn: ((e: LabelMouseEvent) => void) | undefined): boolean {
         return this.manager.setClickCallback(name, fn);
@@ -1346,6 +1356,19 @@ export class ScriptingAPI {
     }
 
     /**
+     * Mudlet `getTimestamp([window,] lineNumber)` — the wall-clock time the line
+     * entered the buffer, formatted "HH:MM:SS.mmm" (Mudlet's "hh:mm:ss.zzz").
+     * `lineNumber` is 1-based to match `getLines`; omit it for the current
+     * cursor line. Returns null when the window or line doesn't exist — the Lua
+     * binding maps that to Mudlet's `(nil, errMsg)` shape.
+     */
+    getTimestamp(lineNumber?: number, windowName?: string): string | null {
+        if (!this.consoleExists(windowName)) return null;
+        const ms = this.getConsole(windowName)?.getLineTimestamp(lineNumber) ?? null;
+        return ms == null ? null : formatLineTimestamp(ms);
+    }
+
+    /**
      * Mudlet `wrapLine([window,] lineNumber)`. Re-displays the line at
      * `lineNumber` (0-indexed, like getLineNumber/getLineCount), re-interpreting
      * its embedded `\n` and re-wrapping to the current width. Returns false when
@@ -1929,6 +1952,33 @@ export class ScriptingAPI {
         this.session.windows.centerView(roomId);
     }
 
+    /**
+     * Mudlet `getMapZoom([areaID])`. mudix renders one area at a time through a
+     * single shared 2D view, so `areaID` has no per-area analogue — the current
+     * view's zoom is returned regardless. The value is Mudlet-compatible: the
+     * number of map units visible across the viewport's shorter edge. Returns
+     * false when no map panel is mounted (the Lua binding turns that into nil).
+     */
+    getMapZoom(_areaID?: number): number | false {
+        return this.session.windows.getMapZoom() ?? false;
+    }
+
+    /**
+     * Mudlet `setMapZoom(zoom [, areaID])`. `zoom` is the number of map units to
+     * fit across the viewport's shorter edge (larger = more map shown / zoomed
+     * out); like Mudlet it must be at least 3.0. Returns false for an invalid
+     * zoom or when no map panel is mounted to receive it.
+     */
+    setMapZoom(zoom: number, _areaID?: number): boolean {
+        if (!Number.isFinite(zoom) || zoom < 3) return false;
+        return this.session.windows.setMapZoom(zoom);
+    }
+
+    /** Mudlet `updateMap()` — force the map to re-read MapStore and redraw. */
+    updateMap(): void {
+        this.session.windows.updateMap();
+    }
+
     getRoomIDbyHash(hash: string): number | undefined {
         return this.session.windows.getRoomIDbyHash(hash);
     }
@@ -2148,6 +2198,41 @@ export class ScriptingAPI {
             }
         }
         return { host, port, connected: this.session.status === 'connected' };
+    }
+
+    /**
+     * Mudlet `connectToServer(host, port [, save])`. mudix tunnels MUD traffic
+     * through a WebSocket proxy, so this builds the same `proxy?host=&port=` URL
+     * the connection screen uses and (re)connects the live session. With `save`,
+     * the host/port are persisted onto the active connection (switching it to
+     * mud-mode) so they survive a reload — the analogue of Mudlet's profile
+     * write. Returns false for an out-of-range port.
+     */
+    connectToServer(host: string, port = 23, save = false): boolean {
+        if (!Number.isFinite(port) || port < 1 || port > 65535) return false;
+        const state = useAppStore.getState();
+        const conn = state.connections.find(c => c.id === this.connectionId);
+        const url = connectionUrl(
+            conn
+                ? { ...conn, mode: 'mud', host, port }
+                : { id: this.connectionId, name: '', mode: 'mud', host, port },
+            state.client.userProxyUrl,
+        );
+        if (!url) return false;
+        if (save && conn) {
+            state.updateConnection(this.connectionId, { ...conn, mode: 'mud', host, port });
+        }
+        this.session.connect(url);
+        return true;
+    }
+
+    /**
+     * Mudlet `getLabelSizeHint(name)` → `width, height` (the label's preferred
+     * content size). Returns null when no such label — the Lua binding maps that
+     * to Mudlet's `(nil, errMsg)` shape.
+     */
+    getLabelSizeHint(name: string): { width: number; height: number } | null {
+        return this.labels.getSizeHint(name);
     }
 
     /**

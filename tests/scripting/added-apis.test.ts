@@ -137,6 +137,74 @@ describe('sendMSDP / sendSocket / feedTelnet / disconnect — wiring', () => {
   });
 });
 
+describe('getTimestamp', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('returns an "hh:mm:ss.zzz" string for an in-range (1-based) line', () => {
+    env.run('createBuffer("tb"); cecho("tb", "hi\\n")');
+    const ts = env.run('return (getTimestamp("tb", 1))');
+    expect(ts).toMatch(/^\d{2}:\d{2}:\d{2}\.\d{3}$/);
+  });
+
+  it('returns nil for an out-of-range line or a missing window', () => {
+    env.run('createBuffer("tb"); cecho("tb", "hi\\n")');
+    expect(env.run('return (getTimestamp("tb", 99))')).toBe(null);
+    expect(env.run('return (getTimestamp("nope", 1))')).toBe(null);
+  });
+});
+
+describe('getLabelSizeHint', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  // No DOM in the node harness, so getSizeHint falls back to the label's
+  // configured geometry — which is exactly what we asserted createLabel set.
+  it('returns the label width and height', () => {
+    env.run('createLabel("L", 0, 0, 120, 40, false)');
+    expect(env.run('local w, h = getLabelSizeHint("L"); return w')).toBe(120);
+    expect(env.run('local w, h = getLabelSizeHint("L"); return h')).toBe(40);
+  });
+
+  it('returns nil for a non-existent label', () => {
+    expect(env.run('return (getLabelSizeHint("nope"))')).toBe(null);
+  });
+});
+
+// No map panel is mounted in the test runtime, so no MapControl is registered.
+// These confirm the Lua → ScriptingAPI → WindowManager chain is wired and
+// degrades cleanly (Mudlet's "no map" path) rather than throwing.
+describe('getMapZoom / setMapZoom / updateMap — wiring', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('report no-map and do not throw with no panel open', () => {
+    expect(env.run('return (getMapZoom())')).toBe(false);
+    // A valid zoom (>= 3.0) still reports false because no panel is mounted.
+    expect(env.run('return (setMapZoom(5))')).toBe(false);
+    expect(() => env.run('updateMap()')).not.toThrow();
+  });
+
+  it('rejects a zoom below the Mudlet minimum of 3.0', () => {
+    expect(env.run('return (setMapZoom(2))')).toBe(false);
+    expect(env.run('return (setMapZoom(0))')).toBe(false);
+  });
+});
+
+describe('connectToServer — port validation', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('rejects out-of-range ports before attempting a connection', () => {
+    expect(env.run('return (connectToServer("example.org", 0))')).toBe(false);
+    expect(env.run('return (connectToServer("example.org", 99999))')).toBe(false);
+  });
+});
+
 // setMsdpValue is the bridge from a decoded MSDP variable into the Lua `msdp`
 // global (mirrors setGmcpValue → gmcp). The receive pipeline's parsing is
 // covered in tests/mud/protocol/msdp.test.ts; here we confirm the value lands

@@ -640,6 +640,13 @@ export class LuaRuntime implements IScriptingRuntime {
         // getLabelFormat consumer which only branches on the empty string.
         this.lua.global.set('getLabelStyleSheet', (name: unknown) =>
             this.api.labels.getStyleSheet(typeof name === 'string' ? name : '') ?? '');
+        // Mudlet getLabelSizeHint(name) → width, height. JS hands back a 0-indexed
+        // [w, h] array (wasmoon convention) or false (no such label); Bridge.lua
+        // unpacks it into the documented multi-return / (nil, errMsg) shape.
+        this.lua.global.set('__getLabelSizeHint', (name: unknown) => {
+            const s = this.api.getLabelSizeHint(typeof name === 'string' ? name : '');
+            return s ? [s.width, s.height] : false;
+        });
         // Mudlet's setLabelClickCallback / setLabelDoubleClickCallback /
         // setLabelReleaseCallback / setLabelMoveCallback / setLabelOnEnter /
         // setLabelOnLeave / setLabelWheelCallback all share a shape: name + a
@@ -854,6 +861,14 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // ── Map view ──────────────────────────────────────────────────────────
         this.lua.global.set('centerview',      (id: number)              => this.api.centerView(id));
+        // Mudlet getMapZoom([areaID]) / setMapZoom(zoom[, areaID]) / updateMap().
+        // mudix has a single shared 2D view, so areaID is accepted for compat but
+        // applies to the current view. getMapZoom returns false (→ nil) with no
+        // map panel open. The zoom value is Mudlet-compatible: the number of map
+        // units across the viewport's shorter edge (must be >= 3.0 to set).
+        this.lua.global.set('getMapZoom',       (areaID?: unknown)         => this.api.getMapZoom(areaID === undefined ? undefined : Number(areaID)));
+        this.lua.global.set('setMapZoom',       (zoom: unknown, areaID?: unknown) => this.api.setMapZoom(Number(zoom), areaID === undefined ? undefined : Number(areaID)));
+        this.lua.global.set('updateMap',        ()                         => { this.api.updateMap(); });
         // Mudlet getPlayerRoom: nil when no map / no valid room. We return
         // false because wasmoon nil round-trips through false more reliably.
         this.lua.global.set('getPlayerRoom',   ()                         => this.api.map.getPlayerRoom() ?? false);
@@ -1438,6 +1453,10 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('feedTelnet', (data: unknown) => { this.api.feedTelnet(String(data ?? '')); });
         // Mudlet `disconnect()`: drop the current connection.
         this.lua.global.set('disconnect', () => { this.api.disconnect(); });
+        // Mudlet `connectToServer(host, port [, save])`: (re)connect through the
+        // proxy; `save` persists host/port onto the active connection.
+        this.lua.global.set('connectToServer', (host: unknown, port?: unknown, save?: unknown) =>
+            this.api.connectToServer(String(host ?? ''), port === undefined ? 23 : Number(port), !!save));
         // Cancels the in-flight sysDataSendRequest dispatch. Only meaningful while
         // a sysDataSendRequest handler is on the stack — flag is reset before each send.
         this.lua.global.set('denyCurrentSend', () => { this._denyCurrentSend = true; });
@@ -1796,6 +1815,15 @@ export class LuaRuntime implements IScriptingRuntime {
         // a non-existent named window. The raw entry point hands JS `null` for
         // the miss case; Bridge.lua re-shapes it into the documented multi-return.
         this.lua.global.set('__getCurrentLine', (win?: string) => this.api.getCurrentLine(win));
+        // Mudlet `getTimestamp([console_name,] lineNumber)`. Optional leading
+        // window name; lineNumber is 1-based. Returns the formatted time string
+        // or false (miss) — Bridge.lua maps false to Mudlet's (nil, errMsg).
+        this.lua.global.set('__getTimestamp', (a?: unknown, b?: unknown) => {
+            if (typeof a === 'string') {
+                return this.api.getTimestamp(b === undefined ? undefined : Number(b), a) ?? false;
+            }
+            return this.api.getTimestamp(a === undefined ? undefined : Number(a)) ?? false;
+        });
         this.lua.global.set('getLineNumber',  (win?: string)=> this.api.getLineNumber(win));
         this.lua.global.set('getLineCount',   (win?: string)=> this.api.getLineCount(win));
         this.lua.global.set('getLastLineNumber', (win?: string)=> this.api.getLastLineNumber(win));
@@ -3204,11 +3232,22 @@ export class LuaRuntime implements IScriptingRuntime {
     }
 
     destroy(): void {
+        if (this.destroyed) return; // idempotent — a double lua_close corrupts the heap
         this.destroyed = true;
         this.tts?.destroy();
         this.api.map.setMapEventDispatcher(null);
         this.api.map.setMapInfoEvaluator(null);
         this.api.map.clearMapInfoContributors();
-        this.lua.global.close();
+        // Callers must stop everything that can call into Lua (timers, key
+        // bindings, line feed) BEFORE this runs — see useEngines teardown order.
+        // wasmoon's lua_close still runs GC finalizers inside the WASM and can
+        // abort with a "memory/table index out of bounds" RuntimeError on a
+        // large/long-lived state; contain it so the throw doesn't unwind the
+        // caller's teardown (which would leave subscriptions live → app hang).
+        try {
+            this.lua.global.close();
+        } catch (err) {
+            console.error('[mudix] error closing Lua runtime (ignored):', err);
+        }
     }
 }

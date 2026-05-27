@@ -63,6 +63,27 @@ function getConnectionInfo()
     return t[0], t[1], t[2]
 end
 
+-- Mudlet getTimestamp([console_name], lineNumber) → "hh:mm:ss.zzz" string, or
+-- (nil, errMsg) for an out-of-range line / missing window. JS returns false on
+-- the miss case.
+function getTimestamp(a, b)
+    local v = __getTimestamp(a, b)
+    if not v then
+        return nil, "getTimestamp: invalid line number"
+    end
+    return v
+end
+
+-- Mudlet getLabelSizeHint(name) → width, height, or (nil, errMsg) when the
+-- label doesn't exist. JS returns a 0-indexed [w, h] array or false.
+function getLabelSizeHint(name)
+    local t = __getLabelSizeHint(name)
+    if not t then
+        return nil, "label '" .. tostring(name) .. "' does not exist"
+    end
+    return t[0], t[1]
+end
+
 function getMousePosition()
     local t = __getMousePosition()
     return t[0], t[1]
