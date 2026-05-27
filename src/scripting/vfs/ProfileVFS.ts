@@ -39,6 +39,26 @@ export type VFSSource = 'folder' | 'idb';
 // AsyncMixin exposes sync(), but it isn't on FileSystem's public type.
 type Syncable = FileSystem & { sync?: () => Promise<void> };
 
+/**
+ * Disable access-time tracking on a freshly resolved mount.
+ *
+ * ZenFS bumps a file's atime on every read and marks the handle dirty, so
+ * closing the handle flushes the inode back to the backing store
+ * (vfs/file.js: readSync → closeSync → syncSync → touchSync → store write).
+ * Boot scripts read many data files through `io.open`, which turned that
+ * atime write-back into ~175ms of synchronous IndexedDB writes during startup
+ * — and a store write on *every* file read thereafter. mudix never relies on
+ * atime (stat() and the Lua `lfs` `access` field only surface it), so we opt
+ * out, the same trade-off as mounting a real filesystem `noatime`. The
+ * `attributes` map is shared across the mixin stack (MutexedFS delegates to
+ * its inner fs; AsyncFS inherits the instance field), so setting it once here
+ * reaches the file handle that checks `fs.attributes.has('no_atime')`.
+ */
+function disableAtime(fs: Syncable): Syncable {
+    fs.attributes.set('no_atime');
+    return fs;
+}
+
 export class ProfileVFS {
     readonly profilePath: string;
     private _cwd: string;
@@ -102,7 +122,7 @@ export class ProfileVFS {
             const perm = await checkFolderPermission(handle);
             if (perm === 'granted') {
                 try {
-                    const fs = await resolveMountConfig({ backend: WebAccess, handle }) as Syncable;
+                    const fs = disableAtime(await resolveMountConfig({ backend: WebAccess, handle }) as Syncable);
                     claimSlot();
                     mount(profilePath, fs);
                     return new ProfileVFS(connectionId, fs, 'folder', handle);
@@ -112,7 +132,7 @@ export class ProfileVFS {
             }
         }
 
-        const fs = await resolveMountConfig({ backend: IndexedDB, storeName: `mudix_vfs_${connectionId}` }) as Syncable;
+        const fs = disableAtime(await resolveMountConfig({ backend: IndexedDB, storeName: `mudix_vfs_${connectionId}` }) as Syncable);
         claimSlot();
         mount(profilePath, fs);
         if (!existsSync(profilePath)) {
@@ -231,7 +251,7 @@ export class ProfileVFS {
         if (this.source !== 'folder' || !this._handle) return;
         await this.flush();
         try { umount(this.profilePath); } catch { /* not mounted */ }
-        const fs = await resolveMountConfig({ backend: WebAccess, handle: this._handle }) as Syncable;
+        const fs = disableAtime(await resolveMountConfig({ backend: WebAccess, handle: this._handle }) as Syncable);
         mount(this.profilePath, fs);
         this._fs = fs;
     }
