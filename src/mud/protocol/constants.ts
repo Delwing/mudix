@@ -14,9 +14,19 @@ export const MCCP2_OPTION = 0x56; // Telnet option 86
 // MSDP (Mud Server Data Protocol) — telnet option 69, with MSDP_VAR/MSDP_VAL
 // framing bytes inside the IAC SB … IAC SE subnegotiation. (IAC/SB/SE reuse the
 // GMCP_* byte constants above — they are the generic telnet command bytes.)
+export const MSDP_COMMAND_CODE = 69;
 export const OPT_MSDP = "\x45"; // 69
 export const MSDP_VAR = "\x01"; // 1
 export const MSDP_VAL = "\x02"; // 2
+// Compound-value framing: tables (string-keyed) and arrays (ordered list).
+export const MSDP_TABLE_OPEN  = "\x03"; // 3
+export const MSDP_TABLE_CLOSE = "\x04"; // 4
+export const MSDP_ARRAY_OPEN  = "\x05"; // 5
+export const MSDP_ARRAY_CLOSE = "\x06"; // 6
+
+// MSDP negotiation sequences
+export const MSDP_WILL = "\xFF\xFB\x45"; // IAC WILL MSDP - server offers MSDP
+export const MSDP_DO   = "\xFF\xFD\x45"; // IAC DO MSDP   - client requests MSDP
 
 // GMCP (Generic MUD Communication Protocol) negotiation sequences
 export const GMCP_WILL = "\xFF\xFB\xC9"; // IAC WILL GMCP - server offers GMCP

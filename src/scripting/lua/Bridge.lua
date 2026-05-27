@@ -779,6 +779,13 @@ function __mudix_set_gmcp(key, value)
     node[parts[#parts]] = value
 end
 
+-- MSDP equivalent of __mudix_set_gmcp. MSDP variable names are flat (any
+-- nesting lives inside the value), so we replace the single top-level key.
+function __mudix_set_msdp(key, value)
+    if type(msdp) ~= 'table' then msdp = {} end
+    msdp[key] = value
+end
+
 -- Mirrors Mudlet's C++ TLuaInterpreter::registerAnonymousEventHandler: stores
 -- (event name → list of Lua function names) keyed registrations made by scripts
 -- loaded before Other.lua's Lua-side override takes effect (notably

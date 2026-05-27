@@ -3078,6 +3078,16 @@ export class LuaRuntime implements IScriptingRuntime {
         this.runChunk('__mudix_set_gmcp(__mudix_gmcp_path, __mudix_gmcp_val)', `set-gmcp "${path}"`);
     }
 
+    // Bridges a single MSDP variable into the Lua `msdp` global. `path` is the
+    // top-level variable name (flat — MSDP nesting lives inside the value, not
+    // the key); `value` is the decoded string / array / table.
+    setMsdpValue(path: string, value: unknown): void {
+        if (this.destroyed || !path) return;
+        this.lua.global.set('__mudix_msdp_path', path);
+        this.lua.global.set('__mudix_msdp_val', this.toLuaValue(value));
+        this.runChunk('__mudix_set_msdp(__mudix_msdp_path, __mudix_msdp_val)', `set-msdp "${path}"`);
+    }
+
     /**
      * Mudlet-style async unzip. Reads the zip from the profile VFS, decodes
      * it on a worker (fflate falls back to a chunked main-thread decode where

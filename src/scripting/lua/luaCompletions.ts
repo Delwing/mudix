@@ -656,6 +656,7 @@ const MUDLET_GLOBALS: Completion[] = [
     ns('rex', 'PCRE-compatible regex module: rex.match(), rex.find(), rex.new()'),
     // Globals / tables
     variable('gmcp',         'GMCP state table — auto-populated from server packets'),
+    variable('msdp',         'MSDP state table — auto-populated from server packets'),
     variable('matches',      'Regex captures in trigger/alias context: [full, cap1, cap2, ...]'),
     variable('line',         'Current trigger line text'),
     variable('multimatches', 'Multiline trigger captures'),

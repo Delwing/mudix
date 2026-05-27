@@ -401,6 +401,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `gmcp` table | ✅ | Auto-populated from incoming GMCP packets |
 | `sendGMCP(message)` | ✅ | JS-exposed (frames as IAC SB GMCP …) |
 | `sendMSDP(var, ...)` | ✅ | JS-exposed; frames `IAC SB MSDP MSDP_VAR var [MSDP_VAL val]… IAC SE` (`encodeMsdp`). Bridge.lua packs varargs |
+| `msdp` table | ✅ | Auto-populated from incoming MSDP subnegotiations (`createMsdpStream` parses VAR/VAL/TABLE/ARRAY). Client auto-responds `IAC DO MSDP`; raises `sysProtocolEnabled('MSDP')` + `msdp.<VAR>` events |
 | `sendSocket(data)` | ✅ | JS-exposed; sends literal bytes over the socket (no telnet/encoding processing) |
 | `getConnectionInfo()` | ✅ | Bridge.lua unpacks `__getConnectionInfo` → host, port, connected (mud-mode config or parsed websocket URL) |
 | `getNetworkLatency()` | ✅ | JS-exposed |

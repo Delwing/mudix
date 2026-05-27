@@ -20,6 +20,7 @@ if yajl then
   json_to_value = yajl.to_value
 end
 gmcp = {}
+msdp = {}
 mssp = {}
 
 function __gmcp_merge_gmcp_sub_tables( a, key )

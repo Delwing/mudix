@@ -16,6 +16,11 @@ export interface IScriptingRuntime {
      * at `path` is replaced; sibling subtrees are preserved (Mudlet parity).
      */
     setGmcpValue(path: string, value: unknown): void;
+    /**
+     * Write a single MSDP variable into the runtime's `msdp` table. `path` is
+     * the flat top-level variable name; the top-level key is replaced.
+     */
+    setMsdpValue(path: string, value: unknown): void;
     runWithMatches(
         code: string,
         name: string,

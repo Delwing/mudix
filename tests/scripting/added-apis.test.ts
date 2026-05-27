@@ -136,3 +136,35 @@ describe('sendMSDP / sendSocket / feedTelnet / disconnect — wiring', () => {
     expect(() => env.run('feedTelnet("hi\\n"); disconnect()')).not.toThrow();
   });
 });
+
+// setMsdpValue is the bridge from a decoded MSDP variable into the Lua `msdp`
+// global (mirrors setGmcpValue → gmcp). The receive pipeline's parsing is
+// covered in tests/mud/protocol/msdp.test.ts; here we confirm the value lands
+// in the expected Lua shape.
+describe('msdp global — setMsdpValue', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('exposes an empty msdp table before any packet', () => {
+    expect(env.run('return type(msdp)')).toBe('table');
+  });
+
+  it('writes a scalar variable to the flat top-level key', () => {
+    env.rt.setMsdpValue('HEALTH', '5000');
+    expect(env.run('return msdp.HEALTH')).toBe('5000');
+  });
+
+  it('writes nested table values reachable by key', () => {
+    env.rt.setMsdpValue('ROOM', { VNUM: '6008', EXITS: { n: '6011' } });
+    expect(env.run('return msdp.ROOM.VNUM')).toBe('6008');
+    expect(env.run('return msdp.ROOM.EXITS.n')).toBe('6011');
+  });
+
+  it('replaces the whole top-level key on update (no sibling merge)', () => {
+    env.rt.setMsdpValue('ROOM', { VNUM: '1' });
+    env.rt.setMsdpValue('ROOM', { NAME: 'elsewhere' });
+    expect(env.run('return msdp.ROOM.VNUM')).toBe(null);
+    expect(env.run('return msdp.ROOM.NAME')).toBe('elsewhere');
+  });
+});

@@ -11,11 +11,13 @@ export type MudClientEvents = {
     'client.disconnect': void;
     'client.error': [message: string];
     'gmcp.negotiated': void;
+    'msdp.negotiated': void;
     'socket.incoming': [data: string];
     'socket.outgoing': [data: string];
     'message': [text?: string | AnsiAwareBuffer, type?: string, timestamp?: number];
     'flushLines': [groups: { text: string; type: string }[]];
     'gmcp': [payload: { path: string; value: unknown }];
+    'msdp': [payload: { path: string; value: unknown }];
     'gmcp.core.ping': [value: unknown];
     'telnet.echo': [serverEchoing: boolean];
 } & Record<string, any>;

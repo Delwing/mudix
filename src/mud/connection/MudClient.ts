@@ -3,14 +3,19 @@ import { AnsiAwareBuffer } from "../text/FormatState";
 import { createPassthroughProcessor, type ChunkProcessor } from "../triggers/ChunkProcessor";
 import {
     createGmcpStream,
+    createMsdpStream,
     createTelnetOptionParser,
     EchoHandler,
     encodeGmcp,
     encodeGmcpRaw,
     encodeMsdp,
+    GMCP_COMMAND_CODE,
     GMCP_DO,
     GMCP_WILL,
     MccpHandler,
+    MSDP_COMMAND_CODE,
+    MSDP_DO,
+    MSDP_WILL,
     stripTelnetSequences,
     TELNET_GA,
     TELNET_EOR,
@@ -54,6 +59,7 @@ export class MudClient {
     private readonly chunkProcessor: ChunkProcessor;
     private messageBuffer: { text: string; type: string }[] = [];
     private readonly gmcpStream: (data: string) => void;
+    private readonly msdpStream: (data: string) => void;
     private readonly telnetOptionHandler: (optionData: string) => string;
     private readonly mccpHandler: MccpHandler;
     private readonly echoHandler: EchoHandler;
@@ -106,7 +112,20 @@ export class MudClient {
             },
         });
 
-        this.telnetOptionHandler = createTelnetOptionParser(this.gmcpStream);
+        this.msdpStream = createMsdpStream({
+            onEnvelope: ({ path, value }) => {
+                (this.eventBus.emit as (event: string, ...args: unknown[]) => void)(`msdp.${path}`, value);
+                this.eventBus.emit('msdp', { path, value });
+            },
+        });
+
+        // A telnet subnegotiation body opens with its option code; route GMCP
+        // (201) and MSDP (69) to their respective parsers and ignore the rest.
+        this.telnetOptionHandler = createTelnetOptionParser((subneg) => {
+            const code = subneg.charCodeAt(0);
+            if (code === GMCP_COMMAND_CODE) this.gmcpStream(subneg);
+            else if (code === MSDP_COMMAND_CODE) this.msdpStream(subneg);
+        });
         this.mccpHandler = new MccpHandler((data) => this.sendRaw(data));
         this.mccpHandler.enabled = mccpEnabled;
 
@@ -167,6 +186,10 @@ export class MudClient {
                     if (data.includes(GMCP_WILL)) {
                         this.sendRaw(GMCP_DO);
                         this.eventBus.emit('gmcp.negotiated');
+                    }
+                    if (data.includes(MSDP_WILL)) {
+                        this.sendRaw(MSDP_DO);
+                        this.eventBus.emit('msdp.negotiated');
                     }
                     this.echoHandler.processData(data);
                     this.eventBus.emit('socket.incoming', data);

@@ -106,10 +106,11 @@ export class ScriptingEngine {
     private readonly unsubs: (() => void)[] = [];
     private readonly api: ScriptingAPI;
     private promptPending = false;
-    // Tracks whether GMCP finished negotiating on the live connection, so the
-    // symmetric sysProtocolDisabled can fire on disconnect (mudix only ever
-    // negotiates GMCP). Reset on disconnect.
+    // Tracks whether GMCP/MSDP finished negotiating on the live connection, so
+    // the symmetric sysProtocolDisabled can fire on disconnect. Reset on
+    // disconnect.
     private gmcpNegotiated = false;
+    private msdpNegotiated = false;
     private vfs: ProfileVFS | null = null;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
     private readonly mapOpen = new MapOpenNotifier(() => this.raiseEvent('mapOpenEvent'));
@@ -1565,6 +1566,10 @@ export class ScriptingEngine {
                     this.gmcpNegotiated = false;
                     this.emit('sysProtocolDisabled', ['GMCP']);
                 }
+                if (this.msdpNegotiated) {
+                    this.msdpNegotiated = false;
+                    this.emit('sysProtocolDisabled', ['MSDP']);
+                }
             }),
             // GMCP finished negotiating (server WILL → client DO). Mudlet's
             // bundled GMCP.lua re-subscribes its registered modules on this
@@ -1593,6 +1598,23 @@ export class ScriptingEngine {
                 if (path.toLowerCase() === 'client.gui') {
                     void this.handleClientGuiInstall(value);
                 }
+            }),
+            // MSDP finished negotiating (server WILL → client DO). Mirrors the
+            // GMCP pair so scripts can hook sysProtocolEnabled('MSDP') to send
+            // their LIST / REPORT requests.
+            session.events.on('msdp.negotiated', () => {
+                this.msdpNegotiated = true;
+                this.emit('sysProtocolEnabled', ['MSDP']);
+            }),
+            session.events.on('msdp', ({ path, value }) => {
+                // Mirror Mudlet: write the decoded value into the Lua `msdp`
+                // global, then raise a single `msdp.<VARNAME>` event with args
+                // (eventName, fullKey). MSDP variable names are flat (no dotted
+                // descent like GMCP), so nesting comes only from the value.
+                if (!path) return;
+                this.runtimes.lua?.setMsdpValue(path, value);
+                const token = `msdp.${path}`;
+                this.emit(token, [token, token]);
             }),
             // Package install/uninstall events are dispatched by callers via
             // notifyPackageInstalled / notifyPackageUninstalled (not the
