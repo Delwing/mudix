@@ -162,6 +162,129 @@
     flex-shrink: 0;
 }
 
+/* ── Toggle (switch) ────────────────────────────────────────── */
+.toggle {
+    position: relative;
+    display: inline-block;
+    width: 34px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    outline: none;
+}
+
+.toggle:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.toggle__track {
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.toggle__knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1), background 0.15s ease;
+}
+
+.toggle:not(:disabled):hover .toggle__track {
+    border-color: var(--accent-dim);
+}
+
+.toggle--on .toggle__track {
+    background: var(--accent-focus);
+    border-color: var(--accent-dim);
+}
+
+.toggle--on .toggle__knob {
+    transform: translateX(16px);
+    background: var(--accent);
+}
+
+.toggle:focus-visible .toggle__track {
+    box-shadow: 0 0 0 3px var(--accent-focus);
+}
+
+/* ── HelpTip ────────────────────────────────────────────────── */
+.help-tip {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    margin-left: 6px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--text-dim);
+    font-family: var(--font-ui), sans-serif;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: help;
+    vertical-align: middle;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.help-tip:hover,
+.help-tip[aria-expanded='true'] {
+    color: var(--accent);
+    border-color: var(--accent-dim);
+}
+
+.help-tip[aria-expanded='true'] {
+    background: var(--accent-focus);
+}
+
+.help-tip:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--accent-focus);
+}
+
+.help-tip-popover {
+    position: fixed;
+    z-index: 200;
+    transform: translateX(-50%);
+    max-width: 280px;
+    padding: 8px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-float);
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text);
+}
+
+.help-tip-popover code {
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    background: var(--bg-glass);
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+.help-tip-popover--sticky {
+    border-color: var(--accent-dim);
+}
+
 /* ── Confirm dialog ─────────────────────────────────────────── */
 .confirm-dialog-overlay {
     z-index: 60;

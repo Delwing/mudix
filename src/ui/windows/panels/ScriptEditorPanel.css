@@ -84,32 +84,6 @@
     background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.script-editor__nav-import {
-    display: block;
-    width: 100%;
-    margin-top: auto;
-    padding: 7px 10px;
-    background: none;
-    border: none;
-    border-top: 1px solid var(--border);
-    border-left: 2px solid transparent;
-    color: var(--text-dim);
-    font-family: var(--font-ui), sans-serif;
-    font-size: 11px;
-    text-align: left;
-    cursor: pointer;
-    transition: color 0.1s, background 0.1s;
-}
-
-.script-editor__nav-import + .script-editor__nav-import {
-    margin-top: 0;
-}
-
-.script-editor__nav-import:hover {
-    color: var(--text);
-    background: color-mix(in srgb, var(--bg-surface) 50%, transparent);
-}
-
 /* ── Script list ────────────────────────────────────────── */
 .script-editor__list {
     flex-shrink: 0;
@@ -854,6 +828,11 @@
     border-radius: var(--radius);
     background: var(--bg-input);
     overflow: hidden;
+}
+
+.script-editor__pkg-icon-frame--has-icon {
+    border: none;
+    background: transparent;
 }
 
 .script-editor__pkg-icon-img {

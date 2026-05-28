@@ -2650,6 +2650,8 @@ html, body, #root {
 }
 
 .settings-label {
+    display: inline-flex;
+    align-items: center;
     font-family: var(--font-ui), sans-serif;
     font-size: 13px;
     color: var(--text);
@@ -2724,26 +2726,61 @@ html, body, #root {
     border-bottom-color: var(--accent, var(--text));
 }
 
-.settings-field-with-help {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    flex: 1;
-    min-width: 0;
-}
-
 .settings-unit {
     font-family: var(--font-ui), sans-serif;
     font-size: 12px;
     color: var(--text-dim);
 }
 
-.settings-help {
-    margin: 0;
+.settings-font-summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.settings-font-summary__name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-family: var(--font-ui), sans-serif;
-    font-size: 12px;
-    line-height: 1.45;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.settings-font-summary__name strong {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.settings-font-summary__kind {
+    margin-left: 6px;
+    font-style: normal;
+    font-size: 11px;
     color: var(--text-dim);
+}
+
+.settings-font-summary__muted {
+    flex: 1;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
+/* Nested font-picker modal sits above the Settings modal (overlay 50 / 51). */
+.font-picker-overlay {
+    z-index: 60;
+}
+
+.font-picker-modal {
+    z-index: 61;
+    width: min(520px, 92vw);
+    max-height: 80vh;
+    top: 10vh;
+    transform: translateX(-50%);
 }
 
 .color-picker {

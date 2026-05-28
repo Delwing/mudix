@@ -176,7 +176,7 @@ export function PackageRepositoryModal({ installedNames, proxyUrl, onClose, onIn
                         const uploaded = formatRelative(entry.uploaded);
                         return (
                             <div key={entry.mpackage} className="script-editor__pkg-card" style={{ marginBottom: 8 }}>
-                                <div className="script-editor__pkg-icon-frame">
+                                <div className={`script-editor__pkg-icon-frame${iconUrl ? ' script-editor__pkg-icon-frame--has-icon' : ''}`}>
                                     {iconUrl
                                         ? <img className="script-editor__pkg-icon-img" src={iconUrl} alt="" onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
                                         : <Package className="script-editor__pkg-icon-fallback" size={28} strokeWidth={1.4} />}

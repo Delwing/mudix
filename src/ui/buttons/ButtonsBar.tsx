@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, type RefObject } from 'react';
-import { strToU8 } from 'fflate';
 import { useAppStore } from '../../storage';
 import { isEffectivelyEnabled, type ButtonLocation, type ButtonNode } from '../../storage/schema';
 import type { ScriptingEngine } from '../../scripting/ScriptingEngine';
@@ -44,7 +43,7 @@ function resolveIconUrl(vfs: ProfileVFS | null, iconPath: string): string | null
     for (const path of candidates) {
         try {
             if (!vfs.exists(path)) continue;
-            const bytes = strToU8(vfs.readFile(path), true);
+            const bytes = vfs.readBinaryFile(path);
             const ext = iconPath.split('.').pop()?.toLowerCase() ?? '';
             const mime = ICON_MIME[ext] ?? 'application/octet-stream';
             return URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime }));

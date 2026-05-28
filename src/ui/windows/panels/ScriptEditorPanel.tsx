@@ -13,7 +13,6 @@ import { VfsModulePickerModal } from './VfsModulePickerModal';
 import { PackageRepositoryModal } from './PackageRepositoryModal';
 import type { PackageRepoEntry } from '../../../import/packageRepository';
 import { DEFAULT_PROXY_URL } from '../../../storage';
-import { strToU8 } from 'fflate';
 import { renderMarkdown } from '../../markdown';
 import './ScriptEditorPanel.css';
 
@@ -211,12 +210,14 @@ function PackageIcon({ vfs, pkg }: { vfs: ProfileVFS | null; pkg: PackageManifes
 
     useEffect(() => {
         if (!vfs || !pkg.icon) { setUrl(null); return; }
-        const path = `${vfs.profilePath}/${pkg.name}/${pkg.icon}`;
-        if (!vfs.exists(path)) { setUrl(null); return; }
+        const pkgDir = `${vfs.profilePath}/${pkg.name}`;
+        // Mudlet stores package icons at <pkgDir>/.mudlet/Icon/<icon>; fall back to <pkgDir>/<icon>.
+        const candidates = [`${pkgDir}/.mudlet/Icon/${pkg.icon}`, `${pkgDir}/${pkg.icon}`];
+        const path = candidates.find(p => vfs.exists(p));
+        if (!path) { setUrl(null); return; }
         let revoke: string | null = null;
         try {
-            // Binary files were written as Latin-1 strings; reverse with strToU8(_, true).
-            const bytes = strToU8(vfs.readFile(path), true);
+            const bytes = vfs.readBinaryFile(path);
             const ext = pkg.icon.split('.').pop()?.toLowerCase() ?? '';
             const mime = ICON_MIME[ext] ?? 'application/octet-stream';
             const blobUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime }));
@@ -229,7 +230,7 @@ function PackageIcon({ vfs, pkg }: { vfs: ProfileVFS | null; pkg: PackageManifes
     }, [vfs, pkg.name, pkg.icon]);
 
     return (
-        <div className="script-editor__pkg-icon-frame">
+        <div className={`script-editor__pkg-icon-frame${url ? ' script-editor__pkg-icon-frame--has-icon' : ''}`}>
             {url
                 ? <img className="script-editor__pkg-icon-img" src={url} alt="" />
                 : <Package className="script-editor__pkg-icon-fallback" size={28} strokeWidth={1.4} />}
@@ -1239,35 +1240,9 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                         <span className="script-editor__error-badge" style={{ background: '#3a3a3a' }}>{packages.length}</span>
                     )}
                 </button>
-                <button className="script-editor__nav-import" onClick={() => importFileRef.current?.click()} title="Import Mudlet package (.mpackage / .zip / .xml)">
-                    Import Package
-                </button>
-                <button
-                    className="script-editor__nav-import"
-                    onClick={() => importModuleRef.current?.click()}
-                    title="Import as module — the on-disk XML is the source of truth and is reloaded on every profile open"
-                >
-                    Import Module
-                </button>
-                <button
-                    className="script-editor__nav-import"
-                    onClick={() => setShowVfsPicker(true)}
-                    title="Import a module from a file already inside the profile's VFS — plain XML files are referenced in place"
-                    disabled={!vfs}
-                >
-                    Module from VFS…
-                </button>
-                <button
-                    className="script-editor__nav-import"
-                    onClick={() => setShowRepository(true)}
-                    title="Browse the Mudlet package repository and install community packages"
-                    disabled={!vfs}
-                >
-                    Browse Repository…
-                </button>
-                <input ref={importFileRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportFile} />
-                <input ref={importModuleRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportModule} />
             </div>
+            <input ref={importFileRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportFile} />
+            <input ref={importModuleRef} type="file" accept=".xml,.mpackage,.zip" style={{ display: 'none' }} onChange={handleImportModule} />
             {showVfsPicker && vfs && (
                 <VfsModulePickerModal
                     vfs={vfs}
@@ -1291,7 +1266,6 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                     <Button variant="secondary" size="sm" onClick={() => handleNew(false)}>+ New</Button>
                     <Button variant="secondary" size="sm" onClick={() => handleNew(true)}>+ {category === 'buttons' ? BUTTON_GROUP_SINGULAR : 'Group'}</Button>
                 </div>
-                {importError && <div className="script-editor__import-error" title={importError}>Import failed: {importError}</div>}
                 <div
                     className="script-editor__items"
                     onDragLeave={e => {
@@ -1375,10 +1349,32 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                         <span className="script-editor__error-log-title">
                             {packages.length === 0 ? 'No packages installed' : `${packages.length} installed`}
                         </span>
-                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                             {importError && <span className="script-editor__import-error" title={importError}>Import failed: {importError}</span>}
-                            <Button variant="secondary" size="sm" onClick={() => importFileRef.current?.click()}>
-                                Import file…
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => importFileRef.current?.click()}
+                                title="Import Mudlet package (.mpackage / .zip / .xml)"
+                            >
+                                Import Package…
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => importModuleRef.current?.click()}
+                                title="Import as module — the on-disk XML is the source of truth and is reloaded on every profile open"
+                            >
+                                Import Module…
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => setShowVfsPicker(true)}
+                                disabled={!vfs}
+                                title="Import a module from a file already inside the profile's VFS — plain XML files are referenced in place"
+                            >
+                                Module from VFS…
                             </Button>
                             <Button variant="primary" size="sm" onClick={() => setShowRepository(true)} disabled={!vfs}>
                                 Browse Repository…

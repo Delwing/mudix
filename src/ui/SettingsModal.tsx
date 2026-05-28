@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useAppStore, selectProfileField, MAPPER_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings } from '../storage';
-import { Input, FontPicker } from './components';
+import { Input, FontPicker, Toggle, HelpTip, Button } from './components';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
 const DEFAULT_BG_FALLBACK = '#090909';
@@ -107,6 +107,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     };
 
     const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
+    const [fontPickerOpen, setFontPickerOpen] = useState(false);
 
     const handleFontChange = (next: OutputFontSource | undefined) => {
         patchProfile({ outputFont: next });
@@ -225,40 +226,40 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         ))}
                                     </select>
                                 </div>
-                                <div className="settings-row settings-row--top">
-                                    <label className="settings-label" htmlFor="allow-mud-package-install">Allow package installs from MUDs</label>
-                                    <div className="settings-field-with-help">
-                                        <input
-                                            id="allow-mud-package-install"
-                                            type="checkbox"
-                                            checked={mudPackageInstallEnabled}
-                                            onChange={e => patchClient({ allowMudPackageInstall: e.target.checked })}
-                                        />
-                                        <p className="settings-help">
+                                <div className="settings-row">
+                                    <span className="settings-label" id="allow-mud-package-install-label">
+                                        Allow package installs from MUDs
+                                        <HelpTip label="About MUD package installs">
                                             When a connected MUD sends a <code>Client.GUI</code> GMCP message, automatically
                                             download and install the package it points to. Disable to ignore those requests.
-                                        </p>
-                                    </div>
+                                        </HelpTip>
+                                    </span>
+                                    <Toggle
+                                        id="allow-mud-package-install"
+                                        aria-labelledby="allow-mud-package-install-label"
+                                        checked={mudPackageInstallEnabled}
+                                        onChange={next => patchClient({ allowMudPackageInstall: next })}
+                                    />
                                 </div>
-                                <div className="settings-row settings-row--top">
-                                    <label className="settings-label" htmlFor="notifications-enabled">Desktop notifications</label>
-                                    <div className="settings-field-with-help">
-                                        <input
-                                            id="notifications-enabled"
-                                            type="checkbox"
-                                            checked={notificationsOn}
-                                            disabled={!notificationsSupported || notifPermission === 'denied'}
-                                            onChange={e => { void handleNotificationsToggle(e.target.checked); }}
-                                        />
-                                        <p className="settings-help">
+                                <div className="settings-row">
+                                    <span className="settings-label" id="notifications-enabled-label">
+                                        Desktop notifications
+                                        <HelpTip label="About desktop notifications">
                                             Let scripts raise desktop notifications via <code>showNotification()</code>.
                                             {!notificationsSupported
                                                 ? ' Your browser does not support notifications.'
                                                 : notifPermission === 'denied'
                                                 ? ' Notifications are blocked for this site — re-enable them in your browser’s site settings, then toggle this on.'
                                                 : ' Enabling prompts your browser for permission so the first notification can show without interruption.'}
-                                        </p>
-                                    </div>
+                                        </HelpTip>
+                                    </span>
+                                    <Toggle
+                                        id="notifications-enabled"
+                                        aria-labelledby="notifications-enabled-label"
+                                        checked={notificationsOn}
+                                        disabled={!notificationsSupported || notifPermission === 'denied'}
+                                        onChange={next => { void handleNotificationsToggle(next); }}
+                                    />
                                 </div>
                             </section>
                             {connectionId && (
@@ -280,24 +281,34 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         <span className="settings-unit">pt</span>
                                     </div>
                                 </div>
-                                <div className="settings-row settings-row--top">
+                                <div className="settings-row">
                                     <label className="settings-label">Font</label>
-                                    <FontPicker value={outputFont} onChange={handleFontChange} vfs={vfs} />
+                                    <div className="settings-font-summary">
+                                        {outputFont
+                                            ? <span className="settings-font-summary__name" style={{ fontFamily: `"${outputFont.family}", monospace` }}>
+                                                <strong>{outputFont.family}</strong>
+                                                <em className="settings-font-summary__kind">({outputFont.kind})</em>
+                                              </span>
+                                            : <span className="settings-font-summary__muted">Default monospace</span>}
+                                        <Button variant="secondary" size="sm" onClick={() => setFontPickerOpen(true)}>
+                                            Change…
+                                        </Button>
+                                    </div>
                                 </div>
-                                <div className="settings-row settings-row--top">
-                                    <label className="settings-label" htmlFor="logging-enabled">Record session logs</label>
-                                    <div className="settings-field-with-help">
-                                        <input
-                                            id="logging-enabled"
-                                            type="checkbox"
-                                            checked={loggingOn}
-                                            onChange={e => patchProfile({ loggingEnabled: e.target.checked })}
-                                        />
-                                        <p className="settings-help">
+                                <div className="settings-row">
+                                    <span className="settings-label" id="logging-enabled-label">
+                                        Record session logs
+                                        <HelpTip label="About session logging">
                                             Save this profile's output and your typed commands to the persistent
                                             log store, browsable from the toolbar's <code>Logs</code> button.
-                                        </p>
-                                    </div>
+                                        </HelpTip>
+                                    </span>
+                                    <Toggle
+                                        id="logging-enabled"
+                                        aria-labelledby="logging-enabled-label"
+                                        checked={loggingOn}
+                                        onChange={next => patchProfile({ loggingEnabled: next })}
+                                    />
                                 </div>
                                 <div className="settings-row settings-row--top">
                                     <label className="settings-label">Borders</label>
@@ -353,29 +364,29 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                     )}
                     {activeTab === 'network' && connectionId && (
                         <section className="settings-section">
-                            <div className="settings-row settings-row--top">
-                                <label className="settings-label" htmlFor="prompt-timeout">Prompt timeout</label>
-                                <div className="settings-field-with-help">
-                                    <div className="settings-color-field">
-                                        <Input
-                                            id="prompt-timeout"
-                                            type="number"
-                                            min={0}
-                                            max={5000}
-                                            step={50}
-                                            value={timeoutText}
-                                            placeholder={String(DEFAULT_PROMPT_TIMEOUT_MS)}
-                                            onChange={e => setTimeoutText(e.target.value)}
-                                            onBlur={handleTimeoutBlur}
-                                        />
-                                        <span className="settings-unit">ms</span>
-                                    </div>
-                                    <p className="settings-help">
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="prompt-timeout">
+                                    Prompt timeout
+                                    <HelpTip label="About prompt timeout">
                                         How long to wait for the rest of a line before treating a partial chunk as a prompt.
                                         Raise this if you see spurious mid-line breaks on a slow connection; lower it if
                                         prompts on MUDs without IAC GA feel sluggish. Default {DEFAULT_PROMPT_TIMEOUT_MS}ms,
                                         matching Mudlet's "Network packet timeout".
-                                    </p>
+                                    </HelpTip>
+                                </label>
+                                <div className="settings-color-field">
+                                    <Input
+                                        id="prompt-timeout"
+                                        type="number"
+                                        min={0}
+                                        max={5000}
+                                        step={50}
+                                        value={timeoutText}
+                                        placeholder={String(DEFAULT_PROMPT_TIMEOUT_MS)}
+                                        onChange={e => setTimeoutText(e.target.value)}
+                                        onBlur={handleTimeoutBlur}
+                                    />
+                                    <span className="settings-unit">ms</span>
                                 </div>
                             </div>
                         </section>
@@ -410,21 +421,21 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                 </select>
                             </div>
                             <div className="settings-row">
-                                <label className="settings-label" htmlFor="mapper-borders">Room borders</label>
-                                <input
+                                <span className="settings-label" id="mapper-borders-label">Room borders</span>
+                                <Toggle
                                     id="mapper-borders"
-                                    type="checkbox"
+                                    aria-labelledby="mapper-borders-label"
                                     checked={mapperBorders}
-                                    onChange={e => patchMapper({ borders: e.target.checked })}
+                                    onChange={next => patchMapper({ borders: next })}
                                 />
                             </div>
                             <div className="settings-row">
-                                <label className="settings-label" htmlFor="mapper-highlight-current">Highlight current room</label>
-                                <input
+                                <span className="settings-label" id="mapper-highlight-current-label">Highlight current room</span>
+                                <Toggle
                                     id="mapper-highlight-current"
-                                    type="checkbox"
+                                    aria-labelledby="mapper-highlight-current-label"
                                     checked={mapperHighlightCurrentRoom}
-                                    onChange={e => patchMapper({ highlightCurrentRoom: e.target.checked })}
+                                    onChange={next => patchMapper({ highlightCurrentRoom: next })}
                                 />
                             </div>
                             <div className="settings-row">
@@ -442,12 +453,12 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                 />
                             </div>
                             <div className="settings-row">
-                                <label className="settings-label" htmlFor="mapper-grid-enabled">Show grid</label>
-                                <input
+                                <span className="settings-label" id="mapper-grid-enabled-label">Show grid</span>
+                                <Toggle
                                     id="mapper-grid-enabled"
-                                    type="checkbox"
+                                    aria-labelledby="mapper-grid-enabled-label"
                                     checked={mapperGridEnabled}
-                                    onChange={e => patchMapper({ gridEnabled: e.target.checked })}
+                                    onChange={next => patchMapper({ gridEnabled: next })}
                                 />
                             </div>
                             <div className="settings-colors-grid">
@@ -468,6 +479,20 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                     )}
                 </div>
             </div>
+            {fontPickerOpen && connectionId && (
+                <>
+                    <div className="modal-overlay font-picker-overlay" onClick={() => setFontPickerOpen(false)} />
+                    <div className="modal font-picker-modal" role="dialog" aria-modal="true" aria-label="Choose font">
+                        <div className="modal-header">
+                            <span className="modal-title">Choose Font</span>
+                            <button className="modal-close" onClick={() => setFontPickerOpen(false)} type="button" aria-label="Close">✕</button>
+                        </div>
+                        <div className="modal-body">
+                            <FontPicker value={outputFont} onChange={handleFontChange} vfs={vfs} />
+                        </div>
+                    </div>
+                </>
+            )}
         </>
     );
 }
