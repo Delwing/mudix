@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Clock, Filter, Folder, FolderOpen, FolderPlus, Keyboard, MousePointerClick, Package, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
 import { Button, Input, ContextMenu, useConfirm } from '../../components';
 import { useAppStore } from '../../../storage';
@@ -315,9 +315,6 @@ registerAnonymousEventHandler("sysConnectionEvent", function()
 end)
 `;
 
-const DEFAULT_JS = `// mudix JS script (coming soon)
-`;
-
 interface LogEntry {
     text: string;
     level: 'error' | 'info';
@@ -571,7 +568,6 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
 
     // Common edit state
     const [editName, setEditName]     = useState('');
-    const [editLang, setEditLang]     = useState<'lua' | 'js'>('lua');
     const [editCode, setEditCode]     = useState('');
     // Alias extra
     const [editPattern, setEditPattern]   = useState('');
@@ -778,7 +774,6 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
     useEffect(() => {
         if (!selected) return;
         setEditName(selected.name);
-        setEditLang(selected.language);
         // New unsaved scripts have code='' in the store; show the template so the
         // user has a starting point, and mark dirty so "Save & Run" is active.
         const isNewScript = category === 'scripts' && !selected.isGroup && selected.code === '';
@@ -1134,9 +1129,9 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
         setLogs([]);
         if (category === 'scripts') {
             const handlers = editEventHandlers.split('\n').map(s => s.trim()).filter(Boolean);
-            updateScript(connectionId, selectedId, { name: editName, language: editLang, code: editCode, eventHandlers: handlers });
+            updateScript(connectionId, selectedId, { name: editName, language: 'lua', code: editCode, eventHandlers: handlers });
         } else if (category === 'aliases') {
-            updateAlias(connectionId, selectedId, { name: editName, pattern: editPattern, command: editCommand, language: editLang, code: editCode });
+            updateAlias(connectionId, selectedId, { name: editName, pattern: editPattern, command: editCommand, language: 'lua', code: editCode });
         } else if (category === 'triggers') {
             const highlight = (editHighlightFg || editHighlightBg)
                 ? { fg: editHighlightFg || undefined, bg: editHighlightBg || undefined }
@@ -1144,7 +1139,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
             updateTrigger(connectionId, selectedId, {
                 name: editName,
                 patterns: editPatterns,
-                language: editLang,
+                language: 'lua',
                 code: editCode,
                 fireLength: editFireLength,
                 multipleMatches: editMultipleMatches,
@@ -1156,15 +1151,15 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
             });
         } else if (category === 'timers') {
             const seconds = editHours * 3600 + editMinutes * 60 + editSecs + editMs / 1000;
-            updateTimer(connectionId, selectedId, { name: editName, seconds, repeat: editRepeat, language: editLang, code: editCode, command: editTimerCommand || undefined });
+            updateTimer(connectionId, selectedId, { name: editName, seconds, repeat: editRepeat, language: 'lua', code: editCode, command: editTimerCommand || undefined });
         } else if (category === 'keys') {
-            updateKeybinding(connectionId, selectedId, { name: editName, key: editKey, modifiers: editModifiers, language: editLang, code: editCode, command: editKeyCommand || undefined });
+            updateKeybinding(connectionId, selectedId, { name: editName, key: editKey, modifiers: editModifiers, language: 'lua', code: editCode, command: editKeyCommand || undefined });
         } else {
             // buttons
             if (selected.isGroup) {
                 updateButton(connectionId, selectedId, {
                     name: editName,
-                    language: editLang,
+                    language: 'lua',
                     code: editCode,
                     location: editToolbarLocation,
                     orientation: editToolbarOrientation,
@@ -1174,7 +1169,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
             } else {
                 updateButton(connectionId, selectedId, {
                     name: editName,
-                    language: editLang,
+                    language: 'lua',
                     code: editCode,
                     command: editButtonCommand || undefined,
                     isPushDown: editButtonIsPushDown,
@@ -1197,23 +1192,6 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
         else if (category === 'keys')      removeKeybinding(connectionId, selectedId);
         else                               removeButton(connectionId, selectedId);
         setSelectedId(null);
-    };
-
-    const handleTabKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-        if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S' || e.key === 'Enter')) {
-            e.preventDefault();
-            handleSave();
-            return;
-        }
-        if (e.key !== 'Tab') return;
-        e.preventDefault();
-        const ta = e.currentTarget;
-        const start = ta.selectionStart;
-        const end   = ta.selectionEnd;
-        const next  = editCode.slice(0, start) + '  ' + editCode.slice(end);
-        setEditCode(next);
-        setDirty(true);
-        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + 2; });
     };
 
     const isEditCategory = category !== 'errors' && category !== 'packages';
@@ -1598,19 +1576,6 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                 onChange={e => { setEditName(e.target.value); setDirty(true); }}
                                 placeholder="Name"
                             />
-                            <select
-                                className="script-editor__lang-select"
-                                value={editLang}
-                                onChange={e => {
-                                    const lang = e.target.value as 'lua' | 'js';
-                                    setEditLang(lang);
-                                    if (!dirty && category === 'scripts') setEditCode(lang === 'lua' ? DEFAULT_LUA : DEFAULT_JS);
-                                    setDirty(true);
-                                }}
-                            >
-                                <option value="lua">Lua</option>
-                                <option value="js">JS</option>
-                            </select>
                         </div>
                         {category === 'aliases' && (
                             <>
@@ -2007,23 +1972,12 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
 
                     <div className="script-editor__meta-resize" onMouseDown={handleMetaResizeStart} />
 
-                    {editLang === 'lua' ? (
-                        <LuaEditor
-                            value={editCode}
-                            onChange={code => { setEditCode(code); setDirty(true); }}
-                            onSave={handleSave}
-                            gotoLine={editorGotoLine}
-                        />
-                    ) : (
-                        <textarea
-                            className="script-editor__code"
-                            value={editCode}
-                            onChange={e => { setEditCode(e.target.value); setDirty(true); }}
-                            onKeyDown={handleTabKey}
-                            spellCheck={false}
-                            autoComplete="off"
-                        />
-                    )}
+                    <LuaEditor
+                        value={editCode}
+                        onChange={code => { setEditCode(code); setDirty(true); }}
+                        onSave={handleSave}
+                        gotoLine={editorGotoLine}
+                    />
 
                     <div className="script-editor__log">
                         {visibleLogs.length === 0

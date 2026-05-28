@@ -435,23 +435,6 @@
     border-color: var(--accent-dim);
 }
 
-.script-editor__code {
-    flex: 1;
-    resize: none;
-    background: var(--bg);
-    border: none;
-    color: var(--text);
-    font-family: var(--font-mono), monospace;
-    font-size: 13px;
-    line-height: 1.6;
-    outline: none;
-    padding: 10px 12px;
-    tab-size: 2;
-    width: 100%;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-}
-
 .lua-editor {
     flex: 1;
     overflow: hidden;
@@ -654,10 +637,6 @@
     font-size: 11px;
     line-height: 1.45;
 }
-
-.script-editor__code::-webkit-scrollbar { width: 6px; }
-.script-editor__code::-webkit-scrollbar-track { background: transparent; }
-.script-editor__code::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 .script-editor__actions {
     display: flex;
