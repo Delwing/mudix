@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mudix · scripting worker PoC</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #1a1a1a;
+        color: #ddd;
+        font-size: 13px;
+      }
+      h1 { font-size: 14px; margin: 0 0 12px 0; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+      button {
+        background: #2a2a2a;
+        color: #ddd;
+        border: 1px solid #444;
+        padding: 6px 12px;
+        font-family: inherit;
+        font-size: 12px;
+        cursor: pointer;
+        border-radius: 3px;
+      }
+      button:hover:not(:disabled) { background: #333; }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+      input, textarea {
+        background: #111;
+        color: #ddd;
+        border: 1px solid #444;
+        font-family: inherit;
+        font-size: 12px;
+        padding: 6px;
+        border-radius: 3px;
+      }
+      textarea { width: 100%; box-sizing: border-box; height: 140px; }
+      #out {
+        background: #0d0d0d;
+        border: 1px solid #333;
+        padding: 8px;
+        height: 360px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        border-radius: 3px;
+      }
+      .ok  { color: #6fdb6f; }
+      .err { color: #ff7070; }
+      .dim { color: #888; }
+      label { font-size: 12px; color: #aaa; }
+    </style>
+  </head>
+  <body>
+    <h1>mudix · scripting worker PoC</h1>
+    <div class="row">
+      <label>connectionId <input id="cid" value="poc-1" /></label>
+      <button id="init">init worker</button>
+      <button id="shutdown" disabled>shutdown</button>
+    </div>
+    <div class="row">
+      <label>rows <input id="rows" type="number" value="1000" style="width:80px"/></label>
+      <button id="bench-sql" disabled>bench: sqlite</button>
+      <button id="bench-vfs" disabled>bench: vfs</button>
+      <button id="bench-boundary" disabled>bench: boundary</button>
+    </div>
+    <textarea id="lua" spellcheck="false">-- custom Lua
+local id = mudix.db.open('poc/test.sqlite')
+mudix.db.exec(id, 'CREATE TABLE IF NOT EXISTS hits(at REAL, msg TEXT)')
+mudix.db.exec(id, "INSERT INTO hits VALUES(" .. mudix.now() .. ", 'hello')")
+local r = mudix.db.exec(id, 'SELECT count(*) FROM hits')
+mudix.log('rows=' .. tostring(r.rows[1][1]))
+mudix.db.close(id)
+</textarea>
+    <div class="row">
+      <button id="run" disabled>run lua</button>
+      <button id="clear">clear log</button>
+    </div>
+    <div id="out"></div>
+
+    <script type="module" src="/src/poc-worker.ts"></script>
+  </body>
+</html>
