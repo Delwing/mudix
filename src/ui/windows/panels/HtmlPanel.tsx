@@ -2,7 +2,9 @@ import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { WindowManager } from '../WindowManager';
 import type { LabelManager } from '../../labels/LabelManager';
+import type { CommandLineManager } from '../../cmdline/CommandLineManager';
 import { LabelOverlay } from '../../labels/LabelOverlay';
+import { CommandLineOverlay } from '../../cmdline/CommandLineOverlay';
 import { backgroundImageStyle } from '../../output/backgroundImageStyle';
 import { WindowCmdLine } from './WindowCmdLine';
 
@@ -10,6 +12,7 @@ interface HtmlPanelProps {
     id: string;
     manager: WindowManager;
     labels?: LabelManager;
+    cmdLines?: CommandLineManager;
     backgroundColor?: { r: number; g: number; b: number; a: number };
     backgroundImage?: { url: string; mode: number };
     cmdLineEnabled?: boolean;
@@ -18,7 +21,7 @@ interface HtmlPanelProps {
     cmdLineValueSeq?: number;
 }
 
-export function HtmlPanel({ id, manager, labels, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: HtmlPanelProps) {
+export function HtmlPanel({ id, manager, labels, cmdLines, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: HtmlPanelProps) {
     const viewportRef = useRef<HTMLDivElement>(null);
     const ref = useRef<HTMLDivElement>(null);
 
@@ -60,6 +63,7 @@ export function HtmlPanel({ id, manager, labels, backgroundColor, backgroundImag
                 htmlContent
             )}
             {labels && <LabelOverlay manager={labels} parent={id} />}
+            {cmdLines && <CommandLineOverlay manager={cmdLines} parent={id} />}
         </div>
     );
 }

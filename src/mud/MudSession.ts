@@ -1,6 +1,7 @@
 import { EventBus } from '../core/EventBus';
 import { WindowManager } from '../ui/windows/WindowManager';
 import { LabelManager } from '../ui/labels/LabelManager';
+import { CommandLineManager } from '../ui/cmdline/CommandLineManager';
 import { SoundManager } from '../ui/sound/SoundManager';
 import { VideoManager } from '../ui/video/VideoManager';
 import { CmdLineMenuRegistry } from '../ui/CmdLineMenuRegistry';
@@ -33,6 +34,7 @@ export class MudSession {
     readonly events = new EventBus<MudEvents>();
     readonly windows = new WindowManager();
     readonly labels = new LabelManager();
+    readonly cmdLines = new CommandLineManager();
     readonly sounds = new SoundManager();
     readonly videos = new VideoManager();
     readonly cmdLineMenu = new CmdLineMenuRegistry();

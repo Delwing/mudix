@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type RefObject } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { useAppStore } from '../../storage';
 import { isEffectivelyEnabled, type ButtonLocation, type ButtonNode } from '../../storage/schema';
 import type { ScriptingEngine } from '../../scripting/ScriptingEngine';
@@ -101,44 +102,191 @@ function ButtonView({ button, engineRef, vfs, onStateChange }: ButtonViewProps) 
     );
 }
 
+function leavesOf(toolbar: ButtonNode, allButtons: ButtonNode[]): ButtonNode[] {
+    return allButtons.filter(b =>
+        b.parentId === toolbar.id && !b.isGroup && isEffectivelyEnabled(b, allButtons),
+    );
+}
+
+function renderToolbarGroup(
+    toolbar: ButtonNode,
+    leaves: ButtonNode[],
+    engineRef: RefObject<ScriptingEngine | null>,
+    vfs: ProfileVFS | null,
+    onStateChange: (id: string, next: boolean) => void,
+): React.ReactNode {
+    if (leaves.length === 0) return null;
+    const cols = toolbar.columns ?? 0;
+    const useGrid = cols > 0;
+    const tbCls = useGrid
+        ? `mudix-toolbar mudix-toolbar--grid mudix-toolbar--${toolbar.orientation}`
+        : `mudix-toolbar mudix-toolbar--${toolbar.orientation}`;
+    // Mudlet's buttonColumn = cross-axis cell count, so the role flips:
+    //   horizontal toolbar → N rows, buttons fill column-by-column
+    //   vertical toolbar   → N columns, buttons fill row-by-row
+    const gridStyle: React.CSSProperties | undefined = useGrid
+        ? toolbar.orientation === 'horizontal'
+            ? { gridTemplateRows: `repeat(${cols}, auto)`, gridAutoFlow: 'column' }
+            : { gridTemplateColumns: `repeat(${cols}, minmax(0, auto))` }
+        : undefined;
+    return (
+        <div className={tbCls} style={gridStyle} title={toolbar.name}>
+            {leaves.map(b => (
+                <ButtonView
+                    key={b.id}
+                    button={b}
+                    engineRef={engineRef}
+                    vfs={vfs}
+                    onStateChange={onStateChange}
+                />
+            ))}
+        </div>
+    );
+}
+
 function ToolbarStrip({ side, toolbars, allButtons, engineRef, vfs, onStateChange }: ToolbarStripProps) {
     if (toolbars.length === 0) return null;
     const cls = `mudix-toolbar-strip mudix-toolbar-strip--${side}`;
     return (
         <div className={cls}>
-            {toolbars.map(toolbar => {
-                const children = allButtons.filter(b =>
-                    b.parentId === toolbar.id && !b.isGroup && isEffectivelyEnabled(b, allButtons),
-                );
-                if (children.length === 0) return null;
-                const cols = toolbar.columns ?? 0;
-                const useGrid = cols > 0;
-                const tbCls = useGrid
-                    ? `mudix-toolbar mudix-toolbar--grid mudix-toolbar--${toolbar.orientation}`
-                    : `mudix-toolbar mudix-toolbar--${toolbar.orientation}`;
-                // Mudlet's buttonColumn = cross-axis cell count, so the role flips:
-                //   horizontal toolbar → N rows, buttons fill column-by-column
-                //   vertical toolbar   → N columns, buttons fill row-by-row
-                const gridStyle: React.CSSProperties | undefined = useGrid
-                    ? toolbar.orientation === 'horizontal'
-                        ? { gridTemplateRows: `repeat(${cols}, auto)`, gridAutoFlow: 'column' }
-                        : { gridTemplateColumns: `repeat(${cols}, minmax(0, auto))` }
-                    : undefined;
-                return (
-                    <div key={toolbar.id} className={tbCls} style={gridStyle} title={toolbar.name}>
-                        {children.map(b => (
-                            <ButtonView
-                                key={b.id}
-                                button={b}
-                                engineRef={engineRef}
-                                vfs={vfs}
-                                onStateChange={onStateChange}
-                            />
-                        ))}
-                    </div>
-                );
-            })}
+            {toolbars.map(toolbar => (
+                <Fragment key={toolbar.id}>
+                    {renderToolbarGroup(toolbar, leavesOf(toolbar, allButtons), engineRef, vfs, onStateChange)}
+                </Fragment>
+            ))}
         </div>
+    );
+}
+
+// Default off-edge inset for floating toolbars whose geometry hasn't been
+// persisted yet (or got nuked to (0, 0) on Mudlet import).
+const FLOATING_DEFAULT_X = 24;
+const FLOATING_DEFAULT_Y = 24;
+
+/**
+ * Clamp a position so at least `EDGE_MARGIN` of the toolbar stays inside the
+ * viewport — protects against window-resize / stale-coords cases where the
+ * persisted (posX, posY) would put the chrome fully offscreen.
+ */
+const EDGE_MARGIN = 32;
+function clampToViewport(
+    pos: { x: number; y: number },
+    el: HTMLElement | null,
+): { x: number; y: number } {
+    const w = el?.offsetWidth  ?? 80;
+    const h = el?.offsetHeight ?? 32;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const minX = EDGE_MARGIN - w;
+    const minY = 0;
+    const maxX = Math.max(minX, vw - EDGE_MARGIN);
+    const maxY = Math.max(minY, vh - h);
+    return {
+        x: Math.max(minX, Math.min(maxX, pos.x)),
+        y: Math.max(minY, Math.min(maxY, pos.y)),
+    };
+}
+
+interface FloatingToolbarProps {
+    toolbar: ButtonNode;
+    children: React.ReactNode;
+    onPositionChange: (x: number, y: number) => void;
+}
+
+function FloatingToolbar({ toolbar, children, onPositionChange }: FloatingToolbarProps) {
+    const ref = useRef<HTMLDivElement>(null);
+    const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
+        x: toolbar.posX ?? FLOATING_DEFAULT_X,
+        y: toolbar.posY ?? FLOATING_DEFAULT_Y,
+    }));
+    const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+
+    // Sync to external pos changes and clamp into viewport. Skip while a drag
+    // is in flight so a concurrent store update doesn't yank the toolbar back.
+    useLayoutEffect(() => {
+        if (dragRef.current) return;
+        setPos(clampToViewport(
+            { x: toolbar.posX ?? FLOATING_DEFAULT_X, y: toolbar.posY ?? FLOATING_DEFAULT_Y },
+            ref.current,
+        ));
+    }, [toolbar.posX, toolbar.posY]);
+
+    useEffect(() => {
+        const onResize = () => setPos(prev => clampToViewport(prev, ref.current));
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+    }, []);
+
+    const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        dragRef.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
+    };
+    const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+        const d = dragRef.current;
+        if (!d) return;
+        setPos(clampToViewport(
+            { x: d.origX + (e.clientX - d.startX), y: d.origY + (e.clientY - d.startY) },
+            ref.current,
+        ));
+    };
+    const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+        if (!dragRef.current) return;
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        dragRef.current = null;
+        onPositionChange(pos.x, pos.y);
+    };
+
+    return (
+        <div ref={ref} className="mudix-floating-toolbar" style={{ left: pos.x, top: pos.y }}>
+            <div
+                className="mudix-floating-toolbar__handle"
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+                title={`Drag to move "${toolbar.name}"`}
+            >
+                <span className="mudix-floating-toolbar__handle-label">{toolbar.name}</span>
+            </div>
+            {children}
+        </div>
+    );
+}
+
+interface FloatingToolbarsLayerProps {
+    toolbars: ButtonNode[];
+    allButtons: ButtonNode[];
+    engineRef: RefObject<ScriptingEngine | null>;
+    vfs: ProfileVFS | null;
+    onStateChange: (id: string, next: boolean) => void;
+    onPositionChange: (id: string, x: number, y: number) => void;
+}
+
+function FloatingToolbarsLayer({
+    toolbars, allButtons, engineRef, vfs, onStateChange, onPositionChange,
+}: FloatingToolbarsLayerProps) {
+    const renderable = useMemo(
+        () => toolbars
+            .map(t => ({ toolbar: t, leaves: leavesOf(t, allButtons) }))
+            .filter(({ leaves }) => leaves.length > 0),
+        [toolbars, allButtons],
+    );
+    if (renderable.length === 0) return null;
+    return createPortal(
+        <div className="mudix-floating-toolbars-root">
+            {renderable.map(({ toolbar, leaves }) => (
+                <FloatingToolbar
+                    key={toolbar.id}
+                    toolbar={toolbar}
+                    onPositionChange={(x, y) => onPositionChange(toolbar.id, x, y)}
+                >
+                    {renderToolbarGroup(toolbar, leaves, engineRef, vfs, onStateChange)}
+                </FloatingToolbar>
+            ))}
+        </div>,
+        document.body,
     );
 }
 
@@ -160,6 +308,10 @@ export function useButtonStrips({ connectionId, engineRef, vfs }: ButtonsLayerPr
         updateButton(connectionId, id, { buttonState: next });
     };
 
+    const onPositionChange = (id: string, x: number, y: number) => {
+        updateButton(connectionId, id, { posX: Math.round(x), posY: Math.round(y) });
+    };
+
     const enabledToolbars = useMemo(
         () => buttons.filter(b => b.isGroup && isEffectivelyEnabled(b, buttons)),
         [buttons],
@@ -178,10 +330,22 @@ export function useButtonStrips({ connectionId, engineRef, vfs }: ButtonsLayerPr
         />
     );
 
+    const floating = (
+        <FloatingToolbarsLayer
+            toolbars={byLocation('floating')}
+            allButtons={buttons}
+            engineRef={engineRef}
+            vfs={vfs}
+            onStateChange={onStateChange}
+            onPositionChange={onPositionChange}
+        />
+    );
+
     return {
-        top:    strip('top'),
-        bottom: strip('bottom'),
-        left:   strip('left'),
-        right:  strip('right'),
+        top:      strip('top'),
+        bottom:   strip('bottom'),
+        left:     strip('left'),
+        right:    strip('right'),
+        floating,
     };
 }

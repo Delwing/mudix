@@ -117,3 +117,55 @@
     text-overflow: ellipsis;
     max-width: 160px;
 }
+
+/* Floating toolbars — position:fixed portal, sits just under floating windows
+   (z:35) so script modals (z:40+) and app modals (z:50) stay above. */
+.mudix-floating-toolbars-root {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 34;
+}
+
+.mudix-floating-toolbar {
+    position: fixed;
+    display: inline-flex;
+    flex-direction: column;
+    background: var(--bg-glass);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-float);
+    pointer-events: auto;
+}
+
+.mudix-floating-toolbar__handle {
+    cursor: grab;
+    padding: 2px 8px;
+    background: color-mix(in srgb, var(--bg-surface) 80%, transparent);
+    border-bottom: 1px solid var(--border);
+    border-radius: var(--radius) var(--radius) 0 0;
+    user-select: none;
+    touch-action: none;
+}
+
+.mudix-floating-toolbar__handle:active { cursor: grabbing; }
+
+.mudix-floating-toolbar__handle-label {
+    display: block;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 240px;
+    pointer-events: none;
+}
+
+.mudix-floating-toolbar > .mudix-toolbar {
+    border: none;
+    border-radius: 0 0 var(--radius) var(--radius);
+    background: transparent;
+}

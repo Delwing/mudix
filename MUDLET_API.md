@@ -9,7 +9,6 @@ Status legend:
 - ❌ N/A — fundamentally inapplicable (multi-profile, Qt-specific, Discord SDK, etc.). **These should still be bound as warning-emitting no-op stubs** so imported Mudlet scripts that reference them don't crash; the stub logs once per call site and returns a sensible default (`nil`/`false`/empty table).
 
 Known blockers:
-- `createCommandLine` — blocks `Geyser.CommandLine` and the entire overlay command-line widget family for named widgets (main bar is wired separately).
 - Browser file-picker async/sync mismatch — blocks `invokeFileDialog`.
 
 ---
@@ -127,7 +126,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | Function | Status | Notes |
 |---|---|---|
 | `io.exists(path)` | ✅ | Other.lua (uses `io.open`) backed by ProfileVFS |
-| `lfs.attributes(path)` | 🚧 | LuaFileSystem not bound; could be added on top of the VFS |
+| `lfs.attributes(path [, attrib])` | ✅ | VFS.lua exposes the full `lfs` table over the profile VFS — `attributes` returns `{mode, size, modification, access}` (or the single named attribute). `lfs.currentdir`/`chdir`/`mkdir`/`rmdir`/`dir`/`touch`/`isfile`/`isdir` also wired |
 | `openMudletHomeDir()` | ✅ | `openUrl("file:")` routes to the VFS file browser |
 | `saveProfile([name])` | ❌ | Auto-persists via localStorage / IndexedDB; explicit save is a no-op |
 
@@ -214,19 +213,19 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `getSpecialExits(roomID [, listAllExits])` | ✅ | `{[exitRoomID]={[cmd]="0"\|"1"}}`; lowest-weight command per room unless `listAllExits` |
 | `getSpecialExitsSwap(roomID)` | ✅ | JS-exposed; `{cmd=toId}` |
 | `gotoRoom(targetRoomID)` | ✅ | Pure Lua (Bridge.lua): `getPath` then `send`s the moves. mudix sends immediately (no autonomous timed-walk engine) |
-| `hasExitLock(roomID, dir)` | 🚧 | Pathfinding honours `room.exitLocks` but no exposed reader |
 | `hasSpecialExitLock(fromID, toID, cmd)` | ✅ | `toID` ignored; returns the lock boolean or `(nil, errMsg)` when missing |
 | `highlightRoom(roomID, …)` | ✅ | JS-exposed — color1/color2 + radius + alpha |
 | `killMapInfo(label)` | ✅ | Removes a contributor entirely |
 | `loadJsonMap(path)` | ✅ | JS-exposed via `MapStore.loadFromJsonString`; raises `sysMapLoadEvent` on success |
 | `loadMap(path)` | ✅ | JS-exposed |
-| `lockExit(roomID, dir, bool)` | ⚠️ | Pure-Lua wrapper in Other.lua stores into room user-data; pathfinding reads `room.exitLocks`, so locks set via Lua aren't seen by `getPath` yet |
+| `lockExit(roomID, dir, bool)` | ✅ | `MapStore.lockExit` mutates `room.exitLocks`, which `__getPath` reads — locks set from Lua are honoured by pathfinding |
+| `hasExitLock(roomID, dir)` | ✅ | `MapStore.hasExitLock`; reads `room.exitLocks` directly. Direction accepts the 1-12 int or names ("north"/"n"/…) |
 | `lockRoom(roomID, bool)` | ✅ | JS-exposed; honoured by pathfinding |
 | `lockSpecialExit(fromID, toID, cmd, lockIfTrue)` | ✅ | Bridge.lua drops the (Mudlet-ignored) `toID` |
 | `moveMapWidget(x, y)` | ✅ | JS-exposed (alias for `moveWindow` on the embedded mapper) |
 | `openMapWidget([…])` | ✅ | Opens the dockable mapper panel |
 | `pauseSpeedwalk()` | ✅ | Pure Lua via Other.lua |
-| `registerMapInfo(label, fn)` | 🚧 | Map-info contributor API |
+| `registerMapInfo(label, fn)` | ✅ | `MapStore.registerMapInfo` keyed by label; callback receives `(roomId, selectionSize, areaId, displayedAreaId)` and returns `(text, bold?, italic?, r?, g?, b?)`. New contributors land disabled — call `enableMapInfo(label)` to show. MapPanel re-evaluates every enabled contributor on map updates |
 | `resumeSpeedwalk()` | ✅ | Other.lua |
 | `removeCustomLine(roomID, direction)` | ✅ | Direction = 1-12/name/special command; `false` when missing |
 | `removeMapEvent(uniquename)` | ✅ | Pairs with `addMapEvent` |
@@ -369,9 +368,9 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `addCmdLineSuggestion([name,] text)` | ✅ | Main command bar; `name` argument is dropped (Tab-completion merged with command history) |
 | `adjustStopWatch(id\|name, seconds)` | ✅ | Add (or subtract) seconds |
 | `ancestors(id, type)` | 🚧 | Hierarchy walker for any tree node |
-| `appendCmdLine([name,] text)` | ⚠️ | Main bar only; named overlay widgets not yet wired |
+| `appendCmdLine([name,] text)` | ✅ | Routes to overlay cmd lines (`createCommandLine`), per-userwindow cmd lines, or the main bar |
 | `appendScript(name, code)` | ✅ | JS-exposed |
-| `clearCmdLine([name])` | ⚠️ | Main bar only; named overlay widgets not yet wired |
+| `clearCmdLine([name])` | ✅ | Routes to overlay cmd lines, per-userwindow cmd lines, or the main bar |
 | `clearCmdLineSuggestions([name])` | ✅ | Main bar |
 | `clearProfileInformation(key)` | 🚧 | Pairs with `setProfileInformation` |
 | `createStopWatch([name], [autostart])` | ✅ | `performance.now()`-based high-res stopwatch (`StopwatchManager`). Named watches default autostart off |
@@ -417,13 +416,13 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `permAlias(name, parent, pattern, code)` | ✅ | Pattern is a single PCRE string (Mudlet TAlias.mRegexCode). Returns the new id, or -1 |
 | `permGroup(name, type [, parent])` | ✅ | Creates a group node in the requested family |
 | `permPromptTrigger(name, parent, code)` | 🚧 | Persistent prompt-trigger constructor |
-| `permRegexTrigger(name, parent, pattern, code)` | ⚠️ | Constructor exists; full Lua signature still limited |
+| `permRegexTrigger(name, parent, patterns, code)` | ✅ | `patterns` is a table of regex strings (empty table → creates a trigger group). Bridge.lua joins to \x01 and the JS binding splits it back |
 | `permBeginOfLineStringTrigger(name, parent, patterns, code)` | 🚧 | |
 | `permSubstringTrigger(name, parent, patterns, code)` | ✅ | Each pattern is a literal substring. Empty patterns array creates a trigger group |
 | `permScript(name, parent, code)` | 🚧 | Persistent script-node constructor |
 | `permTimer(name, parent, delay, code)` | ✅ | Persistent one-shot timer; returns the new id or -1 |
 | `permKey(name, parent, modifier, key, code)` | ✅ | `modifier` is the Qt::KeyboardModifier int (1=shift, 2=ctrl, 4=alt, 8=meta; -1 → none). `key` accepts a Qt::Key int or a KeyboardEvent.code string |
-| `printCmdLine([name,] text)` | ⚠️ | Main bar only |
+| `printCmdLine([name,] text)` | ✅ | Routes to overlay cmd lines, per-userwindow cmd lines, or the main bar |
 | `raiseEvent(name, ...)` | ✅ | |
 | `raiseGlobalEvent(name, ...)` | ❌ stub | Multi-profile only; stub forwards to local `raiseEvent` so single-profile scripts still see the event |
 | `registerNamedTimer(parent, name, delay, code)` | ✅ | IDManager.lua |
@@ -626,7 +625,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `copy2decho()` | ✅ | Returns the current selection as decho text |
 | `copy2html()` | ✅ | Returns the current selection as HTML |
 | `createBuffer(name)` | ✅ | Off-screen text buffer (no panel) — registers a named Console; output stays in history (never opens a panel) and is selectable/copyable. `windowType` reports `"buffer"` |
-| `createCommandLine(name, x, y, w, h)` | 🚧 | Absolutely-positioned extra input widget |
+| `createCommandLine([parent,] name, x, y, w, h)` | ✅ | Absolutely-positioned overlay `<input>` rendered by `CommandLineOverlay` on the named parent viewport (defaults to main). Sibling to `createLabel` / `createMiniConsole` — uses the unified `moveWindow` / `resizeWindow` / `showWindow` / `hideWindow` / `raiseWindow` / `lowerWindow` lookup |
 | `createConsole(name, fontSize, charsW, linesH, x, y)` | ✅ | JS-exposed |
 | `createGauge(name, x, y, w, h, parent)` | ✅ | Pure Lua via GUIUtils.lua (3× `createLabel` + `setBackgroundColor`) |
 | `createLabel(name, x, y, w, h, passthrough)` | ✅ | JS-exposed |
@@ -643,7 +642,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `dechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
 | `dinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
 | `dinsertPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
-| `deleteCommandLine(name)` | 🚧 | Remove overlay command line |
+| `deleteCommandLine(name)` | ✅ | Destroys an overlay cmd line; fires `sysCommandLineDeleted(name)` and frees the bound action callback chunk |
 | `deleteLabel(name)` | ✅ | Bridge.lua → `__deleteLabel` |
 | `deleteLine()` | ✅ | Removes last output element |
 | `deleteMiniConsole(name)` | ✅ | Rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
@@ -651,7 +650,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `deleteScrollBox(name)` | 🚧 | |
 | `deselect([window])` | ✅ | JS-exposed |
 | `disableClickthrough(name)` | ✅ | JS-exposed |
-| `disableCommandLine(name)` | ⚠️ | Works for user-window cmd-lines; no-op for the main bar |
+| `disableCommandLine(name)` | ✅ | Overlay cmd lines disable the input (greyed); per-userwindow cmd lines hide the docked input; main bar is a no-op |
 | `disableHorizontalScrollBar(name)` | ✅ | JS-exposed |
 | `disableScrollBar(name)` | ✅ | JS-exposed |
 | `disableScrolling(name)` | ✅ | JS-exposed |
@@ -661,7 +660,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `echoUserWindow(name, text)` | ✅ | Alias for `mudix.windows.write` |
 | `echoPopup([window,] text, cmds, hints)` | ✅ | Bridge.lua flattens cmds/hints tables |
 | `enableClickthrough(name)` | ✅ | JS-exposed |
-| `enableCommandLine(name)` | ⚠️ | Works for user-window cmd-lines; no-op for the main bar |
+| `enableCommandLine(name)` | ✅ | Overlay cmd lines re-enable a disabled input; per-userwindow cmd lines show the docked input; main bar is a no-op |
 | `enableHorizontalScrollBar(name)` | ✅ | JS-exposed |
 | `enableScrollBar(name)` | ✅ | JS-exposed |
 | `enableScrolling(name)` | ✅ | JS-exposed |
@@ -736,7 +735,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `replaceAll(what, with)` | ✅ | Pure Lua sweep over the current line buffer |
 | `replaceLine(text)` | ✅ | Pure Lua via GUIUtils.lua (selectCurrentLine + replace) |
 | `replaceWildcard(n, text)` | ✅ | Replace the n-th capture group in the current line |
-| `resetCmdLineAction([name])` | ⚠️ | Main bar wired; named widgets 🚧 |
+| `resetCmdLineAction([name])` | ✅ | Routes to overlay cmd lines, per-userwindow cmd lines, or the main bar |
 | `resetBackgroundImage(name)` | ✅ | Clears the label's (or window's) background image |
 | `resetFormat([window])` | ✅ | Reset all formatting |
 | `resetLabelCursor(name)` | ✅ | JS-exposed |
@@ -747,7 +746,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `saveWindowLayout()` | ✅ | Snapshots window hints + dock extents into `connectionLayoutSnapshots` |
 | `scaleMovie(name, factor)` | 🚧 | No QMovie equivalent |
 | `selectCaptureGroup(n)` | ✅ | JS-exposed |
-| `selectCmdLineText([name])` | ⚠️ | Selects all main command-bar text; named overlay widgets not yet wired |
+| `selectCmdLineText([name])` | ✅ | Selects all text in the targeted overlay cmd line or the main bar (per-userwindow cmd lines accept the name for parity) |
 | `selectCurrentLine([window])` | ✅ | JS-exposed |
 | `selectSection([window,] col, len)` | ✅ | JS-exposed |
 | `selectString([window,] text, n)` | ✅ | JS-exposed |
@@ -762,8 +761,8 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setFgColor([window,] r, g, b)` | ✅ | JS-exposed |
 | `setButtonStyleSheet(name, css)` | ✅ | Raw QSS → inline React style. Pseudo-state selectors (`:hover`/`:pressed`) drop through |
 | `setClipboardText(text)` | 🚧 | Async write — needs user-gesture gating |
-| `setCmdLineAction([name,] fn)` | ⚠️ | Main bar wired; named widgets 🚧 |
-| `setCmdLineStyleSheet([name,] css)` | ⚠️ | Applies to user-window cmd-lines; main bar has no QSS hook so returns true as a no-op |
+| `setCmdLineAction([name,] fn)` | ✅ | Routes to overlay cmd lines, per-userwindow cmd lines, or the main bar. Prior callback freed on rebind |
+| `setCmdLineStyleSheet([name,] css)` | ✅ | Translates QSS through `cmdLineQssToScopedCss` for overlay and per-userwindow cmd lines; main bar has no QSS hook so returns true as a no-op |
 | `setFont([window,] font)` | ✅ | Bridge.lua → `__setFont` |
 | `setFontSize([window,] size)` | ✅ | Bridge.lua → `__setFontSize` |
 | `setGauge(name, current, max [, text])` | ✅ | Pure Lua via GUIUtils.lua |
@@ -911,7 +910,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysWindowMousePressEvent` / `sysWindowMouseReleaseEvent` | ✅ | Mouse press/release. Button is Mudlet-numbered (1=left, 2=right, 3=middle, 4=back, 5=forward, 0=other); x/y are pixels relative to the window — args: button, x, y, name |
 | `sysLabelDeleted` | ✅ | On successful `deleteLabel` — arg: name |
 | `sysMiniConsoleDeleted` | ✅ | On successful `deleteMiniConsole` — arg: name |
-| `sysCommandLineDeleted` | 🚧 | Blocked on `createCommandLine` — arg: name |
+| `sysCommandLineDeleted` | ✅ | On successful `deleteCommandLine` — arg: name |
 | `sysScrollBoxDeleted` | 🚧 | No ScrollBox widget yet — arg: name |
 
 **Protocol / telnet**
@@ -957,7 +956,7 @@ Pure Lua on top of the overlay primitive API. No additional JS required.
 | `Geyser.MiniConsole` | ✅ | Bundled |
 | `Geyser.Gauge` | ✅ | Bundled; wraps GUIUtils `createGauge`/`setGauge` |
 | `Geyser.HBox` / `Geyser.VBox` | ✅ | Bundled |
-| `Geyser.CommandLine` | ⚠️ | Bundled but `createCommandLine` is missing |
+| `Geyser.CommandLine` | ✅ | Bundled; the underlying `createCommandLine` overlay primitive is now wired |
 | `Geyser.UserWindow` | ✅ | Bundled; uses `openUserWindow` |
 | `Geyser.ReflowContainer` | 🚧 | Not bundled in `LuaGlobal.lua` load list |
 

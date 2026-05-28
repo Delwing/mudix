@@ -130,6 +130,8 @@ export function ContentLayout({
                 onTitlebarContextMenu={handleTitlebarContextMenu}
             />
 
+            {buttonStrips.floating}
+
             {menuPos && (
                 <WindowContextMenu
                     windows={windows}
@@ -144,8 +146,8 @@ export function ContentLayout({
                 Each panel renders into a stable portal-target div that shells physically move
                 between dock slots and floating frames without ever unmounting the component. */}
             {windows.map(w => createPortal(
-                w.kind === 'text' ? <TextPanel id={w.id} manager={manager} labels={session.labels} fontSize={w.fontSize} fontFamily={w.fontFamily} wrapAt={w.wrapAt} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} cmdLineEnabled={w.cmdLineEnabled} cmdLineStyleSheet={w.cmdLineStyleSheet} cmdLineValue={w.cmdLineValue} cmdLineValueSeq={w.cmdLineValueSeq} />
-              : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} labels={session.labels} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} cmdLineEnabled={w.cmdLineEnabled} cmdLineStyleSheet={w.cmdLineStyleSheet} cmdLineValue={w.cmdLineValue} cmdLineValueSeq={w.cmdLineValueSeq} />
+                w.kind === 'text' ? <TextPanel id={w.id} manager={manager} labels={session.labels} cmdLines={session.cmdLines} fontSize={w.fontSize} fontFamily={w.fontFamily} wrapAt={w.wrapAt} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} cmdLineEnabled={w.cmdLineEnabled} cmdLineStyleSheet={w.cmdLineStyleSheet} cmdLineValue={w.cmdLineValue} cmdLineValueSeq={w.cmdLineValueSeq} />
+              : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} labels={session.labels} cmdLines={session.cmdLines} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} cmdLineEnabled={w.cmdLineEnabled} cmdLineStyleSheet={w.cmdLineStyleSheet} cmdLineValue={w.cmdLineValue} cmdLineValueSeq={w.cmdLineValueSeq} />
               : <MapPanel id={w.id} manager={manager} connectionId={connectionId} />,
                 manager.getOrCreatePortalTarget(w.id),
                 w.id,

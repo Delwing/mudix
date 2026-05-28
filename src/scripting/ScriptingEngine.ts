@@ -8,7 +8,7 @@ import {buildEffectivelyEnabledIds, isEffectivelyEnabled} from '../storage/schem
 import {useAppStore} from '../storage';
 import {loadProfileData, saveProfileData} from '../storage/profileVfsData';
 import type {FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
-import {AnsiAwareBuffer} from '../mud/text/FormatState';
+import {AnsiAwareBuffer, computeTrailingState} from '../mud/text/FormatState';
 import type {MspCommand} from '../mud/protocol';
 import {ScriptingAPI} from './ScriptingAPI';
 import {LuaRuntime} from './lua/LuaRuntime';
@@ -151,6 +151,12 @@ export class ScriptingEngine {
     private readonly unsubs: (() => void)[] = [];
     private readonly api: ScriptingAPI;
     private promptPending = false;
+    // Persistent SGR state at the end of the last MUD-typed line, so colors
+    // carry across line breaks (and across WebSocket frames) the way Mudlet's
+    // TBuffer does. Polish MUDs like Arkadia colour a header line and let
+    // subsequent lines inherit that colour until the next SGR — without a
+    // persistent carry, a blank line or frame boundary drops the colour.
+    private mudCarryState: FormatStateSnapshot | undefined = undefined;
     // Tracks whether GMCP/MSDP finished negotiating on the live connection, so
     // the symmetric sysProtocolDisabled can fire on disconnect. Reset on
     // disconnect.
@@ -1957,7 +1963,13 @@ export class ScriptingEngine {
                 const lines = text.split('\n');
                 if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
 
-                let carryState: FormatStateSnapshot | undefined;
+                // Only MUD-typed groups participate in cross-line/cross-batch
+                // SGR carry. Client-side echoes and errors are formatted
+                // independently and shouldn't inherit (or perturb) the server's
+                // running colour state.
+                const carryEnabled = type === 'mud';
+                let carryState: FormatStateSnapshot | undefined =
+                    carryEnabled ? this.mudCarryState : undefined;
 
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i];
@@ -1966,7 +1978,11 @@ export class ScriptingEngine {
                     if (isPrompt) this.promptPending = false;
 
                     const buffer = new AnsiAwareBuffer(line, carryState);
-                    carryState = buffer.trailingState();
+                    // computeTrailingState reflects the *actual* end-of-line
+                    // SGR — including trailing resets, and unchanged across
+                    // blank lines — unlike buffer.trailingState() which only
+                    // sees the last text segment's state.
+                    carryState = computeTrailingState(line, carryState);
 
                     if (plain.length > 0) {
                         this.processLineTriggers(plain, buffer, isPrompt);
@@ -1980,6 +1996,8 @@ export class ScriptingEngine {
                         this.session.events.emit('message', buffer, type, Date.now());
                     }
                 }
+
+                if (carryEnabled) this.mudCarryState = carryState;
             } finally {
                 // Flush trigger echoes after the group renders so they never
                 // interleave with the batch. `finally` guarantees isDeferringEcho
@@ -2085,6 +2103,9 @@ export class ScriptingEngine {
                 }
             }),
             session.events.on('client.connect', () => {
+                // Drop any colour carry from a prior session — the new server
+                // starts at default SGR.
+                this.mudCarryState = undefined;
                 // mudix's native `connect` plus the Mudlet-standard name — the
                 // bundled generic mapper and ported scripts register a
                 // sysConnectionEvent handler, so both must fire.

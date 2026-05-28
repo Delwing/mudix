@@ -9,6 +9,7 @@ import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 import { getSqliteClient } from '../db/sqliteClient';
 import { CodeEditorPreview, EDITABLE_EXTENSIONS } from './CodeEditorPreview';
 import { MarkdownPreview } from './MarkdownPreview';
+import { JsonPreview } from './JsonPreview';
 import {
     isFolderLinkSupported,
     loadFolderHandle,
@@ -566,9 +567,13 @@ const markdownStrategy: FilePreviewStrategy = {
     canPreview: (n) => /\.(md|markdown)$/i.test(n),
     Preview: MarkdownPreview,
 };
+const jsonStrategy: FilePreviewStrategy = {
+    canPreview: (n) => /\.json$/i.test(n),
+    Preview: JsonPreview,
+};
 
 // Add new strategies here — order matters, first match wins
-const previewStrategies: FilePreviewStrategy[] = [sqliteStrategy, imageStrategy, audioStrategy, markdownStrategy, codeEditorStrategy, plainTextStrategy];
+const previewStrategies: FilePreviewStrategy[] = [sqliteStrategy, imageStrategy, audioStrategy, markdownStrategy, jsonStrategy, codeEditorStrategy, plainTextStrategy];
 
 function getPreviewStrategy(filename: string): FilePreviewStrategy {
     return previewStrategies.find(s => s.canPreview(filename)) ?? plainTextStrategy;

@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { WindowManager } from '../WindowManager';
 import type { LabelManager } from '../../labels/LabelManager';
+import type { CommandLineManager } from '../../cmdline/CommandLineManager';
 import { useStickyOutput } from '../../../hooks/useOutput';
 import { StickyOutputPanel } from '../../output/StickyOutputPanel';
 import { LabelOverlay } from '../../labels/LabelOverlay';
+import { CommandLineOverlay } from '../../cmdline/CommandLineOverlay';
 import { backgroundImageStyle } from '../../output/backgroundImageStyle';
 import { WindowCmdLine } from './WindowCmdLine';
 
@@ -12,6 +14,7 @@ interface TextPanelProps {
     id: string;
     manager: WindowManager;
     labels?: LabelManager;
+    cmdLines?: CommandLineManager;
     fontSize?: number;
     fontFamily?: string;
     wrapAt?: number;
@@ -23,7 +26,7 @@ interface TextPanelProps {
     cmdLineValueSeq?: number;
 }
 
-export function TextPanel({ id, manager, labels, fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: TextPanelProps) {
+export function TextPanel({ id, manager, labels, cmdLines, fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: TextPanelProps) {
     const viewportRef = useRef<HTMLDivElement>(null);
     const { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom, controls } =
         useStickyOutput(null, { stickyLines: 50 });
@@ -80,6 +83,7 @@ export function TextPanel({ id, manager, labels, fontSize, fontFamily, wrapAt, b
                 stickyPanel
             )}
             {labels && <LabelOverlay manager={labels} parent={id} />}
+            {cmdLines && <CommandLineOverlay manager={cmdLines} parent={id} />}
         </div>
     );
 }

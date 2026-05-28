@@ -227,6 +227,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('openMapWidget',   '([area | x, y, w, h])',                          'Open the map widget. No args: saved layout (right by default). One arg: dock area "f"/"l"/"r"/"t"/"b". Four args: floating at x,y with size w,h.'),
     fn('createMiniConsole', '([parent,] name, x, y, w, h) → bool', 'Create a positioned floating text panel; calling again repositions it'),
     fn('deleteMiniConsole', '(name) → bool', 'Destroy a mini-console created by createMiniConsole. Returns false for the main window, dock panels, or an unknown name.'),
+    fn('createCommandLine', '([parent,] name, x, y, w, h) → bool', 'Create an absolutely-positioned overlay command-line <input> on the named parent viewport (defaults to main). Returns false when a cmd line with that name already exists. Combine with setCmdLineAction/setCmdLineStyleSheet/printCmdLine etc. by name.'),
+    fn('deleteCommandLine', '(name) → bool', 'Destroy an overlay command line created by createCommandLine. Fires sysCommandLineDeleted(name) on success.'),
     fn('createMapper',      '([parent,] x, y, w, h) → bool',        'Create a positioned mapper widget embedded in the main window or a userwindow (shares state with the dock widget). Singleton — calling again repositions it.'),
     fn('createBuffer',    '(name)',        'Create a named off-screen text buffer (like a hidden miniconsole) for formatting/storing rich text'),
     fn('copy',            '([window])',    'Copy the current selection (with formatting) into the clipboard for paste()/appendBuffer()'),

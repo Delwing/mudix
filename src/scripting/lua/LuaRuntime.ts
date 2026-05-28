@@ -76,6 +76,10 @@ export class LuaRuntime implements IScriptingRuntime {
     // command line (vs the main command bar). Cleared on disableCommandLine /
     // resetCmdLineAction(name) and when the window is closed.
     private windowCmdLineActionCbIds = new Map<string, number>();
+    // Per-overlay-cmd-line setCmdLineAction cb ids. Same role as
+    // windowCmdLineActionCbIds but keyed by createCommandLine names. Cleared on
+    // resetCmdLineAction(name) and when the cmd line is deleted.
+    private overlayCmdLineActionCbIds = new Map<string, number>();
     private currentMatches: string[] = [];
     // selectCaptureGroup needs the actual offset of each capture in the
     // source line; without these spans it falls back to selectString(text, 1)
@@ -468,6 +472,37 @@ export class LuaRuntime implements IScriptingRuntime {
                 parent,
             );
         });
+        // Mudlet createCommandLine([parent,] name, x, y, w, h) — absolutely-
+        // positioned overlay <input> element on the named parent viewport
+        // (defaults to 'main'). Returns true on success, false when a command
+        // line of that name already exists. The unified moveWindow / resizeWindow
+        // / showWindow / hideWindow lookup below picks it up automatically.
+        this.lua.global.set('createCommandLine', (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown, f?: unknown) => {
+            const hasParent = f !== undefined;
+            const [parent, name, x, y, w, h] = hasParent
+                ? [a as string, b, c, d, e, f]
+                : [undefined, a, b, c, d, e];
+            if (typeof name !== 'string' || !name) return false;
+            return this.api.cmdLines.create(name, {
+                parent: parent && parent !== 'main' ? parent : 'main',
+                x: Number(x), y: Number(y),
+                width: Number(w), height: Number(h),
+            });
+        });
+        // Mudlet deleteCommandLine(name) → bool. Destroys an overlay command line
+        // created by createCommandLine. Fires sysCommandLineDeleted(name) on
+        // success, matching Mudlet's sysLabelDeleted / sysMiniConsoleDeleted.
+        this.lua.global.set('deleteCommandLine', (name: unknown) => {
+            if (typeof name !== 'string') return false;
+            // Free any bound action callback chunk so the Lua registry slot is
+            // released — overlayCmdLineActionCbIds bookkeeping mirrors the
+            // per-window cmd-line lifecycle.
+            const prev = this.overlayCmdLineActionCbIds.get(name);
+            if (prev) { this.unregisterCb(prev); this.overlayCmdLineActionCbIds.delete(name); }
+            const ok = this.api.cmdLines.destroy(name);
+            if (ok) this.emitEvent('sysCommandLineDeleted', [name]);
+            return ok;
+        });
         // Mudlet deleteMiniConsole(name) → bool. Destroys a mini-console created
         // via createMiniConsole; rejects non-miniconsole targets (main window,
         // dock panels, unknown names).
@@ -511,23 +546,28 @@ export class LuaRuntime implements IScriptingRuntime {
         // race with openUserWindow under the same string.
         this.lua.global.set('hideWindow', (name: string) => {
             if (this.api.labels.has(name)) this.api.labels.hide(name);
+            else if (this.api.cmdLines.has(name)) this.api.cmdLines.hide(name);
             else this.api.windows.hide(name);
         });
-        // Mudlet showWindow(name) → bool. Returns true when the named label or
-        // userwindow exists and is now visible; false when nothing matches.
+        // Mudlet showWindow(name) → bool. Returns true when the named label,
+        // overlay command line, or userwindow exists and is now visible; false
+        // when nothing matches.
         this.lua.global.set('showWindow', (name: string) => {
             if (typeof name !== 'string' || !name) return false;
             if (this.api.labels.has(name)) return this.api.labels.show(name);
+            if (this.api.cmdLines.has(name)) return this.api.cmdLines.show(name);
             return this.api.windows.show(name);
         });
         this.lua.global.set('moveWindow', (name: string, x: unknown, y: unknown) => {
             const xn = Number(x), yn = Number(y);
             if (this.api.labels.has(name)) this.api.labels.move(name, xn, yn);
+            else if (this.api.cmdLines.has(name)) this.api.cmdLines.move(name, xn, yn);
             else if (this.api.windows.has(name)) this.api.windows.move(name, xn, yn);
         });
         this.lua.global.set('resizeWindow', (name: string, w: unknown, h: unknown) => {
             const wn = Number(w), hn = Number(h);
             if (this.api.labels.has(name)) this.api.labels.resize(name, wn, hn);
+            else if (this.api.cmdLines.has(name)) this.api.cmdLines.resize(name, wn, hn);
             else if (this.api.windows.has(name)) this.api.windows.resize(name, wn, hn);
         });
         // Mudlet setUserWindowTitle(name, [title]) → bool. Empty/missing title
@@ -723,12 +763,14 @@ export class LuaRuntime implements IScriptingRuntime {
         const raiseAny = (name: unknown): boolean => {
             if (typeof name !== 'string') return false;
             if (this.api.labels.has(name)) { this.api.labels.raise(name); return true; }
+            if (this.api.cmdLines.has(name)) { this.api.cmdLines.raise(name); return true; }
             if (this.api.windows.has(name)) { this.api.windows.bringToFront(name); return true; }
             return false;
         };
         const lowerAny = (name: unknown): boolean => {
             if (typeof name !== 'string') return false;
             if (this.api.labels.has(name)) { this.api.labels.lower(name); return true; }
+            if (this.api.cmdLines.has(name)) { this.api.cmdLines.lower(name); return true; }
             if (this.api.windows.has(name)) { this.api.windows.sendToBack(name); return true; }
             return false;
         };
@@ -828,6 +870,18 @@ export class LuaRuntime implements IScriptingRuntime {
         // closures don't leak.
         this.lua.global.set('__mudix_setCmdLineAction', (cbId: number, windowName?: unknown) => {
             const name = typeof windowName === 'string' && windowName && windowName !== 'main' ? windowName : null;
+            if (name && this.api.cmdLines.has(name)) {
+                const prev = this.overlayCmdLineActionCbIds.get(name);
+                if (prev && prev !== cbId) this.unregisterCb(prev);
+                if (!cbId) {
+                    this.overlayCmdLineActionCbIds.delete(name);
+                    return this.api.cmdLines.setAction(name, null);
+                }
+                this.overlayCmdLineActionCbIds.set(name, cbId);
+                return this.api.cmdLines.setAction(name, (text: string) => {
+                    this.dispatchCbWithArg(cbId, text, 'setCmdLineAction');
+                });
+            }
             if (name) {
                 const prev = this.windowCmdLineActionCbIds.get(name);
                 if (prev && prev !== cbId) this.unregisterCb(prev);
@@ -854,6 +908,12 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('__mudix_resetCmdLineAction', (windowName?: unknown) => {
             const name = typeof windowName === 'string' && windowName && windowName !== 'main' ? windowName : null;
+            if (name && this.api.cmdLines.has(name)) {
+                const prev = this.overlayCmdLineActionCbIds.get(name);
+                if (prev) this.unregisterCb(prev);
+                this.overlayCmdLineActionCbIds.delete(name);
+                return this.api.cmdLines.setAction(name, null);
+            }
             if (name) {
                 const prev = this.windowCmdLineActionCbIds.get(name);
                 if (prev) this.unregisterCb(prev);
@@ -1201,6 +1261,17 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('getExitStubs',      (id: number)                          => this.api.map.getExitStubs(id));
         this.lua.global.set('setExitStub', (id: unknown, dir: unknown, set: unknown) =>
             this.api.map.setExitStub(Number(id), dir as number | string, !!set));
+        // Mudlet lockExit(roomID, direction, lockIfTrue) — mutates the room's
+        // exitLocks array directly so pathfinding (which reads room.exitLocks)
+        // honours the lock. Direction accepts 1-12 ints or names ("north"/"n"/
+        // …) — parseDirection normalises both.
+        this.lua.global.set('lockExit', (id: unknown, dir: unknown, lock: unknown) =>
+            this.api.map.lockExit(Number(id), dir as number | string, !!lock));
+        // Mudlet hasExitLock(roomID, direction). Lua-side wrapper rejects unknown
+        // string directions before calling in (matches the parity check in
+        // Other.lua); JS returns false for unknown rooms/dirs as well.
+        this.lua.global.set('hasExitLock', (id: unknown, dir: unknown) =>
+            this.api.map.hasExitLock(Number(id), dir as number | string));
         this.lua.global.set('addSpecialExit',    (from: number, to: number, cmd: string)=> this.api.map.addSpecialExit(from, to, cmd));
         this.lua.global.set('removeSpecialExit', (from: number, cmd: string)            => this.api.map.removeSpecialExit(from, cmd));
         this.lua.global.set('getSpecialExitsSwap',(id: number)                         => this.api.map.getSpecialExitsSwap(id));
@@ -1736,37 +1807,49 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // ── Command bar ───────────────────────────────────────────────────────
         // Mudlet's cmdline APIs accept an optional first window-name arg for
-        // sub-command-lines (Geyser.CommandLine / userwindow command lines).
-        // We route to the per-window command line when a matching userwindow
-        // is open with enableCommandLine; otherwise we drop the name and
-        // target the main command bar.
-        const isUserCmdLine = (name?: unknown): name is string => {
-            if (typeof name !== 'string' || !name || name === 'main') return false;
-            return this.api.windows.has(name);
+        // sub-command-lines (overlay createCommandLine widgets or userwindow
+        // command lines). Overlay cmd-lines (cmdLines registry) win first;
+        // userwindow cmd-lines (windows registry) second; otherwise drop the
+        // name and target the main command bar.
+        const cmdLineKind = (name?: unknown): 'overlay' | 'window' | null => {
+            if (typeof name !== 'string' || !name || name === 'main') return null;
+            if (this.api.cmdLines.has(name)) return 'overlay';
+            if (this.api.windows.has(name)) return 'window';
+            return null;
         };
         this.lua.global.set('appendCmdLine', (a: unknown, b?: unknown) => {
-            if (isUserCmdLine(a)) { this.api.windows.appendCmdLine(a, String(b ?? '')); return; }
+            const kind = cmdLineKind(a);
+            if (kind === 'overlay') { this.api.cmdLines.appendValue(a as string, String(b ?? '')); return; }
+            if (kind === 'window')  { this.api.windows.appendCmdLine(a as string, String(b ?? '')); return; }
             this.api.appendCmdLine(String(b !== undefined ? b : a));
         });
         this.lua.global.set('printCmdLine', (a: unknown, b?: unknown) => {
-            if (isUserCmdLine(a)) { this.api.windows.printCmdLine(a, String(b ?? '')); return; }
+            const kind = cmdLineKind(a);
+            if (kind === 'overlay') { this.api.cmdLines.setValue(a as string, String(b ?? '')); return; }
+            if (kind === 'window')  { this.api.windows.printCmdLine(a as string, String(b ?? '')); return; }
             this.api.printCmdLine(String(b !== undefined ? b : a));
         });
         this.lua.global.set('clearCmdLine', (name?: unknown) => {
-            if (isUserCmdLine(name)) { this.api.windows.clearCmdLine(name); return; }
+            const kind = cmdLineKind(name);
+            if (kind === 'overlay') { this.api.cmdLines.clearValue(name as string); return; }
+            if (kind === 'window')  { this.api.windows.clearCmdLine(name as string); return; }
             this.api.clearCmdLine();
         });
-        // Mudlet getCmdLine([name]) → current input string. Returns the live
-        // value of the named userwindow's command line when present, else the
-        // main command bar.
+        // Mudlet getCmdLine([name]) → current input string. Routes through
+        // cmdLines / windows live value probes when targeting a named cmd line,
+        // else returns the main command bar's text.
         this.lua.global.set('getCmdLine', (name?: unknown) => {
-            if (isUserCmdLine(name)) return this.api.windows.getCmdLineValue(name);
+            const kind = cmdLineKind(name);
+            if (kind === 'overlay') return this.api.cmdLines.getValue(name as string);
+            if (kind === 'window')  return this.api.windows.getCmdLineValue(name as string);
             return this.api.getCmdLine();
         });
-        // Mudlet selectCmdLineText([commandLine]) — highlight all text in the
-        // command bar. Only the main bar is wired in mudix; a named overlay
-        // command line arg is accepted but ignored.
+        // Mudlet selectCmdLineText([commandLine]) — highlight all text. Targets
+        // an overlay cmd line first, then the main command bar. (User-window
+        // cmd lines have no select-all hook yet; arg is accepted for parity.)
         this.lua.global.set('selectCmdLineText', (name?: unknown) => {
+            const kind = cmdLineKind(name);
+            if (kind === 'overlay') { this.api.cmdLines.selectAll(name as string); return; }
             this.api.selectCmdLineText(typeof name === 'string' ? name : undefined);
         });
         // Mudlet setCommandBackgroundColor([windowName,] r, g, b [, a]) and
@@ -1784,24 +1867,31 @@ export class LuaRuntime implements IScriptingRuntime {
             cmdColorSetter((r, g, b, al, win) => this.api.setCommandBackgroundColor(r, g, b, al, win)));
         this.lua.global.set('setCommandForegroundColor',
             cmdColorSetter((r, g, b, al, win) => this.api.setCommandForegroundColor(r, g, b, al, win)));
-        // Mudlet enableCommandLine / disableCommandLine for userwindows. mudix
+        // Mudlet enableCommandLine / disableCommandLine. For overlay cmd lines
+        // this toggles the input's `disabled` attribute; for userwindows it
+        // shows/hides the docked <input> at the bottom of the panel. mudix
         // doesn't (yet) gate the main cmd bar this way — calling with no name
         // or "main" is a no-op that returns true so scripts targeting the main
         // bar don't crash.
         this.lua.global.set('enableCommandLine', (name?: unknown) => {
             if (typeof name !== 'string' || !name || name === 'main') return true;
+            if (this.api.cmdLines.has(name)) return this.api.cmdLines.enable(name);
             return this.api.windows.enableCommandLine(name);
         });
         this.lua.global.set('disableCommandLine', (name?: unknown) => {
             if (typeof name !== 'string' || !name || name === 'main') return true;
+            if (this.api.cmdLines.has(name)) return this.api.cmdLines.disable(name);
             return this.api.windows.disableCommandLine(name);
         });
-        // Mudlet setCmdLineStyleSheet(name, css). mudix has no main-bar QSS
-        // hook, so the main / "main" form is a no-op that returns true.
+        // Mudlet setCmdLineStyleSheet(name, css). Routes the QSS string to the
+        // overlay cmd line, the userwindow cmd line, or — for the main bar —
+        // a no-op returning true (no main-bar QSS hook). The legacy 1-arg form
+        // (no name → "" CSS on main bar) is preserved.
         this.lua.global.set('setCmdLineStyleSheet', (a: unknown, b?: unknown) => {
             const name = typeof a === 'string' ? a : '';
             const css = String((b !== undefined ? b : (typeof a === 'string' && b === undefined ? '' : a)) ?? '');
             if (!name || name === 'main') return true;
+            if (this.api.cmdLines.has(name)) return this.api.cmdLines.setStyleSheet(name, css);
             return this.api.windows.setCmdLineStyleSheet(name, css);
         });
         // Mudlet (add|remove)CmdLineSuggestion([name], suggestion) /

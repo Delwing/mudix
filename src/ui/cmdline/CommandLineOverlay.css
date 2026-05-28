@@ -1,0 +1,32 @@
+/* Overlay command-line inputs are absolutely-positioned siblings of labels.
+   The container is pointer-events:none so empty regions don't intercept clicks;
+   each input opts back in via its own auto pointer-events. */
+.cmdline-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 31; /* one above .label-overlay so a cmd-line sits on top of labels at the same coords */
+    overflow: hidden;
+}
+
+.cmdline-overlay-input {
+    position: absolute;
+    box-sizing: border-box;
+    pointer-events: auto;
+    font-family: var(--font-mono), monospace;
+    font-size: 13px;
+    color: #fff;
+    background: #1a1a1a;
+    border: 1px solid #444;
+    padding: 2px 6px;
+    outline: none;
+}
+
+.cmdline-overlay-input:focus {
+    border-color: #888;
+}
+
+.cmdline-overlay-input:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}

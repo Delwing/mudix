@@ -1265,3 +1265,33 @@ export class AnsiAwareBuffer {
 }
 
 export {cloneState as cloneFormatState, statesEqual as formatStatesEqual};
+
+/**
+ * Walks ANSI SGR escapes in `text` starting from `baseState` and returns the
+ * SGR state that would apply *after* the last byte of `text`. Unlike
+ * `AnsiAwareBuffer.trailingState()` (which returns the state of the last
+ * non-empty text segment), this reflects the actual end-of-stream state:
+ *   - empty `text` → returns `baseState`, so blank lines preserve carry
+ *   - text ending in `\e[0m` → returns default (undefined), not the pre-reset color
+ *   - text with no ANSI codes → returns `baseState` unchanged
+ * Used to carry SGR state across line breaks the way Mudlet's TBuffer does.
+ */
+export function computeTrailingState(
+    text: string,
+    baseState?: FormatStateSnapshot,
+): FormatStateSnapshot | undefined {
+    const state = new FormatState(baseState);
+    let i = 0;
+    while (i < text.length) {
+        if (text[i] === ESC && text[i + 1] === "[") {
+            const endIndex = text.indexOf("m", i + 2);
+            if (endIndex === -1) break;
+            state.applySgr(parseSgrCodes(text.slice(i + 2, endIndex)));
+            i = endIndex + 1;
+            continue;
+        }
+        i += 1;
+    }
+    const snapshot = state.toSnapshot();
+    return isDefaultState(snapshot) ? undefined : snapshot;
+}

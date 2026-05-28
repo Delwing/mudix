@@ -796,6 +796,38 @@ export class MapStore {
         return true;
     }
 
+    /**
+     * Mudlet `lockExit(roomID, direction, lockIfTrue)` — toggle a stock-direction
+     * exit lock so pathfinding (see `pathfinding.ts`) routes around it. `dir`
+     * accepts the 1-12 integer code or a direction name ("north"/"n"/etc.).
+     * Returns true on success, false when the room is missing or `dir` doesn't
+     * resolve.
+     */
+    lockExit(id: number, dir: number | string, lock: boolean): boolean {
+        const room = this.rooms.get(id);
+        if (!room) return false;
+        const dirInt = parseDirection(dir);
+        if (dirInt == null) return false;
+        const locks = room.exitLocks ?? (room.exitLocks = []);
+        if (lock) { if (!locks.includes(dirInt)) locks.push(dirInt); }
+        else room.exitLocks = locks.filter(d => d !== dirInt);
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `hasExitLock(roomID, direction)` — whether the stock-direction exit
+     * is currently locked. Returns false for an unlocked exit or when the room
+     * doesn't exist (Lua binding maps the latter to `(false, errMsg)`).
+     */
+    hasExitLock(id: number, dir: number | string): boolean {
+        const room = this.rooms.get(id);
+        if (!room) return false;
+        const dirInt = parseDirection(dir);
+        if (dirInt == null) return false;
+        return (room.exitLocks ?? []).includes(dirInt);
+    }
+
     addSpecialExit(from: number, to: number, cmd: string): boolean {
         const r = this.rooms.get(from);
         if (!r) return false;

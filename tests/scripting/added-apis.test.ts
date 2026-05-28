@@ -590,3 +590,130 @@ describe('media — loadMusicFile / purgeMediaCache', () => {
     expect(env.run('return (purgeMediaCache())')).toBe(true);
   });
 });
+
+// createCommandLine overlay primitive — registry + dispatcher routing for the
+// cmd-line APIs that grew a third branch (main bar / userwindow / overlay).
+describe('createCommandLine — overlay primitive + routing', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('creates an overlay cmd line and registers it under the cmdLines manager', () => {
+    expect(env.run('return (createCommandLine("c1", 10, 20, 200, 24))')).toBe(true);
+    expect(env.session.cmdLines.has('c1')).toBe(true);
+    // Re-create with the same name returns false (Mudlet semantics).
+    expect(env.run('return (createCommandLine("c1", 0, 0, 100, 20))')).toBe(false);
+  });
+
+  it('moveWindow / resizeWindow / hideWindow / showWindow / raiseWindow / lowerWindow target overlay cmd lines', () => {
+    env.run('createCommandLine("c2", 10, 10, 100, 20)');
+    env.run('moveWindow("c2", 200, 300)');
+    env.run('resizeWindow("c2", 250, 32)');
+    const list = env.session.cmdLines.list('main');
+    const c = list.find(c => c.name === 'c2')!;
+    expect(c.x).toBe(200);
+    expect(c.y).toBe(300);
+    expect(c.width).toBe(250);
+    expect(c.height).toBe(32);
+    expect(env.run('return (showWindow("c2"))')).toBe(true);
+    // hideWindow has no return value in Mudlet; verify by inspecting state.
+    env.run('hideWindow("c2")');
+    expect(c.visible).toBe(false);
+    expect(env.run('return (raiseWindow("c2"))')).toBe(true);
+    expect(env.run('return (lowerWindow("c2"))')).toBe(true);
+  });
+
+  it('printCmdLine / appendCmdLine / clearCmdLine / getCmdLine round-trip through the overlay', () => {
+    env.run('createCommandLine("c3", 0, 0, 100, 20)');
+    env.run('printCmdLine("c3", "hello")');
+    expect(env.run('return (getCmdLine("c3"))')).toBe('hello');
+    env.run('appendCmdLine("c3", " world")');
+    expect(env.run('return (getCmdLine("c3"))')).toBe('hello world');
+    env.run('clearCmdLine("c3")');
+    expect(env.run('return (getCmdLine("c3"))')).toBe('');
+  });
+
+  it('enableCommandLine / disableCommandLine toggle the input enabled flag', () => {
+    env.run('createCommandLine("c4", 0, 0, 100, 20)');
+    expect(env.run('return (disableCommandLine("c4"))')).toBe(true);
+    const c = env.session.cmdLines.list('main').find(c => c.name === 'c4')!;
+    expect(c.enabled).toBe(false);
+    expect(env.run('return (enableCommandLine("c4"))')).toBe(true);
+    expect(c.enabled).toBe(true);
+  });
+
+  it('setCmdLineStyleSheet stores the QSS string on the overlay', () => {
+    env.run('createCommandLine("c5", 0, 0, 100, 20)');
+    expect(env.run('return (setCmdLineStyleSheet("c5", "background: red;"))')).toBe(true);
+    const c = env.session.cmdLines.list('main').find(c => c.name === 'c5')!;
+    expect(c.styleSheet).toBe('background: red;');
+  });
+
+  it('setCmdLineAction binds an Enter callback that fires from the registered control', () => {
+    env.run('createCommandLine("c6", 0, 0, 100, 20)');
+    env.run('captured = nil; setCmdLineAction("c6", function(text) captured = text end)');
+    const action = env.session.cmdLines.getAction('c6');
+    expect(action).toBeTruthy();
+    action!('hi from input');
+    expect(env.run('return captured')).toBe('hi from input');
+    // resetCmdLineAction clears the binding.
+    env.run('resetCmdLineAction("c6")');
+    expect(env.session.cmdLines.getAction('c6')).toBe(null);
+  });
+
+  it('deleteCommandLine destroys the overlay and fires sysCommandLineDeleted', () => {
+    env.run('createCommandLine("c7", 0, 0, 100, 20)');
+    // Register a Lua-side handler so we can verify the event raise lands.
+    env.run([
+      'sawDeletedName = nil',
+      'registerAnonymousEventHandler("sysCommandLineDeleted", function(_, name) sawDeletedName = name end)',
+    ].join('\n'));
+    expect(env.run('return (deleteCommandLine("c7"))')).toBe(true);
+    expect(env.session.cmdLines.has('c7')).toBe(false);
+    expect(env.run('return sawDeletedName')).toBe('c7');
+    // Re-deleting an already-removed name is false.
+    expect(env.run('return (deleteCommandLine("c7"))')).toBe(false);
+  });
+});
+
+// lockExit / hasExitLock — now JS-bound; pathfinding reads room.exitLocks.
+describe('lockExit / hasExitLock', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('locks and unlocks a stock-direction exit by name', () => {
+    env.run('addRoom(100); addRoom(101); setExit(100, 101, "north")');
+    expect(env.run('return (hasExitLock(100, "north"))')).toBe(false);
+    expect(env.run('return (lockExit(100, "north", true))')).toBe(true);
+    expect(env.run('return (hasExitLock(100, "north"))')).toBe(true);
+    expect(env.run('return (lockExit(100, "north", false))')).toBe(true);
+    expect(env.run('return (hasExitLock(100, "north"))')).toBe(false);
+  });
+
+  it('accepts the 1-12 integer direction code', () => {
+    env.run('addRoom(200)');
+    expect(env.run('return (lockExit(200, 4, true))')).toBe(true); // 4 = east
+    expect(env.run('return (hasExitLock(200, "east"))')).toBe(true);
+    expect(env.run('return (hasExitLock(200, 4))')).toBe(true);
+  });
+
+  it('rejects an unknown direction or missing room', () => {
+    env.run('addRoom(300)');
+    expect(env.run('return (lockExit(300, "sideways", true))')).toBe(false);
+    expect(env.run('return (lockExit(9999, "north", true))')).toBe(false);
+    expect(env.run('return (hasExitLock(9999, "north"))')).toBe(false);
+  });
+
+  it('honoured by pathfinding (locked direction is routed around)', () => {
+    // Build a tiny 3-room corridor: 1 →north→ 2 →north→ 3
+    env.run('addRoom(1); addRoom(2); addRoom(3); setExit(1, 2, "north"); setExit(2, 3, "north")');
+    // First confirm the unlocked path exists.
+    const before = env.run('return getPath(1, 3)') as boolean;
+    expect(before).toBe(true);
+    // Locking the only outbound exit from room 1 should make the path fail.
+    env.run('lockExit(1, "north", true)');
+    expect(env.run('return getPath(1, 3)')).toBe(false);
+  });
+});
+

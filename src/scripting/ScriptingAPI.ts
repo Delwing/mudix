@@ -5,6 +5,7 @@ import type { TimerEngine } from '../mud/timers/TimerEngine';
 import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
+import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
 import { userWindowQssToScopedCss, cssEscape } from '../ui/labels/qtCss';
 import { AnsiAwareBuffer, type FormatColor, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
@@ -334,6 +335,7 @@ class ScriptingLabelsAPI {
 export class ScriptingAPI {
     readonly windows: ScriptingWindowsAPI;
     readonly labels: ScriptingLabelsAPI;
+    readonly cmdLines: CommandLineManager;
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
     profileName = '';
@@ -451,6 +453,7 @@ export class ScriptingAPI {
     ) {
         this.windows = new ScriptingWindowsAPI(session);
         this.labels = new ScriptingLabelsAPI(session.labels, () => this.cssRewriter);
+        this.cmdLines = session.cmdLines;
         this.aliases = aliasEngine;
         this.triggers = triggerEngine;
         this.timers = timerEngine;
