@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MapRenderer, createSettings } from 'mudlet-map-renderer';
-import type { RoomContextMenuEventDetail, Settings as MapRendererSettings } from 'mudlet-map-renderer';
+import type { RoomContextMenuEventDetail, RoomLens, Settings as MapRendererSettings } from 'mudlet-map-renderer';
 import type { WindowManager, MapControl } from '../WindowManager';
 import type { MapEventEntry, MapInfoResult } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
@@ -17,7 +17,6 @@ function applyMapperSettings(target: MapRendererSettings, mapper: MapperSettings
     if (mapper.roomSize !== undefined) target.roomSize = mapper.roomSize;
     if (mapper.roomShape !== undefined) target.roomShape = mapper.roomShape;
     if (mapper.borders !== undefined) target.borders = mapper.borders;
-    if (mapper.highlightCurrentRoom !== undefined) target.highlightCurrentRoom = mapper.highlightCurrentRoom;
     if (mapper.lineWidth !== undefined) target.lineWidth = mapper.lineWidth;
     if (mapper.backgroundColor !== undefined) target.backgroundColor = mapper.backgroundColor;
     if (mapper.lineColor !== undefined) target.lineColor = mapper.lineColor;
@@ -44,6 +43,11 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const highlightOverlayRef = useRef<MudletHighlightOverlay | null>(null);
     const prevWidthRef = useRef<number>(0);
     const needsFitRef = useRef<boolean>(false);
+    // Tracks the MapStore.hiddenVersion last applied to the renderer so the
+    // store-change subscription can force a renderer.refresh() when the only
+    // thing that changed was the hidden-room set — syncFromStore's
+    // sceneUnchanged guard would otherwise skip the redraw.
+    const lastHiddenVersionRef = useRef<number>(0);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -244,7 +248,14 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             st.currentAreaVersion === targetArea.getVersion();
         if (!sceneUnchanged) {
             renderer.drawArea(restoredArea, restoredLevel);
+        } else if (manager.mapStore.getHiddenVersion() !== lastHiddenVersionRef.current) {
+            // Same area/level, but the lens's hidden-room snapshot moved —
+            // force a rebuild so newly-hidden rooms drop out (and previously-
+            // hidden ones reappear). renderer.refresh() re-reads the lens
+            // version on the next scene build.
+            renderer.refresh();
         }
+        lastHiddenVersionRef.current = manager.mapStore.getHiddenVersion();
         syncPositionMarker(restoredArea, restoredLevel);
         recomputeMapInfos();
         // Only fit on the first successful render; afterwards preserve user pan/zoom.
@@ -271,13 +282,42 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         readerRef.current = reader;
         const settings = createSettings();
         settings.areaName = false;
-        // Hardcoded — the renderer's default (false) animates the camera on
-        // every room change, which feels sluggish on fast-moving MUDs.
+        settings.highlightCurrentRoom = false;
         settings.instantMapMove = true;
         applyMapperSettings(settings, mapperRef.current);
         const renderer = new MapRenderer(reader, settings, containerRef.current);
         renderer.centerOnResize = false;
         rendererRef.current = renderer;
+
+        // Hidden-room lens: Mudlet's setRoomHidden(roomID, true) makes a room
+        // (and any exit landing on it) disappear from the viewing-mode map.
+        // The MapStore side-table is the source of truth; the renderer asks
+        // the lens on every scene build, and its getVersion() tracks the
+        // store's hiddenVersion counter so the renderer's lens-output cache
+        // is invalidated whenever the set actually changes. Editing mode
+        // (Mudlet's edit overlay) shows hidden rooms — match that by skipping
+        // the filter when mapMode is 'editing'.
+        const hiddenLens: RoomLens = {
+            isVisible: (room) => {
+                if (manager.mapStore.getMapMode() === 'editing') return true;
+                return !manager.mapStore.isRoomHidden(room.id);
+            },
+            // Default treatment for an exit with one hidden endpoint is "stub"
+            // (a short stub leaving the visible side), which would leave dangling
+            // stubs pointing at every hidden room. Mudlet's setRoomHidden makes
+            // both the room AND its exits disappear, so return "hidden" instead
+            // when either endpoint is hidden in viewing mode.
+            getExitTreatment: (_exit, a, b) => {
+                if (manager.mapStore.getMapMode() === 'editing') return 'full';
+                const aHidden = manager.mapStore.isRoomHidden(a.id);
+                const bHidden = manager.mapStore.isRoomHidden(b.id);
+                if (aHidden || bHidden) return 'hidden';
+                return 'full';
+            },
+            getVersion: () => manager.mapStore.getHiddenVersion(),
+        };
+        renderer.setLens(hiddenLens);
+        lastHiddenVersionRef.current = manager.mapStore.getHiddenVersion();
 
         // Mudlet-style highlights (radial gradient with both colours + alphas).
         // The overlay self-subscribes to MapStore mutations and area-change

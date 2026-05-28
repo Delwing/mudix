@@ -108,7 +108,6 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const mapperRoomSize = mapper?.roomSize ?? MAPPER_DEFAULTS.roomSize;
     const mapperRoomShape = mapper?.roomShape ?? MAPPER_DEFAULTS.roomShape;
     const mapperBorders = mapper?.borders ?? MAPPER_DEFAULTS.borders;
-    const mapperHighlightCurrentRoom = mapper?.highlightCurrentRoom ?? MAPPER_DEFAULTS.highlightCurrentRoom;
     const mapperLineWidth = mapper?.lineWidth ?? MAPPER_DEFAULTS.lineWidth;
     const mapperBackgroundColor = mapper?.backgroundColor ?? MAPPER_DEFAULTS.backgroundColor;
     const mapperLineColor = mapper?.lineColor ?? MAPPER_DEFAULTS.lineColor;
@@ -648,15 +647,6 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     aria-labelledby="mapper-borders-label"
                                     checked={mapperBorders}
                                     onChange={next => patchMapper({ borders: next })}
-                                />
-                            </div>
-                            <div className="settings-row">
-                                <span className="settings-label" id="mapper-highlight-current-label">Highlight current room</span>
-                                <Toggle
-                                    id="mapper-highlight-current"
-                                    aria-labelledby="mapper-highlight-current-label"
-                                    checked={mapperHighlightCurrentRoom}
-                                    onChange={next => patchMapper({ highlightCurrentRoom: next })}
                                 />
                             </div>
                             <div className="settings-row">

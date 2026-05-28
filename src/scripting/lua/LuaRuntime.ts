@@ -1153,6 +1153,30 @@ export class LuaRuntime implements IScriptingRuntime {
             if (!Number.isFinite(rid) || !this.api.map.roomExists(rid)) return null;
             return this.api.map.roomLocked(rid);
         });
+        // Mudlet setRoomHidden(roomID, hidden) → true on success, false when
+        // the room is missing. getRoomHidden(roomID) → bool, or (false, errMsg)
+        // when the room is missing — Bridge.lua re-shapes the null we return
+        // here into Mudlet's tuple form.
+        this.lua.global.set('setRoomHidden', (id: unknown, hidden: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid)) return false;
+            return this.api.map.setRoomHidden(Math.trunc(rid), !!hidden);
+        });
+        this.lua.global.set('__getRoomHidden', (id: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid) || !this.api.map.roomExists(rid)) return null;
+            return this.api.map.getRoomHidden(Math.trunc(rid));
+        });
+        // Mudlet getHiddenRooms(areaID) → 1-indexed Lua table of room ids in
+        // that area whose hidden flag is set. JS hands back an array (which
+        // lands 0-indexed in wasmoon) or null when the area is missing;
+        // Bridge.lua re-indexes to 1-based and shapes the miss into Mudlet's
+        // (false, errMsg) tuple.
+        this.lua.global.set('__getHiddenRooms', (areaId: unknown) => {
+            const aid = Number(areaId);
+            if (!Number.isFinite(aid)) return null;
+            return this.api.map.getHiddenRooms(Math.trunc(aid)) ?? null;
+        });
         // Mudlet getRoomWeight(roomID) → the room's pathfinding weight, or no
         // value when the room is missing (we hand back false). setRoomWeight
         // returns true on success.

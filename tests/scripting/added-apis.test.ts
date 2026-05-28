@@ -522,6 +522,53 @@ describe('deleteMap', () => {
   });
 });
 
+describe('setRoomHidden / getRoomHidden / getHiddenRooms', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('round-trips the hidden flag and lists hidden rooms per area', () => {
+    const a = env.run('return (addAreaName("HX"))') as number;
+    env.run(`addRoom(1, ${a}); addRoom(2, ${a}); addRoom(3, ${a})`);
+    expect(env.run('return (getRoomHidden(1))')).toBe(false);
+    expect(env.run('return (setRoomHidden(1, true))')).toBe(true);
+    expect(env.run('return (setRoomHidden(3, true))')).toBe(true);
+    expect(env.run('return (getRoomHidden(1))')).toBe(true);
+    expect(env.run('return (getRoomHidden(2))')).toBe(false);
+    expect(env.run(`return #getHiddenRooms(${a})`)).toBe(2);
+    expect(env.run(`return (getHiddenRooms(${a}))[1]`)).toBe(1);
+    expect(env.run(`return (getHiddenRooms(${a}))[2]`)).toBe(3);
+    // Unhiding removes it from the list
+    expect(env.run('return (setRoomHidden(1, false))')).toBe(true);
+    expect(env.run(`return #getHiddenRooms(${a})`)).toBe(1);
+    expect(env.run(`return (getHiddenRooms(${a}))[1]`)).toBe(3);
+  });
+
+  it('reports errors for unknown room or area', () => {
+    expect(env.run('return (setRoomHidden(999, true))')).toBe(false);
+    expect(env.run('return (getRoomHidden(999))')).toBe(false);
+    expect(env.run('return (getHiddenRooms(999))')).toBe(false);
+  });
+
+  it('round-trips through binary save+load via the v20 fallback userData key', () => {
+    env.run('addRoom(1); addRoom(2); setRoomHidden(1, true)');
+    const map = env.api.map.toMudletMapForSave();
+    expect(map.rooms[1].userData['system.fallback_hidden']).toBe('true');
+    expect(map.rooms[2].userData['system.fallback_hidden']).toBeUndefined();
+    // The live room must not have the fallback key smeared on it
+    expect(env.api.map.toMudletMap().rooms[1].userData['system.fallback_hidden']).toBeUndefined();
+
+    // Round-trip back: clear the store, reload from the save snapshot, and
+    // verify the hidden flag was lifted back into the side-table.
+    env.api.map.deleteMap();
+    env.api.map.loadFromBinary(map);
+    expect(env.api.map.getRoomHidden(1)).toBe(true);
+    expect(env.api.map.getRoomHidden(2)).toBe(false);
+    // The userData entry must have been taken out (not left on the room).
+    expect(env.api.map.getRoomUserData(1, 'system.fallback_hidden')).toBeUndefined();
+  });
+});
+
 describe('gotoRoom', () => {
   let env: TestRuntime;
   beforeEach(async () => { env = await createTestRuntime(); });

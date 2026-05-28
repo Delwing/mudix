@@ -148,15 +148,17 @@ export interface ProtocolSettings {
 }
 
 /** Defaults used when a protocol field is undefined. Off-by-default for MSDP
- *  matches Mudlet's "MSDP support" preference; GMCP/MTTS/CHARSET are on by
- *  default because most modern MUDs expect them. MSP is off by default — the
- *  in-band tag bytes are valid text on MUDs that don't speak the protocol. */
+ *  matches Mudlet's "MSDP support" preference; GMCP/MTTS/CHARSET/MSP are on by
+ *  default because most modern MUDs expect them. MSP is on so `!!SOUND/!!MUSIC`
+ *  tags are stripped and routed to sound inline (the zMUD model — most MSP MUDs
+ *  never negotiate option 90, they just emit the tags); the tag bytes are
+ *  legitimate text on non-MSP MUDs but that collision is rare in practice. */
 export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
     gmcp: true,
     mtts: true,
     msdp: false,
     charset: true,
-    msp: false,
+    msp: true,
 };
 
 /** User-tunable subset of the map renderer's Settings. Add new entries here
@@ -171,8 +173,6 @@ export interface MapperSettings {
     roomShape?: 'rectangle' | 'circle' | 'roundedRectangle';
     /** renderer.settings.borders — draw a stroke around each room. */
     borders?: boolean;
-    /** renderer.settings.highlightCurrentRoom — overlay the player's room/exits. */
-    highlightCurrentRoom?: boolean;
     /** renderer.settings.lineWidth — exit/edge stroke width in map units. */
     lineWidth?: number;
     /** renderer.settings.backgroundColor — hex (#rrggbb). */
@@ -192,7 +192,6 @@ export const MAPPER_DEFAULTS: Required<MapperSettings> = {
     roomSize: 0.6,
     roomShape: 'rectangle',
     borders: true,
-    highlightCurrentRoom: true,
     lineWidth: 0.025,
     backgroundColor: '#000000',
     lineColor: '#e1ffe1',

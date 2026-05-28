@@ -183,7 +183,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `getExitStubs1(roomID)` | ✅ | Bridge.lua — 1-indexed |
 | `getExitWeights(roomID)` | ✅ | JS-exposed; `{exit=weight}` |
 | `getGridMode(areaID)` | ✅ | Bridge.lua → `__getGridMode`; `(false, errMsg)` when area missing |
-| `getHiddenRooms(areaID)` | 🚧 | No room-hidden flag model yet |
+| `getHiddenRooms(areaID)` | ✅ | Bridge.lua — 1-indexed array of room ids in the area whose hidden flag is set; `(false, errMsg)` when the area is missing |
 | `getMapEvents()` | ✅ | Bridge.lua |
 | `getMapLabel(areaID, labelID\|labelText)` | ✅ | Bridge.lua |
 | `getMapLabels(areaID)` | ✅ | Bridge.lua → `__getMapLabels` |
@@ -201,7 +201,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `getRoomEnv(roomID)` | ✅ | JS-exposed |
 | `getRoomExits(roomID)` | ✅ | JS-exposed |
 | `getRoomHashByID(roomID)` | ✅ | Bridge.lua |
-| `getRoomHidden(roomID)` | 🚧 | No hidden-flag model |
+| `getRoomHidden(roomID)` | ✅ | Bridge.lua — bool, `(false, errMsg)` when the room is missing. MapStore side-table; renderer's RoomLens skips hidden rooms in viewing mode (editing mode shows them) |
 | `getRoomIDbyHash(hash)` | ✅ | JS-exposed |
 | `getRoomName(roomID)` | ✅ | Bridge.lua → `__getRoomName` |
 | `getRooms()` | ✅ | JS-exposed |
@@ -255,7 +255,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `setRoomCharColor(roomID, r, g, b [, a])` | ✅ | Side-table on MapStore (upstream `MudletRoom` has no charColor field); cleared by map reset |
 | `setRoomCoordinates(roomID, x, y, z)` | ✅ | JS-exposed |
 | `setRoomEnv(roomID, envID)` | ✅ | JS-exposed |
-| `setRoomHidden(roomID, bool)` | 🚧 | No hidden-flag model |
+| `setRoomHidden(roomID, bool)` | ✅ | JS-exposed via MapStore side-table; round-trips through binary maps via the `system.fallback_hidden` userData key (Mudlet v20-compatible). False when the room is missing |
 | `setRoomIDbyHash(hash, roomID)` | ✅ | JS-exposed |
 | `setRoomName(roomID, name)` | ✅ | JS-exposed |
 | `setRoomUserData(roomID, key, value)` | ✅ | JS-exposed |

@@ -83,6 +83,12 @@ const PEN_STYLE_NAMES: Record<number, string> = {
     5: 'dash dot dot line',
 };
 
+// Round-trip key Mudlet uses to persist the hidden-room flag in pre-v21
+// binary maps (TRoom.cpp:894-899). On load we lift it into the hiddenRooms
+// side-table and drop the key; on save we write it back for rooms in the
+// set so the file stays interoperable with Mudlet v20 readers.
+const HIDDEN_FALLBACK_KEY = 'system.fallback_hidden';
+
 const DEFAULT_FONT: MudletFont = {
     family: 'Bitstream Vera Sans Mono', style: 'Normal',
     pointSize: 8, pixelSize: -1, styleHint: 5, styleStrategy: 1,
@@ -299,6 +305,7 @@ export class MapStore {
         this.envColors.clear();
         this.customEnvColors.clear();
         this.roomCharColors.clear();
+        if (this.hiddenRooms.size > 0) { this.hiddenRooms.clear(); this.hiddenVersion++; }
         this.roomHighlights.clear();
         this.mapUserData = {};
         this.playerRoomId = null;
@@ -329,15 +336,28 @@ export class MapStore {
         this.envColors.clear();
         this.customEnvColors.clear();
         this.roomCharColors.clear();
+        if (this.hiddenRooms.size > 0) { this.hiddenRooms.clear(); this.hiddenVersion++; }
         this.roomHighlights.clear();
         this.playerRoomId = null;
 
         for (const [k, room] of Object.entries(mudletMap.rooms ?? {})) {
             const id = Number(k);
+            // v20 maps (and older) have no dedicated isHidden field on TRoom;
+            // Mudlet smuggles it through userData["system.fallback_hidden"]
+            // (TRoom.cpp:894-899). Take the key out and lift it to our
+            // side-table so the rest of the codebase only deals with the
+            // in-memory hiddenRooms set. The key is removed regardless of
+            // value, matching Mudlet's QMap::take semantics.
+            const fallback = room.userData?.[HIDDEN_FALLBACK_KEY];
+            if (fallback !== undefined) {
+                delete room.userData[HIDDEN_FALLBACK_KEY];
+                if (fallback === 'true') this.hiddenRooms.add(id);
+            }
             this.rooms.set(id, room);
             if (room.hash) this.hashToRoom.set(room.hash, id);
             if (id >= this.nextRoomId) this.nextRoomId = id + 1;
         }
+        if (this.hiddenRooms.size > 0) this.hiddenVersion++;
         // Binary may carry hashes for rooms that haven't been parsed into
         // `rooms` (legacy maps with orphan hash entries). Trust the explicit
         // hash→id table as authoritative when it disagrees.
@@ -400,7 +420,28 @@ export class MapStore {
      * already normalised to base64 by `loadFromBinary`, so the result
      * round-trips cleanly through `JSON.stringify`.
      */
-    toJsonString(): string { return JSON.stringify(this.toMudletMap()); }
+    toJsonString(): string { return JSON.stringify(this.toMudletMapForSave()); }
+
+    /**
+     * Save-side variant of {@link toMudletMap}: re-injects the v20-compatible
+     * `system.fallback_hidden` userData key for rooms in the hidden side-table
+     * so the serialised file round-trips back through `loadFromBinary` (and
+     * stays loadable by Mudlet v20 readers). Render paths still call the plain
+     * {@link toMudletMap} — the fallback key is dead weight for the renderer
+     * and we don't want to pay the per-room object spread on every redraw.
+     */
+    toMudletMapForSave(): MudletMap {
+        const m = this.toMudletMap();
+        if (this.hiddenRooms.size === 0) return m;
+        const patched: Record<number, MudletRoom> = {};
+        for (const [k, r] of Object.entries(m.rooms)) {
+            const id = Number(k);
+            patched[id] = this.hiddenRooms.has(id)
+                ? { ...r, userData: { ...r.userData, [HIDDEN_FALLBACK_KEY]: 'true' } }
+                : r;
+        }
+        return { ...m, rooms: patched };
+    }
 
     /**
      * Mudlet `loadJsonMap(path)` backbone — parse a JSON payload previously
@@ -1840,6 +1881,11 @@ export class MapStore {
         if (mode !== 'viewing' && mode !== 'editing') return false;
         if (this.mapMode === mode) return true;
         this.mapMode = mode;
+        // The hidden-room lens reports a different isVisible() output for the
+        // same room across viewing↔editing (editing shows hidden rooms). Bump
+        // the lens version so the renderer rebuilds even when no hidden-set
+        // mutation accompanied the mode flip.
+        this.hiddenVersion++;
         this.mapModeListener?.(mode);
         this.notify();
         return true;
@@ -1851,6 +1897,16 @@ export class MapStore {
     // that with a separate Map keyed by room id; the renderer's
     // MudixMapReader can read this back when painting room symbols.
     private roomCharColors = new Map<number, MudletColor>();
+    // ── Hidden rooms (Mudlet setRoomHidden / getRoomHidden / getHiddenRooms) ──
+    // Mudlet stores `isHidden` on the C++ TRoom; the binary reader's MudletRoom
+    // shape doesn't surface it. Mirror with a Set keyed by room id and let the
+    // renderer's RoomLens (installed in MapPanel) consult this to skip painting.
+    // The dedicated `hiddenVersion` counter is what the lens reports via
+    // getVersion() and what MapPanel uses to decide when to force a rebuild —
+    // the main `version` counter bumps on every store mutation, which would
+    // defeat the renderer's lens-output cache.
+    private hiddenRooms = new Set<number>();
+    private hiddenVersion = 0;
 
     setRoomCharColor(id: number, r: number, g: number, b: number, a = 255): boolean {
         if (!this.rooms.has(id)) return false;
@@ -1862,6 +1918,63 @@ export class MapStore {
     getRoomCharColor(id: number): { r: number; g: number; b: number; a: number } | undefined {
         const c = this.roomCharColors.get(id);
         return c ? { r: c.r, g: c.g, b: c.b, a: c.alpha } : undefined;
+    }
+
+    // ── Hidden rooms ──────────────────────────────────────────────────────────
+
+    /**
+     * Mudlet `setRoomHidden(roomID, hidden)`. Toggles the hidden flag; the
+     * RoomLens installed on the renderer consults {@link isRoomHidden} when
+     * deciding whether to paint a room, so hidden rooms (and exits whose
+     * other endpoint is hidden) disappear from the view. Returns false when
+     * the room doesn't exist; no-ops without a notify when the state is
+     * already the requested one.
+     */
+    setRoomHidden(id: number, hidden: boolean): boolean {
+        if (!this.rooms.has(id)) return false;
+        const already = this.hiddenRooms.has(id);
+        if (hidden === already) return true;
+        if (hidden) this.hiddenRooms.add(id);
+        else this.hiddenRooms.delete(id);
+        this.hiddenVersion++;
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `getRoomHidden(roomID)`. Returns the hidden flag (false by
+     * default). The Lua binding re-shapes the missing-room case into
+     * Mudlet's (false, errMsg) tuple.
+     */
+    getRoomHidden(id: number): boolean {
+        return this.hiddenRooms.has(id);
+    }
+
+    /** True iff the room exists in the side-table. Used by the RoomLens. */
+    isRoomHidden(id: number): boolean {
+        return this.hiddenRooms.has(id);
+    }
+
+    /** Monotonic counter bumped only when the hidden-rooms set actually
+     *  changes. Surfaced via the RoomLens's getVersion() so the renderer can
+     *  cache lens output, and read by MapPanel to decide when a force-refresh
+     *  is needed after store mutations that left area/level unchanged. */
+    getHiddenVersion(): number { return this.hiddenVersion; }
+
+    /**
+     * Mudlet `getHiddenRooms(areaID)` — array of room ids in the area that
+     * are currently hidden. Returns `undefined` when the area doesn't exist
+     * so the Lua binding can distinguish "no such area" from "no hidden
+     * rooms here".
+     */
+    getHiddenRooms(areaId: number): number[] | undefined {
+        const area = this.areas.get(areaId);
+        if (!area) return undefined;
+        const out: number[] = [];
+        for (const id of area.rooms) {
+            if (this.hiddenRooms.has(id)) out.push(id);
+        }
+        return out;
     }
 
     // ── Room highlights (Mudlet highlightRoom / unHighlightRoom) ──────────────

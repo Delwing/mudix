@@ -241,6 +241,36 @@ function getRoomCharColor(roomId)
     return t[0], t[1], t[2], t[3]
 end
 
+-- Mudlet getRoomHidden(roomID) → bool, or (false, errMsg) when the room
+-- doesn't exist. JS returns nil for the miss (false is a valid not-hidden
+-- value).
+function getRoomHidden(roomId)
+    local h = __getRoomHidden(roomId)
+    if h == nil then return false, "room with given id not found" end
+    return h
+end
+
+-- Mudlet getHiddenRooms(areaID) → 1-indexed sequential table of room ids,
+-- or (false, errMsg) when the area is missing. JS hands back an array
+-- (wasmoon 0-indexed in Lua) or nil; rebuild as a 1-based table (same
+-- pattern as getRoomUserDataKeys).
+function getHiddenRooms(areaId)
+    local raw = __getHiddenRooms(areaId)
+    if raw == nil then return false, "no area with given id found" end
+    local out = {}
+    if type(raw) == 'table' then
+        local i = 0
+        while raw[i] ~= nil do
+            out[#out + 1] = raw[i]
+            i = i + 1
+        end
+        if #out == 0 then
+            for _, v in ipairs(raw) do out[#out + 1] = v end
+        end
+    end
+    return out
+end
+
 -- Mudlet getSelection([windowName]) → text, start, length on success;
 -- nil, "no selection" otherwise. JS hands back a 0-indexed array or nil.
 function getSelection(windowName)

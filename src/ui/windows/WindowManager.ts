@@ -755,7 +755,7 @@ export class WindowManager {
     saveMap(): ArrayBuffer | null {
         let bytes: ArrayBuffer;
         try {
-            const buf = writeMapToBuffer(this.mapStore.toMudletMap());
+            const buf = writeMapToBuffer(this.mapStore.toMudletMapForSave());
             // Copy into a freshly-allocated standalone ArrayBuffer — the
             // returned Buffer is a view onto a Node Buffer pool (and at the
             // type level its .buffer may be SharedArrayBuffer), neither of
