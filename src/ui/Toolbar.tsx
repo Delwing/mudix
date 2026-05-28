@@ -83,7 +83,7 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
     );
 
     return (
-        <div className="toolbar" onContextMenu={onContextMenu}>
+        <div className="mudix-toolbar" onContextMenu={onContextMenu}>
             <span className="brand">mudix</span>
             <span className="toolbar-connection-name">{connectionName}</span>
             <span

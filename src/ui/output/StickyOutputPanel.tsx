@@ -6,9 +6,9 @@ const DEFAULT_STICKY_HEIGHT = 160;
 const MIN_STICKY_HEIGHT = 40;
 
 interface StickyOutputPanelProps {
-    outputRef: React.RefObject<HTMLDivElement>;
-    sentinelRef: React.RefObject<HTMLDivElement>;
-    stickyAreaRef: React.RefObject<HTMLDivElement>;
+    outputRef: React.RefObject<HTMLDivElement | null>;
+    sentinelRef: React.RefObject<HTMLDivElement | null>;
+    stickyAreaRef: React.RefObject<HTMLDivElement | null>;
     isSplitView: boolean;
     scrollToBottom: () => void;
     background?: string;
@@ -18,7 +18,7 @@ interface StickyOutputPanelProps {
     foreground?: string;
     showTimestamps?: boolean;
     onToggleTimestamps?: () => void;
-    commandInputRef?: React.RefObject<HTMLInputElement>;
+    commandInputRef?: React.RefObject<HTMLInputElement | null>;
     className?: string;
     fontSize?: number;
     fontFamily?: string;

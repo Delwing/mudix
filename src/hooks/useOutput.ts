@@ -11,9 +11,9 @@ export interface UseStickyOutputOptions {
 }
 
 export interface UseStickyOutputResult {
-    outputRef: React.RefObject<HTMLDivElement>;
-    sentinelRef: React.RefObject<HTMLDivElement>;
-    stickyAreaRef: React.RefObject<HTMLDivElement>;
+    outputRef: React.RefObject<HTMLDivElement | null>;
+    sentinelRef: React.RefObject<HTMLDivElement | null>;
+    stickyAreaRef: React.RefObject<HTMLDivElement | null>;
     isSplitView: boolean;
     scrollToBottom: () => void;
     controls: OutputRendererControls | null;

@@ -6,6 +6,7 @@ import type { MapEventEntry, MapInfoResult } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
 import { MudletHighlightOverlay } from '../../../map/MudletHighlightOverlay';
 import { useAppStore, selectProfileField, type MapperSettings } from '../../../storage';
+import { MapEditorModal } from '../../MapEditorModal';
 
 /**
  * Copy user-set fields from MapperSettings onto a live renderer settings
@@ -66,6 +67,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         items: MapEventEntry[];
     } | null>(null);
     const [mapInfos, setMapInfos] = useState<MapInfoResult[]>([]);
+    const [editorOpen, setEditorOpen] = useState(false);
 
     // Refs mirror the latest area/level so callbacks captured at mount time
     // can see the current selection (state values would be stale captures).
@@ -80,6 +82,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     // effect read the current value without taking `mapper` as a dependency
     // (which would tear down the renderer on every Mapper-tab edit).
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
+    const connectionName = useAppStore(s => s.connections.find(c => c.id === connectionId)?.name ?? 'map');
     const mapperRef = useRef(mapper);
     mapperRef.current = mapper;
 
@@ -865,6 +868,12 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                             >
                                 Load map…
                             </button>
+                            <button
+                                className="map-hamburger-item"
+                                onMouseDown={() => { setMenuOpen(false); setEditorOpen(true); }}
+                            >
+                                Edit map…
+                            </button>
                         </div>
                     )}
                 </div>
@@ -916,6 +925,14 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                         manager.mapStore.dispatchMapEvent(uniqueName, contextMenu.roomId);
                         setContextMenu(null);
                     }}
+                />
+            )}
+            {editorOpen && (
+                <MapEditorModal
+                    connectionId={connectionId}
+                    connectionName={connectionName}
+                    manager={manager}
+                    onClose={() => setEditorOpen(false)}
                 />
             )}
         </div>

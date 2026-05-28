@@ -123,7 +123,11 @@ html, body, #root {
 }
 
 /* ── Toolbar ───────────────────────────────────────────────── */
-.toolbar {
+/* Namespaced class so this rule's flex layout (align-items: center, fixed
+   height, padding) doesn't cascade into the embedded mudlet-map-editor's
+   own `.toolbar` element, which only sets a subset of these properties
+   and would otherwise inherit mudix's row layout. */
+.mudix-toolbar {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -348,6 +352,28 @@ html, body, #root {
     overflow: hidden;
     display: flex;
     flex-direction: column;
+}
+
+/* mudlet-map-editor's <App> renders a `.mudlet-editor-root` wrapper whose CSS
+   ships pre-scoped to that class (built with postcss-prefix-selector), so it
+   can't leak onto mudix's chrome. The body just needs to be a same-stacking
+   context flex parent for the editor's `height:100%` root to size against. */
+.map-editor-modal-body {
+    position: relative;
+    padding: 0;
+}
+.map-editor-modal-body > .mudlet-editor-root {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+}
+.map-editor-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    color: var(--text-dim);
+    font-size: 14px;
 }
 
 .resizable-modal__resize { position: absolute; z-index: 2; }

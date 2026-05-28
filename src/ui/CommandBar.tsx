@@ -10,7 +10,7 @@ interface CommandBarProps {
     command: string;
     onCommandChange: (command: string) => void;
     passwordMode?: boolean;
-    commandInputRef: React.RefObject<HTMLInputElement>;
+    commandInputRef: React.RefObject<HTMLInputElement | null>;
     onSubmit: () => void;
     cmdLineMenu: CmdLineMenuRegistry;
     /** Tab-completion suggestions added via Mudlet's addCmdLineSuggestion API.
