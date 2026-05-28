@@ -282,6 +282,16 @@ export class SoundManager {
         return true;
     }
 
+    /**
+     * Mudlet `purgeMediaCache()` — drop every decoded-audio buffer so the next
+     * play of any file re-fetches and re-decodes it. Active playback is
+     * untouched (the cache only fronts the decode step). Always returns true.
+     */
+    purgeCache(): boolean {
+        decodeCache.clear();
+        return true;
+    }
+
     /** Stop everything this manager owns. Call on engine teardown. */
     stopAll(): void {
         const ctx = sharedContext;

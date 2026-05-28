@@ -219,6 +219,30 @@ export class StopwatchManager {
         return this.elapsedMs(w) / 1000;
     }
 
+    /** Mudlet getStopWatchBrokenDownTime — elapsed time as a day/hour/minute/
+     *  second/millisecond table. null for an unknown watch. */
+    getBrokenDownTime(arg: number | string): BrokenDownTime | null {
+        const w = this.resolve(arg);
+        if (!w) return null;
+        return breakDown(this.elapsedMs(w));
+    }
+
+    /**
+     * Mudlet setStopWatchName(watchID|currentName, newName). Assigns or renames
+     * a watch. Returns false for an unknown watch, an empty new name, or when
+     * another watch already uses the new name (Mudlet rejects duplicate names).
+     */
+    setName(arg: number | string, newName: string): boolean {
+        const w = this.resolve(arg);
+        if (!w || typeof newName !== 'string' || newName.length === 0) return false;
+        for (const other of this.watches.values()) {
+            if (other !== w && other.name === newName) return false;
+        }
+        w.name = newName;
+        if (w.persistent) this.persist();
+        return true;
+    }
+
     /** Mudlet resetStopWatch — zero the elapsed time; a running watch keeps running. */
     reset(arg: number | string): boolean {
         const w = this.resolve(arg);

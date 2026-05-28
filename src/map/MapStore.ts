@@ -41,6 +41,27 @@ const DIR_NAME_TO_INT: Record<string, number> = {
     out: 12,
 };
 
+// Complementary direction for each stock direction (Mudlet's scmReverseDirections):
+// n↔s, ne↔sw, nw↔se, e↔w, up↔down, in↔out. Used when connecting exit stubs so
+// the reverse stub on the target room is hooked up too.
+const REVERSE_DIR: Record<number, number> = {
+    1: 6, 2: 8, 3: 7, 4: 5, 5: 4, 6: 1, 7: 3, 8: 2, 9: 10, 10: 9, 11: 12, 12: 11,
+};
+
+// Unit displacement vector per stock direction (Mudlet's scmUnitVectors). in/out
+// (11/12) are intentionally absent — they have no spatial component, so the
+// direction-only connectExitStub form can't resolve them, matching Mudlet.
+const UNIT_VECTORS: Record<number, [number, number, number]> = {
+    1: [0, -1, 0], 2: [1, -1, 0], 3: [-1, -1, 0], 4: [1, 0, 0], 5: [-1, 0, 0],
+    6: [0, 1, 0], 7: [1, 1, 0], 8: [-1, 1, 0], 9: [0, 0, 1], 10: [0, 0, -1],
+};
+
+/** True when both values share a sign (Mudlet's compSign). Only meaningful for
+ *  non-zero inputs — callers gate the zero case separately. */
+function sameSign(a: number, b: number): boolean {
+    return (a < 0) === (b < 0);
+}
+
 export function parseDirection(dir: unknown): number | undefined {
     if (typeof dir === 'number') {
         return DIR_FIELD[dir] ? dir : undefined;
@@ -355,6 +376,16 @@ export class MapStore {
         this.notifyHighlights();
     }
 
+    /**
+     * Mudlet `deleteMap()` — wipe every room, area, label and associated datum,
+     * leaving a fresh empty map with a single default area (so scripts can keep
+     * adding rooms). Returns true.
+     */
+    deleteMap(): boolean {
+        this.newEmptyMap();
+        return true;
+    }
+
     toRendererData(): MapRendererData | null {
         if (this.rooms.size === 0) return null;
         try { return readerExport(this.toMudletMap()); } catch { return null; }
@@ -516,6 +547,54 @@ export class MapStore {
         return r ? [r.x, r.y, r.z] : undefined;
     }
 
+    /**
+     * Mudlet `searchRoom(roomID | roomName[, caseSensitive[, exactMatch]])` —
+     * by id returns the room's name (or `undefined` for a miss); by name returns
+     * `{ [roomID] = roomName }` for every room whose name matches. Matching is a
+     * case-insensitive substring search by default; `caseSensitive`/`exactMatch`
+     * tighten it. The binding re-keys the wasmoon-stringified ids back to ints.
+     */
+    searchRoom(arg: number | string, caseSensitive = false, exactMatch = false): string | undefined | Record<number, string> {
+        if (typeof arg === 'number') {
+            return this.rooms.get(arg)?.name;
+        }
+        const needle = caseSensitive ? arg : arg.toLowerCase();
+        const out: Record<number, string> = {};
+        for (const [id, r] of this.rooms) {
+            const name = r.name ?? '';
+            const hay = caseSensitive ? name : name.toLowerCase();
+            const hit = exactMatch ? hay === needle : hay.includes(needle);
+            if (hit) out[id] = name;
+        }
+        return out;
+    }
+
+    /**
+     * Mudlet `searchRoomUserData([key[, value]])`:
+     *   • no args → sorted list of every user-data key used by any room;
+     *   • key only → sorted list of every distinct value stored under that key;
+     *   • key + value → sorted list of room ids where that key equals value.
+     */
+    searchRoomUserData(key?: string, value?: string): string[] | number[] {
+        if (key == null) {
+            const keys = new Set<string>();
+            for (const r of this.rooms.values()) for (const k of Object.keys(r.userData)) keys.add(k);
+            return [...keys].sort();
+        }
+        if (value == null) {
+            const values = new Set<string>();
+            for (const r of this.rooms.values()) {
+                if (Object.prototype.hasOwnProperty.call(r.userData, key)) values.add(r.userData[key]);
+            }
+            return [...values].sort();
+        }
+        const ids: number[] = [];
+        for (const [id, r] of this.rooms) {
+            if (r.userData[key] === value) ids.push(id);
+        }
+        return ids.sort((a, b) => a - b);
+    }
+
     setRoomCoordinates(id: number, x: number, y: number, z: number): boolean {
         const room = this.rooms.get(id);
         if (!room) return false;
@@ -658,6 +737,19 @@ export class MapStore {
 
     getExitStubs(id: number): number[] { return [...(this.rooms.get(id)?.stubs ?? [])]; }
 
+    /**
+     * Mudlet `getExitStubsNames(roomID)` — the room's exit stubs as direction
+     * names ("north"/"northeast"/…, or "other" for the special-exit code 13)
+     * rather than the numeric codes `getExitStubs` returns. Returns `undefined`
+     * when the room doesn't exist so the binding can hand back Mudlet's
+     * `(false, errMsg)`.
+     */
+    getExitStubsNames(id: number): string[] | undefined {
+        const room = this.rooms.get(id);
+        if (!room) return undefined;
+        return room.stubs.map(n => DIR_FIELD[n] ?? 'other');
+    }
+
     /** Mudlet `findPath(from, to)` — see {@link findPath} in `./pathfinding`
      *  for the algorithm (A* with Mudlet's Euclidean-or-1 heuristic). */
     findPath(from: number, to: number): PathfindResult | null {
@@ -780,6 +872,214 @@ export class MapStore {
         return true;
     }
 
+    /**
+     * Mudlet `clearSpecialExits(roomID)` — remove every special exit from the
+     * room, along with the locks, doors and custom lines keyed by those
+     * commands (Mudlet's TRoom::clearSpecialExits does the same cleanup).
+     * Returns true on success, false when the room doesn't exist.
+     */
+    clearSpecialExits(id: number): boolean {
+        const room = this.rooms.get(id);
+        if (!room) return false;
+        for (const cmd of Object.keys(room.mSpecialExits)) {
+            delete room.doors[cmd];
+            delete room.customLines[cmd];
+            delete room.customLinesColor[cmd];
+            delete room.customLinesStyle[cmd];
+            delete room.customLinesArrow[cmd];
+            delete room.exitWeights[cmd];
+        }
+        room.mSpecialExits = {};
+        room.mSpecialExitLocks = [];
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `lockSpecialExit(fromRoomID, toRoomID, command, lockIfTrue)` — lock
+     * or unlock a special exit so pathfinding skips it. Mudlet ignores the
+     * `toRoomID` argument (kept for signature compatibility); the exit is keyed
+     * by its command. This client's data model tracks special-exit locks by
+     * destination room id (`mSpecialExitLocks`), so we resolve the command to
+     * its destination and toggle that. Returns true on success or an error
+     * string (room missing / no such command) the binding turns into
+     * `(false, errMsg)`.
+     */
+    lockSpecialExit(fromId: number, command: string, lock: boolean): true | string {
+        const room = this.rooms.get(fromId);
+        if (!room) return `lockSpecialExit: roomID ${fromId} does not exist`;
+        if (!Object.prototype.hasOwnProperty.call(room.mSpecialExits, command)) {
+            return `lockSpecialExit: the special exit name/command '${command}' does not exist in roomID ${fromId}`;
+        }
+        const dest = room.mSpecialExits[command];
+        const locks = room.mSpecialExitLocks;
+        const idx = locks.indexOf(dest);
+        if (lock) { if (idx === -1) locks.push(dest); }
+        else if (idx !== -1) locks.splice(idx, 1);
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `hasSpecialExitLock(fromRoomID, toRoomID, command)` — whether the
+     * special exit is locked. As with `lockSpecialExit`, the `toRoomID` argument
+     * is ignored and the lock is resolved via the command's destination room.
+     * Returns the boolean lock state, or an error string (room missing / no such
+     * command) the binding turns into `(false, errMsg)`.
+     */
+    hasSpecialExitLock(fromId: number, command: string): boolean | string {
+        const room = this.rooms.get(fromId);
+        if (!room) return `hasSpecialExitLock: roomID ${fromId} does not exist`;
+        if (!Object.prototype.hasOwnProperty.call(room.mSpecialExits, command)) {
+            return `hasSpecialExitLock: the special exit name/command '${command}' does not exist in roomID ${fromId}`;
+        }
+        return room.mSpecialExitLocks.includes(room.mSpecialExits[command]);
+    }
+
+    /**
+     * Mudlet `getAllRoomEntrances(roomID)` — every room that has an exit (stock
+     * or special) leading into this room, as a sorted, de-duplicated id list.
+     * Returns `undefined` when the room doesn't exist.
+     */
+    getAllRoomEntrances(id: number): number[] | undefined {
+        if (!this.rooms.has(id)) return undefined;
+        const entrances = new Set<number>();
+        for (const [otherId, r] of this.rooms) {
+            if (otherId === id) continue;
+            let found = false;
+            for (const field of Object.values(DIR_FIELD)) {
+                if ((r as unknown as Record<string, number>)[field] === id) { found = true; break; }
+            }
+            if (!found) {
+                for (const dest of Object.values(r.mSpecialExits)) {
+                    if (dest === id) { found = true; break; }
+                }
+            }
+            if (found) entrances.add(otherId);
+        }
+        return [...entrances].sort((a, b) => a - b);
+    }
+
+    /**
+     * Mudlet `connectExitStub(fromID, direction)` / `(fromID, toID[, direction])`
+     * — hook up an existing exit stub to another room, wiring the reverse stub
+     * back too. Dispatches the three Mudlet call forms:
+     *   • explicit `(fromID, toID, direction)` — connect the stub in `direction`.
+     *   • direction only — find the nearest in-area room sitting in that
+     *     direction that has a matching reverse stub.
+     *   • toID only — connect when exactly one pair of reverse stubs exists.
+     * A bare numeric second argument is resolved to a direction or a toID by
+     * checking what actually exists (a stub in that direction vs. a room with
+     * that id); genuinely ambiguous cases return an error asking for a string
+     * direction. Returns true on success or an error string.
+     */
+    connectExitStub(fromId: number, arg2: number | string, arg3?: number | string): true | string {
+        const from = this.rooms.get(fromId);
+        if (!from) return `connectExitStub: fromID (${fromId}) does not exist`;
+
+        if (arg3 !== undefined) {
+            const dir = parseDirection(arg3);
+            if (dir == null) return `connectExitStub: argument '${arg3}' cannot be parsed as a valid direction`;
+            return this.connectStubByDirAndTo(fromId, dir, Number(arg2));
+        }
+
+        // A string second argument is always a direction name (the binding has
+        // already coerced numeric-string captures to numbers).
+        if (typeof arg2 === 'string') {
+            const dir = parseDirection(arg2);
+            if (dir == null) return `connectExitStub: argument '${arg2}' cannot be parsed as a valid direction`;
+            return this.connectStubByDir(fromId, dir);
+        }
+
+        const value = Number(arg2);
+        if (!Number.isFinite(value)) {
+            return `connectExitStub: argument '${String(arg2)}' cannot be parsed as a toID or direction`;
+        }
+        // Mudlet treats a bare numeric 2..11 as a toID; only 1, 12, and out-of-range
+        // values (which collide with the DIR_NORTH / DIR_OUT codes) are resolved
+        // against what exists — a stub in that direction vs. a room with that id.
+        if (value >= 2 && value <= 11) {
+            return this.connectStubByTo(fromId, value);
+        }
+        const asDir = parseDirection(value);
+        const isStubDir = asDir != null && from.stubs.includes(asDir);
+        const isRoomId = this.rooms.has(value);
+        if (isRoomId) {
+            if (isStubDir) {
+                return `connectExitStub: ${value} is ambiguous (both a stub direction and a roomID); pass the direction as a string`;
+            }
+            return this.connectStubByTo(fromId, value);
+        }
+        if (isStubDir) return this.connectStubByDir(fromId, asDir!);
+        return `connectExitStub: ${value} is not valid as a toID nor a direction with a stub on roomID ${fromId}`;
+    }
+
+    /** connectExitStub direction-only form (Mudlet connectExitStubByDirection). */
+    private connectStubByDir(fromId: number, dir: number): true | string {
+        const from = this.rooms.get(fromId)!;
+        const uv = UNIT_VECTORS[dir];
+        if (!uv) return `connectExitStub: direction ${dir} has no spatial component (in/out can't be auto-resolved)`;
+        if (!from.stubs.includes(dir)) return `connectExitStub: fromID (${fromId}) has no exit stub in the given direction`;
+        const reverse = REVERSE_DIR[dir];
+        const area = this.areas.get(from.area);
+        if (!area) return `connectExitStub: fromID (${fromId}) room does not have an area`;
+        const [ux, uy, uz] = uv;
+        let minDistance = -1;
+        let minRoom = 0;
+        for (const toId of area.rooms) {
+            if (toId === fromId) continue;
+            const to = this.rooms.get(toId);
+            if (!to || !to.stubs.includes(reverse)) continue;
+            let dx = 0, dy = 0, dz = 0;
+            if (uz) { dz = to.z - from.z; if (!sameSign(dz, uz) || dz === 0) continue; }
+            else if (to.z !== from.z) continue;
+            if (ux) { dx = to.x - from.x; if (!sameSign(dx, ux) || dx === 0) continue; }
+            else if (to.x !== from.x) continue;
+            // Y is screen-flipped relative to the unit vector, so the matching
+            // room sits in the OPPOSITE y sign (Mudlet does the same).
+            if (uy) { dy = to.y - from.y; if (sameSign(dy, uy) || dy === 0) continue; }
+            else if (to.y !== from.y) continue;
+            const msd = dx * dx + dy * dy + dz * dz;
+            if (minDistance === -1 || msd < minDistance) { minRoom = toId; minDistance = msd; }
+        }
+        if (!minRoom) return `connectExitStub: fromID (${fromId}) has no room in that direction with a matching reverse stub in its area`;
+        this.setExit(fromId, minRoom, dir);
+        this.setExit(minRoom, fromId, reverse);
+        return true;
+    }
+
+    /** connectExitStub toID-only form (Mudlet connectExitStubByToId). */
+    private connectStubByTo(fromId: number, toId: number): true | string {
+        const from = this.rooms.get(fromId)!;
+        if (toId === fromId) return `connectExitStub: fromID and toID are the same (${fromId})`;
+        const to = this.rooms.get(toId);
+        if (!to) return `connectExitStub: toID (${toId}) does not exist`;
+        if (from.stubs.length === 0) return `connectExitStub: fromID (${fromId}) has no stub exits`;
+        if (to.stubs.length === 0) return `connectExitStub: toID (${toId}) has no stub exits`;
+        const toReverse = new Set(to.stubs.map(d => REVERSE_DIR[d]).filter((d): d is number => d != null));
+        const usable = [...new Set(from.stubs)].filter(d => toReverse.has(d));
+        if (usable.length === 0) return `connectExitStub: no pairs of reverse stubs found between rooms ${fromId} and ${toId}`;
+        if (usable.length > 1) return `connectExitStub: multiple pairs of reverse stubs between rooms ${fromId} and ${toId}; use the three-argument form with a direction`;
+        const dir = usable[0];
+        this.setExit(fromId, toId, dir);
+        this.setExit(toId, fromId, REVERSE_DIR[dir]);
+        return true;
+    }
+
+    /** connectExitStub explicit form (Mudlet connectExitStubByDirectionAndToId). */
+    private connectStubByDirAndTo(fromId: number, dir: number, toId: number): true | string {
+        const from = this.rooms.get(fromId)!;
+        if (toId === fromId) return `connectExitStub: fromID and toID are the same (${fromId})`;
+        if (!from.stubs.includes(dir)) return `connectExitStub: fromID (${fromId}) has no exit stub in the given direction`;
+        const to = this.rooms.get(toId);
+        if (!to) return `connectExitStub: toID (${toId}) does not exist`;
+        const reverse = REVERSE_DIR[dir];
+        if (!to.stubs.includes(reverse)) return `connectExitStub: toID (${toId}) has no exit stub in the reverse direction`;
+        this.setExit(fromId, toId, dir);
+        this.setExit(toId, fromId, reverse);
+        return true;
+    }
+
     // ── Custom exit lines ─────────────────────────────────────────────────────
 
     /**
@@ -813,6 +1113,30 @@ export class MapStore {
             };
         }
         return out;
+    }
+
+    /**
+     * Mudlet `removeCustomLine(roomID, direction)` — drop the custom exit line
+     * for a direction (stock direction number/name or a special-exit command).
+     * The key form stored varies by map source, so we try the raw command, the
+     * canonical long name and the short name. Returns true when a line was
+     * removed, false when the room or the line doesn't exist.
+     */
+    removeCustomLine(id: number, dir: number | string): boolean {
+        const room = this.rooms.get(id);
+        if (!room) return false;
+        const candidates: string[] = [];
+        if (typeof dir === 'string') candidates.push(dir);
+        const dirInt = parseDirection(dir);
+        if (dirInt != null) { candidates.push(DIR_FIELD[dirInt], DIR_SHORT[dirInt]); }
+        const key = candidates.find(k => k != null && Object.prototype.hasOwnProperty.call(room.customLines, k));
+        if (key == null) return false;
+        delete room.customLines[key];
+        delete room.customLinesColor[key];
+        delete room.customLinesStyle[key];
+        delete room.customLinesArrow[key];
+        this.notify();
+        return true;
     }
 
     // ── Doors ─────────────────────────────────────────────────────────────────
@@ -1105,6 +1429,31 @@ export class MapStore {
         return true;
     }
 
+    /**
+     * Mudlet `searchAreaUserData([key[, value]])` — the area-level analogue of
+     * {@link searchRoomUserData}: no args → all keys; key only → all distinct
+     * values for that key; key + value → sorted area ids where key equals value.
+     */
+    searchAreaUserData(key?: string, value?: string): string[] | number[] {
+        if (key == null) {
+            const keys = new Set<string>();
+            for (const a of this.areas.values()) for (const k of Object.keys(a.userData)) keys.add(k);
+            return [...keys].sort();
+        }
+        if (value == null) {
+            const values = new Set<string>();
+            for (const a of this.areas.values()) {
+                if (Object.prototype.hasOwnProperty.call(a.userData, key)) values.add(a.userData[key]);
+            }
+            return [...values].sort();
+        }
+        const ids: number[] = [];
+        for (const [id, a] of this.areas) {
+            if (a.userData[key] === value) ids.push(id);
+        }
+        return ids.sort((x, y) => x - y);
+    }
+
     // ── Grid mode ───────────────────────────────────────────────────────────--
 
     /**
@@ -1170,6 +1519,38 @@ export class MapStore {
 
     getAreaRooms(areaId: number): number[] {
         return [...(this.areas.get(areaId)?.rooms ?? [])];
+    }
+
+    /**
+     * Mudlet `getAreaExits(areaID[, fullData])` — exits crossing out of the area.
+     * Without full data, a sorted list of the area's rooms that have any exit to
+     * another area. With full data, `{ [fromRoomID] = { [exitName] = toRoomID } }`,
+     * where `exitName` is the long direction name for stock exits or the verbatim
+     * command for special exits. Returns `undefined` when the area is unknown.
+     */
+    getAreaExits(areaId: number, fullData = false): number[] | Record<number, Record<string, number>> | undefined {
+        const area = this.areas.get(areaId);
+        if (!area) return undefined;
+        const full: Record<number, Record<string, number>> = {};
+        const fromIds = new Set<number>();
+        for (const rid of area.rooms) {
+            const r = this.rooms.get(rid);
+            if (!r) continue;
+            const exits: Record<string, number> = {};
+            for (const [dirNum, field] of Object.entries(DIR_FIELD)) {
+                const dest = (r as unknown as Record<string, number>)[field];
+                if (dest >= 0 && this.rooms.get(dest) && this.rooms.get(dest)!.area !== areaId) {
+                    exits[DIR_FIELD[Number(dirNum)]] = dest;
+                }
+            }
+            for (const [cmd, dest] of Object.entries(r.mSpecialExits)) {
+                const destRoom = this.rooms.get(dest);
+                if (destRoom && destRoom.area !== areaId) exits[cmd] = dest;
+            }
+            if (Object.keys(exits).length > 0) { fromIds.add(rid); full[rid] = exits; }
+        }
+        if (fullData) return full;
+        return [...fromIds].sort((a, b) => a - b);
     }
 
     getRooms(): Record<number, string> {

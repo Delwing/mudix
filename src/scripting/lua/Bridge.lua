@@ -35,6 +35,30 @@ function getPath(from, to)
     return true, res.totalWeight or 0
 end
 
+-- Mudlet gotoRoom(targetRoomID) — pathfind from the player's current room to the
+-- target and walk it. mudix has no autonomous timed-walk engine, so the
+-- direction commands getPath produced are sent immediately, in order. Returns
+-- true, or (false, errMsg) when the current room is unknown, the target roomID
+-- is invalid, or no path exists.
+function gotoRoom(targetRoomID)
+    local from = getPlayerRoom()
+    if not from then
+        return false, "gotoRoom: the current room is unknown (use centerview to set it first)"
+    end
+    if not roomExists(targetRoomID) then
+        return false, "gotoRoom: number " .. tostring(targetRoomID) .. " is not a valid target roomID"
+    end
+    local ok = getPath(from, targetRoomID)
+    if not ok then
+        speedWalkPath, speedWalkDir, speedWalkWeight = {}, {}, {}
+        return false, "gotoRoom: no path found from current room to room with id " .. tostring(targetRoomID)
+    end
+    for i = 1, #speedWalkDir do
+        send(speedWalkDir[i])
+    end
+    return true
+end
+
 -- wasmoon pushes JS arrays 0-indexed in Lua (Object.keys → numeric keys
 -- 0..n-1), so unpack as t[0], t[1], ... not t[1], t[2], ...
 function getRoomCoordinates(id)
@@ -299,6 +323,135 @@ function getExitStubs1(id)
     return out
 end
 
+-- Walk a wasmoon 0-indexed array proxy (Object.keys → 0..n-1) into a 1-indexed
+-- Lua sequence. Shared by the 1-indexed mapper wrappers below.
+local function reindex1(raw)
+    if raw == nil then return nil end
+    local out, i = {}, 0
+    while raw[i] ~= nil do out[i + 1] = raw[i]; i = i + 1 end
+    return out
+end
+
+-- Mudlet getAreaRooms1(areaID) → 1-indexed variant of getAreaRooms (which is
+-- 0-indexed for legacy reasons).
+function getAreaRooms1(areaID)
+    return reindex1(getAreaRooms(areaID))
+end
+
+-- Mudlet getRoomsByPosition1(areaID, x, y, z) → 1-indexed getRoomsByPosition.
+function getRoomsByPosition1(areaID, x, y, z)
+    return reindex1(getRoomsByPosition(areaID, x, y, z))
+end
+
+-- Mudlet getExitStubsNames(roomID) → 1-indexed direction-name list. The __
+-- binding hands back a 0-indexed array, or nil when the room is missing.
+function getExitStubsNames(id)
+    local raw = __getExitStubsNames(id)
+    if raw == nil then
+        return false, "getExitStubsNames: room with id " .. tostring(id) .. " does not exist"
+    end
+    return reindex1(raw)
+end
+
+-- Mudlet getAllRoomEntrances(roomID) → 1-indexed list of rooms with an exit into
+-- this one. nil (room missing) → (false, errMsg).
+function getAllRoomEntrances(id)
+    local raw = __getAllRoomEntrances(id)
+    if raw == nil then
+        return false, "getAllRoomEntrances: room with id " .. tostring(id) .. " does not exist"
+    end
+    return reindex1(raw)
+end
+
+-- Mudlet getAreaExits(areaID[, fullData]). Without full data → 1-indexed id
+-- array; with → { [fromRoomID] = { [exit] = toRoomID } }, re-keyed to integer
+-- room ids (wasmoon stringifies object keys). nil (area missing) →
+-- (false, errMsg).
+function getAreaExits(areaID, fullData)
+    local raw = __getAreaExits(areaID, fullData and true or false)
+    if raw == nil then
+        return false, "getAreaExits: area with id " .. tostring(areaID) .. " does not exist"
+    end
+    if fullData then
+        local out = {}
+        for k, inner in pairs(raw) do
+            local exits = {}
+            for cmd, toId in pairs(inner) do exits[cmd] = toId end
+            out[tonumber(k) or k] = exits
+        end
+        return out
+    end
+    return reindex1(raw)
+end
+
+-- Mudlet getCustomLines1(roomID) → getCustomLines with 1-indexed point arrays.
+-- Rebuilt entirely off the wasmoon proxy so callers hold a plain Lua table.
+function getCustomLines1(id)
+    local raw = getCustomLines(id)
+    if raw == nil then return nil end
+    local out = {}
+    for dir, line in pairs(raw) do
+        local pts, i = {}, 0
+        local src = line.points or {}
+        while src[i] ~= nil do
+            local p = src[i]
+            pts[i + 1] = { x = p.x, y = p.y, z = p.z }
+            i = i + 1
+        end
+        local a = line.attributes or {}
+        local c = a.color or {}
+        out[dir] = {
+            attributes = { color = { r = c.r, g = c.g, b = c.b }, style = a.style, arrow = a.arrow },
+            points = pts,
+        }
+    end
+    return out
+end
+
+-- Mudlet searchRoom(roomID|name[, caseSensitive[, exactMatch]]). By id → name
+-- string (false on miss). By name → { [roomID] = name } with integer ids
+-- (wasmoon stringifies the keys).
+function searchRoom(arg, caseSensitive, exactMatch)
+    local raw = __searchRoom(arg, caseSensitive and true or false, exactMatch and true or false)
+    if type(raw) == 'table' then
+        local out = {}
+        for k, v in pairs(raw) do out[tonumber(k) or k] = v end
+        return out
+    end
+    return raw
+end
+
+-- Mudlet searchRoomUserData / searchAreaUserData ([key[, value]]) → 1-indexed
+-- list: all keys (no value arg & no key), all values for a key, or matching ids.
+function searchRoomUserData(key, value)
+    return reindex1(__searchRoomUserData(key, value))
+end
+function searchAreaUserData(key, value)
+    return reindex1(__searchAreaUserData(key, value))
+end
+
+-- Mudlet lockSpecialExit(fromID, toID, command, lockIfTrue) and
+-- hasSpecialExitLock(fromID, toID, command). The toID argument is accepted for
+-- signature compatibility and ignored — locks are resolved via the command.
+function lockSpecialExit(fromID, _toID, command, lockIfTrue)
+    local r = __lockSpecialExit(fromID, command, lockIfTrue and true or false)
+    if r == true then return true end
+    return false, r
+end
+function hasSpecialExitLock(fromID, _toID, command)
+    local r = __hasSpecialExitLock(fromID, command)
+    if type(r) == 'boolean' then return r end
+    return nil, r
+end
+
+-- Mudlet connectExitStub(fromID, direction) | (fromID, toID[, direction]) →
+-- true, or (false, errMsg) on any failure.
+function connectExitStub(fromID, a2, a3)
+    local r = __connectExitStub(fromID, a2, a3)
+    if r == true then return true end
+    return false, r
+end
+
 -- Mudlet getRoomUserData(id, key [, fullErr]). Default form returns "" when
 -- either the room or the key is missing (so scripts can safely concatenate
 -- the result). With `fullErr=true` the two miss cases are distinguishable:
@@ -549,6 +702,23 @@ function getStopWatches()
         end
     end
     return out
+end
+
+-- Mudlet getStopWatchBrokenDownTime(watchID|name) → a day/hour/minute/second/
+-- millisecond table. The __ binding returns the record (or nil for an unknown
+-- watch); rebuild it off the wasmoon proxy, mapping the miss to false.
+function getStopWatchBrokenDownTime(arg)
+    local e = __getStopWatchBrokenDownTime(arg)
+    if type(e) ~= 'table' then return false end
+    return {
+        negative = e.negative,
+        days = e.days,
+        hours = e.hours,
+        minutes = e.minutes,
+        seconds = e.seconds,
+        milliSeconds = e.milliSeconds,
+        decimalSeconds = e.decimalSeconds,
+    }
 end
 
 -- Mudlet getSpecialExits(roomID [, listAllExits]) → { [exitRoomID] =
@@ -1393,6 +1563,17 @@ function loadSoundFile(a, b)
         return __loadSoundFile({ name = tostring(a.name or a.url or '') })
     end
     return __loadSoundFile({ name = tostring(a or b or '') })
+end
+
+-- Mudlet `loadMusicFile`. Preloads a music track (same decode/cache path as
+-- loadSoundFile — the cache is keyed by path, not by sound/music kind). Accepts:
+--   loadMusicFile(name [, url])            -- positional
+--   loadMusicFile({name=..., url=...})     -- table
+function loadMusicFile(a, b)
+    if type(a) == 'table' then
+        return __loadMusicFile({ name = tostring(a.name or a.url or '') })
+    end
+    return __loadMusicFile({ name = tostring(a or b or '') })
 end
 
 -- Mudlet `getPlayingSounds([filter])`. Returns a 1-indexed array of currently

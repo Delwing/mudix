@@ -298,6 +298,14 @@ export class LuaRuntime implements IScriptingRuntime {
         // getStopWatches → record keyed by stringified id; Bridge.lua re-keys to
         // integer ids and rebuilds the nested table off the wasmoon proxy.
         this.lua.global.set('__getStopWatches', () => this.api.stopwatches.getAll());
+        // setStopWatchName(id|name, newName) — assign/rename; false on unknown
+        // watch, empty name, or a name already taken by another watch.
+        this.lua.global.set('setStopWatchName', (a: unknown, newName: unknown) =>
+            this.api.stopwatches.setName(resolveWatchArg(a), String(newName ?? '')));
+        // getStopWatchBrokenDownTime(id|name) → day/hour/minute/second table;
+        // Bridge.lua rebuilds it off the proxy and maps the miss to false.
+        this.lua.global.set('__getStopWatchBrokenDownTime', (a: unknown) =>
+            this.api.stopwatches.getBrokenDownTime(resolveWatchArg(a)));
 
         // Mudlet getMainConsoleWidth() → pixel width of the main console text area.
         this.lua.global.set('getMainConsoleWidth', () => this.api.getMainConsoleWidth());
@@ -1144,6 +1152,69 @@ export class LuaRuntime implements IScriptingRuntime {
             if (!Number.isFinite(rid)) return null;
             return this.api.map.getCustomLines(rid) ?? null;
         });
+        // Mudlet removeCustomLine(roomID, direction). A numeric-string direction
+        // (e.g. a regex capture "4") is coerced back to a number so MapStore's
+        // parseDirection recognizes it; arbitrary special-exit commands pass through.
+        this.lua.global.set('removeCustomLine', (id: unknown, dir: unknown) => {
+            let d: number | string;
+            if (typeof dir === 'number') d = dir;
+            else { const s = String(dir ?? ''); d = /^-?\d+$/.test(s.trim()) ? Number(s) : s; }
+            return this.api.map.removeCustomLine(Number(id), d);
+        });
+        // Mudlet getExitStubsNames(roomID) → 1-indexed direction-name list (or
+        // (false, errMsg) when the room is missing). Bridge.lua re-indexes.
+        this.lua.global.set('__getExitStubsNames', (id: unknown) => this.api.map.getExitStubsNames(Number(id)) ?? null);
+        // Mudlet getAllRoomEntrances(roomID) → sorted id list of rooms with an
+        // exit into this one; nil/(false,errMsg) when the room is missing.
+        this.lua.global.set('__getAllRoomEntrances', (id: unknown) => this.api.map.getAllRoomEntrances(Number(id)) ?? null);
+        // Mudlet getAreaExits(areaID[, fullData]). Without full data → id array;
+        // with → { [fromRoomID] = { [exit] = toRoomID } }. Bridge.lua re-keys the
+        // outer ids (wasmoon stringifies them) / 1-indexes the array form.
+        this.lua.global.set('__getAreaExits', (areaId: unknown, full?: unknown) => {
+            const r = this.api.map.getAreaExits(Number(areaId), !!full);
+            return r === undefined ? null : r;
+        });
+        // Mudlet clearSpecialExits(roomID) — remove all special exits. We return a
+        // bool (mudix extension; Mudlet returns nothing) so scripts can detect a
+        // bad roomID.
+        this.lua.global.set('clearSpecialExits', (id: unknown) => this.api.map.clearSpecialExits(Number(id)));
+        // Mudlet lockSpecialExit / hasSpecialExitLock take (from, to, command) —
+        // the `to` argument is ignored (Bridge.lua drops it). The JS side returns
+        // true / boolean on success or an error string; Bridge.lua re-shapes the
+        // string into Mudlet's (false, errMsg) / (nil, errMsg).
+        this.lua.global.set('__lockSpecialExit', (from: unknown, cmd: unknown, lock: unknown) =>
+            this.api.map.lockSpecialExit(Number(from), String(cmd ?? ''), !!lock));
+        this.lua.global.set('__hasSpecialExitLock', (from: unknown, cmd: unknown) =>
+            this.api.map.hasSpecialExitLock(Number(from), String(cmd ?? '')));
+        // Mudlet connectExitStub(fromID, direction) | (fromID, toID[, direction]).
+        // Returns true on success or an error string Bridge.lua turns into
+        // (false, errMsg). A numeric-string second/third arg is coerced so a
+        // direction code survives the wasmoon string round-trip.
+        this.lua.global.set('__connectExitStub', (from: unknown, a2: unknown, a3?: unknown) => {
+            const coerce = (v: unknown): number | string => {
+                if (typeof v === 'number') return v;
+                const s = String(v ?? '');
+                return /^-?\d+$/.test(s.trim()) ? Number(s) : s;
+            };
+            // wasmoon hands a trailing Lua nil over as null, not undefined.
+            return this.api.map.connectExitStub(Number(from), coerce(a2), a3 == null ? undefined : coerce(a3));
+        });
+        // Mudlet deleteMap() — wipe the map back to a single empty default area.
+        this.lua.global.set('deleteMap', () => this.api.map.deleteMap());
+        // Mudlet searchRoom(roomID|name[, caseSensitive[, exactMatch]]). By id →
+        // name string; by name → { [roomID] = name }. Bridge.lua re-keys the
+        // table form's ids back to integers.
+        this.lua.global.set('__searchRoom', (arg: unknown, cs?: unknown, em?: unknown) => {
+            if (typeof arg === 'number') return this.api.map.searchRoom(arg) ?? false;
+            return this.api.map.searchRoom(String(arg ?? ''), !!cs, !!em);
+        });
+        // Mudlet searchRoomUserData / searchAreaUserData ([key[, value]]) →
+        // 0-indexed JS arrays; Bridge.lua re-indexes to 1-based Lua sequences.
+        const optStr = (v: unknown): string | undefined => (v == null ? undefined : String(v));
+        this.lua.global.set('__searchRoomUserData', (key?: unknown, value?: unknown) =>
+            this.api.map.searchRoomUserData(optStr(key), optStr(value)));
+        this.lua.global.set('__searchAreaUserData', (key?: unknown, value?: unknown) =>
+            this.api.map.searchAreaUserData(optStr(key), optStr(value)));
 
         // ── Doors ─────────────────────────────────────────────────────────────
         // setDoor's direction can be a stock direction (numeric or name) or
@@ -2441,6 +2512,15 @@ export class LuaRuntime implements IScriptingRuntime {
             const o = detachOpts(t);
             return sounds.preload(String(o.name ?? ''));
         });
+        // loadMusicFile(name[, url]) | ({name=...}) — same preload/decode path as
+        // loadSoundFile (the decode cache is keyed by path, not by sound/music
+        // kind). Bridge.lua normalises both call shapes to a name.
+        this.lua.global.set('__loadMusicFile', (t: unknown) => {
+            const o = detachOpts(t);
+            return sounds.preload(String(o.name ?? ''));
+        });
+        // Mudlet purgeMediaCache() — drop every decoded-audio buffer.
+        this.lua.global.set('purgeMediaCache', () => sounds.purgeCache());
 
         // ── Text-to-speech (Mudlet ttsSpeak / ttsQueue / ttsSetRate / ...) ─────
         // Web Speech API backend on this.tts. Fire-and-forget like sounds/HTTP;

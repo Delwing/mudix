@@ -312,3 +312,281 @@ describe('area user data + grid mode + getAreaTableSwap', () => {
     expect(env.run(`return (getAreaTableSwap())[${aid}]`)).toBe('Plains');
   });
 });
+
+describe('special exits — clearSpecialExits / lockSpecialExit / hasSpecialExitLock', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('locks and unlocks a special exit (toID arg ignored)', () => {
+    env.run('addRoom(1); addRoom(2); addSpecialExit(1, 2, "enter portal")');
+    expect(env.run('return (hasSpecialExitLock(1, 2, "enter portal"))')).toBe(false);
+    expect(env.run('return (lockSpecialExit(1, 2, "enter portal", true))')).toBe(true);
+    expect(env.run('return (hasSpecialExitLock(1, 99, "enter portal"))')).toBe(true); // toID ignored
+    // reflected in getSpecialExits lock flag
+    expect(env.run('return (getSpecialExits(1))[2]["enter portal"]')).toBe('1');
+    expect(env.run('return (lockSpecialExit(1, 2, "enter portal", false))')).toBe(true);
+    expect(env.run('return (hasSpecialExitLock(1, 2, "enter portal"))')).toBe(false);
+  });
+
+  it('reports errors for an unknown room or command', () => {
+    env.run('addRoom(1)');
+    expect(env.run('return (hasSpecialExitLock(1, 2, "nope"))')).toBe(null);      // no such command
+    expect(env.run('return (hasSpecialExitLock(999, 2, "x"))')).toBe(null);       // no such room
+    expect(env.run('return (lockSpecialExit(999, 2, "x", true))')).toBe(false);   // no such room
+  });
+
+  it('clears all special exits on a room', () => {
+    env.run('addRoom(1); addRoom(2); addRoom(3)');
+    env.run('addSpecialExit(1, 2, "enter portal"); addSpecialExit(1, 3, "climb rope")');
+    expect(env.run('return (next(getSpecialExitsSwap(1)))')).not.toBe(null);
+    expect(env.run('return (clearSpecialExits(1))')).toBe(true);
+    expect(env.run('return (next(getSpecialExitsSwap(1)))')).toBe(null);
+    expect(env.run('return (clearSpecialExits(999))')).toBe(false);
+  });
+});
+
+describe('getAllRoomEntrances', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('lists rooms with a stock or special exit into the room, sorted & deduped', () => {
+    env.run('addRoom(1); addRoom(2); addRoom(3)');
+    env.run('setExit(2, 1, "north")');         // 2 -> 1 (stock)
+    env.run('addSpecialExit(3, 1, "fall")');   // 3 -> 1 (special)
+    expect(env.run('return #getAllRoomEntrances(1)')).toBe(2);
+    expect(env.run('return (getAllRoomEntrances(1))[1]')).toBe(2);
+    expect(env.run('return (getAllRoomEntrances(1))[2]')).toBe(3);
+    // a room nothing points to
+    expect(env.run('return #getAllRoomEntrances(2)')).toBe(0);
+  });
+
+  it('reports the miss for an unknown room', () => {
+    expect(env.run('return (getAllRoomEntrances(999))')).toBe(false);
+  });
+});
+
+describe('getAreaExits', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('returns area-crossing exits in both summary and full forms', () => {
+    const a1 = env.run('return (addAreaName("A"))') as number;
+    const a2 = env.run('return (addAreaName("B"))') as number;
+    env.run(`addRoom(1, ${a1}); addRoom(2, ${a2})`);
+    env.run('setExit(1, 2, "east")'); // crosses from area A to area B
+    expect(env.run(`return #getAreaExits(${a1})`)).toBe(1);
+    expect(env.run(`return (getAreaExits(${a1}))[1]`)).toBe(1);
+    expect(env.run(`return (getAreaExits(${a1}, true))[1].east`)).toBe(2);
+    // the destination area has no outgoing cross-area exits
+    expect(env.run(`return #getAreaExits(${a2})`)).toBe(0);
+  });
+
+  it('reports the miss for an unknown area', () => {
+    expect(env.run('return (getAreaExits(999))')).toBe(false);
+  });
+});
+
+describe('1-indexed mapper wrappers — getAreaRooms1 / getRoomsByPosition1 / getExitStubsNames', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('getAreaRooms1 / getRoomsByPosition1 are 1-indexed', () => {
+    const a = env.run('return (addAreaName("Z"))') as number;
+    env.run(`addRoom(10, ${a}); addRoom(11, ${a})`);
+    env.run('setRoomCoordinates(10, 5, 5, 0)');
+    expect(env.run(`return #getAreaRooms1(${a})`)).toBe(2);
+    expect(env.run(`return (getAreaRooms1(${a}))[1]`)).toBe(10);
+    const p = env.run(`return (getRoomsByPosition1(${a}, 5, 5, 0))[1]`);
+    expect(p).toBe(10);
+  });
+
+  it('getExitStubsNames maps stub codes to direction names (1-indexed)', () => {
+    env.run('addRoom(1)');
+    env.run('setExitStub(1, "north", true); setExitStub(1, 4, true)'); // north + east
+    expect(env.run('return (getExitStubsNames(1))[1]')).toBe('north');
+    expect(env.run('return (getExitStubsNames(1))[2]')).toBe('east');
+    expect(env.run('return (getExitStubsNames(999))')).toBe(false);
+  });
+});
+
+describe('getCustomLines1 / removeCustomLine', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('getCustomLines1 returns an empty table for a room with no lines, nil for a miss', () => {
+    env.run('addRoom(1)');
+    expect(env.run('return next(getCustomLines1(1))')).toBe(null); // empty table
+    expect(env.run('return (getCustomLines1(999))')).toBe(null);   // missing room
+  });
+
+  it('removeCustomLine is false when the room or line is absent', () => {
+    env.run('addRoom(1)');
+    expect(env.run('return (removeCustomLine(1, "north"))')).toBe(false); // no such line
+    expect(env.run('return (removeCustomLine(999, "north"))')).toBe(false); // no such room
+  });
+});
+
+describe('searchRoom / searchRoomUserData / searchAreaUserData', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('searchRoom by id returns the name, by name returns matches', () => {
+    env.run('addRoom(1); setRoomName(1, "Town Square")');
+    env.run('addRoom(2); setRoomName(2, "Town Gate")');
+    env.run('addRoom(3); setRoomName(3, "Forest")');
+    expect(env.run('return (searchRoom(1))')).toBe('Town Square');
+    expect(env.run('return (searchRoom(999))')).toBe(false);
+    // case-insensitive substring by default
+    expect(env.run('return (searchRoom("town"))[1]')).toBe('Town Square');
+    expect(env.run('return (searchRoom("town"))[2]')).toBe('Town Gate');
+    expect(env.run('return (searchRoom("town"))[3]')).toBe(null);
+    // exact match
+    expect(env.run('return (searchRoom("Forest", false, true))[3]')).toBe('Forest');
+    expect(env.run('return next(searchRoom("Town", false, true))')).toBe(null); // no exact "Town"
+  });
+
+  it('searchRoomUserData covers the keys / values / matching-ids forms', () => {
+    env.run('addRoom(1); setRoomUserData(1, "terrain", "grass")');
+    env.run('addRoom(2); setRoomUserData(2, "terrain", "water")');
+    env.run('addRoom(3); setRoomUserData(3, "terrain", "grass")');
+    expect(env.run('return (searchRoomUserData())[1]')).toBe('terrain');     // all keys
+    expect(env.run('return (searchRoomUserData("terrain"))[1]')).toBe('grass'); // values, sorted
+    expect(env.run('return (searchRoomUserData("terrain"))[2]')).toBe('water');
+    expect(env.run('return (searchRoomUserData("terrain", "grass"))[1]')).toBe(1); // matching ids
+    expect(env.run('return (searchRoomUserData("terrain", "grass"))[2]')).toBe(3);
+  });
+
+  it('searchAreaUserData mirrors searchRoomUserData for areas', () => {
+    const a = env.run('return (addAreaName("A"))') as number;
+    env.run(`setAreaUserData(${a}, "music", "birds.mp3")`);
+    expect(env.run('return (searchAreaUserData())[1]')).toBe('music');
+    expect(env.run('return (searchAreaUserData("music"))[1]')).toBe('birds.mp3');
+    expect(env.run(`return (searchAreaUserData("music", "birds.mp3"))[1]`)).toBe(a);
+  });
+});
+
+describe('connectExitStub', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('explicit (fromID, toID, direction) form connects both ways and clears the stubs', () => {
+    env.run('addRoom(1); addRoom(2)');
+    env.run('setExitStub(1, "north", true); setExitStub(2, "south", true)');
+    expect(env.run('return (connectExitStub(1, 2, "north"))')).toBe(true);
+    expect(env.run('return (getRoomExits(1)).north')).toBe(2);
+    expect(env.run('return (getRoomExits(2)).south')).toBe(1);
+    expect(env.run('return #getExitStubs1(1)')).toBe(0);
+  });
+
+  it('toID-only form connects the single matching reverse-stub pair', () => {
+    env.run('addRoom(3); addRoom(4)');
+    env.run('setExitStub(3, "east", true); setExitStub(4, "west", true)');
+    expect(env.run('return (connectExitStub(3, 4))')).toBe(true);
+    expect(env.run('return (getRoomExits(3)).east')).toBe(4);
+    expect(env.run('return (getRoomExits(4)).west')).toBe(3);
+  });
+
+  it('direction-only form finds the nearest in-area room with a reverse stub', () => {
+    const a = env.run('return (addAreaName("C"))') as number;
+    env.run(`addRoom(5, ${a}); addRoom(6, ${a})`);
+    env.run('setRoomCoordinates(5, 0, 0, 0); setRoomCoordinates(6, 1, 0, 0)'); // 6 is east of 5
+    env.run('setExitStub(5, "east", true); setExitStub(6, "west", true)');
+    expect(env.run('return (connectExitStub(5, "east"))')).toBe(true);
+    expect(env.run('return (getRoomExits(5)).east')).toBe(6);
+  });
+
+  it('reports an error when there is no stub in the given direction', () => {
+    env.run('addRoom(1); addRoom(2)');
+    expect(env.run('return (connectExitStub(1, 2, "up"))')).toBe(false);
+  });
+});
+
+describe('deleteMap', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('wipes all rooms', () => {
+    env.run('addRoom(1); addRoom(2)');
+    expect(env.run('return (roomExists(1))')).toBe(true);
+    expect(env.run('return (deleteMap())')).toBe(true);
+    expect(env.run('return (roomExists(1))')).toBe(false);
+    expect(env.run('return (roomExists(2))')).toBe(false);
+  });
+});
+
+describe('gotoRoom', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('pathfinds from the current room and sends the moves', () => {
+    env.run('addRoom(1); addRoom(2); setExit(1, 2, "north"); centerview(1)');
+    const before = env.mainOutput.length;
+    expect(env.run('return (gotoRoom(2))')).toBe(true);
+    expect(env.run('return #speedWalkDir')).toBe(1);
+    // the move command ("n" for a north exit) was echoed to the main window
+    expect(env.mainOutput.length).toBeGreaterThan(before);
+    expect(env.mainOutput.join('')).toContain('> n');
+  });
+
+  it('fails when the current room is unknown', () => {
+    env.run('addRoom(1); addRoom(2); setExit(1, 2, "north")'); // no centerview
+    expect(env.run('return (gotoRoom(2))')).toBe(false);
+  });
+
+  it('fails for an invalid target room', () => {
+    env.run('addRoom(1); centerview(1)');
+    expect(env.run('return (gotoRoom(999))')).toBe(false);
+  });
+});
+
+describe('stopwatches — setStopWatchName / getStopWatchBrokenDownTime', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('getStopWatchBrokenDownTime decomposes elapsed time', () => {
+    env.run('createStopWatch("w1", false)');           // named, not running
+    env.run('adjustStopWatch("w1", 3661.5)');          // 1h 1m 1s 500ms
+    expect(env.run('return (getStopWatchBrokenDownTime("w1")).hours')).toBe(1);
+    expect(env.run('return (getStopWatchBrokenDownTime("w1")).minutes')).toBe(1);
+    expect(env.run('return (getStopWatchBrokenDownTime("w1")).seconds')).toBe(1);
+    expect(env.run('return (getStopWatchBrokenDownTime("w1")).milliSeconds')).toBe(500);
+    expect(env.run('return (getStopWatchBrokenDownTime(99999))')).toBe(false);
+  });
+
+  it('setStopWatchName assigns and rejects duplicates / unknown watches', () => {
+    const id = env.run('return (createStopWatch())') as number;
+    expect(env.run(`return (setStopWatchName(${id}, "combat"))`)).toBe(true);
+    // resolvable by the new name now
+    expect(env.run('return type(getStopWatchBrokenDownTime("combat"))')).toBe('table');
+    const id2 = env.run('return (createStopWatch())') as number;
+    expect(env.run(`return (setStopWatchName(${id2}, "combat"))`)).toBe(false); // duplicate
+    expect(env.run('return (setStopWatchName(88888, "x"))')).toBe(false);       // unknown
+  });
+});
+
+describe('media — loadMusicFile / purgeMediaCache', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('loadMusicFile returns a boolean and does not throw (no AudioContext in node)', () => {
+    // node test env has no AudioContext, so preload returns false — the point is
+    // it round-trips a boolean cleanly through both call shapes.
+    expect(env.run('return (loadMusicFile("song.mp3"))')).toBe(false);
+    expect(env.run('return (loadMusicFile({name = "song.mp3"}))')).toBe(false);
+  });
+
+  it('purgeMediaCache returns true', () => {
+    expect(env.run('return (purgeMediaCache())')).toBe(true);
+  });
+});

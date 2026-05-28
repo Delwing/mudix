@@ -258,6 +258,8 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `deleteStopWatch(id\|name)` | ✅ | |
 | `getStopWatches()` | ✅ | Bridge.lua re-keys to integer ids → `{ name, isRunning, isPersistent, elapsedTime }` |
 | `setStopWatchPersistence(id\|name, state)` | ✅ | Persistent watches saved to localStorage (per connection) and restored on reload; a running one keeps counting across reloads. Uses wall-clock `Date.now()` |
+| `getStopWatchBrokenDownTime(id\|name)` | ✅ | Bridge.lua rebuilds `{negative, days, hours, minutes, seconds, milliSeconds, decimalSeconds}` off the proxy; `false` on miss |
+| `setStopWatchName(id\|currentName, newName)` | ✅ | Assign/rename; `false` on unknown watch, empty name, or a name already taken |
 
 ---
 
@@ -603,7 +605,23 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `getSpecialExitsSwap(roomID)` | ✅ | JS-exposed; `{cmd=toId}` |
 | `getExitStubs(roomID)` | ✅ | JS-exposed; returns a 0-indexed table of stub direction numbers (wasmoon array convention, matches Mudlet) |
 | `getExitStubs1(roomID)` | ✅ | Bridge.lua wraps `getExitStubs` and re-indexes to a 1-based table |
+| `getExitStubsNames(roomID)` | ✅ | Stub direction names ("north"/…/"other"), 1-indexed; `(false, errMsg)` when the room is missing |
+| `connectExitStub(fromID, dir)` / `(fromID, toID[, dir])` | ✅ | Connects an exit stub and wires the reverse stub back. Direction-only finds the nearest in-area room with a matching reverse stub (Mudlet's unit-vector/compSign search); toID-only requires exactly one reverse-stub pair; a bare numeric 2–11 is treated as a toID (Mudlet quirk). `(false, errMsg)` on failure |
+| `clearSpecialExits(roomID)` | ✅ | Removes every special exit plus the locks/doors/custom lines keyed by those commands; `false` when the room is missing |
+| `lockSpecialExit(fromID, toID, cmd, lockIfTrue)` | ✅ | Bridge.lua drops the (Mudlet-ignored) `toID`; locks by command → destination id in `mSpecialExitLocks`. `(false, errMsg)` on miss |
+| `hasSpecialExitLock(fromID, toID, cmd)` | ✅ | `toID` ignored; returns the lock boolean or `(nil, errMsg)` when the room/command is missing |
+| `getAllRoomEntrances(roomID)` | ✅ | Sorted, de-duped list of rooms with a stock or special exit into this one; `(false, errMsg)` on miss |
+| `getAreaExits(areaID[, fullData])` | ✅ | Default → sorted id list of in-area rooms with a cross-area exit; `fullData` → `{ [fromRoomID] = { [exit] = toRoomID } }` (Bridge.lua re-keys ids). `(false, errMsg)` when the area is missing |
+| `getAreaRooms1(areaID)` | ✅ | Bridge.lua wraps `getAreaRooms` and re-indexes to a 1-based table |
+| `getRoomsByPosition1(areaID, x, y, z)` | ✅ | Bridge.lua wraps `getRoomsByPosition` and re-indexes to a 1-based table |
+| `searchRoom(roomID \| name[, caseSensitive[, exactMatch]])` | ✅ | By id → name (`false` on miss); by name → `{ [roomID] = name }` (case-insensitive substring by default). Bridge.lua re-keys ids |
+| `searchRoomUserData([key[, value]])` | ✅ | No args → all keys; key only → distinct values; key+value → matching room ids. All 1-indexed |
+| `searchAreaUserData([key[, value]])` | ✅ | Area-level analogue of `searchRoomUserData`, 1-indexed |
+| `gotoRoom(targetRoomID)` | ✅ | Pure Lua (Bridge.lua): `getPath(getPlayerRoom(), target)` then `send`s the moves. `(false, errMsg)` when the current room is unknown, the target is invalid, or no path exists. mudix sends the path immediately (no autonomous timed-walk engine) |
+| `deleteMap()` | ✅ | Wipes every room/area/label back to a single empty default area |
 | `getCustomLines(roomID)` | ✅ | JS-exposed; `{ dir = { attributes={color,style,arrow}, points={[0]={x,y,z},...} } }`. Returns nil for missing rooms, empty table when none |
+| `getCustomLines1(roomID)` | ✅ | Bridge.lua wraps `getCustomLines` with 1-indexed point arrays; nil for a missing room |
+| `removeCustomLine(roomID, direction)` | ✅ | Removes the custom exit line for a direction (1-12/name/special command); `false` when the room or line is missing |
 | `lockRoom(roomID, bool)` | ✅ | JS-exposed; sets `room.isLocked` (honoured by pathfinding) |
 | `roomLocked(roomID)` | ✅ | JS-exposed; lock state, or nil when the room is missing |
 | `lockExit(roomID, dir, bool)` | ⚠️ | Pure-Lua wrapper in Other.lua stores into room user-data; `getPath` honours `room.exitLocks` but the wrapper doesn't write there yet, so locks set via Lua aren't seen by pathfinding |
@@ -633,7 +651,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `saveJsonMap(path)` / `loadJsonMap(path)` | 🚧 | JSON map format |
 | `updateMap()` | ✅ | JS-exposed; forces the map panel to re-read MapStore and redraw (via the registered `MapControl.redraw`) |
 | `getMapZoom([areaID])` / `setMapZoom(zoom[, areaID])` | ✅ | JS-exposed via a `MapControl` registered by MapPanel (`get/setZoom` + recenter/redraw). Mudlet-compatible zoom semantics: the value is the number of map units visible across the viewport's **shorter edge** (zoom=3 → 3 rooms across, larger = zoomed out), converted to/from the renderer's pixels-per-room-unit at the panel boundary. `setMapZoom` enforces Mudlet's minimum of 3.0. mudix has a single shared 2D view, so `areaID` is accepted for compat but applies to the current view. `getMapZoom` returns nil / `setMapZoom` returns false when no map panel is open |
-| All other mapper functions | 🚧 | ~90 total — implement incrementally |
+| All other mapper functions | 🚧 | long tail — implement incrementally (the MUDLET_API.md mapper table understates coverage; verify against `MapStore`/`LuaRuntime`/`Bridge.lua` before implementing) |
 
 ---
 
@@ -736,6 +754,8 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 |---|---|---|
 | `playSoundFile(path [, vol, loops, ch])` | ✅ | Bridge.lua → `SoundManager` (Web Audio + VFS or http(s) URL) |
 | `loadSoundFile(path)` | ✅ | Bridge.lua → `SoundManager.preload`; decodes + caches so the first `playSoundFile` has no latency. Accepts positional or table form |
+| `loadMusicFile(path)` | ✅ | Bridge.lua → `SoundManager.preload` (same decode cache, keyed by path). Positional or table form |
+| `purgeMediaCache()` | ✅ | `SoundManager.purgeCache` — drops every decoded-audio buffer; active playback is unaffected |
 | `pauseSounds([channel])` | 🚧 | |
 | `stopSounds([channel])` | ✅ | JS-exposed |
 | `getPlayingSounds()` | ✅ | Bridge.lua → `SoundManager.getPlaying`; re-indexes to a 1-based array of `{name, key, tag, volume}`. Optional name/key/tag filter |
