@@ -9,6 +9,7 @@ import {useAppStore} from '../storage';
 import {loadProfileData, saveProfileData} from '../storage/profileVfsData';
 import type {FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer} from '../mud/text/FormatState';
+import type {MspCommand} from '../mud/protocol';
 import {ScriptingAPI} from './ScriptingAPI';
 import {LuaRuntime} from './lua/LuaRuntime';
 import type {IScriptingRuntime} from './IScriptingRuntime';
@@ -26,6 +27,18 @@ function hexToRgb(hex: string): RgbColor | null {
     const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
     if (!m) return null;
     return { space: 'rgb', r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+}
+
+/** Mirrors `debugMspEnabled` in MudClient.ts — same `mudix.debugMsp`
+ *  localStorage gate, duplicated here because the engine and the client
+ *  don't share a debug-flags module. Toggle in the browser console:
+ *  `localStorage.setItem('mudix.debugMsp', '1')`. */
+function debugMspEnabled(): boolean {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem('mudix.debugMsp') === '1';
+    } catch {
+        return false;
+    }
 }
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -67,6 +80,37 @@ const FILTER_ANSI_ONLY_LINES = true;
 function mudletInfo(message: string): string {
     return `\x1b[33m[ INFO ]\x1b[32m  - ${message}\x1b[0m`;
 }
+
+/** Mudlet `permKey`/`tempKey` modifier int → KeyNode.modifiers string array.
+ *  Bit mapping is Qt::KeyboardModifier (1=shift, 2=ctrl, 4=alt, 8=meta). -1
+ *  (or anything <0) means "no modifier" — used by the permGroup overload. */
+function modifiersFromMudletInt(modifier: number): string[] {
+    if (!Number.isFinite(modifier) || modifier < 0) return [];
+    const out: string[] = [];
+    if (modifier & 1) out.push('shift');
+    if (modifier & 2) out.push('ctrl');
+    if (modifier & 4) out.push('alt');
+    if (modifier & 8) out.push('meta');
+    return out;
+}
+
+/** Mudlet's permKey takes a Qt::Key int. We accept either an int (best-effort
+ *  mapped to the F-keys + a few common ones) or a string (passed through as the
+ *  KeyNode.key — KeyEngine compares against `KeyboardEvent.code`). */
+function keyCodeFromMudletKey(key: string | number): string {
+    if (typeof key === 'string') return key;
+    if (!Number.isFinite(key)) return '';
+    // Qt::Key_F1 = 0x01000030 .. Qt::Key_F35 = 0x01000052.
+    const n = Number(key);
+    if (n >= 0x01000030 && n <= 0x01000052) return `F${n - 0x01000030 + 1}`;
+    // Single-character keys: ascii letter 0x41..0x5A → "KeyA".."KeyZ".
+    if (n >= 0x41 && n <= 0x5a) return `Key${String.fromCharCode(n)}`;
+    if (n >= 0x30 && n <= 0x39) return `Digit${String.fromCharCode(n)}`;
+    return '';
+}
+
+/** Mudlet `tempButtonToolbar` location int → ButtonLocation. */
+const BUTTON_LOCATIONS = ['top', 'bottom', 'left', 'right', 'floating'] as const;
 
 /**
  * Compare the slice of nodes tagged with `pkgName` between two arrays. Returns
@@ -139,6 +183,11 @@ export class ScriptingEngine {
     // (.mudix/profile.json). Coalesces bursts of store mutations into one write.
     private profileDataSaveTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly PROFILE_DATA_SAVE_DEBOUNCE_MS = 1000;
+    // Per-kind default MSP base URL, set by any `!!SOUND`/`!!MUSIC` tag that
+    // carries U=. Lets servers (e.g. Alteraeon) announce their sound pack
+    // location once with `!!SOUND(Off U=https://.../wav_v1/)` and then send
+    // subsequent tags with just the filename.
+    private mspBaseUrl: { sound?: string; music?: string } = {};
     // sysExitEvent must fire exactly once per engine — either on teardown
     // (destroy) or on page unload, whichever comes first.
     private exitFired = false;
@@ -734,6 +783,13 @@ export class ScriptingEngine {
             this.api.setPermSubstringTriggerCallback((name, parent, patterns, code) => this.createPermSubstringTrigger(name, parent, patterns, code));
             this.api.setPermAliasCallback((name, parent, pattern, code) => this.createPermAlias(name, parent, pattern, code));
             this.api.setPermTimerCallback((name, parent, delay, code) => this.createPermTimer(name, parent, delay, code));
+            this.api.setPermKeyCallback((name, parent, modifier, key, code) => this.createPermKey(name, parent, modifier, key, code));
+            this.api.setTempButtonCallback((toolbar, name, code, orientation) => this.createTempButton(toolbar, name, code, orientation));
+            this.api.setTempButtonToolbarCallback((name, orientation, location) => this.createTempButtonToolbar(name, orientation, location));
+            this.api.setButtonStateSetter((name, state) => this.setButtonStateByName(name, state));
+            this.api.setButtonStateGetter((name) => this.getButtonStateByName(name));
+            this.api.setButtonStyleSheetSetter((name, css) => this.setButtonStyleSheetByName(name, css));
+            this.api.setToolBarToggler((name, show) => this.toggleToolBarByName(name, show));
             this.api.setSetScriptCallback((name, code, pos) => this.setScriptByName(name, code, pos));
             this.api.setKillByNameCallback((kind, name) => this.killByName(kind, name));
             this.api.setCssRewriter((css) => {
@@ -762,6 +818,28 @@ export class ScriptingEngine {
                     return null;
                 }
             });
+            // VideoManager reuses the same VFS-or-URL loader as sounds, and
+            // emits sysMediaFinished on natural end (matching Mudlet).
+            this.session.videos.setLoader(async (path) => {
+                if (/^https?:|^data:|^blob:/.test(path)) {
+                    const res = await fetch(path);
+                    if (!res.ok) return null;
+                    return await res.arrayBuffer();
+                }
+                const v = this.vfs;
+                if (!v) return null;
+                const abs = path.startsWith('/') ? `${v.profilePath}${path}` : `${v.profilePath}/${path}`;
+                try {
+                    const bytes = v.readBinaryFile(abs);
+                    const out = new ArrayBuffer(bytes.byteLength);
+                    new Uint8Array(out).set(bytes);
+                    return out;
+                } catch {
+                    return null;
+                }
+            });
+            this.session.videos.setMountPoint(() => this.session.windows.getMainViewportElement());
+            this.session.videos.onEnded = (name, path) => this.raiseEvent('sysMediaFinished', [name, path]);
             this.triggerEngine.setLuaEval((code) => {
                 const lua = this.runtimes.lua;
                 return lua ? lua.evalTriggerPattern(code) : false;
@@ -855,6 +933,117 @@ export class ScriptingEngine {
      * via `manifest.sourceUrl` so the same MUD telling us to install on every
      * connect doesn't churn the file system.
      */
+    /**
+     * Dispatch a parsed `!!SOUND` / `!!MUSIC` tag to the SoundManager. `Off`
+     * stops playback; otherwise the file is resolved against `<profile>/media/`
+     * (downloading from `U=` on cache miss) and the resulting VFS path is
+     * handed to the SoundManager.
+     */
+    private async handleMspCommand(command: MspCommand): Promise<void> {
+        const debug = debugMspEnabled();
+        // Any tag carrying U= updates the per-kind default base URL.
+        // Alteraeon (and others) use `!!SOUND(Off U=https://.../wav_v1/)` at
+        // session start to point us at the sound pack, then send subsequent
+        // tags without U=. Track per-kind so sounds/music can come from
+        // different hosts.
+        if (command.url) this.mspBaseUrl[command.kind] = command.url;
+        const isOff = command.file === 'Off';
+        if (isOff) {
+            if (command.kind === 'sound') this.session.sounds.stopSounds();
+            else this.session.sounds.stopMusic(command.type ? { tag: command.type } : {});
+            if (debug) console.debug(`[mudix.msp] dispatch stop ${command.kind}`, command.type ? `tag=${command.type}` : '');
+            return;
+        }
+        const name = await this.resolveMspMedia(command);
+        if (!name) return;
+        const opts: { name: string; volume?: number; loops?: number; tag?: string; continue?: boolean } = { name };
+        if (command.volume !== undefined) opts.volume = command.volume;
+        if (command.loops !== undefined) opts.loops = command.loops;
+        if (command.type) opts.tag = command.type;
+        if (command.kind === 'music') {
+            if (command.continueIfPlaying) opts.continue = true;
+            if (debug) console.debug('[mudix.msp] dispatch playMusic', opts);
+            void this.session.sounds.playMusic(opts);
+        } else {
+            if (debug) console.debug('[mudix.msp] dispatch playSound', opts);
+            void this.session.sounds.playSound(opts);
+        }
+    }
+
+    /**
+     * Resolve an MSP `file` (+ optional `U=` base URL) to a VFS-relative path
+     * the SoundManager loader can read. Per the MSP spec `U=` is a *directory*
+     * the filename is appended to (not a full URL). Downloads land in
+     * `<profile>/media/` and are reused on subsequent plays and across page
+     * reloads. Returns null when the file can't be located or fetched.
+     */
+    private async resolveMspMedia(command: MspCommand): Promise<string | null> {
+        const debug = debugMspEnabled();
+        const vfs = this.vfs;
+        if (!vfs) {
+            if (debug) console.debug('[mudix.msp] no profile VFS — cannot resolve media');
+            return null;
+        }
+        // Preserve subdirectories — per the MSP spec the whole filename is
+        // appended to U= (e.g. `!!SOUND(combat/hit.wav)` → `<U>/combat/hit.wav`)
+        // and is mirrored under `media/` so the cache layout matches the
+        // server's. Reject `..` / `.` segments outright so a hostile server
+        // can't escape the cache root.
+        const raw = (command.file ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
+        const segments = raw.split('/').filter(s => s.length > 0);
+        const cleanSegments: string[] = [];
+        for (const seg of segments) {
+            if (seg === '.' || seg === '..') {
+                if (debug) console.debug(`[mudix.msp] rejecting traversal segment in "${command.file}"`);
+                return null;
+            }
+            const clean = seg.replace(/[^\w.\-]/g, '_').replace(/^\.+/, '');
+            if (!clean) {
+                if (debug) console.debug(`[mudix.msp] empty segment after sanitising "${command.file}"`);
+                return null;
+            }
+            cleanSegments.push(clean);
+        }
+        if (cleanSegments.length === 0) {
+            if (debug) console.debug(`[mudix.msp] empty filename "${command.file}"`);
+            return null;
+        }
+        const cleanFile = cleanSegments.join('/');
+        const vfsPath = `media/${cleanFile}`;
+        const absPath = `${vfs.profilePath}/${vfsPath}`;
+        if (vfs.exists(absPath)) {
+            if (debug) console.debug(`[mudix.msp] cache hit ${vfsPath}`);
+            return vfsPath;
+        }
+        // Per-command U= wins; otherwise use the kind's default set by an
+        // earlier tag (often the Alteraeon-style `Off U=...` boot directive).
+        const baseUrl = command.url ?? this.mspBaseUrl[command.kind];
+        if (!baseUrl) {
+            if (debug) console.debug(`[mudix.msp] "${cleanFile}" not in media/ and no U= base URL`);
+            return null;
+        }
+        let downloadUrl: string;
+        try {
+            // URL() treats `base` as a file when it has no trailing slash, so
+            // normalise: `U=http://x/sounds` + `zap.wav` → `http://x/sounds/zap.wav`.
+            const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+            downloadUrl = new URL(cleanFile, base).toString();
+        } catch {
+            if (debug) console.debug(`[mudix.msp] invalid U= "${baseUrl}"`);
+            return null;
+        }
+        try {
+            const bytes = await downloadFromUrl(downloadUrl, this.proxyUrlGetter());
+            vfs.writeBinaryFile(absPath, bytes);
+            if (debug) console.debug(`[mudix.msp] downloaded ${downloadUrl} → ${vfsPath} (${bytes.byteLength} bytes)`);
+            return vfsPath;
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (debug) console.debug(`[mudix.msp] download failed ${downloadUrl}: ${msg}`);
+            return null;
+        }
+    }
+
     private async handleClientGuiInstall(value: unknown): Promise<void> {
         const parsed = parseClientGuiPayload(value);
         if (!parsed) return;
@@ -1252,6 +1441,146 @@ export class ScriptingEngine {
             repeat: false,
         });
         return this.numericIdFor(uuid);
+    }
+
+    /**
+     * Mudlet `permKey(name, parent, modifier, key, code)`. Creates a saved
+     * keybinding under the key group `parent` (empty = root). `modifier` uses
+     * the Qt::KeyboardModifier int (1=shift, 2=ctrl, 4=alt, 8=meta); -1 means
+     * "no modifier" — used by `permGroup(name,"key")` to make a key folder.
+     * Returns the new id or -1 when `parent` is non-empty but no key group of
+     * that name exists.
+     */
+    createPermKey(name: string, parent: string, modifier: number, key: string, code: string): number {
+        if (!name) return -1;
+        const store = useAppStore.getState();
+        const keys = store.connectionKeybindings[this.connectionId] ?? [];
+        let parentId: string | null = null;
+        if (parent && parent.length > 0) {
+            const group = keys.find(k => k.isGroup && k.name === parent);
+            if (!group) return -1;
+            parentId = group.id;
+        }
+        // Mudlet's permKey overload that creates a group passes modifier=-1
+        // with an empty key. Mirror that here so `permGroup("name","key")` lands
+        // on a real ButtonNode-style group.
+        const isGroup = modifier < 0 && (!key || key === '');
+        const uuid = store.addKeybinding(this.connectionId, {
+            name,
+            enabled: true,
+            isGroup,
+            parentId,
+            key: isGroup ? '' : keyCodeFromMudletKey(key),
+            modifiers: isGroup ? [] : modifiersFromMudletInt(modifier),
+            code,
+            language: 'lua',
+        });
+        return this.numericIdFor(uuid);
+    }
+
+    /**
+     * Mudlet `tempButton(toolbar, name, code[, orientation])`. Appends a
+     * transient button under an existing toolbar group. Returns the new id, or
+     * -1 when no toolbar of that name exists. `orientation` is round-tripped
+     * onto the leaf for parity with Mudlet — the renderer doesn't use it at the
+     * leaf, but ports that read it back via the store get a stable value.
+     */
+    createTempButton(toolbar: string, name: string, code: string, _orientation: number): number {
+        if (!toolbar || !name) return -1;
+        const store = useAppStore.getState();
+        const buttons = store.connectionButtons[this.connectionId] ?? [];
+        const parent = buttons.find(b => b.isGroup && b.name === toolbar);
+        if (!parent) return -1;
+        const uuid = store.addButton(this.connectionId, {
+            name,
+            enabled: true,
+            isGroup: false,
+            parentId: parent.id,
+            orientation: parent.orientation,
+            location: parent.location,
+            columns: 0,
+            isPushDown: false,
+            buttonState: false,
+            code,
+            language: 'lua',
+        });
+        return this.numericIdFor(uuid);
+    }
+
+    /**
+     * Mudlet `tempButtonToolbar(name [, orientation [, location]])`. Creates a
+     * transient toolbar (ButtonNode group). `orientation`: 0=horizontal,
+     * 1=vertical. `location`: 0=top, 1=bottom, 2=left, 3=right, 4=floating.
+     * Returns -1 when a toolbar group of that name already exists.
+     */
+    createTempButtonToolbar(name: string, orientation: number, location: number): number {
+        if (!name) return -1;
+        const store = useAppStore.getState();
+        const buttons = store.connectionButtons[this.connectionId] ?? [];
+        if (buttons.some(b => b.isGroup && b.name === name)) return -1;
+        const uuid = store.addButton(this.connectionId, {
+            name,
+            enabled: true,
+            isGroup: true,
+            parentId: null,
+            orientation: orientation === 1 ? 'vertical' : 'horizontal',
+            location: BUTTON_LOCATIONS[location] ?? 'top',
+            columns: 0,
+            isPushDown: false,
+            buttonState: false,
+            code: '',
+            language: 'lua',
+        });
+        return this.numericIdFor(uuid);
+    }
+
+    /** Mudlet `setButtonState(name, state)`. Flips the buttonState on the named
+     *  two-state button. */
+    setButtonStateByName(name: string, state: boolean): boolean {
+        if (!name) return false;
+        const store = useAppStore.getState();
+        const buttons = store.connectionButtons[this.connectionId] ?? [];
+        const target = buttons.find(b => !b.isGroup && b.name === name);
+        if (!target) return false;
+        store.updateButton(this.connectionId, target.id, { buttonState: !!state });
+        return true;
+    }
+
+    /** Mudlet `getButtonState(name)`. Reads the pressed state on a two-state
+     *  button by name. Returns null when no such button (the Lua binding maps
+     *  that to nil — Mudlet returns false/error). */
+    getButtonStateByName(name: string): boolean | null {
+        if (!name) return null;
+        const store = useAppStore.getState();
+        const buttons = store.connectionButtons[this.connectionId] ?? [];
+        const target = buttons.find(b => !b.isGroup && b.name === name);
+        if (!target) return null;
+        return !!target.buttonState;
+    }
+
+    /** Mudlet `setButtonStyleSheet(name, css)`. Stores raw CSS on the
+     *  ButtonNode; ButtonsBar applies it inline. */
+    setButtonStyleSheetByName(name: string, css: string): boolean {
+        if (!name) return false;
+        const store = useAppStore.getState();
+        const buttons = store.connectionButtons[this.connectionId] ?? [];
+        const target = buttons.find(b => !b.isGroup && b.name === name);
+        if (!target) return false;
+        store.updateButton(this.connectionId, target.id, { styleSheet: String(css ?? '') });
+        return true;
+    }
+
+    /** Mudlet `showToolBar(name)` / `hideToolBar(name)`. Toggles the toolbar
+     *  group's enabled flag (the ButtonsBar already filters by
+     *  isEffectivelyEnabled, so this is the show/hide hook). */
+    toggleToolBarByName(name: string, show: boolean): boolean {
+        if (!name) return false;
+        const store = useAppStore.getState();
+        const buttons = store.connectionButtons[this.connectionId] ?? [];
+        const target = buttons.find(b => b.isGroup && b.name === name);
+        if (!target) return false;
+        store.updateButton(this.connectionId, target.id, { enabled: !!show });
+        return true;
     }
 
     /**
@@ -1742,6 +2071,12 @@ export class ScriptingEngine {
             session.events.on('telnet.event', (type, option, message) => {
                 this.raiseEvent('sysTelnetEvent', [type, option, message]);
             }),
+            // Mudlet `sysEchoAnomalyDetected` — raised once when the echo
+            // handler trips its 5-toggles-in-5s safeguard and refuses ECHO
+            // for the rest of the session.
+            session.events.on('telnet.echo.anomaly', () => {
+                this.raiseEvent('sysEchoAnomalyDetected', []);
+            }),
             session.events.on('flushLines', (groups) => {
                 try {
                     this.processFlushBatch(groups);
@@ -1815,6 +2150,13 @@ export class ScriptingEngine {
                 this.runtimes.lua?.setMsdpValue(path, value);
                 const token = `msdp.${path}`;
                 this.emit(token, [token, token]);
+            }),
+            // MSP — translate parsed `!!SOUND` / `!!MUSIC` tags into
+            // SoundManager calls. `Off` stops the matching kind; otherwise
+            // the file is cached under `<profile>/media/` (downloading from
+            // the `U=` base URL on first miss) before being played.
+            session.events.on('msp', (command) => {
+                void this.handleMspCommand(command);
             }),
             // Package install/uninstall events are dispatched by callers via
             // notifyPackageInstalled / notifyPackageUninstalled (not the

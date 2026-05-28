@@ -3,6 +3,7 @@ import { useAppStore } from '../../storage';
 import { isEffectivelyEnabled, type ButtonLocation, type ButtonNode } from '../../storage/schema';
 import type { ScriptingEngine } from '../../scripting/ScriptingEngine';
 import type { ProfileVFS } from '../../scripting/vfs/ProfileVFS';
+import { cssTextToStyle } from '../labels/qtCss';
 import './ButtonsBar.css';
 
 const ICON_MIME: Record<string, string> = {
@@ -77,6 +78,13 @@ function ButtonView({ button, engineRef, vfs, onStateChange }: ButtonViewProps) 
         button.isPushDown ? 'mudix-btn--toggle' : '',
     ].filter(Boolean).join(' ');
 
+    // Mudlet setButtonStyleSheet stores a Qt-style stylesheet on the node;
+    // convert to inline React style here. Only the flat-declarations subset is
+    // applied — pseudo-state selectors (`:hover`, `:pressed`) drop through.
+    const sheet = button.styleSheet
+        ? cssTextToStyle(button.styleSheet)
+        : undefined;
+
     return (
         <button
             type="button"
@@ -84,6 +92,7 @@ function ButtonView({ button, engineRef, vfs, onStateChange }: ButtonViewProps) 
             title={button.tooltip || button.name}
             aria-pressed={button.isPushDown ? pressed : undefined}
             onClick={handleClick}
+            style={sheet}
         >
             {iconUrl
                 ? <img className="mudix-btn__icon" src={iconUrl} alt="" />

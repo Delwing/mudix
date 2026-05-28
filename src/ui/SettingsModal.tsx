@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react';
-import { useAppStore, selectProfileField, MAPPER_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings } from '../storage';
+import { useAppStore, selectProfileField, MAPPER_DEFAULTS, PROTOCOL_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings, type ProtocolSettings } from '../storage';
 import { Input, FontPicker, Toggle, HelpTip, Button } from './components';
 import { DEFAULT_ANSI_PALETTE } from '../mud/text/colors';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
@@ -33,14 +33,18 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
     { value: 'light', label: 'Light (Qt)' },
 ];
 
-type SettingsTab = 'appearance' | 'colors' | 'network' | 'mapper';
+type SettingsTab = 'general' | 'appearance' | 'input' | 'colors' | 'network' | 'mapper';
 
 const TABS: { value: SettingsTab; label: string }[] = [
+    { value: 'general',    label: 'General' },
     { value: 'appearance', label: 'Appearance' },
+    { value: 'input',      label: 'Input' },
     { value: 'colors',     label: 'Colors' },
     { value: 'network',    label: 'Network' },
     { value: 'mapper',     label: 'Mapper' },
 ];
+
+const DEFAULT_COMMAND_SEPARATOR = ';;';
 
 interface SettingsModalProps {
     onClose: () => void;
@@ -92,6 +96,14 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const loggingOn = loggingEnabled !== false;
     const outputBorders = useAppStore(s => selectProfileField(s, connectionId, 'outputBorders'));
     const borders = outputBorders ?? EMPTY_BORDERS;
+    const autoClearInput = useAppStore(s => selectProfileField(s, connectionId, 'autoClearInput')) === true;
+    const commandSeparator = useAppStore(s => selectProfileField(s, connectionId, 'commandSeparator')) ?? '';
+    const protocols = useAppStore(s => selectProfileField(s, connectionId, 'protocols'));
+    const gmcpEnabled = protocols?.gmcp ?? PROTOCOL_DEFAULTS.gmcp;
+    const mttsEnabled = protocols?.mtts ?? PROTOCOL_DEFAULTS.mtts;
+    const msdpEnabled = protocols?.msdp ?? PROTOCOL_DEFAULTS.msdp;
+    const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
+    const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
     const mapperRoomSize = mapper?.roomSize ?? MAPPER_DEFAULTS.roomSize;
     const mapperRoomShape = mapper?.roomShape ?? MAPPER_DEFAULTS.roomShape;
@@ -113,8 +125,13 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const patchMapper = (patch: Partial<MapperSettings>) => {
         patchProfile({ mapper: { ...(mapper ?? {}), ...patch } });
     };
+    // Same pattern as patchMapper — protocols share one slot so flipping one
+    // toggle doesn't wipe the others.
+    const patchProtocols = (patch: Partial<ProtocolSettings>) => {
+        patchProfile({ protocols: { ...(protocols ?? {}), ...patch } });
+    };
 
-    const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
+    const [activeTab, setActiveTab] = useState<SettingsTab>('general');
     const [fontPickerOpen, setFontPickerOpen] = useState(false);
 
     const handleFontChange = (next: OutputFontSource | undefined) => {
@@ -237,6 +254,98 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                     </div>
                 )}
                 <div className="modal-body">
+                    {activeTab === 'general' && connectionId && (
+                        <section className="settings-section">
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-gmcp-label">
+                                    GMCP
+                                    <HelpTip label="About GMCP">
+                                        Telnet option 201. Generic MUD Communication Protocol —
+                                        servers expose room, character and UI data as JSON
+                                        envelopes (the <code>gmcp</code> table in Lua). Disable
+                                        to negotiate as a vanilla telnet client.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-gmcp"
+                                    aria-labelledby="protocol-gmcp-label"
+                                    checked={gmcpEnabled}
+                                    onChange={next => patchProtocols({ gmcp: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-mtts-label">
+                                    MTTS
+                                    <HelpTip label="About MTTS / TERMINAL-TYPE">
+                                        Telnet option 24. Identifies the client (name, terminal
+                                        type, capability bitvector — colors, UTF-8, truecolor).
+                                        Many MUDs gate MSDP/GMCP on this handshake completing.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-mtts"
+                                    aria-labelledby="protocol-mtts-label"
+                                    checked={mttsEnabled}
+                                    onChange={next => patchProtocols({ mtts: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-msdp-label">
+                                    MSDP
+                                    <HelpTip label="About MSDP">
+                                        Telnet option 69. Mud Server Data Protocol — a binary
+                                        alternative to GMCP for the same kind of structured
+                                        server data (the <code>msdp</code> table in Lua). Off
+                                        by default; enable only if your MUD prefers MSDP.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-msdp"
+                                    aria-labelledby="protocol-msdp-label"
+                                    checked={msdpEnabled}
+                                    onChange={next => patchProtocols({ msdp: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-charset-label">
+                                    CHARSET
+                                    <HelpTip label="About CHARSET">
+                                        Telnet option 42 (RFC 2066). Negotiates the character
+                                        encoding for the session — typically switches to UTF-8
+                                        so non-ASCII text (Polish, Cyrillic, box-drawing) renders
+                                        correctly. Disable to stay on the UTF-8 baseline without
+                                        negotiation.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-charset"
+                                    aria-labelledby="protocol-charset-label"
+                                    checked={charsetEnabled}
+                                    onChange={next => patchProtocols({ charset: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-msp-label">
+                                    MSP
+                                    <HelpTip label="About MSP">
+                                        Telnet option 90. MUD Sound Protocol — strips inline
+                                        <code>!!SOUND(...)</code> and <code>!!MUSIC(...)</code> tags from
+                                        MUD text and plays them through the sound manager. Off by
+                                        default; enable for MUDs that send sound triggers.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-msp"
+                                    aria-labelledby="protocol-msp-label"
+                                    checked={mspEnabled}
+                                    onChange={next => patchProtocols({ msp: next })}
+                                />
+                            </div>
+                            <p className="settings-hint">
+                                Protocol changes take effect the next time you connect.
+                            </p>
+                        </section>
+                    )}
                     {(activeTab === 'appearance' || !connectionId) && (
                         <>
                             <section className="settings-section">
@@ -358,6 +467,46 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                             </section>
                             )}
                         </>
+                    )}
+                    {activeTab === 'input' && connectionId && (
+                        <section className="settings-section">
+                            <div className="settings-row">
+                                <span className="settings-label" id="auto-clear-input-label">
+                                    Clear input after send
+                                    <HelpTip label="About clearing the command line">
+                                        When on, the command bar empties after each Enter.
+                                        When off, the text stays selected so the next keystroke
+                                        overtypes it (and a bare Enter resends).
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="auto-clear-input"
+                                    aria-labelledby="auto-clear-input-label"
+                                    checked={autoClearInput}
+                                    onChange={next => patchProfile({ autoClearInput: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="command-separator">
+                                    Command separator
+                                    <HelpTip label="About the command separator">
+                                        Splits one Enter into multiple commands — typing
+                                        <code> kill orc{DEFAULT_COMMAND_SEPARATOR}get all</code>
+                                        sends both as separate commands. Each split is run
+                                        through aliases independently. Leave blank to disable
+                                        splitting.
+                                    </HelpTip>
+                                </label>
+                                <Input
+                                    id="command-separator"
+                                    type="text"
+                                    value={commandSeparator}
+                                    placeholder={DEFAULT_COMMAND_SEPARATOR}
+                                    spellCheck={false}
+                                    onChange={e => patchProfile({ commandSeparator: e.target.value })}
+                                />
+                            </div>
+                        </section>
                     )}
                     {activeTab === 'colors' && connectionId && (
                         <section className="settings-section">

@@ -2,6 +2,7 @@ import { EventBus } from '../core/EventBus';
 import { WindowManager } from '../ui/windows/WindowManager';
 import { LabelManager } from '../ui/labels/LabelManager';
 import { SoundManager } from '../ui/sound/SoundManager';
+import { VideoManager } from '../ui/video/VideoManager';
 import { CmdLineMenuRegistry } from '../ui/CmdLineMenuRegistry';
 import { MudClient, type MudClientOptions } from './connection/MudClient';
 import { PingTracker } from './connection/PingTracker';
@@ -33,6 +34,7 @@ export class MudSession {
     readonly windows = new WindowManager();
     readonly labels = new LabelManager();
     readonly sounds = new SoundManager();
+    readonly videos = new VideoManager();
     readonly cmdLineMenu = new CmdLineMenuRegistry();
     /** Per-window Console instances. 'main' registered by ScriptingAPI; named windows by WindowManager. */
     readonly consoles = new Map<string, Console>();
@@ -157,6 +159,17 @@ export class MudSession {
         return this.client?.getPromptTimeoutMs() ?? this.options.promptTimeoutMs ?? null;
     }
 
+    /** Update the telnet protocol toggles applied on the next connect.
+     *  Mid-session changes do not retroactively renegotiate — the values are
+     *  read by MudClient's constructor, so the next dial sees them. */
+    setProtocolOptions(opts: { gmcpEnabled?: boolean; mttsEnabled?: boolean; msdpEnabled?: boolean; charsetEnabled?: boolean; mspEnabled?: boolean }): void {
+        if (opts.gmcpEnabled !== undefined) this.options.gmcpEnabled = opts.gmcpEnabled;
+        if (opts.mttsEnabled !== undefined) this.options.mttsEnabled = opts.mttsEnabled;
+        if (opts.msdpEnabled !== undefined) this.options.msdpEnabled = opts.msdpEnabled;
+        if (opts.charsetEnabled !== undefined) this.options.charsetEnabled = opts.charsetEnabled;
+        if (opts.mspEnabled !== undefined) this.options.mspEnabled = opts.mspEnabled;
+    }
+
     private teardownClient(): void {
         for (const unsub of this.stateUnsubs) unsub();
         this.stateUnsubs = [];
@@ -178,6 +191,7 @@ export class MudSession {
         this._destroyed = true;
         this.teardownClient();
         this.sounds.destroy();
+        this.videos.destroy();
         this.events.clear();
     }
 

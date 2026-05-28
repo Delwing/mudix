@@ -91,6 +91,9 @@ export class WindowManager {
     private readonly portalTargets = new Map<string, HTMLDivElement>();
     private readonly resizeObservers = new Map<string, ResizeObserver>();
     private readonly lastEmittedSize = new Map<string, { w: number; h: number }>();
+    /** Per-window last reported character grid (cols, rows) — used to gate
+     *  sysConsoleSizeChanged so the event fires only on actual grid changes. */
+    private readonly lastEmittedGrid = new Map<string, { cols: number; rows: number }>();
     private readonly activeTabGroups = new Map<string, string>(); // groupId → active panelId
     /** Per-window command-line state. Keyed by window id; entry exists only
      *  after enableCommandLine. The actual rendered <input> lives in TextPanel
@@ -423,6 +426,7 @@ export class WindowManager {
         this.resizeObservers.get(id)?.disconnect();
         this.resizeObservers.delete(id);
         this.lastEmittedSize.delete(id);
+        this.lastEmittedGrid.delete(id);
         this.mouseCleanups.get(id)?.();
         this.mouseCleanups.delete(id);
         this.dropCleanups.get(id)?.();
@@ -445,18 +449,75 @@ export class WindowManager {
             // that happen during portal moves between dock/floating shells.
             if (w <= 0 && h <= 0) return;
             const last = this.lastEmittedSize.get(id);
-            if (last && last.w === w && last.h === h) return;
-            this.lastEmittedSize.set(id, { w, h });
-            // Mudlet argument order:
-            //   sysWindowResizeEvent(width, height)         — main window
-            //   sysUserWindowResizeEvent(width, height, name) — user windows
-            // GeyserReposition's user-window branch reads `arg.."Container" == window.name`,
-            // so the name must be the third arg, not the first.
-            if (id === 'main') this.onRaiseEvent?.('sysWindowResizeEvent', [w, h]);
-            else               this.onRaiseEvent?.('sysUserWindowResizeEvent', [w, h, id]);
+            const sizeChanged = !last || last.w !== w || last.h !== h;
+            if (sizeChanged) {
+                this.lastEmittedSize.set(id, { w, h });
+                // Mudlet argument order:
+                //   sysWindowResizeEvent(width, height)         — main window
+                //   sysUserWindowResizeEvent(width, height, name) — user windows
+                // GeyserReposition's user-window branch reads `arg.."Container" == window.name`,
+                // so the name must be the third arg, not the first.
+                if (id === 'main') this.onRaiseEvent?.('sysWindowResizeEvent', [w, h]);
+                else               this.onRaiseEvent?.('sysUserWindowResizeEvent', [w, h, id]);
+            }
+            // Mudlet sysConsoleSizeChanged(name, columns, rows) — fires when
+            // the char-grid changes. cols is the wrap setting (falling back to
+            // an estimate from element width); rows is derived from element
+            // height. Both axes use the rendered monospace cell size so the
+            // event values match what scripts can use to lay out output.
+            this.emitConsoleGridIfChanged(id, w, h, element);
+            // Mudlet sysWindowOverflowEvent(name, overflowLines) — fires when a
+            // non-scrolling console pushes content past its visible row count.
+            // The DOM exposes this directly via scrollHeight vs clientHeight; a
+            // ResizeObserver tick is the cheapest reliable hook.
+            this.emitWindowOverflowIfPresent(id, element);
         });
         observer.observe(element);
         this.resizeObservers.set(id, observer);
+    }
+
+    /** Compute the rendered char-grid for `id` and emit sysConsoleSizeChanged
+     *  when (cols, rows) changes. The cell metrics come from getComputedStyle
+     *  off the observed element so theme / font-size changes propagate. */
+    private emitConsoleGridIfChanged(id: string, w: number, h: number, element: HTMLElement): void {
+        let cellW = 8, cellH = 16;
+        try {
+            const cs = getComputedStyle(element);
+            const fs = parseFloat(cs.fontSize) || 12;
+            const lh = parseFloat(cs.lineHeight);
+            cellH = Number.isFinite(lh) && lh > 0 ? lh : fs * 1.4;
+            // Monospace cell width ≈ font-size × 0.6 — close enough for the
+            // grid estimate without a canvas measure (called on every resize).
+            cellW = fs * 0.6;
+        } catch { /* SSR / detached element — keep fallback metrics */ }
+        const win = this.windows.get(id);
+        const wrap = win?.wrapAt ?? 0;
+        const cols = wrap > 0 ? wrap : Math.max(1, Math.floor(w / cellW));
+        const rows = Math.max(1, Math.floor(h / cellH));
+        const last = this.lastEmittedGrid.get(id);
+        if (last && last.cols === cols && last.rows === rows) return;
+        this.lastEmittedGrid.set(id, { cols, rows });
+        this.onRaiseEvent?.('sysConsoleSizeChanged', [id, cols, rows]);
+    }
+
+    /** Mudlet sysWindowOverflowEvent(name, overflowLines). Fires when a console
+     *  whose scrolling is disabled has more content than fits in the viewport.
+     *  scrollHeight − clientHeight gives the pixel overflow; dividing by the
+     *  estimated line height converts it to lines for the event payload. */
+    private emitWindowOverflowIfPresent(id: string, element: HTMLElement): void {
+        const scroll = this.scrollState.get(id);
+        if (!scroll || scroll.scrollingEnabled) return;
+        const overflowPx = element.scrollHeight - element.clientHeight;
+        if (overflowPx <= 0) return;
+        let cellH = 16;
+        try {
+            const cs = getComputedStyle(element);
+            const fs = parseFloat(cs.fontSize) || 12;
+            const lh = parseFloat(cs.lineHeight);
+            cellH = Number.isFinite(lh) && lh > 0 ? lh : fs * 1.4;
+        } catch { /* keep fallback */ }
+        const overflowLines = Math.max(1, Math.ceil(overflowPx / cellH));
+        this.onRaiseEvent?.('sysWindowOverflowEvent', [id, overflowLines]);
     }
 
     /** Raise Mudlet's sysWindowMousePress/ReleaseEvent for clicks anywhere on a
@@ -802,6 +863,12 @@ export class WindowManager {
         win.wrapAt = v > 0 ? v : undefined;
         this.notify();
         this.saveHint(id, win);
+        // Wrap column = columns axis of the char grid; force-fire
+        // sysConsoleSizeChanged so scripts notice the change without waiting
+        // for a viewport resize.
+        const el = this.elements.get(id) ?? this.viewports.get(id);
+        const size = this.lastEmittedSize.get(id);
+        if (el && size) this.emitConsoleGridIfChanged(id, size.w, size.h, el);
         return true;
     }
 

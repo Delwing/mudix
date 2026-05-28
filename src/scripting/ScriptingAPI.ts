@@ -44,6 +44,11 @@ function rgbaCss(r: number, g: number, b: number, a = 255): string {
     return `rgba(${ch(r)}, ${ch(g)}, ${ch(b)}, ${alpha})`;
 }
 
+/** Clamp a numeric value to [0, 255] and round. Used by the map colour APIs. */
+function clamp255(n: number): number {
+    return Math.max(0, Math.min(255, Math.round(Number(n) || 0)));
+}
+
 /** Format an epoch-ms timestamp as Mudlet's "hh:mm:ss.zzz" (local time). */
 function formatLineTimestamp(ms: number): string {
     const d = new Date(ms);
@@ -400,6 +405,20 @@ export class ScriptingAPI {
     private permSubstringTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
     private permAliasCallback: ((name: string, parent: string, pattern: string, code: string) => number) | null = null;
     private permTimerCallback: ((name: string, parent: string, delay: number, code: string) => number) | null = null;
+    // Mudlet permKey(name, parent, modifier, key, code). Modifier comes from the
+    // engine as a Qt::KeyboardModifier int; the JS-side resolver translates it
+    // back into `["ctrl",...]` strings to store on the KeyNode.
+    private permKeyCallback: ((name: string, parent: string, modifier: number, key: string, code: string) => number) | null = null;
+    // Mudlet button & toolbar APIs operate on ButtonNodes stored in the same
+    // tree the persistent button bar consumes — these callbacks let the
+    // ScriptingEngine carry the mutation while ScriptingAPI keeps the Lua
+    // surface area in one place.
+    private tempButtonCallback: ((toolbar: string, name: string, code: string, orientation: number) => number) | null = null;
+    private tempButtonToolbarCallback: ((name: string, orientation: number, location: number) => number) | null = null;
+    private buttonStateSetter: ((name: string, state: boolean) => boolean) | null = null;
+    private buttonStateGetter: ((name: string) => boolean | null) | null = null;
+    private buttonStyleSheetSetter: ((name: string, css: string) => boolean) | null = null;
+    private toolBarToggler: ((name: string, show: boolean) => boolean) | null = null;
     /** Mudlet `startLogging(state)`. Forwarded to ProfileSession, which owns
      *  the SessionLogger instance (created/torn-down on this hook). */
     private loggingToggler: ((enabled: boolean) => boolean) | null = null;
@@ -595,6 +614,34 @@ export class ScriptingAPI {
         this.permTimerCallback = fn;
     }
 
+    setPermKeyCallback(fn: ((name: string, parent: string, modifier: number, key: string, code: string) => number) | null): void {
+        this.permKeyCallback = fn;
+    }
+
+    setTempButtonCallback(fn: ((toolbar: string, name: string, code: string, orientation: number) => number) | null): void {
+        this.tempButtonCallback = fn;
+    }
+
+    setTempButtonToolbarCallback(fn: ((name: string, orientation: number, location: number) => number) | null): void {
+        this.tempButtonToolbarCallback = fn;
+    }
+
+    setButtonStateSetter(fn: ((name: string, state: boolean) => boolean) | null): void {
+        this.buttonStateSetter = fn;
+    }
+
+    setButtonStateGetter(fn: ((name: string) => boolean | null) | null): void {
+        this.buttonStateGetter = fn;
+    }
+
+    setButtonStyleSheetSetter(fn: ((name: string, css: string) => boolean) | null): void {
+        this.buttonStyleSheetSetter = fn;
+    }
+
+    setToolBarToggler(fn: ((name: string, show: boolean) => boolean) | null): void {
+        this.toolBarToggler = fn;
+    }
+
     setSetScriptCallback(fn: ((name: string, code: string, pos: number) => number) | null): void {
         this.setScriptCallback = fn;
     }
@@ -751,6 +798,60 @@ export class ScriptingAPI {
      *  timer group of that name exists. */
     permTimer(name: string, parent: string, delay: number, code: string): number {
         return this.permTimerCallback?.(name, parent, delay, code) ?? -1;
+    }
+
+    /** Mudlet `permKey(name, parent, modifier, keycode, luaCode)`. Persists a
+     *  keybinding under the named parent group (empty = root). Returns the new
+     *  id, or -1 when `parent` is non-empty but no key group of that name
+     *  exists. `modifier` is the Qt keyboard-modifier int (1=shift, 2=ctrl,
+     *  4=alt, 8=meta) — -1 means "no modifier" (Mudlet's convention; used by
+     *  `permGroup("name","key")`). */
+    permKey(name: string, parent: string, modifier: number, key: string, code: string): number {
+        return this.permKeyCallback?.(name, parent, modifier, key, code) ?? -1;
+    }
+
+    /** Mudlet `tempButton(toolbarName, name, code [, orientation])`. Appends a
+     *  transient button under an existing toolbar group; returns the new id, or
+     *  -1 when the toolbar doesn't exist. `orientation` is Mudlet's int form
+     *  (0=horizontal/1=vertical) — accepted for compat, applied to the
+     *  button row inside the toolbar grid. */
+    tempButton(toolbar: string, name: string, code: string, orientation: number): number {
+        return this.tempButtonCallback?.(toolbar, name, code, orientation) ?? -1;
+    }
+
+    /** Mudlet `tempButtonToolbar(name [, orientation [, location]])`. Creates
+     *  a transient toolbar (ButtonNode group). `location` int: 0=top, 1=bottom,
+     *  2=left, 3=right, 4=floating. Returns the new id or -1 on duplicate
+     *  name. */
+    tempButtonToolbar(name: string, orientation: number, location: number): number {
+        return this.tempButtonToolbarCallback?.(name, orientation, location) ?? -1;
+    }
+
+    /** Mudlet `setButtonState(name, state)`. Sets the pressed state of a
+     *  two-state (push-down) button by name. Returns false when not found. */
+    setButtonState(name: string, state: boolean): boolean {
+        return this.buttonStateSetter?.(name, state) ?? false;
+    }
+
+    /** Mudlet `getButtonState(name)`. Reads the pressed state of a two-state
+     *  button. Returns nil when not found. */
+    getButtonState(name: string): boolean | null {
+        return this.buttonStateGetter?.(name) ?? null;
+    }
+
+    /** Mudlet `setButtonStyleSheet(name, css)`. Stores a CSS string on the
+     *  ButtonNode; the renderer applies it inline. Returns false when not
+     *  found. */
+    setButtonStyleSheet(name: string, css: string): boolean {
+        return this.buttonStyleSheetSetter?.(name, css) ?? false;
+    }
+
+    /** Mudlet `showToolBar(name)` / `hideToolBar(name)`. Toggles the toolbar's
+     *  effective enabled flag — the existing button bar already gates render
+     *  on `isEffectivelyEnabled`, so flipping the group's `enabled` field is
+     *  the show/hide hook. Returns true on success, false when not found. */
+    setToolBarVisibility(name: string, show: boolean): boolean {
+        return this.toolBarToggler?.(name, show) ?? false;
     }
 
     setScript(name: string, code: string, pos: number): number {
@@ -2073,6 +2174,39 @@ export class ScriptingAPI {
     get cmdLineMenu() { return this.session.cmdLineMenu; }
 
     get sounds() { return this.session.sounds; }
+
+    get videos() { return this.session.videos; }
+
+    /** Mudlet `setMapBackgroundColor(r, g, b)`. Persists into the profile
+     *  mapper settings so MapPanel picks it up on its next render pass. */
+    setMapBackgroundColor(r: number, g: number, b: number): boolean {
+        const rr = clamp255(r);
+        const gg = clamp255(g);
+        const bb = clamp255(b);
+        const hex = '#' + [rr, gg, bb].map(c => c.toString(16).padStart(2, '0')).join('');
+        const store = useAppStore.getState();
+        const prev = store.connectionProfile[this.connectionId]?.mapper ?? {};
+        store.patchConnectionProfile(this.connectionId, { mapper: { ...prev, backgroundColor: hex } });
+        return true;
+    }
+
+    /** Mudlet `setMapRoomSize(size)`. Maps to renderer.settings.roomSize via
+     *  the profile mapper field. Returns false for non-positive values. */
+    setMapRoomSize(size: number): boolean {
+        if (!Number.isFinite(size) || size <= 0) return false;
+        const store = useAppStore.getState();
+        const prev = store.connectionProfile[this.connectionId]?.mapper ?? {};
+        store.patchConnectionProfile(this.connectionId, { mapper: { ...prev, roomSize: size } });
+        return true;
+    }
+
+    /** Mudlet `getMapRoomSize()`. Reads the active room-size value. Falls back
+     *  to the MAPPER_DEFAULTS.roomSize when unset. */
+    getMapRoomSize(): number {
+        const store = useAppStore.getState();
+        const mapper = store.connectionProfile[this.connectionId]?.mapper;
+        return mapper?.roomSize ?? 0.6;
+    }
 
     /**
      * Mudlet `loadMap([location])`. Persists the bytes (when given) to the

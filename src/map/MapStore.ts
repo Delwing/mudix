@@ -298,6 +298,7 @@ export class MapStore {
         this.labels.clear();
         this.envColors.clear();
         this.customEnvColors.clear();
+        this.roomCharColors.clear();
         this.roomHighlights.clear();
         this.mapUserData = {};
         this.playerRoomId = null;
@@ -327,6 +328,7 @@ export class MapStore {
         this.labels.clear();
         this.envColors.clear();
         this.customEnvColors.clear();
+        this.roomCharColors.clear();
         this.roomHighlights.clear();
         this.playerRoomId = null;
 
@@ -1776,6 +1778,58 @@ export class MapStore {
             out[id] = { r: c.r, g: c.g, b: c.b, a: c.alpha };
         }
         return out;
+    }
+
+    /** Mudlet removeCustomEnvColor(envID). Drops the override so the renderer
+     *  falls back to the built-in env palette. Returns true if an entry was
+     *  removed. */
+    removeCustomEnvColor(envId: number): boolean {
+        if (!this.customEnvColors.has(envId)) return false;
+        this.customEnvColors.delete(envId);
+        this.notify();
+        return true;
+    }
+
+    // ── Map mode (Mudlet view/edit toggle, fires mapModeChangeEvent) ──────────
+    // Mudlet's 2D map widget supports a "viewing" and "editing" mode. mudix has
+    // a single render path right now; the mode is stored here so scripts can
+    // toggle it and listen for the change event, even though no chrome wires
+    // visible behaviour to the value yet.
+    private mapMode: 'viewing' | 'editing' = 'viewing';
+    private mapModeListener: ((mode: 'viewing' | 'editing') => void) | null = null;
+
+    setMapModeListener(fn: ((mode: 'viewing' | 'editing') => void) | null): void {
+        this.mapModeListener = fn;
+    }
+
+    getMapMode(): 'viewing' | 'editing' { return this.mapMode; }
+
+    setMapMode(mode: 'viewing' | 'editing'): boolean {
+        if (mode !== 'viewing' && mode !== 'editing') return false;
+        if (this.mapMode === mode) return true;
+        this.mapMode = mode;
+        this.mapModeListener?.(mode);
+        this.notify();
+        return true;
+    }
+
+    // ── Room char colour (Mudlet setRoomCharColor / getRoomCharColor) ─────────
+    // The MudletRoom shape from mudlet-map-binary-reader has no charColor field
+    // (Mudlet stores it on the C++ TRoom side-by-side with the symbol). Mirror
+    // that with a separate Map keyed by room id; the renderer's
+    // MudixMapReader can read this back when painting room symbols.
+    private roomCharColors = new Map<number, MudletColor>();
+
+    setRoomCharColor(id: number, r: number, g: number, b: number, a = 255): boolean {
+        if (!this.rooms.has(id)) return false;
+        this.roomCharColors.set(id, { spec: 1, alpha: a, r, g, b });
+        this.notify();
+        return true;
+    }
+
+    getRoomCharColor(id: number): { r: number; g: number; b: number; a: number } | undefined {
+        const c = this.roomCharColors.get(id);
+        return c ? { r: c.r, g: c.g, b: c.b, a: c.alpha } : undefined;
     }
 
     // ── Room highlights (Mudlet highlightRoom / unHighlightRoom) ──────────────

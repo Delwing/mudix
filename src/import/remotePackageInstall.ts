@@ -11,12 +11,24 @@ export async function downloadFromUrl(url: string, proxyUrlRaw?: string): Promis
     return new Uint8Array(await res.arrayBuffer());
 }
 
+// Hosts that have already failed a direct fetch this session. Chrome logs the
+// rejection to the console before our catch sees it, so once we know a host
+// blocks CORS we skip the direct attempt on subsequent requests to keep the
+// devtools noise down. Cleared on full reload (module state).
+const proxyOnlyHosts = new Set<string>();
+
 async function fetchWithProxyFallback(target: string, proxyUrlRaw?: string): Promise<Response> {
+    const proxy = normalizeProxyBase(proxyUrlRaw);
+    let host = '';
+    try { host = new URL(target).host; } catch { /* malformed URL — fall through to direct fetch */ }
+    if (proxy && host && proxyOnlyHosts.has(host)) {
+        return fetch(`${proxy}/?url=${encodeURIComponent(target)}`);
+    }
     try {
         return await fetch(target);
     } catch (err) {
-        const proxy = normalizeProxyBase(proxyUrlRaw);
         if (!proxy) throw err;
+        if (host) proxyOnlyHosts.add(host);
         return fetch(`${proxy}/?url=${encodeURIComponent(target)}`);
     }
 }

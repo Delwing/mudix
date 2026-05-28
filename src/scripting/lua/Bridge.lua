@@ -233,6 +233,14 @@ function getCustomEnvColor(envId)
     return t[0], t[1], t[2], t[3]
 end
 
+-- Mudlet getRoomCharColor(roomID). Returns r, g, b, a when the room has a
+-- per-room char colour set; nil otherwise. JS returns a 0-indexed array.
+function getRoomCharColor(roomId)
+    local t = __getRoomCharColor(roomId)
+    if t == nil then return nil end
+    return t[0], t[1], t[2], t[3]
+end
+
 -- Mudlet getSelection([windowName]) → text, start, length on success;
 -- nil, "no selection" otherwise. JS hands back a 0-indexed array or nil.
 function getSelection(windowName)
@@ -1291,6 +1299,36 @@ do
     end
 end
 
+-- Mudlet permKey(name, parent, modifier, key, luaCode). Creates a saved
+-- keybinding. `modifier` is the Qt::KeyboardModifier int (-1 = no modifier,
+-- used by `permGroup("name", "key")` to make a key folder). `key` is either a
+-- Qt::Key int or a string keycode (KeyboardEvent.code). Returns the new id or
+-- -1 if the parent key group is missing.
+do
+    local _raw = __mudix_permKey
+    function permKey(name, parent, modifier, key, code)
+        return _raw(tostring(name or ""), tostring(parent or ""), tonumber(modifier) or -1, key, tostring(code or ""))
+    end
+end
+
+-- Mudlet tempButton(toolbar, name, luaCode [, orientation]). Returns the new
+-- id or -1 if no toolbar of that name exists.
+do
+    local _raw = __mudix_tempButton
+    function tempButton(toolbar, name, code, orientation)
+        return _raw(tostring(toolbar or ""), tostring(name or ""), tostring(code or ""), tonumber(orientation) or 0)
+    end
+end
+
+-- Mudlet tempButtonToolbar(name [, orientation [, location]]). Creates a
+-- transient toolbar group. Returns the new id, or -1 if the name is taken.
+do
+    local _raw = __mudix_tempButtonToolbar
+    function tempButtonToolbar(name, orientation, location)
+        return _raw(tostring(name or ""), tonumber(orientation) or 0, tonumber(location) or 0)
+    end
+end
+
 -- Mudlet tempColorTrigger(fg, bg, code [, expirationCount]). fg/bg are ANSI
 -- palette indices (0..255), or -1 to match any colour. The callback is
 -- invoked when any segment of the current rendered line carries the
@@ -1586,6 +1624,17 @@ function playSoundFile(a, b)
         return __playSoundFile(a)
     end
     return __playSoundFile({ name = tostring(a or ''), volume = b })
+end
+
+-- Mudlet `playVideoFile`. Accepts either:
+--   playVideoFile(filename [, volume [, loops]])  -- positional
+--   playVideoFile({name=..., volume=..., loops=..., width=..., height=...})
+-- The file resolves against the profile VFS or may be an http(s):// URL.
+function playVideoFile(a, b, c)
+    if type(a) == 'table' then
+        return __playVideoFile(a)
+    end
+    return __playVideoFile({ name = tostring(a or ''), volume = b, loops = c })
 end
 
 -- Mudlet `playMusicFile`. Table-arg only:

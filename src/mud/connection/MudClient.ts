@@ -28,6 +28,17 @@ import {
     GMCP_IAC,
     GMCP_SB,
     GMCP_SE,
+    CHARSET_COMMAND_CODE,
+    CHARSET_WILL,
+    CHARSET_DO,
+    CHARSET_REQUEST,
+    CHARSET_ACCEPTED,
+    CHARSET_REJECTED,
+    OPT_CHARSET,
+    MSP_COMMAND_CODE,
+    MSP_WILL,
+    MSP_DO,
+    MspParser,
 } from "../protocol";
 import type { MudClientEvents } from "../events";
 
@@ -44,6 +55,29 @@ export interface MudClientOptions {
      *  at least once, the client latches into "GA-driver" mode and bypasses
      *  buffering entirely, making this value moot. */
     promptTimeoutMs?: number;
+    /** Whether to accept GMCP (telnet option 201) negotiation. Default true.
+     *  When false, the client silently ignores IAC WILL/DO GMCP so the server
+     *  never sees a positive ack and no GMCP envelopes flow. */
+    gmcpEnabled?: boolean;
+    /** Whether to accept TERMINAL-TYPE / MTTS (telnet option 24) negotiation.
+     *  Default true. When false, IAC DO TTYPE is ignored so the server falls
+     *  back to its non-MTTS code path. */
+    mttsEnabled?: boolean;
+    /** Whether to accept MSDP (telnet option 69) negotiation. Default false.
+     *  When false, IAC WILL/DO MSDP is ignored and no MSDP envelopes flow. */
+    msdpEnabled?: boolean;
+    /** Whether to accept CHARSET (telnet option 42, RFC 2066) negotiation.
+     *  Default true. When false, IAC WILL/DO CHARSET is ignored and the
+     *  session stays on the UTF-8 baseline (so non-ASCII bytes from non-UTF-8
+     *  MUDs render as replacement chars). */
+    charsetEnabled?: boolean;
+    /** Whether to enable MSP (MUD Sound Protocol, telnet option 90). Default
+     *  false. When true the client negotiates the option and strips inline
+     *  `!!SOUND(...)` / `!!MUSIC(...)` tags from MUD text, dispatching them
+     *  as `msp` events. Always parses subnegotiations regardless of this flag
+     *  once negotiated, but in-band parsing is gated to avoid eating literal
+     *  text on MUDs that don't speak MSP. */
+    mspEnabled?: boolean;
 }
 
 const DEFAULT_PROMPT_TIMEOUT_MS = 300;
@@ -108,6 +142,17 @@ export class MudClient {
     private telnetEventSeen = new Set<number>();
 
     commandEcho: boolean;
+    private gmcpEnabled: boolean;
+    private mttsEnabled: boolean;
+    private msdpEnabled: boolean;
+    private charsetEnabled: boolean;
+    private mspEnabled: boolean;
+    private readonly mspParser = new MspParser();
+    /** Currently active byte→char codec label. Starts at UTF-8 (works for
+     *  ASCII and modern MUDs); switches when a CHARSET REQUEST/ACCEPTED
+     *  exchange agrees on something else. Also drives outgoing encoding for
+     *  user input — see encodeOutgoing(). Reset on each connect(). */
+    private currentEncoding = 'utf-8';
 
     constructor(
         {
@@ -116,6 +161,11 @@ export class MudClient {
             commandEcho = true,
             chunkProcessor,
             promptTimeoutMs = DEFAULT_PROMPT_TIMEOUT_MS,
+            gmcpEnabled = true,
+            mttsEnabled = true,
+            msdpEnabled = false,
+            charsetEnabled = true,
+            mspEnabled = false,
         }: MudClientOptions,
         eventBus: EventBus<MudClientEvents>,
     ) {
@@ -124,6 +174,11 @@ export class MudClient {
         this.eventBus = eventBus;
         this.chunkProcessor = chunkProcessor ?? createPassthroughProcessor();
         this.promptTimeoutMs = clampPromptTimeout(promptTimeoutMs);
+        this.gmcpEnabled = gmcpEnabled;
+        this.mttsEnabled = mttsEnabled;
+        this.msdpEnabled = msdpEnabled;
+        this.charsetEnabled = charsetEnabled;
+        this.mspEnabled = mspEnabled;
 
         this.gmcpStream = createGmcpStream({
             onEnvelope: ({ path, value }) => {
@@ -149,6 +204,8 @@ export class MudClient {
             if (code === GMCP_COMMAND_CODE) this.gmcpStream(subneg);
             else if (code === MSDP_COMMAND_CODE) this.msdpStream(subneg);
             else if (code === TTYPE_COMMAND_CODE) this.respondTerminalType(subneg);
+            else if (code === CHARSET_COMMAND_CODE) this.handleCharsetSubneg(subneg);
+            else if (code === MSP_COMMAND_CODE) this.handleMspSubneg(subneg);
         });
         this.mccpHandler = new MccpHandler((data) => this.sendRaw(data));
         this.mccpHandler.enabled = mccpEnabled;
@@ -156,6 +213,7 @@ export class MudClient {
         this.echoHandler = new EchoHandler(
             (data) => this.sendRaw(data),
             (serverEchoing) => this.eventBus.emit('telnet.echo', serverEchoing),
+            () => this.eventBus.emit('telnet.echo.anomaly'),
         );
 
         addEventListener('beforeunload', (event) => {
@@ -204,10 +262,12 @@ export class MudClient {
         }
         this.mccpHandler.reset();
         this.echoHandler.reset();
+        this.currentEncoding = 'utf-8';
         this.textDecoder = new TextDecoder('utf-8', { fatal: false });
         this.pendingLineTail = "";
         this.gaDriver = false;
         this.ttypeStep = 0;
+        this.mspParser.reset();
         this.clearTailTimer();
 
         try {
@@ -226,22 +286,22 @@ export class MudClient {
                         logTelnetNegotiation('raw', decodedData);
                         if (data !== decodedData) logTelnetNegotiation('post-mccp', data);
                     }
-                    if (data.includes(GMCP_WILL)) {
+                    if (this.gmcpEnabled && data.includes(GMCP_WILL)) {
                         // Server offers GMCP (IAC WILL GMCP) → we accept (IAC DO GMCP).
                         this.sendRaw(GMCP_DO);
                         this.eventBus.emit('gmcp.negotiated');
-                    } else if (data.includes(GMCP_DO)) {
+                    } else if (this.gmcpEnabled && data.includes(GMCP_DO)) {
                         // Server requests we enable GMCP (IAC DO GMCP) → we accept
                         // (IAC WILL GMCP). Mirrors the MSDP handling below: telnet
                         // negotiation is symmetric, so handle both directions.
                         this.sendRaw(GMCP_WILL);
                         this.eventBus.emit('gmcp.negotiated');
                     }
-                    if (data.includes(MSDP_WILL)) {
+                    if (this.msdpEnabled && data.includes(MSDP_WILL)) {
                         // Server offers MSDP (IAC WILL MSDP) → we accept (IAC DO MSDP).
                         this.sendRaw(MSDP_DO);
                         this.eventBus.emit('msdp.negotiated');
-                    } else if (data.includes(MSDP_DO)) {
+                    } else if (this.msdpEnabled && data.includes(MSDP_DO)) {
                         // Server requests we enable MSDP (IAC DO MSDP) → we accept
                         // (IAC WILL MSDP). Telnet negotiation is symmetric and many
                         // servers (e.g. Legends of Kallisti) start MSDP this way; without
@@ -249,13 +309,43 @@ export class MudClient {
                         this.sendRaw(MSDP_WILL);
                         this.eventBus.emit('msdp.negotiated');
                     }
-                    if (data.includes(TTYPE_DO)) {
+                    if (this.mttsEnabled && data.includes(TTYPE_DO)) {
                         // Server asks us to identify our terminal (IAC DO TTYPE).
                         // Agree (IAC WILL TTYPE); the actual name/type/MTTS values
                         // follow via the SB TTYPE SEND subnegotiation handled in
                         // respondTerminalType(). Many MUDs (e.g. Kallisti) won't
                         // offer MSDP/GMCP until this handshake completes.
                         this.sendRaw(TTYPE_WILL);
+                    }
+                    if (this.mspEnabled && data.includes(MSP_WILL)) {
+                        // Server offers MSP (IAC WILL MSP) → we accept (IAC DO MSP).
+                        // In practice most MUDs just inline `!!SOUND(...)` tags
+                        // without ever negotiating, so this branch is rarely hit;
+                        // when it is, we want the option enabled so subnegotiated
+                        // tags route through handleMspSubneg.
+                        this.sendRaw(MSP_DO);
+                        this.eventBus.emit('msp.negotiated');
+                        if (debugMspEnabled()) console.debug('[mudix.msp] negotiated: server WILL → client DO');
+                    } else if (this.mspEnabled && data.includes(MSP_DO)) {
+                        // Server requests we enable MSP (IAC DO MSP) → we agree.
+                        this.sendRaw(MSP_WILL);
+                        this.eventBus.emit('msp.negotiated');
+                        if (debugMspEnabled()) console.debug('[mudix.msp] negotiated: server DO → client WILL');
+                    }
+                    if (this.charsetEnabled && data.includes(CHARSET_WILL)) {
+                        // Server offers CHARSET (IAC WILL CHARSET) → we accept
+                        // (IAC DO CHARSET) and proactively send our REQUEST
+                        // listing preferred encodings (UTF-8 first). Mudlet does
+                        // the same — without the REQUEST many servers stay on
+                        // their default codec and never switch.
+                        this.sendRaw(CHARSET_DO);
+                        this.sendCharsetRequest();
+                    } else if (this.charsetEnabled && data.includes(CHARSET_DO)) {
+                        // Server asks us to enable CHARSET (IAC DO CHARSET) → we
+                        // agree (IAC WILL CHARSET) and drive the negotiation by
+                        // sending our REQUEST.
+                        this.sendRaw(CHARSET_WILL);
+                        this.sendCharsetRequest();
                     }
                     this.scanTelnetOptions(data);
                     this.echoHandler.processData(data);
@@ -286,6 +376,7 @@ export class MudClient {
                 this.echoHandler.reset();
                 this.pendingSubneg = "";
                 this.pendingLineTail = "";
+                this.mspParser.reset();
                 this.clearTailTimer();
             };
 
@@ -328,6 +419,7 @@ export class MudClient {
         this.echoHandler.reset();
         this.pendingSubneg = '';
         this.pendingLineTail = '';
+        this.mspParser.reset();
         this.clearTailTimer();
     }
 
@@ -352,11 +444,31 @@ export class MudClient {
             this.eventBus.emit('socket.outgoing', message);
         }
         try {
-            this.sendBytes(message + "\r\n");
+            this.sendBytes(this.encodeOutgoing(message + "\r\n"));
         } catch (error) {
             console.error('Error sending message:', error);
             this.eventBus.emit('error', error);
         }
+    }
+
+    /** Convert a user-typed JS string (UTF-16) into the Latin-1 byte-string
+     *  sendBytes expects, using the currently negotiated outgoing encoding.
+     *  For UTF-8 we run it through TextEncoder so multi-byte chars survive;
+     *  for other encodings we fall back to a per-char `& 0xff` truncation,
+     *  which is lossless for ASCII and acceptable for Latin-1-family inputs.
+     *  TextEncoder has no API for non-UTF-8 outputs, so a full per-encoding
+     *  outbound table isn't worth the bytes given how rare non-UTF-8 MUDs are. */
+    private encodeOutgoing(text: string): string {
+        if (this.currentEncoding === 'utf-8') {
+            const bytes = new TextEncoder().encode(text);
+            let out = '';
+            const CHUNK = 0x8000;
+            for (let i = 0; i < bytes.length; i += CHUNK) {
+                out += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+            }
+            return out;
+        }
+        return text;
     }
 
     private sendRaw(data: string): void {
@@ -436,7 +548,7 @@ export class MudClient {
         const SB = 0xFA, WILL = 0xFB, WONT = 0xFC, DO = 0xFD, DONT = 0xFE;
         // Options the client negotiates inline elsewhere — exclude from
         // sysTelnetEvent so handlers see only "everything else".
-        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 69 /* MSDP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 201 /* GMCP */]);
+        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 42 /* CHARSET */, 69 /* MSDP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 90 /* MSP */, 201 /* GMCP */]);
         for (let i = 0; i < data.length - 2; i++) {
             if (data.charCodeAt(i) !== IAC) continue;
             const cmd = data.charCodeAt(i + 1);
@@ -467,12 +579,86 @@ export class MudClient {
      *  type → MTTS capability bitvector on successive SENDs, then repeating the
      *  last value to signal the list is exhausted (RFC 1091 + the MTTS standard). */
     private respondTerminalType(subneg: string): void {
+        if (!this.mttsEnabled) return;
         if (subneg.charCodeAt(1) !== TTYPE_SEND.charCodeAt(0)) return; // only handle SEND
         // MTTS bits we advertise: ANSI(1) + UTF-8(4) + 256 COLORS(8) + TRUECOLOR(256) = 269.
         const cycle = ['Mudix', 'XTERM-256COLOR', 'MTTS 269'];
         const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
         if (this.ttypeStep < cycle.length - 1) this.ttypeStep++;
         this.sendRaw(GMCP_IAC + GMCP_SB + OPT_TTYPE + TTYPE_IS + value + GMCP_IAC + GMCP_SE);
+    }
+
+    /** Send `IAC SB CHARSET REQUEST ;UTF-8;ISO-8859-2;ISO-8859-1 IAC SE` —
+     *  advertising the encodings we can decode, in preference order. Each name
+     *  is prefixed by the separator (`;`) per RFC 2066 (the separator comes
+     *  before each charset, not between them). The server replies ACCEPTED
+     *  <name> or REJECTED; handleCharsetSubneg() processes either. */
+    private sendCharsetRequest(): void {
+        if (!this.charsetEnabled) return;
+        const PREFS = ['UTF-8', 'ISO-8859-2', 'ISO-8859-1'];
+        const sep = ';';
+        const body = OPT_CHARSET + CHARSET_REQUEST + sep + PREFS.join(sep);
+        this.sendRaw(GMCP_IAC + GMCP_SB + body + GMCP_IAC + GMCP_SE);
+    }
+
+    /** Route an `IAC SB CHARSET ... IAC SE` subnegotiation body (leading byte
+     *  is the option code, 42). Handles REQUEST (server lists charsets, we
+     *  ACCEPT one or REJECT), ACCEPTED (server picked one of ours — switch
+     *  codec), and REJECTED (server didn't like any of ours — stay put).
+     *  TTABLE-* subcommands are silently ignored; almost no MUD uses them. */
+    private handleCharsetSubneg(subneg: string): void {
+        if (!this.charsetEnabled) return;
+        if (subneg.length < 2) return;
+        const sub = subneg.charCodeAt(1);
+        if (sub === CHARSET_REQUEST.charCodeAt(0)) {
+            const chosen = pickCharsetFromRequest(subneg);
+            if (!chosen) {
+                this.sendRaw(GMCP_IAC + GMCP_SB + OPT_CHARSET + CHARSET_REJECTED + GMCP_IAC + GMCP_SE);
+                return;
+            }
+            this.sendRaw(GMCP_IAC + GMCP_SB + OPT_CHARSET + CHARSET_ACCEPTED + chosen.original + GMCP_IAC + GMCP_SE);
+            this.setEncoding(chosen.normalized, chosen.original);
+        } else if (sub === CHARSET_ACCEPTED.charCodeAt(0)) {
+            // Server accepted one of the names from our REQUEST. The body after
+            // byte[1] is the chosen name verbatim.
+            const name = subneg.substring(2);
+            const norm = normalizeCharsetName(name);
+            if (norm) this.setEncoding(norm, name);
+        }
+        // CHARSET_REJECTED — no action, keep current encoding.
+    }
+
+    /** Swap the streaming decoder to a new encoding label (an IANA name the
+     *  TextDecoder constructor accepts: 'utf-8', 'iso-8859-2', ...). Any partial
+     *  multi-byte sequence buffered in the previous decoder is discarded —
+     *  fine because CHARSET typically negotiates before any real content
+     *  arrives. Emits `charset.negotiated` with the wire-spelling name so
+     *  listeners can surface it (status bar / debug log). */
+    private setEncoding(encoding: string, displayName: string): void {
+        try {
+            this.textDecoder = new TextDecoder(encoding, { fatal: false });
+            this.currentEncoding = encoding;
+        } catch {
+            // Browser refused the label (shouldn't happen for our allowlist).
+            // Stay on the existing decoder; don't emit the negotiated event.
+            return;
+        }
+        this.eventBus.emit('charset.negotiated', displayName);
+    }
+
+    /** Route an `IAC SB MSP ... IAC SE` body to the MSP parser and dispatch
+     *  any parsed commands as `msp` events. Always runs when an MSP subneg
+     *  arrives — once the server has bothered to wrap a tag, we trust it. */
+    private handleMspSubneg(subneg: string): void {
+        const commands = this.mspParser.feedSubneg(subneg);
+        if (debugMspEnabled()) {
+            if (commands.length === 0) {
+                console.debug('[mudix.msp] subneg arrived but parsed 0 commands; body=', JSON.stringify(subneg.substring(1)));
+            } else {
+                console.debug(`[mudix.msp] subneg parsed ${commands.length} command(s):`, commands);
+            }
+        }
+        for (const cmd of commands) this.eventBus.emit('msp', cmd);
     }
 
     /** Mudlet `sendSocket(data)`. Sends literal bytes over the socket with no
@@ -534,7 +720,20 @@ export class MudClient {
 
         const hasPrompt = processable.includes(TELNET_GA) || processable.includes(TELNET_EOR);
         const sanitized = stripTelnetSequences(processable, this.telnetOptionHandler).replace(/\r/g, '');
-        const decoded = this.decodeUtf8(sanitized);
+        const decodedRaw = this.decodeUtf8(sanitized);
+        // MSP in-band parsing: strip `!!SOUND(...)` / `!!MUSIC(...)` triplets
+        // and dispatch them as events. Gated on mspEnabled because the tag
+        // bytes are legitimate text on non-MSP MUDs (rare in practice but
+        // possible inside log dumps and quoted strings).
+        let decoded = decodedRaw;
+        if (this.mspEnabled && decodedRaw.length > 0) {
+            const { text, commands } = this.mspParser.feed(decodedRaw);
+            decoded = text;
+            if (commands.length > 0 && debugMspEnabled()) {
+                console.debug(`[mudix.msp] inline parsed ${commands.length} command(s):`, commands);
+            }
+            for (const cmd of commands) this.eventBus.emit('msp', cmd);
+        }
         const ts = typeof timestamp === 'number' ? timestamp : Date.now();
 
         if (debugFramesEnabled() && decoded.length > 0) {
@@ -687,8 +886,8 @@ const TELNET_CMD_NAMES: Record<number, string> = {
 };
 const TELNET_OPT_NAMES: Record<number, string> = {
     1: 'ECHO', 3: 'SGA', 24: 'TTYPE', 25: 'EOR', 31: 'NAWS', 32: 'TSPEED',
-    69: 'MSDP', 70: 'MSSP', 85: 'MCCP1', 86: 'MCCP2', 90: 'MSP', 91: 'MXP',
-    93: 'ZMP', 201: 'GMCP', 255: 'IAC',
+    42: 'CHARSET', 69: 'MSDP', 70: 'MSSP', 85: 'MCCP1', 86: 'MCCP2', 90: 'MSP',
+    91: 'MXP', 93: 'ZMP', 201: 'GMCP', 255: 'IAC',
 };
 
 /** Scan a Latin-1 byte-string for telnet IAC sequences and log them in
@@ -725,6 +924,108 @@ function debugFramesEnabled(): boolean {
     } catch {
         return false;
     }
+}
+
+/**
+ * Diagnostic gate — enable via `localStorage.setItem('mudix.debugMsp', '1')`
+ * in the browser console to log MSP negotiation, parsed `!!SOUND`/`!!MUSIC`
+ * tags (inline and subneg), and their dispatch into the SoundManager. Use
+ * this to confirm whether a MUD is actually emitting MSP and whether the
+ * client is routing it through.
+ */
+function debugMspEnabled(): boolean {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem('mudix.debugMsp') === '1';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Map a wire-format charset name (case-insensitive, with various dash/underscore
+ * spellings) onto an IANA label that `TextDecoder` accepts. Returns null for
+ * encodings we don't support — most legacy MUD codepages aren't reachable from
+ * the browser TextDecoder API and would need a polyfill not worth shipping.
+ *
+ * Coverage is deliberately narrow: UTF-8 (the universal modern answer), the
+ * Latin-N family, the Cyrillic KOI8 variants, and the Windows-125x codepages.
+ * That covers every Polish, Russian, and Western European MUD seen in practice.
+ */
+function normalizeCharsetName(raw: string): string | null {
+    const n = raw.trim().toLowerCase().replace(/_/g, '-');
+    if (n === 'utf-8' || n === 'utf8') return 'utf-8';
+    // US-ASCII is a strict subset of UTF-8, so the UTF-8 decoder handles it byte-for-byte.
+    if (n === 'us-ascii' || n === 'ascii') return 'utf-8';
+    const iso = /^iso-?8859-?(\d{1,2})$/.exec(n);
+    if (iso) {
+        // TextDecoder knows iso-8859-{2..16} (and iso-8859-1 via 'latin1').
+        const part = parseInt(iso[1], 10);
+        if (part >= 1 && part <= 16 && part !== 12 /* iso-8859-12 doesn't exist */) {
+            return `iso-8859-${part}`;
+        }
+        return null;
+    }
+    const latin = /^latin-?(\d+)$/.exec(n);
+    if (latin) {
+        // "Latin-N" aliases: Latin-1 = ISO-8859-1, Latin-2 = ISO-8859-2, Latin-9 = ISO-8859-15.
+        const map: Record<string, string> = { '1': 'iso-8859-1', '2': 'iso-8859-2', '9': 'iso-8859-15' };
+        return map[latin[1]] ?? null;
+    }
+    if (/^windows-125\d$/.test(n)) return n;        // 1250..1258 all valid TextDecoder labels
+    if (n === 'koi8-r' || n === 'koi8-u') return n;
+    return null;
+}
+
+/** Priority order for picking among offered charsets. Earlier wins. Matches
+ *  the Mudlet preference (UTF-8 first, then Polish/Russian, then Western). */
+const CHARSET_PRIORITY = [
+    'utf-8',
+    'iso-8859-2',
+    'windows-1250',
+    'iso-8859-1',
+    'iso-8859-15',
+    'windows-1252',
+    'koi8-r',
+    'koi8-u',
+];
+
+/**
+ * Parse an `IAC SB CHARSET REQUEST ...` subnegotiation body (leading byte is
+ * the option code 42, then subcommand byte 1, then optional `[TTABLE]<ver>`
+ * prefix, then a separator byte, then separator-delimited IANA names). Returns
+ * the best match against {@link CHARSET_PRIORITY} with both the original wire
+ * spelling (echoed back in the ACCEPTED reply per RFC 2066) and the normalized
+ * IANA label suitable for `new TextDecoder(...)`. Returns null if no offered
+ * name is supported.
+ */
+function pickCharsetFromRequest(subneg: string): { original: string; normalized: string } | null {
+    if (subneg.length < 4) return null;
+    let i = 2; // skip option code (42) + subcommand (REQUEST = 1)
+    // Optional `[TTABLE]<version>` prefix — skip the bracket-delimited tag and
+    // the single version byte after it. We don't support translation tables;
+    // we just step past the prefix so we can find the real separator.
+    if (subneg.charCodeAt(i) === 0x5B /* '[' */) {
+        const close = subneg.indexOf(']', i);
+        if (close === -1) return null;
+        i = close + 1;
+        if (i >= subneg.length) return null;
+        i++; // skip version byte
+    }
+    if (i >= subneg.length) return null;
+    const sep = subneg[i];
+    const list = subneg.substring(i).split(sep).filter(name => name.length > 0);
+    if (list.length === 0) return null;
+    // Build a lookup from normalized name → first occurrence with original spelling.
+    const normalized = new Map<string, string>();
+    for (const original of list) {
+        const norm = normalizeCharsetName(original);
+        if (norm && !normalized.has(norm)) normalized.set(norm, original);
+    }
+    for (const preferred of CHARSET_PRIORITY) {
+        const original = normalized.get(preferred);
+        if (original) return { original, normalized: preferred };
+    }
+    return null;
 }
 
 /**

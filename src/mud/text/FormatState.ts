@@ -321,17 +321,20 @@ export class FormatState {
                 }
                 default:
                     if (code >= 30 && code <= 37) {
-                        if (params[1] === 1) {
-                            this.foreground = {space: "hex", color: colorCodes.ansi.bright[code - 30]};
-                        } else {
-                            this.foreground = {space: "hex", color: colorCodes.ansi.dark[code - 30]};
-                        }
+                        // Bold persists across SGRs and brightens the 30–37 dark
+                        // palette into 90–97. Polish MUDs (Arkadia, Avalon) draw
+                        // map glyphs as `\e[1;30m+`/`\e[1m...\e[30m+` — both must
+                        // resolve to bright black, not invisible #000000 on a
+                        // black background.
+                        const bright = this.bold || params.includes(1);
+                        const palette = bright ? colorCodes.ansi.bright : colorCodes.ansi.dark;
+                        this.foreground = {space: "hex", color: palette[code - 30]};
                     } else if (code >= 90 && code <= 97) {
-                        this.foreground = {space: "hex", color: colorCodes.ansi.bright[code - 82]};
+                        this.foreground = {space: "hex", color: colorCodes.ansi.bright[code - 90]};
                     } else if (code >= 40 && code <= 47) {
-                        this.background = {space: "hex", color: colorCodes.ansi.bright[code - 40]};
+                        this.background = {space: "hex", color: colorCodes.ansi.dark[code - 40]};
                     } else if (code >= 100 && code <= 107) {
-                        this.background = {space: "hex", color: colorCodes.ansi.bright[code - 92]};
+                        this.background = {space: "hex", color: colorCodes.ansi.bright[code - 100]};
                     }
                     break;
             }

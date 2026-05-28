@@ -1,868 +1,976 @@
 # Mudlet API Implementation Checklist
 
-Status legend:
-- ✅ Implemented and callable from Lua (either JS-bound or pure Lua whose dependencies are all satisfied)
-- 🚧 Feasible — worth implementing
-- ⚠️ Partial — skeleton exists, signature is incomplete, or pure-Lua impl is bundled but blocked by a missing dependency
-- ❌ N/A — fundamentally inapplicable (multi-profile, subprocess, Discord SDK, IRC, etc.)
+Organised to match the [Mudlet wiki Lua Functions reference](https://wiki.mudlet.org/w/Manual:Lua_Functions). Each section below corresponds to a top-level category on that page; rows appear in the wiki's alphabetical order.
 
-> Many APIs become "free" as soon as a single primitive is added. The known blockers right now:
-> - `createCommandLine` — blocks `Geyser.CommandLine` and the whole overlay command-line widget family.
-> - ~~`getLabelStyleSheet` — blocks `getLabelFormat` returning correct values.~~ (resolved)
-> - ~~`insertPopup` / `setPopup` — block `cinsertPopup`/`dinsertPopup`/`hinsertPopup`.~~ (resolved — `insertPopup`/`setPopup` implemented)
+Status legend:
+- ✅ Implemented and callable from Lua (JS-bound, pure-Lua, or wasmoon stdlib)
+- ⚠️ Partial — skeleton exists, signature is incomplete, or pure-Lua impl is bundled but blocked by a missing dependency
+- 🚧 Feasible — worth implementing
+- ❌ N/A — fundamentally inapplicable (multi-profile, Qt-specific, Discord SDK, etc.). **These should still be bound as warning-emitting no-op stubs** so imported Mudlet scripts that reference them don't crash; the stub logs once per call site and returns a sensible default (`nil`/`false`/empty table).
+
+Known blockers:
+- `createCommandLine` — blocks `Geyser.CommandLine` and the entire overlay command-line widget family for named widgets (main bar is wired separately).
+- Browser file-picker async/sync mismatch — blocks `invokeFileDialog`.
 
 ---
 
 ## Architecture Notes
 
 ### Overlay UI system
-`createMiniConsole`, `createLabel`, `createGauge`, `createCommandLine` and friends will be implemented as **absolutely-positioned HTML elements** rendered in an overlay layer on top of the main output area. This mirrors how Mudlet lays them out: pixel coordinates within the client window.
+`createMiniConsole`, `createLabel`, `createGauge`, `createCommandLine` and friends are implemented as **absolutely-positioned HTML elements** rendered in an overlay layer on top of the main output area, mirroring Mudlet's pixel-coordinate layout.
 
 - `moveWindow(name, x, y)` and `resizeWindow(name, w, h)` apply to overlay elements via CSS `left`/`top`/`width`/`height`.
-- Dockview panels (opened via `openWindow`) follow dockview's own layout and are not absolutely positioned — `moveWindow`/`resizeWindow` do not apply to them.
+- Dockview panels (opened via `openWindow`) follow dockview's own layout and are not absolutely positioned.
 - `showWindow`/`hideWindow` and `raiseWindow`/`lowerWindow` apply to both overlay elements (CSS `display`/`z-index`) and dockview panels.
 
 ### Virtual filesystem
-A virtual filesystem (IndexedDB-backed, similar to the existing `mapStorage`) will provide path-based file I/O from Lua. This enables:
-- `table.save` / `table.load`
-- `io.exists`
-- `getMudletHomeDir()` → returns the VFS root path
-- `saveMap(path)` / `loadMap(path)`
-- `downloadFile(url, path)` → fetch + write to VFS
-- Sound file playback from VFS paths
+A profile-scoped IndexedDB VFS provides path-based file I/O from Lua. `getMudletHomeDir()` returns the VFS root; `io.open`, `io.exists`, `table.save`/`table.load`, `downloadFile`, `saveMap`/`loadMap`, and sound/video paths all resolve through it.
+
+### Database
+Mudlet's `DB.lua` is bundled and runs against `sqlite-wasm` through a `Luasql.lua` shim, so the entire `db:*` API works in the browser.
 
 ### Geyser
-A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gauge`, `HBox`, `VBox`) can be implemented in pure Lua on top of the overlay element API — no additional JS needed once the primitives exist.
+A subset of the Geyser OOP framework (`Container`, `Label`, `MiniConsole`, `Gauge`, `HBox`, `VBox`, `UserWindow`) is bundled in pure Lua on top of the overlay primitive API.
 
 ---
 
-## Output / Display
+## Basic Essentials
 
 | Function | Status | Notes |
 |---|---|---|
-| `echo([window,] text)` | ✅ | Main window; window arg routes to overlay/panel |
-| `cecho([window,] text)` | ✅ | `<colorname>text` syntax |
-| `decho([window,] text)` | ✅ | `<r,g,b>text` syntax |
-| `hecho([window,] text)` | ✅ | `#RRGGBBtext` syntax |
-| `print(...)` | ✅ | Alias for echo |
+| `debugc` | ✅ | Alias for `debug` — `console.debug` |
 | `display(value)` | ✅ | Pretty-prints tables recursively |
-| `feedTriggers(text)` | ✅ | Feeds text through trigger pipeline + shows in output |
-| `cfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua, wraps `feedTriggers` |
-| `dfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `deleteLine()` | ✅ | Removes last output element |
-| `prefix(text)` | ✅ | Pure Lua via GUIUtils.lua (moveCursor + insertText) |
-| `suffix(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `replace(text)` | ✅ | JS-exposed |
-| `replaceLine(text)` | ✅ | Pure Lua via GUIUtils.lua (selectCurrentLine + replace) |
-| `creplace(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `dreplace(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hreplace(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `insertText([window,] text)` | ✅ | JS-exposed |
-| `cinsertText([window,] text)` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → insertText) |
-| `wrapLine([window,] linenum)` | ✅ | JS-exposed; re-renders the line buffer (0-indexed) so embedded `\n` is interpreted and the line re-wraps. mudix renders with `white-space: pre-wrap`, so re-rendering the shared buffer is the re-wrap |
-| `scrollUp([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
-| `scrollDown([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
-| `showColors([columns])` | ✅ | Pure Lua via GUIUtils.lua |
-| `showCaptureGroups()` | ✅ | Pure Lua via DebugTools.lua (uses `matches` global) |
+| `echo([window,] text)` | ✅ | Main window; window arg routes to overlay/panel |
+| `printDebug` | ✅ | Bound in LuaRuntime |
+| `printError` | ✅ | Bound in LuaRuntime |
+| `send(text [, echo])` | ✅ | Send command to MUD |
+
+---
+
+## Database Functions
+
+All `db:*` calls run against `sqlite-wasm` via the Luasql shim; Mudlet's bundled `DB.lua` provides the high-level API unchanged.
+
+| Function | Status | Notes |
+|---|---|---|
+| `db:add` | ✅ | DB.lua |
+| `db:aggregate` | ✅ | DB.lua |
+| `db:close` | ✅ | DB.lua |
+| `db:create` | ✅ | DB.lua |
+| `db:delete` | ✅ | DB.lua |
+| `db:fetch` | ✅ | DB.lua |
+| `db:fetch_sql` | ✅ | DB.lua |
+| `db:get_database` | ✅ | DB.lua |
+| `db:merge_unique` | ✅ | DB.lua |
+| `db:query_by_example` | ✅ | DB.lua |
+| `db:Timestamp` | ✅ | DB.lua |
+| `db:Null` | ✅ | DB.lua |
+| `db:safe_name` | ✅ | DB.lua |
+| `db:set` | ✅ | DB.lua |
+| `db:update` | ✅ | DB.lua |
+| `db:_sql_convert` | ✅ | DB.lua internal — exposed |
+| `db:_sql_values` | ✅ | DB.lua internal — exposed |
+
+---
+
+## Database Expressions
+
+| Function | Status | Notes |
+|---|---|---|
+| `db:AND` | ✅ | DB.lua |
+| `db:OR` | ✅ | DB.lua |
+| `db:between` | ✅ | DB.lua |
+| `db:eq` | ✅ | DB.lua |
+| `db:exp` | ✅ | DB.lua |
+| `db:gt` | ✅ | DB.lua |
+| `db:gte` | ✅ | DB.lua |
+| `db:in_` | ✅ | DB.lua |
+| `db:is_nil` | ✅ | DB.lua |
+| `db:is_not_nil` | ✅ | DB.lua |
+| `db:like` | ✅ | DB.lua |
+| `db:lt` | ✅ | DB.lua |
+| `db:lte` | ✅ | DB.lua |
+| `db:not_between` | ✅ | DB.lua |
+| `db:not_eq` | ✅ | DB.lua |
+| `db:not_in` | ✅ | DB.lua |
+| `db:not_like` | ✅ | DB.lua |
+
+---
+
+## Database Transactions
+
+Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rollback()`); DB.lua's auto-commit wrapping handles the documented `db:_*` entry points.
+
+| Function | Status | Notes |
+|---|---|---|
+| `db:_begin` | ✅ | Via DB.lua autocommit toggling |
+| `db:_commit` | ✅ | Via `conn:commit()` |
+| `db:_end` | ✅ | Closes transaction window |
+| `db:_rollback` | ✅ | Via `conn:rollback()` |
+
+---
+
+## Date & Time Functions
+
+| Function | Status | Notes |
+|---|---|---|
+| `datetime:parse` | ✅ | DateTime.lua |
+| `getEpoch()` | ✅ | JS-exposed (`Date.now() / 1000`) |
+| `getTime([returnAsTable, format])` | ✅ | Bridge.lua — full Qt QDateTime token formatting |
+| `getTimestamp([window,] lineNumber)` | ✅ | Bridge.lua → `__getTimestamp` → `"hh:mm:ss.zzz"` string. Each `AnsiAwareBuffer` carries a construction-time `timestamp`; `Console.getLineTimestamp` reads it (1-based, matching `getLines`). `(nil, errMsg)` when out of range |
+| `shms(seconds)` | ✅ | DateTime.lua |
+
+---
+
+## File System Functions
+
+| Function | Status | Notes |
+|---|---|---|
+| `io.exists(path)` | ✅ | Other.lua (uses `io.open`) backed by ProfileVFS |
+| `lfs.attributes(path)` | 🚧 | LuaFileSystem not bound; could be added on top of the VFS |
+| `openMudletHomeDir()` | ✅ | `openUrl("file:")` routes to the VFS file browser |
+| `saveProfile([name])` | ❌ | Auto-persists via localStorage / IndexedDB; explicit save is a no-op |
+
+---
+
+## Mapper Functions
+
+| Function | Status | Notes |
+|---|---|---|
+| `addAreaName(name)` | ✅ | Bridge.lua |
+| `addCustomLine(roomID, toID, direction, style, color, arrow)` | 🚧 | Programmatic custom-line editing not wired |
+| `addMapEvent(uniquename, event, parent, displayName, ...)` | ✅ | Map context-menu event registration |
+| `addMapMenu(name, parent, displayName)` | 🚧 | Map context-menu group registration |
+| `addRoom(roomID)` | ✅ | JS-exposed |
+| `addSpecialExit(fromID, toID, cmd)` | ✅ | JS-exposed |
+| `auditAreas()` | 🚧 | No equivalent integrity-audit hook yet |
+| `centerview(roomID)` | ✅ | JS-exposed; also sets the player room (matches Mudlet) |
+| `clearAreaUserData(areaID)` | ✅ | Bridge.lua → `__clearAreaUserData`; `(false, errMsg)` when area missing |
+| `clearAreaUserDataItem(areaID, key)` | ✅ | Bridge.lua → `__clearAreaUserDataItem` |
+| `clearMapSelection()` | 🚧 | No map selection model yet |
+| `clearMapUserData()` | ✅ | JS-exposed |
+| `clearMapUserDataItem(key)` | ✅ | JS-exposed |
+| `clearRoomUserData(roomID)` | ✅ | Bridge.lua → `__clearRoomUserData` |
+| `clearRoomUserDataItem(roomID, key)` | ✅ | Bridge.lua → `__clearRoomUserDataItem` |
+| `clearSpecialExits(roomID)` | ✅ | Removes special exits and the locks/doors/custom lines keyed by their commands |
+| `closeMapWidget()` | 🚧 | Programmatic close of the mapper panel |
+| `connectExitStub(fromID, dir)` / `(fromID, toID[, dir])` | ✅ | Direction-only finds the nearest in-area room with a matching reverse stub (Mudlet's unit-vector/compSign search); toID-only requires exactly one reverse-stub pair |
+| `createMapLabel(areaID, text, x, y, z, fg, bg, …)` | 🚧 | Programmatic label creation not wired |
+| `createMapImageLabel(areaID, imagePath, x, y, z, w, h, zoom, …)` | 🚧 | |
+| `createMapper(x, y, w, h)` | ✅ | Singleton embedded mapper widget sharing MapStore with the dock |
+| `createRoomID([minimumID])` | ✅ | JS-exposed |
+| `deleteArea(areaID\|name)` | ✅ | JS-exposed |
+| `deleteMap()` | ✅ | Wipes every room/area/label back to a single empty default area |
+| `deleteMapLabel(areaID, labelID)` | 🚧 | |
+| `deleteRoom(roomID)` | ✅ | JS-exposed |
+| `disableMapInfo(label)` | ✅ | Toggles a registered info contributor off |
+| `enableMapInfo(label)` | ✅ | Toggles a registered info contributor on |
+| `exportAreaImage(areaID)` | 🚧 | No canvas-export pipeline |
+| `getAllAreaUserData(areaID)` | ✅ | Bridge.lua → `__getAllAreaUserData` |
+| `getAllMapUserData()` | ✅ | JS-exposed |
+| `getAllRoomEntrances(roomID)` | ✅ | Sorted, de-duped list of rooms with a stock or special exit into this one |
+| `getAllRoomUserData(roomID)` | ✅ | Bridge.lua → `__getAllRoomUserData` |
+| `getAreaExits(areaID[, fullData])` | ✅ | Default → sorted id list; `fullData` → `{ [fromRoomID] = { [exit] = toRoomID } }` |
+| `getAreaRooms(areaID)` | ✅ | JS-exposed (0-indexed) |
+| `getAreaRooms1(areaID)` | ✅ | Bridge.lua — 1-based reindex |
+| `getAreaTable()` | ✅ | JS-exposed |
+| `getAreaTableSwap()` | ✅ | Bridge.lua re-keys numeric-string ids back to integers |
+| `getAreaUserData(areaID, key)` | ✅ | Bridge.lua → `__getAreaUserData` |
+| `getCustomEnvColorTable()` | ✅ | Bridge.lua |
+| `getCustomLines(roomID)` | ✅ | `{ dir = { attributes={color,style,arrow}, points={[0]={x,y,z},...} } }` |
+| `getCustomLines1(roomID)` | ✅ | Bridge.lua — 1-indexed point arrays |
+| `getDoors(roomID)` | ✅ | JS-exposed |
+| `getExitStubs(roomID)` | ✅ | JS-exposed; 0-indexed (wasmoon array convention, matches Mudlet) |
+| `getExitStubs1(roomID)` | ✅ | Bridge.lua — 1-indexed |
+| `getExitWeights(roomID)` | ✅ | JS-exposed; `{exit=weight}` |
+| `getGridMode(areaID)` | ✅ | Bridge.lua → `__getGridMode`; `(false, errMsg)` when area missing |
+| `getHiddenRooms(areaID)` | 🚧 | No room-hidden flag model yet |
+| `getMapEvents()` | ✅ | Bridge.lua |
+| `getMapLabel(areaID, labelID\|labelText)` | ✅ | Bridge.lua |
+| `getMapLabels(areaID)` | ✅ | Bridge.lua → `__getMapLabels` |
+| `getMapMenus()` | 🚧 | Pairs with `addMapMenu` |
+| `getMapSelection()` | 🚧 | Pairs with `clearMapSelection` |
+| `getMapUserData(key)` | ✅ | Bridge.lua |
+| `getMapZoom([areaID])` | ✅ | Mudlet-compatible zoom semantics (units across the shorter viewport edge). `setMapZoom` enforces min of 3.0; `areaID` accepted for compat |
+| `getPath(fromID, toID)` | ✅ | A* via `__getPath`; populates `speedWalkPath`/`speedWalkDir`/`speedWalkWeight` (1-indexed) |
+| `getPlayerRoom()` | ✅ | Returns the id last passed to `centerview`; `nil` when unset/deleted |
+| `getRoomArea(roomID)` | ✅ | JS-exposed |
+| `getRoomAreaName(roomID)` | ✅ | JS-exposed |
+| `getRoomChar(roomID)` | ✅ | Bridge.lua |
+| `getRoomCharColor(roomID)` | ✅ | Bridge.lua → r, g, b, a; nil when unset |
+| `getRoomCoordinates(roomID)` | ✅ | Bridge.lua → `__getRoomCoordinates` |
+| `getRoomEnv(roomID)` | ✅ | JS-exposed |
+| `getRoomExits(roomID)` | ✅ | JS-exposed |
+| `getRoomHashByID(roomID)` | ✅ | Bridge.lua |
+| `getRoomHidden(roomID)` | 🚧 | No hidden-flag model |
+| `getRoomIDbyHash(hash)` | ✅ | JS-exposed |
+| `getRoomName(roomID)` | ✅ | Bridge.lua → `__getRoomName` |
+| `getRooms()` | ✅ | JS-exposed |
+| `getRoomsByPosition(areaID, x, y, z)` | ✅ | JS-exposed (0-indexed) |
+| `getRoomsByPosition1(areaID, x, y, z)` | ✅ | Bridge.lua — 1-based reindex |
+| `getRoomUserData(roomID, key)` | ✅ | Bridge.lua → `__getRoomUserData` |
+| `getRoomUserDataKeys(roomID)` | ✅ | Bridge.lua — re-indexes JS 0-based array to 1-based |
+| `getRoomWeight(roomID)` | ✅ | JS-exposed; false when missing |
+| `getSpecialExits(roomID [, listAllExits])` | ✅ | `{[exitRoomID]={[cmd]="0"\|"1"}}`; lowest-weight command per room unless `listAllExits` |
+| `getSpecialExitsSwap(roomID)` | ✅ | JS-exposed; `{cmd=toId}` |
+| `gotoRoom(targetRoomID)` | ✅ | Pure Lua (Bridge.lua): `getPath` then `send`s the moves. mudix sends immediately (no autonomous timed-walk engine) |
+| `hasExitLock(roomID, dir)` | 🚧 | Pathfinding honours `room.exitLocks` but no exposed reader |
+| `hasSpecialExitLock(fromID, toID, cmd)` | ✅ | `toID` ignored; returns the lock boolean or `(nil, errMsg)` when missing |
+| `highlightRoom(roomID, …)` | ✅ | JS-exposed — color1/color2 + radius + alpha |
+| `killMapInfo(label)` | ✅ | Removes a contributor entirely |
+| `loadJsonMap(path)` | ✅ | JS-exposed via `MapStore.loadFromJsonString`; raises `sysMapLoadEvent` on success |
+| `loadMap(path)` | ✅ | JS-exposed |
+| `lockExit(roomID, dir, bool)` | ⚠️ | Pure-Lua wrapper in Other.lua stores into room user-data; pathfinding reads `room.exitLocks`, so locks set via Lua aren't seen by `getPath` yet |
+| `lockRoom(roomID, bool)` | ✅ | JS-exposed; honoured by pathfinding |
+| `lockSpecialExit(fromID, toID, cmd, lockIfTrue)` | ✅ | Bridge.lua drops the (Mudlet-ignored) `toID` |
+| `moveMapWidget(x, y)` | ✅ | JS-exposed (alias for `moveWindow` on the embedded mapper) |
+| `openMapWidget([…])` | ✅ | Opens the dockable mapper panel |
+| `pauseSpeedwalk()` | ✅ | Pure Lua via Other.lua |
+| `registerMapInfo(label, fn)` | 🚧 | Map-info contributor API |
+| `resumeSpeedwalk()` | ✅ | Other.lua |
+| `removeCustomLine(roomID, direction)` | ✅ | Direction = 1-12/name/special command; `false` when missing |
+| `removeMapEvent(uniquename)` | ✅ | Pairs with `addMapEvent` |
+| `removeMapMenu(name)` | 🚧 | Pairs with `addMapMenu` |
+| `removeSpecialExit(fromID, cmd)` | ✅ | JS-exposed |
+| `resetRoomArea(roomID)` | ✅ | Bridge.lua → moves the room to the void area (-1) |
+| `resizeMapWidget(w, h)` | ✅ | JS-exposed (alias for `resizeWindow` on the embedded mapper) |
+| `roomExists(roomID)` | ✅ | JS-exposed |
+| `roomLocked(roomID)` | ✅ | JS-exposed; nil when missing |
+| `saveJsonMap(path)` | ✅ | Same `MudletMap` shape as `saveMap`, just JSON |
+| `saveMap(path)` | ✅ | Serialises MapStore via `writeMapToBuffer` to VFS / IDB |
+| `searchAreaUserData([key[, value]])` | ✅ | 1-indexed |
+| `searchRoom(roomID \| name[, caseSensitive[, exactMatch]])` | ✅ | By id → name (`false` on miss); by name → `{ [roomID] = name }` |
+| `searchRoomUserData([key[, value]])` | ✅ | 1-indexed |
+| `setAreaName(idOrName, newName)` | ✅ | Bridge.lua |
+| `setAreaUserData(areaID, key, value)` | ✅ | JS-exposed; false when missing |
+| `setCustomEnvColor(envID, r, g, b, a)` | ✅ | JS-exposed |
+| `setDoor(roomID, exitCmd, type)` | ✅ | JS-exposed |
+| `setExit(fromID, toID, dir)` | ✅ | JS-exposed |
+| `setExitStub(roomID, dir, bool)` | ✅ | JS-exposed |
+| `setExitWeight(roomID, exitCommand, weight)` | ✅ | Weight 0 resets to destination-room weight; rejects negatives/unknown exits |
+| `setGridMode(areaID, bool)` | ✅ | `api.map.setGridMode`; false when missing |
+| `setMapUserData(key, value)` | ✅ | JS-exposed |
+| `setMapZoom(zoom[, areaID])` | ✅ | See `getMapZoom` |
+| `setRoomArea(roomID, areaID)` | ✅ | JS-exposed |
+| `setRoomChar(roomID, char)` | ✅ | JS-exposed |
+| `setRoomCharColor(roomID, r, g, b [, a])` | ✅ | Side-table on MapStore (upstream `MudletRoom` has no charColor field); cleared by map reset |
+| `setRoomCoordinates(roomID, x, y, z)` | ✅ | JS-exposed |
+| `setRoomEnv(roomID, envID)` | ✅ | JS-exposed |
+| `setRoomHidden(roomID, bool)` | 🚧 | No hidden-flag model |
+| `setRoomIDbyHash(hash, roomID)` | ✅ | JS-exposed |
+| `setRoomName(roomID, name)` | ✅ | JS-exposed |
+| `setRoomUserData(roomID, key, value)` | ✅ | JS-exposed |
+| `setRoomWeight(roomID, weight)` | ✅ | JS-exposed; rejects negatives |
+| `speedwalk(roomID [, walkcmd, delay])` | ✅ | Pure Lua via Other.lua (`send` + `tempTimer`) |
+| `stopSpeedwalk()` | ✅ | Other.lua |
+| `unHighlightRoom(roomID)` | ✅ | JS-exposed |
+| `unsetRoomCharColor(roomID)` | 🚧 | Pairs with `setRoomCharColor` |
+| `updateMap()` | ✅ | Forces the map panel to re-read MapStore and redraw |
+
+mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"editing")`, `getMapRoomSize`/`setMapRoomSize`, `setMapBackgroundColor`, `removeCustomEnvColor`.
+
+---
+
+## Miscellaneous Functions
+
+| Function | Status | Notes |
+|---|---|---|
+| `addFileWatch(path)` | ✅ | Tracks resolved VFS paths, fires `sysPathChanged` on mutation |
+| `addSupportedTelnetOption(option)` | ✅ | Registers a telnet option byte so the next IAC WILL/DO is auto-accepted |
+| `alert([secs])` | ✅ | Flashes `document.title` for `secs` (default 10). No-op while focused |
 | `announce(text [, processing])` | ✅ | ARIA live region; `processing` (`importantall`/`importantmostrecent` → assertive, else polite) matches Mudlet's politeness mapping |
+| `appendLog(text)` | 🚧 | Append-to-current-log primitive |
+| `cfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `clearVisitedLinks()` | 🚧 | No visited-link state model |
+| `closeMudlet()` | 🚧 | Map to "close the active profile" — disconnect, flush save, and return to the connection screen |
+| `compare(a, b)` | ✅ | Other.lua — alias for `_comp` deep equality |
+| `deleteAllNamedEventHandlers([type])` | ✅ | IDManager.lua |
+| `deleteNamedEventHandler(name)` | ✅ | IDManager.lua |
+| `denyCurrentSend()` | ✅ | Cancels the currently-dispatched send |
+| `dfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `disableModuleSync(name)` | ✅ | Marks the module non-syncing in profile state |
+| `enableModuleSync(name)` | ✅ | Marks the module syncing |
+| `expandAlias(text [, echo])` | ✅ | `ScriptingAPI.expandAlias` |
+| `feedTriggers(text)` | ✅ | Feeds text through trigger pipeline + shows in output |
+| `getCharacterName()` | 🚧 | Per-profile character-name slot not exposed |
+| `getConfig(key)` | ✅ | Bound on profile config slice |
+| `getCommandSeparator()` | 🚧 | Multi-command separator not user-configurable yet |
+| `getModuleInfo(name, key)` | ✅ | Bridge.lua |
+| `getModulePath(name)` | 🚧 | Modules are VFS-backed; path lookup not wired |
+| `getModulePriority(name)` | ✅ | JS-exposed |
+| `getModules()` | ✅ | JS-exposed |
+| `getModuleSync(name)` | ✅ | JS-exposed |
+| `getMudletHomeDir()` | ✅ | VFS.lua — alias for `getMudixProfilePath()` |
+| `getMudletInfo()` | 🚧 | Self-description debug dump not wired |
+| `getMudletVersion([mode])` | ✅ | Supports `nil`/`"string"`/`"major"`/`"minor"`/`"revision"`/`"build"`/`"table"` |
+| `getNamedEventHandlers()` | ✅ | IDManager.lua |
+| `getNewIDManager()` | ✅ | IDManager.lua factory |
+| `getOS()` | ✅ | Sniffed from user agent → `"windows"`/`"mac"`/`"linux"`/`"freebsd"`/`"openbsd"`/`"netbsd"`/`"unknown"` |
+| `getPackages()` | ✅ | JS-exposed |
+| `getPackageInfo(name, key)` | 🚧 | Per-package metadata accessor |
+| `getPausedMusic()` / `getPausedSounds()` / `getPausedVideos()` | 🚧 | No paused-track inventory exposed |
+| `getPlayingMusic()` / `getPlayingVideos()` | 🚧 | Sister of `getPlayingSounds` not wired yet |
+| `getPlayingSounds([filter])` | ✅ | 1-based array of `{name, key, tag, volume}`; optional name/key/tag filter |
+| `getProfileName()` | ✅ | JS-exposed |
+| `getServerEncoding()` / `setServerEncoding(name)` / `getServerEncodingsList()` | 🚧 | CHARSET (RFC 2066) is fully negotiated by `MudClient` and tracked in `currentEncoding`; the Lua-side getters/setters just need to be bound |
+| `getWindowsCodepage()` | ✅ | Returns `"65001"` (UTF-8) on every platform |
+| `hfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `holdingModifiers()` | 🚧 | No global modifier-state poll |
+| `installModule(path)` | ✅ | JS-exposed |
+| `installPackage(path)` | ✅ | JS-exposed |
+| `killAnonymousEventHandler(id)` | ✅ | Other.lua: removes handler by ID |
+| `loadMusicFile(path \| {name=…})` | ✅ | `SoundManager.preload` |
+| `loadSoundFile(path \| {name=…})` | ✅ | `SoundManager.preload` |
+| `loadVideoFile(path \| {name=…})` | 🚧 | Preload variant of `playVideoFile` |
+| `mudletOlderThan(major, minor, revision)` | ✅ | Built on `getMudletVersion("table")` |
+| `openWebPage(url)` | ✅ | Routes to `openUrl` |
+| `playMusicFile(path \| {…})` | ✅ | `SoundManager` (Web Audio + VFS or http(s) URL) |
+| `playSoundFile(path \| {…})` | ✅ | `SoundManager` |
+| `playVideoFile(path \| {…})` | ✅ | `VideoManager`; absolutely-positioned `<video>` on the main viewport. `loops=-1` plays indefinitely. Fires `sysMediaFinished(name, path)` on natural end |
+| `pauseMusic([channel])` | 🚧 | Music tracks not yet exposed via the SoundManager pause API |
+| `pauseSounds([channel])` | ✅ | Web Audio source nodes can't truly pause — stops sources (optionally tag-filtered). Re-trigger `playSoundFile` to "resume" |
+| `pauseVideos()` | ✅ | Pauses every active `<video>` element |
+| `purgeMediaCache()` | ✅ | Drops every decoded-audio buffer; active playback unaffected |
+| `receiveMSP(payload)` | 🚧 | Inbound MSP synth not wired (MSP detection exists, dispatch doesn't) |
+| `registerAnonymousEventHandler(event, fn)` | ✅ | Other.lua override tracks IDs in `handlerIdsToHandlers` |
+| `registerNamedEventHandler(name, event, code)` | ✅ | IDManager.lua |
+| `reloadModule(name)` | ✅ | JS-exposed |
+| `removeFileWatch(path)` | ✅ | Stops watching a path |
+| `resetLinkStyle()` / `setLinkStyle(...)` | 🚧 | Per-profile link styling not exposed |
+| `resetProfile()` | 🚧 | Profile reset utility |
+| `resumeNamedEventHandler(name)` | ✅ | IDManager.lua |
+| `saveProfile([name])` | 🚧 | Auto-persists via localStorage / IndexedDB with a debounced flush; the Lua call should force the flush (and resolve the `name` arg as a no-op for single-profile parity) |
+| `setConfig(key, value)` | ✅ | JS-exposed |
+| `setMergeTables(t)` | 🚧 | Module-merge config |
+| `setModuleInfo(name, key, value)` | 🚧 | |
+| `setModulePriority(name, n)` | ✅ | JS-exposed |
+| `setPackageInfo(name, key, value)` | 🚧 | |
+| `showNotification(title, text [, expirySecs])` | ✅ | Web Notifications API; gated on the Settings opt-in |
+| `spawn(...)` | ❌ stub | No subprocess in the browser; stub returns `false` with a warning |
+| `startLogging(bool)` | ✅ | Toggles the per-profile `SessionLogger`. mudix records to IndexedDB (the same store the toolbar Logs button browses) |
+| `stopAllNamedEventHandlers([type])` | ✅ | IDManager.lua |
+| `stopMusic([channel])` | ✅ | `SoundManager` |
+| `stopNamedEventHandler(name)` | ✅ | IDManager.lua |
+| `stopSounds([channel])` | ✅ | JS-exposed |
+| `stopVideos()` | ✅ | Removes every active `<video>` element; revokes blob: URLs |
+| `timeframe(s)` | ✅ | Other.lua humanises seconds |
+| `translateTable(t)` | ✅ | Other.lua |
+| `uninstallModule(name)` | ✅ | JS-exposed |
+| `uninstallPackage(name)` | ✅ | JS-exposed |
+| `unzipAsync(zipPath, destDir)` | ✅ | JS-exposed; fires `sysUnzipDone`/`sysUnzipError` |
+| `yajl.to_string` / `yajl.to_value` | 🚧 | YAJL JSON helpers — `Yajl.lua` bundled but binding not finalised |
 
 ---
 
-## Text Selection & Cursor
+## Mudlet Object Functions
 
 | Function | Status | Notes |
 |---|---|---|
-| `selectString([window,] text, n)` | ✅ | JS-exposed |
-| `selectSection([window,] col, len)` | ✅ | JS-exposed |
-| `selectCaptureGroup(n)` | ✅ | JS-exposed |
-| `selectCurrentLine([window])` | ✅ | JS-exposed |
-| `deselect([window])` | ✅ | JS-exposed |
-| `getSelection([window])` | ✅ | Bridge.lua wraps `__getSelection` |
-| `moveCursor([window,] x, y)` | ✅ | JS-exposed |
-| `moveCursorEnd([window])` | ✅ | JS-exposed (plus `moveCursorUp`/`Down` in GUIUtils.lua) |
-| `getLineNumber([window])` | ✅ | JS-exposed |
-| `getColumnNumber([window])` | ✅ | JS-exposed |
-| `getLineCount([window])` | ✅ | JS-exposed |
-| `getLastLineNumber([window])` | ✅ | JS-exposed |
-| `getCurrentLine([window])` | ✅ | Bridge.lua wraps `__getCurrentLine` |
-| `getLines([window,] from, to)` | ✅ | Bridge.lua wraps `__getLines` |
-| `getRowCount([window])` | ✅ | JS-exposed |
-| `getColumnCount([window])` | ✅ | JS-exposed |
+| `addCmdLineSuggestion([name,] text)` | ✅ | Main command bar; `name` argument is dropped (Tab-completion merged with command history) |
+| `adjustStopWatch(id\|name, seconds)` | ✅ | Add (or subtract) seconds |
+| `ancestors(id, type)` | 🚧 | Hierarchy walker for any tree node |
+| `appendCmdLine([name,] text)` | ⚠️ | Main bar only; named overlay widgets not yet wired |
+| `appendScript(name, code)` | ✅ | JS-exposed |
+| `clearCmdLine([name])` | ⚠️ | Main bar only; named overlay widgets not yet wired |
+| `clearCmdLineSuggestions([name])` | ✅ | Main bar |
+| `clearProfileInformation(key)` | 🚧 | Pairs with `setProfileInformation` |
+| `createStopWatch([name], [autostart])` | ✅ | `performance.now()`-based high-res stopwatch (`StopwatchManager`). Named watches default autostart off |
+| `deleteAllNamedTimers(parent)` | ✅ | IDManager.lua |
+| `deleteAllNamedTriggers(parent)` | ✅ | IDManager.lua |
+| `deleteNamedTimer(parent, name)` | ✅ | IDManager.lua |
+| `deleteNamedTrigger(parent, name)` | ✅ | IDManager.lua |
+| `deleteStopWatch(id\|name)` | ✅ | |
+| `disableAlias(name)` | ✅ | |
+| `disableKey(name)` | ✅ | Cascades to children |
+| `disableScript(name)` | ✅ | JS-exposed |
+| `disableTimer(name)` | ✅ | JS-exposed |
+| `disableTrigger(name)` | ✅ | JS-exposed |
+| `enableAlias(name)` | ✅ | |
+| `enableKey(name)` | ✅ | Cascades to children |
+| `enableScript(name)` | ✅ | JS-exposed |
+| `enableTimer(name)` | ✅ | JS-exposed |
+| `enableTrigger(name)` | ✅ | JS-exposed |
+| `exists(name, type)` | ✅ | `ScriptingAPI.exists` |
+| `findItems(name, type, exactMatch)` | 🚧 | Tree-wide id lookup |
+| `getButtonState(name)` | ✅ | Two-state button pressed state; nil when missing |
+| `getCmdLine([name])` | ✅ | Reads the live main bar or a named overlay command line |
+| `getConsoleBufferSize([window])` | ✅ | Bridge.lua → linesLimit, batchSize; nil when console missing |
+| `getExitStubsNames(roomID)` | ✅ | Stub direction names ("north"/…/"other"), 1-indexed |
+| `getNamedTimers(parent)` | ✅ | IDManager.lua |
+| `getNamedTriggers(parent)` | ✅ | IDManager.lua |
+| `getProfileInformation([key])` | 🚧 | Per-profile metadata slot |
+| `getProfileStats()` | 🚧 | Per-profile timer/trigger stat dump |
+| `getProfiles()` | ❌ stub | Single-connection web app; stub returns `{getProfileName()}` so callers that iterate profiles still work |
+| `getStopWatches()` | ✅ | Re-keys to integer ids → `{ name, isRunning, isPersistent, elapsedTime }` |
+| `getStopWatchTime(id\|name)` | ✅ | Elapsed seconds without stopping |
+| `getStopWatchBrokenDownTime(id\|name)` | ✅ | `{negative, days, hours, minutes, seconds, milliSeconds, decimalSeconds}` off the proxy; `false` on miss |
+| `getScript(name)` | 🚧 | Script-text accessor |
+| `invokeFileDialog(type, title)` | 🚧 | Blocked on a sync/async design decision — browser pickers are async; Mudlet's `local p = invokeFileDialog(...)` is synchronous |
+| `isActive(name, type [, checkAncestors])` | ✅ | Count active items by name/id |
+| `isAncestorsActive(name, type)` | 🚧 | |
+| `isPrompt()` | ✅ | True when the current trigger fired against a prompt line |
+| `killAlias(id)` | ✅ | |
+| `killKey(id)` | ✅ | |
+| `killTimer(id)` | ✅ | |
+| `killTrigger(name\|id)` | ✅ | String → name-based delete; numeric → temp-trigger disposer |
+| `loadProfile(name)` | ❌ stub | No multi-profile switching; bind as a warning-emitting no-op stub returning `false` |
+| `permAlias(name, parent, pattern, code)` | ✅ | Pattern is a single PCRE string (Mudlet TAlias.mRegexCode). Returns the new id, or -1 |
+| `permGroup(name, type [, parent])` | ✅ | Creates a group node in the requested family |
+| `permPromptTrigger(name, parent, code)` | 🚧 | Persistent prompt-trigger constructor |
+| `permRegexTrigger(name, parent, pattern, code)` | ⚠️ | Constructor exists; full Lua signature still limited |
+| `permBeginOfLineStringTrigger(name, parent, patterns, code)` | 🚧 | |
+| `permSubstringTrigger(name, parent, patterns, code)` | ✅ | Each pattern is a literal substring. Empty patterns array creates a trigger group |
+| `permScript(name, parent, code)` | 🚧 | Persistent script-node constructor |
+| `permTimer(name, parent, delay, code)` | ✅ | Persistent one-shot timer; returns the new id or -1 |
+| `permKey(name, parent, modifier, key, code)` | ✅ | `modifier` is the Qt::KeyboardModifier int (1=shift, 2=ctrl, 4=alt, 8=meta; -1 → none). `key` accepts a Qt::Key int or a KeyboardEvent.code string |
+| `printCmdLine([name,] text)` | ⚠️ | Main bar only |
+| `raiseEvent(name, ...)` | ✅ | |
+| `raiseGlobalEvent(name, ...)` | ❌ stub | Multi-profile only; stub forwards to local `raiseEvent` so single-profile scripts still see the event |
+| `registerNamedTimer(parent, name, delay, code)` | ✅ | IDManager.lua |
+| `registerNamedTrigger(parent, name, pattern, code)` | ✅ | IDManager.lua |
+| `remainingTime(id)` | ✅ | JS-exposed |
+| `removeCmdLineSuggestion([name,] text)` | ✅ | Main bar |
+| `resetProfileIcon()` | 🚧 | |
+| `resetStopWatch(id\|name)` | ✅ | Zeroes elapsed; a running watch keeps running |
+| `resumeNamedTimer(parent, name)` | ✅ | IDManager.lua |
+| `resumeNamedTrigger(parent, name)` | ✅ | IDManager.lua |
+| `setButtonState(name, state)` | ✅ | Pressed state on a two-state (push-down) button |
+| `sendCmdLine(text)` | ✅ | Set + send the main command bar |
+| `setConsoleBufferSize([window,] linesLimit [, batchSize])` | ✅ | Maps to `Console.setMaxLines` |
+| `setProfileIcon(path)` | 🚧 | |
+| `setProfileInformation(key, value)` | 🚧 | |
+| `setScript(name, code)` | ✅ | JS-exposed |
+| `setStopWatchName(id\|currentName, newName)` | ✅ | Empty name or duplicate name → false |
+| `setStopWatchPersistence(id\|name, state)` | ✅ | Persistent watches saved to localStorage and restored on reload; running ones keep counting across reloads (wall-clock `Date.now()`) |
+| `setTriggerStayOpen(name, lines)` | ✅ | Extends the named chain head's open window |
+| `startStopWatch(id\|name [, resetAndRestart])` | ✅ | Bare numeric id resets+restarts (legacy); name form resumes |
+| `stopAllNamedTimers(parent)` | ✅ | IDManager.lua |
+| `stopAllNamedTrigger(parent)` | 🚧 | Wiki name is singular; not yet wired |
+| `stopNamedTimer(parent, name)` | ✅ | IDManager.lua |
+| `stopNamedTrigger(parent, name)` | ✅ | IDManager.lua |
+| `stopStopWatch(id\|name)` | ✅ | Returns elapsed seconds |
+| `tempAlias(pattern, code)` | ✅ | |
+| `tempAnsiColorTrigger(fg, bg, code)` | 🚧 | Variant of `tempColorTrigger` using ANSI semantics |
+| `tempBeginOfLineTrigger(pattern, code)` | ✅ | Literal prefix (`String.prototype.startsWith`), NOT regex `^` — matches Mudlet's `match_begin_of_line_substring` |
+| `tempButton(toolbar, name, code, orientation)` | ✅ | Appends a transient ButtonNode under the named toolbar |
+| `tempButtonToolbar(name, orientation, location)` | ✅ | `orientation`: 0=horizontal, 1=vertical. `location`: 0=top, 1=bottom, 2=left, 3=right, 4=floating |
+| `tempColorTrigger(fg, bg, code)` | ✅ | Matches on ANSI palette indices on the current rendered line (`-1` = any). Non-indexed RGB segments never match a positive index, matching Mudlet's palette-only semantics |
+| `tempComplexRegexTrigger(...)` | 🚧 | Full-fat trigger constructor variant |
+| `tempExactMatchTrigger(pattern, code)` | ✅ | Full-line exact match |
+| `tempKey(modifier, key, code)` | ✅ | |
+| `tempLineTrigger(from, count, code)` | ✅ | Position-based: fires on `count` lines starting `from` lines ahead, then self-expires |
+| `tempPromptTrigger(code)` | ✅ | Fires on GA/EOR-flagged prompt lines; expirationCount honoured |
+| `tempRegexTrigger(pattern, code)` | ✅ | Bridge.lua wraps `__mudix_tempRegexTrigger` |
+| `tempTimer(delay, code [, repeat])` | ✅ | One-shot or repeating timer |
+| `tempTrigger(pattern, code)` | ✅ | Temporary substring/regex trigger |
+
+mudix-specific extras (not on the wiki): `mudix.windows.write/setTitle/has/focus`, the `mudix.timers.after`/`mudix.aliases.add` Lua-side namespace (alongside the Mudlet API).
 
 ---
 
-## Text Formatting & Color
+## Networking Functions
 
 | Function | Status | Notes |
 |---|---|---|
-| `fg([window,] colorname)` | ✅ | Set foreground color by name |
+| `connectToServer(host, port [, save])` | ✅ | Builds the proxy `?host=&port=` URL the connection screen uses and (re)connects. `save` persists host/port onto the active connection |
+| `customHTTP(method, url, data [, headers])` | ✅ | Bridge.lua → `HttpService.customHTTP`; fires `sysCustomHttp*` |
+| `deleteHTTP(url [, headers])` | ✅ | Bridge.lua → `HttpService.deleteHTTP` |
+| `disconnect()` | ✅ | `MudSession.disconnect` |
+| `downloadFile(url, path)` | ✅ | Bridge.lua → `HttpService.downloadFile`, writes to profile VFS |
+| `feedTelnet(data)` | ✅ | Injects raw bytes into `MudClient.processIncomingData` (telnet strip → ANSI → triggers → render). mudix feeds the live inbound pipeline (Mudlet only loops back when unconnected) |
+| `getConnectionInfo()` | ✅ | Bridge.lua → host, port, connected |
+| `getHTTP(url [, headers])` | ✅ | Bridge.lua → `HttpService.getHTTP`; fires `sysGetHttpDone`/`sysGetHttpError` |
+| `getIrcChannels()` / `getIrcConnectedHost()` / `getIrcNick()` / `getIrcServer()` | ❌ stub | No IRC client in mudix; bind as warning-emitting no-op stubs (getters return empty table / `""`) |
+| `getNetworkLatency()` | ✅ | JS-exposed |
+| `openIRC()` / `restartIrc()` / `sendIrc()` / `setIrcChannels()` / `setIrcNick()` / `setIrcServer()` | ❌ stub | No IRC client; bind as warning-emitting no-op stubs |
+| `openUrl(url)` | ✅ | `window.open(url, '_blank')`; `file:` prefix routes to the VFS file browser |
+| `postHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.postHTTP` |
+| `putHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.putHTTP` |
+| `reconnect()` | 🚧 | One-shot reconnect helper (vs `disconnect` + `connectToServer`) |
+| `sendAll(text1, text2, ...)` | ✅ | Other.lua |
+| `sendATCP(msg)` | 🚧 | Legacy precursor to GMCP — IAC SB ATCP <payload> IAC SE framing; would reuse `MudClient.sendRaw` like `sendGMCP` |
+| `sendGMCP(message)` | ✅ | Frames as IAC SB GMCP … |
+| `sendMSDP(var, ...)` | ✅ | Frames `IAC SB MSDP MSDP_VAR var [MSDP_VAL val]… IAC SE`. Bridge.lua packs varargs |
+| `sendSocket(data)` | ✅ | Literal bytes (no telnet/encoding processing) |
+| `sendTelnetChannel102(data)` | 🚧 | Legacy zMUD channel-102 — `IAC SB 102 <data> IAC SE` framing; trivial wrapper over `sendRaw` |
+
+mudix-specific extras: `gmcp` table, `msdp` table, `gmcp.<path>` per-key event chain.
+
+---
+
+## String Functions
+
+Standard Lua 5.1 string functions (`string.byte`, `string.char`, `string.find`, `string.format`, `string.gmatch`, `string.gsub`, `string.len`, `string.lower`, `string.match`, `string.rep`, `string.reverse`, `string.sub`, `string.upper`) ship with wasmoon and are listed once below.
+
+| Function | Status | Notes |
+|---|---|---|
+| `addWordToDictionary(word)` | ❌ stub | No Hunspell in browser; bind as warning-emitting no-op stub |
+| `cecho2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `decho2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `f(str)` | ✅ | StringUtils.lua — `{expr}` interpolation |
+| `getDictionaryWordList()` | ❌ stub | Stub returns empty table |
+| `hecho2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `removeWordFromDictionary(word)` | ❌ stub | Warning-emitting no-op |
+| `spellCheckWord(word, useUser)` | ❌ stub | Stub returns `true` (treat every word as spelled correctly) |
+| `spellSuggestWord(word, useUser, n)` | ❌ stub | Stub returns empty table |
+| `string.byte` / `string.char` / `string.find` / `string.format` / `string.gmatch` / `string.gsub` / `string.len` / `string.lower` / `string.match` / `string.rep` / `string.reverse` / `string.sub` / `string.upper` | ✅ | Lua 5.1 stdlib (wasmoon) |
+| `string.cut(s, maxlen)` | ✅ | StringUtils.lua |
+| `string.dump(fn)` | ✅ | Lua 5.1 stdlib |
+| `string.enclose(s [, level])` | 🚧 | Mudlet long-bracket helper |
+| `string.ends(s, suffix)` | ✅ | StringUtils.lua |
+| `string.findPattern(s, pattern)` | 🚧 | Mudlet pattern helper |
+| `string.genNocasePattern(s)` | ✅ | StringUtils.lua |
+| `string.gfind(s, pat)` | ✅ | Lua 5.1 alias for `string.gmatch` (wasmoon) |
+| `string.patternEscape(s)` | ✅ | StringUtils.lua |
+| `string.split(s, sep)` | ✅ | StringUtils.lua |
+| `string.starts(s, prefix)` | ✅ | StringUtils.lua |
+| `string.title(s)` | ✅ | StringUtils.lua |
+| `string.trim(s)` | ✅ | StringUtils.lua |
+| `utf8.byte` / `utf8.char` / `utf8.find` / `utf8.gmatch` / `utf8.gsub` / `utf8.len` / `utf8.lower` / `utf8.match` / `utf8.reverse` / `utf8.sub` / `utf8.upper` | ✅ | Bundled `utf8.lua` (Stepets) exposed as the `utf8` global |
+| `utf8.patternEscape` / `utf8.title` | 🚧 | Mudlet extensions over the standard utf8 lib |
+| `utf8.charpos` / `utf8.escape` / `utf8.fold` / `utf8.insert` / `utf8.ncasecmp` / `utf8.next` / `utf8.remove` / `utf8.width` / `utf8.widthindex` | 🚧 | Mudlet extensions (luautf8 surface) |
+
+---
+
+## Table Functions
+
+Standard Lua 5.1 table functions (`table.concat`, `table.insert`, `table.maxn`, `table.remove`, `table.sort`) ship with wasmoon.
+
+| Function | Status | Notes |
+|---|---|---|
+| `spairs(t [, fn])` | ✅ | TableUtils.lua — sorted-key iterator |
+| `table.collect(t, fn)` | ✅ | TableUtils.lua |
+| `table.complement(t1, t2)` | ✅ | TableUtils.lua |
+| `table.concat` | ✅ | Lua 5.1 stdlib |
+| `table.contains(t, val)` | ✅ | TableUtils.lua |
+| `table.deepcopy(t)` | ✅ | TableUtils.lua |
+| `table.insert` | ✅ | Lua 5.1 stdlib |
+| `table.intersection(t1, t2)` | ✅ | TableUtils.lua |
+| `table.index_of(t, val)` | ✅ | TableUtils.lua |
+| `table.is_empty(t)` | ✅ | TableUtils.lua |
+| `table.keys(t)` | ✅ | TableUtils.lua |
+| `table.load(filename)` | ✅ | Other.lua, uses `dofile`/VFS |
+| `table.matches(t, ...)` | ✅ | TableUtils.lua |
+| `table.maxn` | ✅ | Lua 5.1 stdlib |
+| `table.n_collect(t, fn)` | ✅ | TableUtils.lua |
+| `table.n_filter(t, fn)` | ✅ | TableUtils.lua |
+| `table.n_flatten(t)` | ✅ | TableUtils.lua |
+| `table.n_matches(t, ...)` | ✅ | TableUtils.lua |
+| `table.n_union(t1, t2)` | ✅ | TableUtils.lua |
+| `table.n_complement(t1, t2)` | ✅ | TableUtils.lua |
+| `table.n_intersection(t1, t2)` | ✅ | TableUtils.lua |
+| `table.pickle(t)` | ✅ | TableUtils.lua |
+| `table.remove` | ✅ | Lua 5.1 stdlib |
+| `table.save(filename, t)` | ✅ | Other.lua, uses `io.open`/VFS |
+| `table.sort` | ✅ | Lua 5.1 stdlib |
+| `table.size(t)` | ✅ | Counts all keys including non-integer |
+| `table.unpickle(s)` | ✅ | TableUtils.lua |
+| `table.update(t1, t2)` | ✅ | TableUtils.lua |
+| `table.union(t1, t2, ...)` | ✅ | TableUtils.lua |
+
+---
+
+## Text to Speech Functions
+
+Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` for rate/pitch and `0..1` for volume; mudix maps these to Web Speech ranges at speak time.
+
+| Function | Status | Notes |
+|---|---|---|
+| `ttsClearQueue([index])` | ✅ | Whole queue or the 1-based `index` item (false if out of bounds) |
+| `ttsGetCurrentLine()` | ✅ | Maps idle/errored to `(nil, "not speaking any text")` |
+| `ttsGetCurrentVoice()` | ✅ | Selected voice name, or engine default |
+| `ttsGetPitch()` | ✅ | |
+| `ttsGetQueue([index])` | ✅ | 1-based; `index` form returns one item or false |
+| `ttsGetRate()` | ✅ | |
+| `ttsGetState()` | ✅ | `ttsSpeechReady`/`ttsSpeechStarted`/`ttsSpeechPaused`/`ttsSpeechError`/`ttsUnknownState`, raised as events on transitions |
+| `ttsGetVoices()` | ✅ | 1-based array of voice names |
+| `ttsGetVolume()` | ✅ | |
+| `ttsPause()` | ✅ | |
+| `ttsQueue(text [, index])` | ✅ | Inserts at 1-based `index` (default end); raises `ttsSpeechQueued(text, index)` |
+| `ttsResume()` | ✅ | |
+| `ttsSpeak(text)` | ✅ | Speaks immediately, interrupting current. Strips angle brackets like Mudlet |
+| `ttsSetPitch(pitch)` | ✅ | Raises `ttsPitchChanged` |
+| `ttsSetRate(rate)` | ✅ | Raises `ttsRateChanged` |
+| `ttsSetVolume(vol)` | ✅ | Raises `ttsVolumeChanged` |
+| `ttsSetVoiceByIndex(index)` | ✅ | 1-based; returns bool |
+| `ttsSetVoiceByName(name)` | ✅ | Returns bool; raises `ttsVoiceChanged` |
+| `ttsSkip()` | ✅ | Stops current, advances to next queued |
+
+---
+
+## UI Functions
+
+| Function | Status | Notes |
+|---|---|---|
+| `addCommandLineMenuEvent(name, event)` | ✅ | Right-click command-line menu hook |
+| `addMouseEvent(uniquename, event, ...)` | 🚧 | Generic mouse-event registration |
+| `ansi2decho(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `ansi2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `appendBuffer([window])` | ✅ | Appends the clipboard (from `copy()`) as a new line to the named console |
 | `bg([window,] colorname)` | ✅ | Set background color by name |
-| `resetFormat([window])` | ✅ | Reset all formatting |
-| `setFgColor([window,] r, g, b)` | ✅ | JS-exposed |
-| `setBgColor([window,] r, g, b)` | ✅ | JS-exposed |
-| `setHexFgColor([window,] hex)` | ✅ | Pure Lua via GUIUtils.lua → setFgColor |
-| `setHexBgColor([window,] hex)` | ✅ | Pure Lua via GUIUtils.lua → setBgColor |
-| `setBold([window,] bool)` | ✅ | JS-exposed |
-| `setItalics([window,] bool)` | ✅ | JS-exposed |
-| `setUnderline([window,] bool)` | ✅ | JS-exposed |
-| `setStrikeOut([window,] bool)` | ✅ | JS-exposed |
-| `setReverse([window,] bool)` | ✅ | Toggle reverse video — sets `FormatState.inverse` on pen + selection (renderer swaps fg/bg) |
-| `setTextFormat([window,] ...)` | ✅ | JS-exposed (`r1,g1,b1,r2,g2,b2,bold,underline,italics[,strikeout,overline,reverse,blink]`) |
-| `getTextFormat([window])` | ✅ | Bridge.lua → `__getTextFormat` → documented attribute table |
-| `setCommandBackgroundColor([window,] r,g,b[,a])` | ✅ | Patches the `inputBackground` profile field (rgba 0..255 → CSS). Main bar only; non-"main" window ignored |
-| `setCommandForegroundColor([window,] r,g,b[,a])` | ✅ | Patches the `inputForeground` profile field. Main bar only |
-| `setBackgroundColor([window,] r,g,b,a)` | ✅ | JS-exposed |
-
----
-
-## Color Conversion Utilities
-
-All of these are pure text-transformation functions implementable in Lua/JS with no platform dependencies.
-
-| Function | Status | Notes |
-|---|---|---|
+| `calcFontSize(size[, family]) \| calcFontSize(windowName)` | ✅ | Canvas-2D monospace cell measurement, falls back to App.css `--font-mono` |
+| `cecho([window,] text)` | ✅ | `<colorname>text` syntax |
+| `cechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
 | `cecho2ansi(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `cecho2decho(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `cecho2hecho(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `cecho2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `cecho2html(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `cechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
+| `cinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
+| `cinsertPopup([window,] text, cmds, hints)` | ✅ | Pure Lua via GUIUtils.lua |
+| `cinsertText([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `clearUserWindow(name)` | ✅ | Alias of `clearWindow` on user windows |
+| `clearWindow(name)` | ✅ | Clears panel content |
+| `closestColor(r, g, b)` | ✅ | Pure Lua via GUIUtils.lua |
+| `copy([window])` | ✅ | Copies the current selection (with formatting) into the session clipboard (Mudlet's host-global `mClipboard`) |
+| `copy2decho()` | ✅ | Returns the current selection as decho text |
+| `copy2html()` | ✅ | Returns the current selection as HTML |
+| `createBuffer(name)` | ✅ | Off-screen text buffer (no panel) — registers a named Console; output stays in history (never opens a panel) and is selectable/copyable. `windowType` reports `"buffer"` |
+| `createCommandLine(name, x, y, w, h)` | 🚧 | Absolutely-positioned extra input widget |
+| `createConsole(name, fontSize, charsW, linesH, x, y)` | ✅ | JS-exposed |
+| `createGauge(name, x, y, w, h, parent)` | ✅ | Pure Lua via GUIUtils.lua (3× `createLabel` + `setBackgroundColor`) |
+| `createLabel(name, x, y, w, h, passthrough)` | ✅ | JS-exposed |
+| `createMiniConsole(name, x, y, w, h)` | ✅ | JS-exposed |
+| `createScrollBox(name, x, y, w, h)` | 🚧 | No ScrollBox widget yet |
+| `creplace([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `creplaceLine([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `decho([window,] text)` | ✅ | `<r,g,b>text` syntax |
 | `decho2ansi(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `decho2cecho(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `decho2hecho(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `decho2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `decho2html(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hecho2ansi(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hecho2cecho(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hecho2decho(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hecho2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hecho2html(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `ansi2decho(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `ansi2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `closestColor(r, g, b)` | ✅ | Pure Lua via GUIUtils.lua |
-| `getFgColor([window])` | ✅ | Bridge.lua → `__getFgColor`; reads color at selection start, falls back to profile default when the segment carries no explicit color |
-| `getBgColor([window])` | ✅ | Bridge.lua → `__getBgColor`; same semantics — distinct from window-background `getBackgroundColor` |
-| `color_table` | ✅ | Named color → {r,g,b} table (GUIUtils.lua) |
-
----
-
-## Clickable Links & Popups
-
-| Function | Status | Notes |
-|---|---|---|
-| `echoLink([window,] text, cmd, hint)` | ✅ | JS-exposed; Bridge.lua maps function `cmd` to a callback id |
-| `cechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → echoLink) |
 | `dechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
-| `insertLink([window,] text, cmd, hint)` | ✅ | JS-exposed; Bridge.lua maps function `cmd` to a callback id (same wrapper as `echoLink`) |
-| `cinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → insertLink) |
-| `dinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
-| `echoPopup([window,] text, cmds, hints)` | ✅ | JS-exposed; Bridge.lua flattens cmds/hints tables |
-| `cechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
 | `dechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
+| `dinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
+| `dinsertPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
+| `deleteCommandLine(name)` | 🚧 | Remove overlay command line |
+| `deleteLabel(name)` | ✅ | Bridge.lua → `__deleteLabel` |
+| `deleteLine()` | ✅ | Removes last output element |
+| `deleteMiniConsole(name)` | ✅ | Rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
+| `deleteMultiline(text)` | ✅ | Multi-line deletion (GUIUtils.lua) |
+| `deleteScrollBox(name)` | 🚧 | |
+| `deselect([window])` | ✅ | JS-exposed |
+| `disableClickthrough(name)` | ✅ | JS-exposed |
+| `disableCommandLine(name)` | ⚠️ | Works for user-window cmd-lines; no-op for the main bar |
+| `disableHorizontalScrollBar(name)` | ✅ | JS-exposed |
+| `disableScrollBar(name)` | ✅ | JS-exposed |
+| `disableScrolling(name)` | ✅ | JS-exposed |
+| `dreplace([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `dreplaceLine([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `echoLink([window,] text, cmd, hint)` | ✅ | Bridge.lua maps function `cmd` to a callback id |
+| `echoUserWindow(name, text)` | ✅ | Alias for `mudix.windows.write` |
+| `echoPopup([window,] text, cmds, hints)` | ✅ | Bridge.lua flattens cmds/hints tables |
+| `enableClickthrough(name)` | ✅ | JS-exposed |
+| `enableCommandLine(name)` | ⚠️ | Works for user-window cmd-lines; no-op for the main bar |
+| `enableHorizontalScrollBar(name)` | ✅ | JS-exposed |
+| `enableScrollBar(name)` | ✅ | JS-exposed |
+| `enableScrolling(name)` | ✅ | JS-exposed |
+| `fg([window,] colorname)` | ✅ | Set foreground color by name |
+| `getAvailableFonts()` | ✅ | `{[family]=true}` set merging web-safe families, FontFaceSet registrations, the profile font, and Local Font Access results |
+| `getBackgroundColor([window])` | ✅ | JS-exposed |
+| `getBgColor([window])` | ✅ | Bridge.lua — color at selection start; distinct from window-background `getBackgroundColor` |
+| `getBorderBottom()` / `getBorderTop()` / `getBorderLeft()` / `getBorderRight()` | ✅ | JS-exposed |
+| `getBorderSizes()` | ✅ | JS-exposed |
+| `getClipboardText()` | 🚧 | Async clipboard read — needs user-gesture gating |
+| `getColorWildcard()` | ✅ | Returns the captured colour wildcard from the current trigger |
+| `getColumnCount([window])` | ✅ | JS-exposed |
+| `getColumnNumber([window])` | ✅ | JS-exposed |
+| `getCurrentLine([window])` | ✅ | Bridge.lua wraps `__getCurrentLine` |
+| `getFgColor([window])` | ✅ | Bridge.lua — color at selection start; falls back to profile default |
+| `getFont([window])` | ✅ | Bridge.lua → `__getFont` |
+| `getFontSize([window])` | ✅ | Bridge.lua → `__getFontSize` |
+| `getHTMLformat(text)` | ✅ | Mudlet-format → HTML serialisation |
+| `getImageSize(path)` | 🚧 | Async-only in the browser (`Image.onload`) — Mudlet's sync semantics need an async-coroutine plan |
+| `getLabelFormat(name)` | ✅ | GUIUtils.lua |
+| `getLabelSizeHint(name)` | ✅ | Bridge.lua → `width, height`. Browser analogue of Qt sizeHint (rendered content extent) |
+| `getLabelStyleSheet(name)` | ✅ | Reads the CSS last set via `setLabelStyleSheet` |
+| `getLastLineNumber([window])` | ✅ | JS-exposed |
+| `getLineCount([window])` | ✅ | JS-exposed |
+| `getLines([window,] from, to)` | ✅ | Bridge.lua wraps `__getLines` |
+| `getLineNumber([window])` | ✅ | JS-exposed |
+| `getMainConsoleWidth()` | ✅ | Monospace cell width × (wrap columns + 1) |
+| `getMouseEvents()` | 🚧 | Pairs with `addMouseEvent` |
+| `getMousePosition()` | ✅ | Bridge.lua — last-seen cursor position in main viewport coords |
+| `getProfileTabNumber(name)` | 🚧 | No tab UI in mudix |
+| `getMainWindowSize()` | ✅ | Returns `window.innerWidth, window.innerHeight` |
+| `getRowCount([window])` | ✅ | JS-exposed |
+| `getScroll([window])` | ✅ | Returns the scroll position (top-most visible line) |
+| `getSelection([window])` | ✅ | Bridge.lua wraps `__getSelection` |
+| `getTextFormat([window])` | ✅ | Bridge.lua → documented attribute table |
+| `getUserWindowSize(name)` | ✅ | Bridge.lua → `__getUserWindowSize` |
+| `getWindowWrap(name)` | 🚧 | Sister of `setWindowWrap` |
+| `handleWindowResizeEvent()` | ✅ | Fires the resize listener chain (no-op shim that's part of the public API) |
+| `hasFocus([window])` | ✅ | `document.activeElement` check. No name = command bar; a name targets the registered overlay element |
+| `hecho([window,] text)` | ✅ | `#RRGGBBtext` syntax |
+| `hecho2ansi(text)` / `hecho2cecho(text)` / `hecho2decho(text)` / `hecho2html(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hechoLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
 | `hechoPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
-| `insertPopup([window,] text, cmds, hints)` | ✅ | JS-exposed; Bridge.lua flattens cmds/hints tables. `cinsertPopup`/`dinsertPopup`/`hinsertPopup` (GUIUtils.lua) now route here via `xEcho` |
-| `cinsertPopup`/`dinsertPopup`/`hinsertPopup` | ✅ | Pure Lua via GUIUtils.lua (`xEcho` → `insertPopup`) |
-| `setLink([window,] cmd, hint)` | ✅ | JS-exposed; Bridge.lua maps function `cmd` to a callback id |
-| `setPopup([window,] cmds, hints)` | ✅ | JS-exposed; applies a right-click popup to the current selection (preserves its formatting, like `setLink`) |
+| `hideGauge(name)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hinsertLink([window,] text, cmd, hint)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hinsertPopup(...)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hreplaceLine([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hreplace([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `hideToolBar(name)` | ✅ | Disables the toolbar group; false when no toolbar of that name exists |
+| `hideWindow(name)` | ✅ | JS-exposed |
+| `insertLink([window,] text, cmd, hint)` | ✅ | Bridge.lua maps function `cmd` to a callback id |
+| `insertPopup([window,] text, cmds, hints)` | ✅ | Bridge.lua flattens cmds/hints tables |
+| `insertText([window,] text)` | ✅ | JS-exposed |
+| `ioprint(...)` | 🚧 | Mudlet's print-to-stdout helper |
+| `isAnsiBgColor(idx)` / `isAnsiFgColor(idx)` | 🚧 | Predicates over the current pen |
+| `loadWindowLayout()` | ✅ | Re-applies the saved snapshot — re-positions live windows and reopens saved-visible windows |
+| `lowerWindow(name)` | ✅ | JS-exposed |
+| `moveCursor([window,] x, y)` | ✅ | JS-exposed |
+| `moveCursorDown([window])` / `moveCursorUp([window])` | ✅ | GUIUtils.lua |
+| `moveCursorEnd([window])` | ✅ | JS-exposed |
+| `moveGauge(name, x, y)` | ✅ | Pure Lua via GUIUtils.lua |
+| `moveWindow(name, x, y)` | ✅ | JS-exposed |
+| `openUserWindow(name [, …])` | ✅ | Opens (or focuses) a dockable user-window panel |
+| `paste([window])` | ✅ | Pastes the clipboard at the cursor; appends at end when on the last line |
+| `pauseMovie(name)` | 🚧 | No QMovie equivalent in browser |
+| `prefix(text)` | ✅ | Pure Lua via GUIUtils.lua (moveCursor + insertText) |
+| `print(...)` | ✅ | Alias for echo |
+| `raiseWindow(name)` | ✅ | CSS `z-index` on labels via `raiseLabel`/`lowerLabel` |
+| `removeCommandLineMenuEvent(name, event)` | ✅ | Pairs with `addCommandLineMenuEvent` |
+| `removeMouseEvent(uniquename)` | 🚧 | Pairs with `addMouseEvent` |
+| `replace(text)` | ✅ | JS-exposed |
+| `replaceAll(what, with)` | ✅ | Pure Lua sweep over the current line buffer |
+| `replaceLine(text)` | ✅ | Pure Lua via GUIUtils.lua (selectCurrentLine + replace) |
+| `replaceWildcard(n, text)` | ✅ | Replace the n-th capture group in the current line |
+| `resetCmdLineAction([name])` | ⚠️ | Main bar wired; named widgets 🚧 |
+| `resetBackgroundImage(name)` | ✅ | Clears the label's (or window's) background image |
+| `resetFormat([window])` | ✅ | Reset all formatting |
+| `resetLabelCursor(name)` | ✅ | JS-exposed |
+| `resetLabelToolTip(name)` | ✅ | JS-exposed |
+| `resetMapWindowTitle()` | ✅ | Pairs with `setMapWindowTitle` |
+| `resetUserWindowTitle(name)` | ✅ | Pairs with `setUserWindowTitle` |
+| `resizeWindow(name, w, h)` | ✅ | JS-exposed |
+| `saveWindowLayout()` | ✅ | Snapshots window hints + dock extents into `connectionLayoutSnapshots` |
+| `scaleMovie(name, factor)` | 🚧 | No QMovie equivalent |
+| `selectCaptureGroup(n)` | ✅ | JS-exposed |
+| `selectCmdLineText([name])` | ⚠️ | Selects all main command-bar text; named overlay widgets not yet wired |
+| `selectCurrentLine([window])` | ✅ | JS-exposed |
+| `selectSection([window,] col, len)` | ✅ | JS-exposed |
+| `selectString([window,] text, n)` | ✅ | JS-exposed |
+| `setAppStyleSheet(css)` | ✅ | Installs/replaces a CSS block in `document.head`; raises `sysAppStyleSheetChange` |
+| `setBackgroundColor([window,] r,g,b,a)` | ✅ | JS-exposed |
+| `setBackgroundImage(name, path)` | ✅ | Pure Lua via GUIUtils.lua → `setLabelStyleSheet` |
+| `setBgColor([window,] r, g, b)` | ✅ | JS-exposed |
+| `setBold([window,] bool)` | ✅ | JS-exposed |
+| `setBorderBottom(px)` / `setBorderTop(px)` / `setBorderLeft(px)` / `setBorderRight(px)` | ✅ | JS-exposed |
+| `setBorderColor(r,g,b)` | ✅ | Also `resetBorderColor` |
+| `setBorderSizes(...)` | ✅ | Bulk setter via the four side-specific routines |
+| `setFgColor([window,] r, g, b)` | ✅ | JS-exposed |
+| `setButtonStyleSheet(name, css)` | ✅ | Raw QSS → inline React style. Pseudo-state selectors (`:hover`/`:pressed`) drop through |
+| `setClipboardText(text)` | 🚧 | Async write — needs user-gesture gating |
+| `setCmdLineAction([name,] fn)` | ⚠️ | Main bar wired; named widgets 🚧 |
+| `setCmdLineStyleSheet([name,] css)` | ⚠️ | Applies to user-window cmd-lines; main bar has no QSS hook so returns true as a no-op |
+| `setFont([window,] font)` | ✅ | Bridge.lua → `__setFont` |
+| `setFontSize([window,] size)` | ✅ | Bridge.lua → `__setFontSize` |
+| `setGauge(name, current, max [, text])` | ✅ | Pure Lua via GUIUtils.lua |
+| `setGaugeStyleSheet(name, css [, textcss])` | ✅ | Pure Lua via GUIUtils.lua → `setLabelStyleSheet` |
+| `setGaugeText(name, text [, r, g, b])` | ✅ | Pure Lua via GUIUtils.lua |
+| `setHexBgColor([window,] hex)` | ✅ | Pure Lua via GUIUtils.lua → setBgColor |
+| `setHexFgColor([window,] hex)` | ✅ | Pure Lua via GUIUtils.lua → setFgColor |
+| `setItalics([window,] bool)` | ✅ | JS-exposed |
+| `setLabelToolTip(name, text, delay)` | ✅ | JS-exposed |
+| `setLabelClickCallback(name, fn)` | ✅ | Bridge.lua + JS callback registry |
+| `setLabelDoubleClickCallback(name, fn)` | ✅ | Bridge.lua |
+| `setLabelMoveCallback(name, fn)` | ✅ | Bridge.lua |
+| `setLabelOnEnter(name, fn)` | ✅ | Bridge.lua |
+| `setLabelOnLeave(name, fn)` | ✅ | Bridge.lua |
+| `setLabelReleaseCallback(name, fn)` | ✅ | Bridge.lua |
+| `setLabelStyleSheet(name, css)` | ✅ | JS-exposed |
+| `setLabelCursor(name, shape)` | ✅ | JS-exposed |
+| `setLabelCustomCursor(name, path[, hotX, hotY])` | ✅ | CSS `cursor: url(...) hotX hotY, auto`; path resolved through the VFS-aware rewriter |
+| `setLabelWheelCallback(name, fn)` | ✅ | Bridge.lua |
+| `setLink([window,] cmd, hint)` | ✅ | Bridge.lua maps function `cmd` to a callback id |
+| `setMainWindowSize(w, h)` | 🚧 | The main window IS the browser viewport |
+| `setMapWindowTitle(title)` | 🚧 | Pairs with `resetMapWindowTitle` |
+| `setMiniConsoleFontSize(name, size)` | ✅ | Bridge.lua; rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
+| `setMovie(name, path)` / `setMovieFrame(name, n)` / `setMovieSpeed(name, factor)` / `startMovie(name)` | 🚧 | No QMovie equivalent — could be replaced by `<img>` with animated GIFs |
+| `setOverline([window,] bool)` | 🚧 | No overline rendering path |
+| `setPopup([window,] cmds, hints)` | ✅ | Right-click popup on the current selection (preserves formatting, like `setLink`) |
+| `setProfileStyleSheet(css)` | 🚧 | Per-profile theme override |
+| `setReverse([window,] bool)` | ✅ | Sets `FormatState.inverse` on pen + selection (renderer swaps fg/bg) |
+| `setStrikeOut([window,] bool)` | ✅ | JS-exposed |
+| `setTextFormat([window,] ...)` | ✅ | `r1,g1,b1,r2,g2,b2,bold,underline,italics[,strikeout,overline,reverse,blink]` |
+| `setUnderline([window,] bool)` | ✅ | JS-exposed |
+| `setUserWindowTitle(name, title)` | ✅ | JS-exposed |
+| `setUserWindowStyleSheet(name, css)` | ✅ | JS-exposed |
+| `setWindow(...)` | 🚧 | Geyser/window parent reparenting |
+| `setWindowWrap(name, col)` | ✅ | JS-exposed |
+| `setWindowWrapHangingIndent(name, n)` | 🚧 | Hanging-indent wrap mode |
+| `setWindowWrapIndent(name, n)` | 🚧 | Indent-on-wrap mode |
+| `showCaptureGroups()` | ✅ | Pure Lua via DebugTools.lua (uses `matches`) |
+| `showColors([columns])` | ✅ | Pure Lua via GUIUtils.lua |
+| `showGauge(name)` | ✅ | Pure Lua via GUIUtils.lua |
+| `showMultimatches()` | ✅ | Pure Lua via DebugTools.lua |
+| `showToolBar(name)` | ✅ | Flips a toolbar group's `enabled` flag; false when no toolbar of that name exists |
+| `showWindow(name)` | ✅ | JS-exposed |
+| `suffix(text)` | ✅ | Pure Lua via GUIUtils.lua |
+| `setCommandBackgroundColor([window,] r,g,b[,a])` | ✅ | Patches the `inputBackground` profile field. Main bar only |
+| `setCommandForegroundColor([window,] r,g,b[,a])` | ✅ | Patches the `inputForeground` profile field. Main bar only |
+| `scrollDown([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
+| `scrollUp([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
+| `scrollTo([window,] line)` | ✅ | Jumps the scroll position |
+| `windowType(name)` | ✅ | Bridge.lua → `__windowType` |
+| `wrapLine([window,] linenum)` | ✅ | Re-renders the line buffer (0-indexed) so embedded `\n` is interpreted; mudix renders with `white-space: pre-wrap` |
+
+mudix-specific extras: `color_table`, `addCmdLineSuggestion`/`removeCmdLineSuggestion`/`clearCmdLineSuggestions` Tab-completion hooks against the main bar, `mudix.windows.*`.
 
 ---
 
-## Command Input
+## Discord Functions
 
-| Function | Status | Notes |
-|---|---|---|
-| `send(text [, echo])` | ✅ | Send command to MUD |
-| `sendAll(text1, text2, ...)` | ✅ | Send multiple commands at once (Other.lua) |
-| `expandAlias(text [, echo])` | ✅ | JS-exposed (`ScriptingAPI.expandAlias`) |
-| `denyCurrentSend()` | ✅ | JS-exposed; cancels the currently-dispatched send |
-| `appendCmdLine(text)` | ✅ | Append text to main command bar |
-| `setCmdLine(text)` | ✅ | Set main command bar text (`sendCmdLine`/`printCmdLine`) |
-| `getCmdLine([name])` | ✅ | JS-exposed; reads the live main bar or a named overlay command line |
-| `clearCmdLine([name])` | ⚠️ | JS-exposed but only operates on the main command bar; named overlay widgets not yet wired |
-| `feedTelnet(data)` | ✅ | JS-exposed; injects raw bytes into `MudClient.processIncomingData` (telnet strip → ANSI → triggers → render). Unlike Mudlet (loopback only when unconnected), mudix feeds the live inbound pipeline |
+All Discord Rich Presence functions require the Discord SDK and have no real implementation in a browser MUD client. They should be bound as **warning-emitting no-op stubs** (getters return `nil`, setters/resets are no-ops) so packages that touch Discord on load don't blow up.
 
----
-
-## Aliases
-
-| Function | Status | Notes |
-|---|---|---|
-| `tempAlias(pattern, code)` | ✅ | Temporary Lua regex alias |
-| `killAlias(id)` | ✅ | Delete temp alias by ID |
-| `permAlias(name, parent, pattern, code)` | ✅ | Bridge.lua → `__mudix_permAlias`; pattern is a single PCRE string (Mudlet TAlias.mRegexCode). Returns the new id, or -1 when the parent alias group is missing |
-| `enableAlias(name)` | ✅ | Enable permanent alias by name |
-| `disableAlias(name)` | ✅ | Disable permanent alias by name |
-| `exists(name, type)` | ✅ | JS-exposed (`ScriptingAPI.exists`) |
-| `isActive(name, type [, checkAncestors])` | ✅ | Count active items by name/id; `checkAncestors` requires ancestor groups enabled too |
+| Function | Status |
+|---|---|
+| `getDiscordDetail` / `setDiscordDetail` | ❌ stub |
+| `getDiscordLargeIcon` / `setDiscordLargeIcon` | ❌ stub |
+| `getDiscordLargeIconText` / `setDiscordLargeIconText` | ❌ stub |
+| `getDiscordSmallIcon` / `setDiscordSmallIcon` | ❌ stub |
+| `getDiscordSmallIconText` / `setDiscordSmallIconText` | ❌ stub |
+| `getDiscordParty` / `setDiscordParty` | ❌ stub |
+| `getDiscordState` / `setDiscordState` | ❌ stub |
+| `getDiscordTimeStamps` / `setDiscordElapsedStartTime` / `setDiscordRemainingEndTime` | ❌ stub |
+| `resetDiscordData` | ❌ stub |
+| `setDiscordApplicationID` / `setDiscordGame` / `setDiscordGameUrl` | ❌ stub |
+| `usingMudletsDiscordID` | ❌ stub |
 
 ---
 
-## Triggers
+## System Events (fired to Lua by the client)
 
-| Function | Status | Notes |
-|---|---|---|
-| `tempTrigger(pattern, code)` | ✅ | Temporary substring/regex trigger |
-| `killTrigger(id)` | ✅ | Delete temp trigger by ID |
-| `tempRegexTrigger(pattern, code)` | ✅ | Bridge.lua wraps `__mudix_tempRegexTrigger` |
-| `tempBeginOfLineTrigger(pattern, code)` | ✅ | Literal prefix (`String.prototype.startsWith`), NOT regex `^` — matches Mudlet's `match_begin_of_line_substring` |
-| `tempExactMatchTrigger(pattern, code)` | ✅ | Full-line exact match |
-| `tempColorTrigger(fg, bg, code)` | ✅ | JS-exposed; matches when any segment of the current rendered line carries the requested ANSI palette indices (`-1` = any). Non-indexed RGB segments never match a positive index, matching Mudlet's palette-only semantics. Implementation: empty-string substring temp trigger gated on `ScriptingAPI.currentLineMatchesColor`. Permanent `colorTrigger` patterns use the same scan — the pattern `text` carries `"fg,bg"` and `TriggerEngine.buildMatcher` delegates to the colour matcher `ScriptingEngine` registers via `setColorMatcher` |
-| `tempLineTrigger(from, count, code)` | ✅ | Position-based (no pattern): `TriggerEngine.addTempLine` fires on `count` lines starting `from` lines ahead (from=1 = next line), then self-expires. Bridge.lua wraps `__mudix_tempLineTrigger` |
-| `tempPromptTrigger(code)` | ✅ | Bridge.lua wraps `__mudix_tempPromptTrigger`; fires on lines flagged as a prompt (GA/EOR). expirationCount honoured |
-| `permRegexTrigger(name, parent, pattern, code)` | ⚠️ | `__mudix_permRegexTrigger`/`permRegexTrigger` exist; full Lua API still limited |
-| `permSubstringTrigger(name, parent, patterns, code)` | ✅ | Bridge.lua → `__mudix_permSubstringTrigger`; same shape as `permRegexTrigger` but each pattern is a literal substring. Empty patterns array creates a trigger group |
-| `enableTrigger(name)` | ✅ | JS-exposed |
-| `disableTrigger(name)` | ✅ | JS-exposed |
-| `killTrigger(name)` | ✅ | JS-exposed; string → `killByName('trigger', name)`, numeric → temp-trigger disposer |
-| `setTriggerStayOpen(name, lines)` | ✅ | JS-exposed; `TriggerEngine.setStayOpen` extends the named chain head's open window by `lines` (transient, not persisted) |
-
----
-
-## Timers
-
-| Function | Status | Notes |
-|---|---|---|
-| `tempTimer(delay, code [, repeat])` | ✅ | One-shot or repeating timer |
-| `killTimer(id)` | ✅ | Delete timer by ID |
-| `permTimer(name, parent, delay, code)` | ✅ | Bridge.lua → `__mudix_permTimer`. Creates a persistent one-shot timer; returns the new id, or -1 when the parent timer group is missing |
-| `enableTimer(name)` | ✅ | JS-exposed |
-| `disableTimer(name)` | ✅ | JS-exposed |
-| `remainingTime(id)` | ✅ | JS-exposed |
-
----
-
-## Keybindings
-
-| Function | Status | Notes |
-|---|---|---|
-| `tempKey(modifier, key, code)` | ✅ | Temporary keybinding |
-| `killKey(id)` | ✅ | Delete keybinding by ID |
-| `permKey(name, parent, modifier, key, code)` | ⚠️ | Permanent keybindings exist; no Lua creation API yet |
-| `enableKey(name)` | ✅ | Enable keybindings (and groups) matching name; cascades to children |
-| `disableKey(name)` | ✅ | Disable keybindings (and groups) matching name; cascades to children |
-
----
-
-## Stopwatches
-
-| Function | Status | Notes |
-|---|---|---|
-| `createStopWatch([name], [autostart])` | ✅ | `performance.now()`-based high-res stopwatch (`StopwatchManager`). Accepts watchID or name everywhere. Named watches default autostart off |
-| `startStopWatch(id\|name [, resetAndRestart])` | ✅ | Bare numeric id resets+restarts (legacy); name form resumes |
-| `stopStopWatch(id\|name)` | ✅ | Returns elapsed seconds |
-| `resetStopWatch(id\|name)` | ✅ | Zeroes elapsed; a running watch keeps running |
-| `getStopWatchTime(id\|name)` | ✅ | Elapsed seconds without stopping |
-| `adjustStopWatch(id\|name, seconds)` | ✅ | Add (or subtract) seconds |
-| `deleteStopWatch(id\|name)` | ✅ | |
-| `getStopWatches()` | ✅ | Bridge.lua re-keys to integer ids → `{ name, isRunning, isPersistent, elapsedTime }` |
-| `setStopWatchPersistence(id\|name, state)` | ✅ | Persistent watches saved to localStorage (per connection) and restored on reload; a running one keeps counting across reloads. Uses wall-clock `Date.now()` |
-| `getStopWatchBrokenDownTime(id\|name)` | ✅ | Bridge.lua rebuilds `{negative, days, hours, minutes, seconds, milliSeconds, decimalSeconds}` off the proxy; `false` on miss |
-| `setStopWatchName(id\|currentName, newName)` | ✅ | Assign/rename; `false` on unknown watch, empty name, or a name already taken |
-
----
-
-## Events
-
-| Function | Status | Notes |
-|---|---|---|
-| `raiseEvent(name, ...)` | ✅ | Fire custom Lua event |
-| `registerAnonymousEventHandler(name, fn)` | ✅ | Other.lua override tracks IDs in `handlerIdsToHandlers` |
-| `killAnonymousEventHandler(id)` | ✅ | Other.lua: removes handler by ID |
-| `mudix.on(event, fn)` | ✅ | Mudix-native registration |
-| `mudix.off(event, fn)` | ✅ | Mudix-native deregistration |
-| `registerNamedEventHandler(name, event, code)` | ✅ | IDManager.lua (built on `registerAnonymousEventHandler`) |
-| `deleteNamedEventHandler(name)` | ✅ | IDManager.lua |
-| `stopNamedEventHandler(name)` | ✅ | IDManager.lua |
-| `resumeNamedEventHandler(name)` | ✅ | IDManager.lua |
-| `raiseGlobalEvent(name, ...)` | ❌ | Multi-profile only |
-
-### System Events (fired to Lua by the client)
-
-Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.org/w/Manual:Event_Engine) list (every `sys*`/`map*` event Mudlet raises). Status reflects what mudix actually fires today (verified against `LuaRuntime`/`ScriptingEngine`/`WindowManager`/`HttpService` and the bundled `mudlet-lua`). Arg lists exclude the implicit leading event-name argument that Mudlet prepends.
+Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.org/w/Manual:Event_Engine) list. Arg lists exclude the implicit leading event-name argument.
 
 **Lifecycle / connection**
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysLoadEvent` | ✅ | After the initial script load (`ScriptingEngine.start`) |
-| `sysExitEvent` | ✅ | Fired once at `ScriptingEngine.destroy()` (connection switch/unmount) or on `window` `beforeunload`, whichever comes first — before the Lua runtime tears down so handlers (e.g. Geyser autosave) still run |
-| `sysConnectionEvent` | ✅ | Fired on connect (`ScriptingEngine` bridge), alongside mudix's native `connect` |
-| `sysDisconnectionEvent` | ✅ | Fired on disconnect, alongside mudix's native `disconnect` |
-| `sysProfileFocusChangeEvent` | ✅ | Fired on `document.visibilitychange` (Alt-Tab / tab switch) — arg: isFocused |
+| `sysLoadEvent` | ✅ | After the initial script load |
+| `sysExitEvent` | ✅ | Fired once at `ScriptingEngine.destroy()` (connection switch/unmount) or on `window` `beforeunload`, whichever comes first |
+| `sysConnectionEvent` | ✅ | On connect; mudix also fires native `connect` |
+| `sysDisconnectionEvent` | ✅ | On disconnect |
+| `sysProfileFocusChangeEvent` | ✅ | On `document.visibilitychange` — arg: isFocused |
 
 **Input / send**
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysDataSendRequest` | ✅ | Before each send (`LuaRuntime.dispatchSendRequest`); handler may call `denyCurrentSend()` to cancel — arg: text |
+| `sysDataSendRequest` | ✅ | Before each send; handler may call `denyCurrentSend()` — arg: text |
 
 **Packages / modules**
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysInstall` | ✅ | After any package/module install — arg: name |
-| `sysUninstall` | ✅ | Before any package/module uninstall — arg: name |
-| `sysInstallPackage` | ✅ | After package install — args: name, fileName |
-| `sysUninstallPackage` | ✅ | Before package uninstall — arg: name |
-| `sysInstallModule` | ✅ | After module install (`ScriptingEngine`) — args: name, fileName |
-| `sysUninstallModule` | ✅ | Before module uninstall — arg: name |
-| `sysLuaInstallModule` | ✅ | Fired by the Lua `installModule()` path — args: name, fileName |
-| `sysLuaUninstallModule` | ✅ | Fired by the Lua `uninstallModule()` path — arg: name |
-| `sysSyncInstallModule` | ✅ | Fired by `installModuleFromPath` for sync-flagged modules — args: name, fileName. Single-profile, so fires locally (no sibling-profile propagation) |
-| `sysSyncUninstallModule` | ✅ | Fired by `uninstallModuleByName` for sync-flagged modules — arg: name |
+| `sysInstall` / `sysUninstall` | ✅ | After/before any package/module install or uninstall — arg: name |
+| `sysInstallPackage` / `sysUninstallPackage` | ✅ | args: name, fileName / name |
+| `sysInstallModule` / `sysUninstallModule` | ✅ | args: name, fileName / name |
+| `sysLuaInstallModule` / `sysLuaUninstallModule` | ✅ | Fired by the Lua `installModule`/`uninstallModule` paths |
+| `sysSyncInstallModule` / `sysSyncUninstallModule` | ✅ | Sync-flagged modules; single-profile, no sibling propagation |
 
 **HTTP / download**
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysGetHttpDone` / `sysGetHttpError` | ✅ | `getHTTP` (`HttpService`) — done: url, body · error: error, url |
-| `sysPostHttpDone` / `sysPostHttpError` | ✅ | `postHTTP` — done: url, body · error: error, url |
+| `sysGetHttpDone` / `sysGetHttpError` | ✅ | `getHTTP` — done: url, body · error: error, url |
+| `sysPostHttpDone` / `sysPostHttpError` | ✅ | `postHTTP` |
 | `sysPutHttpDone` / `sysPutHttpError` | ✅ | `putHTTP` |
 | `sysDeleteHttpDone` / `sysDeleteHttpError` | ✅ | `deleteHTTP` |
 | `sysCustomHttpDone` / `sysCustomHttpError` | ✅ | `customHTTP` — extra arg: HTTP method |
-| `sysDownloadDone` | ✅ | After `downloadFile` completes — args: saveTo, fileSize, "" (body omitted) |
-| `sysDownloadError` | ✅ | After `downloadFile` fails — args: errorMessage, saveTo, url |
-| `sysDownloadFileProgress` | ✅ | During download — args: url, bytesDownloaded, totalBytes |
-| `sysUnzipDone` / `sysUnzipError` | ✅ | `unzipAsync` — args: zipPath, destDir |
+| `sysDownloadDone` / `sysDownloadError` / `sysDownloadFileProgress` | ✅ | `downloadFile` |
+| `sysUnzipDone` / `sysUnzipError` | ✅ | `unzipAsync` |
 
-**Speedwalk** (pure Lua — bundled `Other.lua` / generic mapper)
+**Speedwalk** (pure Lua — bundled `Other.lua`)
 
-| Event | Status | Notes |
-|---|---|---|
-| `sysSpeedwalkStarted` | ✅ | |
-| `sysSpeedwalkPaused` | ✅ | |
-| `sysSpeedwalkResumed` | ✅ | |
-| `sysSpeedwalkStopped` | ✅ | Premature stop |
-| `sysSpeedwalkFinished` | ✅ | Normal completion |
+| Event | Status |
+|---|---|
+| `sysSpeedwalkStarted` / `sysSpeedwalkPaused` / `sysSpeedwalkResumed` / `sysSpeedwalkStopped` / `sysSpeedwalkFinished` | ✅ |
 
 **Mapper**
 
 | Event | Status | Notes |
 |---|---|---|
-| `mapOpenEvent` | ✅ | Mapper opened (`ScriptingEngine`) |
-| `mapModeChangeEvent` | 🚧 | No view/edit mode toggle in mudix's map panel yet — arg: "editing"/"viewing" |
-| `sysManualLocationSetEvent` | ✅ | Fired by the `MapPanel` right-click "Set player location" action — arg: roomID |
-| `sysMapAreaChanged` | ✅ | Fired by `MapPanel` whenever the displayed area changes (via the area dropdown, `centerview`, or any other path that re-keys `currentArea`) — args: newAreaID, prevAreaID. `prevAreaID` is -1 on the initial transition |
+| `mapOpenEvent` | ✅ | Mapper opened |
+| `mapModeChangeEvent` | ✅ | View↔edit transitions (`setMapMode`/`getMapMode`) — arg: "viewing"/"editing" |
+| `sysManualLocationSetEvent` | ✅ | `MapPanel`'s right-click "Set player location" — arg: roomID |
+| `sysMapAreaChanged` | ✅ | Whenever the displayed area changes — args: newAreaID, prevAreaID (-1 on initial transition) |
 | `sysMapDownloadEvent` | 🚧 | No MMP map-protocol support (mudix uses binary maps + `downloadFile`) |
-| `sysMapWindowMousePressEvent` | ✅ | Fired by `MapPanel`'s mousedown listener on every press inside the map widget — args: button (1=left, 2=right, 3=middle), x, y. Coordinates are pixels relative to the map container |
+| `sysMapWindowMousePressEvent` | ✅ | args: button (1=left, 2=right, 3=middle), x, y |
 
 **Windows / UI elements**
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysWindowResizeEvent` | ✅ | Main output resize (`WindowManager` ResizeObserver) — args: width, height |
+| `sysWindowResizeEvent` | ✅ | Main output resize — args: width, height |
 | `sysUserWindowResizeEvent` | ✅ | User-window / miniconsole resize — args: width, height, name |
-| `sysConsoleSizeChanged` | 🚧 | Char-grid (not pixel) resize — args: name, columns, rows |
-| `sysWindowOverflowEvent` | 🚧 | Non-scrolling console overflows — args: name, overflowLines |
-| `sysBufferShrinkEvent` | ✅ | Fired by `Console.evict` whenever the scrollback cap drops one or more lines from the head of history — one event per evict batch. The main console wires the hook in `ScriptingAPI`; user-window consoles wire it in `WindowManager.registerConsole` — args: name, linesRemoved |
-| `sysWindowMousePressEvent` | ✅ | Mouse press on a window — args: button, x, y, name. `WindowManager.observeMouse` attaches mousedown listeners to each viewport ('main' + user windows); button is Mudlet-numbered (1=left, 2=right, 3=middle, 4=back, 5=forward, 0=other), x/y are pixels relative to the window |
-| `sysWindowMouseReleaseEvent` | ✅ | Mouse release on a window — same args; fired from the matching mouseup listener |
-| `sysLabelDeleted` | ✅ | Fired on a successful `deleteLabel` (the `__deleteLabel` binding) — arg: name |
-| `sysMiniConsoleDeleted` | ✅ | Fired on a successful `deleteMiniConsole` (`ScriptingAPI` eventRaiser) — arg: name |
-| `sysCommandLineDeleted` | 🚧 | Blocked on the `createCommandLine` widget family — arg: name |
+| `sysConsoleSizeChanged` | ✅ | Char-grid change. Cols come from the wrap setting (falling back to `floor(width / fontSize*0.6)`); rows from `floor(height / lineHeight)`. Also force-fires on `setWindowWrap` — args: name, columns, rows |
+| `sysWindowOverflowEvent` | ✅ | Non-scrolling console (`scrollState.scrollingEnabled === false`) when `scrollHeight > clientHeight`; overflowLines = `ceil(overflowPx / lineHeight)` — args: name, overflowLines |
+| `sysBufferShrinkEvent` | ✅ | Whenever scrollback cap drops one or more lines (one event per evict batch) — args: name, linesRemoved |
+| `sysWindowMousePressEvent` / `sysWindowMouseReleaseEvent` | ✅ | Mouse press/release. Button is Mudlet-numbered (1=left, 2=right, 3=middle, 4=back, 5=forward, 0=other); x/y are pixels relative to the window — args: button, x, y, name |
+| `sysLabelDeleted` | ✅ | On successful `deleteLabel` — arg: name |
+| `sysMiniConsoleDeleted` | ✅ | On successful `deleteMiniConsole` — arg: name |
+| `sysCommandLineDeleted` | 🚧 | Blocked on `createCommandLine` — arg: name |
 | `sysScrollBoxDeleted` | 🚧 | No ScrollBox widget yet — arg: name |
 
 **Protocol / telnet**
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysProtocolEnabled` | ✅ | Fired `"GMCP"` on GMCP negotiation (`gmcp.negotiated`); bundled `GMCP.lua` re-subscribes its modules here — arg: protocol |
-| `sysProtocolDisabled` | ✅ | Fired `"GMCP"` on disconnect when GMCP was active — arg: protocol |
-| `sysTelnetEvent` | ✅ | Fired by `MudClient.scanTelnetOptions` for any IAC WILL/WONT/DO/DONT/SB whose option byte isn't natively handled (GMCP/MSDP/TTYPE/MCCP/ECHO are excluded) and isn't in the `addSupportedTelnetOption` registry. `type` mirrors Mudlet's int mapping (1=WILL, 2=WONT, 3=DO, 4=DONT, 5=SB) — args: type, option, message |
+| `sysProtocolEnabled` | ✅ | Fired `"GMCP"` on GMCP negotiation; bundled `GMCP.lua` re-subscribes its modules here. Also fires `"MSDP"` |
+| `sysProtocolDisabled` | ✅ | On disconnect when GMCP was active |
+| `sysTelnetEvent` | ✅ | For any IAC WILL/WONT/DO/DONT/SB whose option byte isn't natively handled. `type` mirrors Mudlet's int mapping (1=WILL, 2=WONT, 3=DO, 4=DONT, 5=SB) — args: type, option, message |
 
 **Drag & drop**
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysDropEvent` | ✅ | Fired by `WindowManager.observeDrop` when a real File is dropped on a window. `path` falls back to the file's `name` since browsers only expose a real path on Electron-flavoured drops — args: filepath, suffix, x, y, name |
-| `sysDropUrlEvent` | ✅ | Fired by `WindowManager.observeDrop` when a textual URL (text/uri-list or a `scheme:`-prefixed text/plain payload) is dropped on a window — args: url, schema, x, y, name |
+| `sysDropEvent` | ✅ | When a real File is dropped on a window. `path` falls back to the file's `name` since browsers only expose a real path on Electron-flavoured drops — args: filepath, suffix, x, y, name |
+| `sysDropUrlEvent` | ✅ | When a textual URL is dropped — args: url, schema, x, y, name |
 
 **Media / misc**
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysAppStyleSheetChange` | ✅ | `setAppStyleSheet` (`ScriptingAPI`) — args: css, tag |
-| `sysPathChanged` | ✅ | `addFileWatch` — fires on VFS mutation of a watched path — arg: path |
-| `sysMediaFinished` | ✅ | Fired from `SoundManager`'s `onended` when a sound/music source ends or is stopped — args: name (filename), path (as passed) |
-| `sysSettingChanged` | ✅ | Fired on every mutation of the per-connection profile settings slice (`connectionProfile[id]`). One event per changed field — args: setting, newValue. `newValue` is `undefined` when the field is unset/cleared |
-| `sysSoundFinished` | ❌ | Obsolete in Mudlet 4.15 — superseded by `sysMediaFinished` |
-| `sysIrcMessage` | ❌ | No IRC client in mudix |
+| `sysAppStyleSheetChange` | ✅ | `setAppStyleSheet` — args: css, tag |
+| `sysPathChanged` | ✅ | VFS mutation of a watched path — arg: path |
+| `sysMediaFinished` | ✅ | Sound/music/video source ended or stopped — args: name, path |
+| `sysSettingChanged` | ✅ | Per-connection profile-settings mutation. One event per changed field — args: setting, newValue (`undefined` when unset) |
+| `sysSoundFinished` | 🚧 | Obsolete in Mudlet 4.15 (superseded by `sysMediaFinished`) but worth firing as a compat alias for older scripts |
+| `sysIrcMessage` | ❌ | No IRC client in mudix; nothing fires it (no stub needed — events don't break callers when never raised) |
 
 > **Not Mudlet events** — do not implement under these names: `sysConnect` / `sysDisconnect` / `sysGmcpMessage` (Mudlet uses `sysConnectionEvent` / `sysDisconnectionEvent` and the `gmcp.<path>` event chain), `sysUserWindowCreated` / `sysUserWindowClosed`, `sysMapperLocationChanged`.
 >
-> **mudix-specific events** (fired by mudix, no Mudlet equivalent): `output` (per output line), `gmcp.<path>` chain (✅, the real GMCP mechanism — args: eventName, fullKey), `sysMapLoadEvent` (✅, after a binary map ingest), `sysSaveProfileError` (✅), `sysReadModuleEvent` / `sysSyncOnModule` (✅, module-sync internals).
-
----
-
-## GMCP / Telnet Protocols
-
-| Function | Status | Notes |
-|---|---|---|
-| `gmcp` table | ✅ | Auto-populated from incoming GMCP packets |
-| `sendGMCP(message)` | ✅ | JS-exposed (frames as IAC SB GMCP …) |
-| `sendMSDP(var, ...)` | ✅ | JS-exposed; frames `IAC SB MSDP MSDP_VAR var [MSDP_VAL val]… IAC SE` (`encodeMsdp`). Bridge.lua packs varargs |
-| `msdp` table | ✅ | Auto-populated from incoming MSDP subnegotiations (`createMsdpStream` parses VAR/VAL/TABLE/ARRAY). Client auto-responds `IAC DO MSDP`; raises `sysProtocolEnabled('MSDP')` + `msdp.<VAR>` events |
-| `sendSocket(data)` | ✅ | JS-exposed; sends literal bytes over the socket (no telnet/encoding processing) |
-| `getConnectionInfo()` | ✅ | Bridge.lua unpacks `__getConnectionInfo` → host, port, connected (mud-mode config or parsed websocket URL) |
-| `getNetworkLatency()` | ✅ | JS-exposed |
-| `connectToServer(host, port [, save])` | ✅ | JS-exposed (`ScriptingAPI.connectToServer`); builds the proxy `?host=&port=` URL the connection screen uses and (re)connects the live session. `save` persists host/port onto the active connection (mud-mode). Rejects out-of-range ports |
-| `disconnect()` | ✅ | JS-exposed and bound as a top-level Lua global (`ScriptingAPI.disconnect` → `MudSession.disconnect`) |
-| `addSupportedTelnetOption(option)` | ✅ | JS-exposed (`MudClient.addSupportedTelnetOption`). Registers a telnet option byte (0..255) so the next IAC WILL/DO from the server is auto-accepted (we reply IAC DO / IAC WILL). Hardcoded options (GMCP/MSDP/TTYPE/MCCP/ECHO) already negotiate inline and don't need registration. Returns true if newly added |
-| `sendATCP(msg)` | ❌ | Legacy protocol, no plans |
-
----
-
-## HTTP Requests
-
-| Function | Status | Notes |
-|---|---|---|
-| `getHTTP(url [, headers])` | ✅ | Bridge.lua → `HttpService.getHTTP`; fires `sysGetHttpDone`/`sysGetHttpError` |
-| `postHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.postHTTP` |
-| `putHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.putHTTP` |
-| `deleteHTTP(url [, headers])` | ✅ | Bridge.lua → `HttpService.deleteHTTP` |
-| `downloadFile(url, path)` | ✅ | Bridge.lua → `HttpService.downloadFile`, writes to profile VFS |
-
----
-
-## Windows / Consoles
-
-| Function | Status | Notes |
-|---|---|---|
-| `openWindow(id, options)` | ✅ | Opens a dockable panel (text/html/map) |
-| `closeWindow(id)` | ✅ | Closes a panel |
-| `clearWindow(id)` | ✅ | Clears panel content |
-| `mudix.windows.write(id, text)` | ✅ | Write ANSI text to a panel |
-| `mudix.windows.setTitle(id, title)` | ✅ | Set panel tab title |
-| `mudix.windows.has(id)` | ✅ | Check if panel exists |
-| `mudix.windows.focus(id)` | ✅ | Focus a panel |
-| `showWindow(name)` | ✅ | JS-exposed |
-| `hideWindow(name)` | ✅ | JS-exposed |
-| `raiseWindow(name)` | ✅ | JS-exposed (CSS `z-index` on labels via `raiseLabel`/`lowerLabel`) |
-| `lowerWindow(name)` | ✅ | JS-exposed |
-| `moveWindow(name, x, y)` | ✅ | JS-exposed |
-| `resizeWindow(name, w, h)` | ✅ | JS-exposed |
-| `createMiniConsole(name, x, y, w, h)` | ✅ | JS-exposed |
-| `createMapper([parent,] x, y, w, h)` | ✅ | JS-exposed; singleton embedded mapper widget that shares MapStore with the dock widget |
-| `createLabel(name, x, y, w, h, passthrough)` | ✅ | JS-exposed |
-| `createGauge(name, x, y, w, h, parent)` | ✅ | Pure Lua via GUIUtils.lua (3× `createLabel` + `setBackgroundColor`) |
-| `createCommandLine(name, x, y, w, h)` | 🚧 | Absolutely-positioned extra input widget |
-| `createBuffer(name)` | ✅ | Off-screen text buffer (no panel) — registers a named Console in `session.consoles`; output to it stays in history (never opens a panel) and is selectable/copyable. `windowType` reports `"buffer"` |
-| `appendBuffer([window])` | ✅ | Appends the clipboard (from `copy()`) as a new line to the named console (`Console.appendBuffer`) |
-| `copy([window])` | ✅ | Copies the current selection (with formatting) into the session clipboard (Mudlet's host-global `mClipboard`) |
-| `paste([window])` | ✅ | Pastes the clipboard at the cursor, or appends at end when on the last line |
-| `echoUserWindow(name, text)` | ✅ | Alias for `mudix.windows.write` |
-| `deleteMiniConsole(name)` | ✅ | JS-exposed; closes the panel via `WindowManager.close`. Rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
-| `deleteLabel(name)` | ✅ | Bridge.lua → `__deleteLabel` |
-| `deleteCommandLine(name)` | 🚧 | Remove overlay command line |
-| `setConsoleBufferSize([window,] linesLimit [, batchSize])` | ✅ | Scrollback size limit — maps to `Console.setMaxLines`; batch size round-tripped |
-| `getConsoleBufferSize([window])` | ✅ | Bridge.lua unpacks `__getConsoleBufferSize` → linesLimit, batchSize; nil when the console is missing |
-| `getMainWindowSize()` | ✅ | Returns `window.innerWidth, window.innerHeight` |
-| `getUserWindowSize(name)` | ✅ | Bridge.lua → `__getUserWindowSize` |
-| `getMainConsoleWidth()` | ✅ | Pixel width of the main console: monospace cell width × (wrap columns + 1) |
-| `setWindowWrap(name, col)` | ✅ | JS-exposed |
-| `windowType(name)` | ✅ | Bridge.lua → `__windowType` |
-| `disableScrollBar(name)` | ✅ | JS-exposed (`ScriptingAPI.disableScrollBar`) |
-| `enableScrollBar(name)` | ✅ | JS-exposed (`ScriptingAPI.enableScrollBar`) |
-| `hasFocus([window])` | ✅ | JS-exposed; `document.activeElement` check. No name = command bar; a name targets the registered overlay element |
-| `saveWindowLayout()` | ✅ | JS-exposed; snapshots window hints + dock extents into `connectionLayoutSnapshots` in the app store |
-| `loadWindowLayout()` | ✅ | JS-exposed; re-applies the saved snapshot — re-positions live windows and reopens saved-visible windows that are currently closed |
-
----
-
-## Labels
-
-| Function | Status | Notes |
-|---|---|---|
-| `setLabelClickCallback(name, fn)` | ✅ | Bridge.lua + JS callback registry (`__mudix_setLabelClickCallback`) |
-| `setLabelDoubleClickCallback(name, fn)` | ✅ | Bridge.lua |
-| `setLabelReleaseCallback(name, fn)` | ✅ | Bridge.lua |
-| `setLabelMoveCallback(name, fn)` | ✅ | Bridge.lua |
-| `setLabelWheelCallback(name, fn)` | ✅ | Bridge.lua |
-| `setLabelOnEnter(name, fn)` | ✅ | Bridge.lua |
-| `setLabelOnLeave(name, fn)` | ✅ | Bridge.lua |
-| `setLabelStyleSheet(name, css)` | ✅ | JS-exposed |
-| `getLabelStyleSheet(name)` | ✅ | JS-exposed; reads the CSS last set via `setLabelStyleSheet` (`""` when none) |
-| `getLabelFormat(name)` | ✅ | GUIUtils.lua; now resolves since `getLabelStyleSheet` is implemented |
-| `getLabelSizeHint(name)` | ✅ | Bridge.lua → `__getLabelSizeHint` → `width, height`. Browser analogue of Qt's sizeHint: the rendered label node's content extent (`scrollWidth`/`scrollHeight`), falling back to the configured geometry when the label isn't in the DOM. `(nil, errMsg)` when no such label |
-| `setLabelCursor(name, shape)` | ✅ | JS-exposed |
-| `setLabelCustomCursor(name, path[, hotX, hotY])` | ✅ | JS-exposed; CSS `cursor: url(...) hotX hotY, auto`. Path resolved through the VFS-aware rewriter |
-| `resetLabelCursor(name)` | ✅ | JS-exposed |
-| `setLabelToolTip(name, text, delay)` | ✅ | JS-exposed |
-| `resetLabelToolTip(name)` | ✅ | JS-exposed |
-| `setBackgroundImage(name, path)` | ✅ | Pure Lua via GUIUtils.lua → `setLabelStyleSheet` |
-| `resetBackgroundImage(name)` | ✅ | JS-exposed (`ScriptingAPI.resetBackgroundImage`); clears the label's (or window's) background image |
-
----
-
-## Gauges
-
-| Function | Status | Notes |
-|---|---|---|
-| `setGauge(name, current, max [, text])` | ✅ | Pure Lua via GUIUtils.lua (resizeWindow + moveWindow) |
-| `moveGauge(name, x, y)` | ✅ | Pure Lua via GUIUtils.lua |
-| `showGauge(name)` | ✅ | Pure Lua via GUIUtils.lua |
-| `hideGauge(name)` | ✅ | Pure Lua via GUIUtils.lua |
-| `setGaugeText(name, text [, r, g, b])` | ✅ | Pure Lua via GUIUtils.lua (`echo` + RGB2Hex) |
-| `setGaugeStyleSheet(name, css [, textcss])` | ✅ | Pure Lua via GUIUtils.lua → `setLabelStyleSheet` |
-
----
-
-## Command Line Widgets
-
-| Function | Status | Notes |
-|---|---|---|
-| `clearCmdLine(name)` | ⚠️ | JS-exposed for main bar; named overlay widgets 🚧 |
-| `getCmdLine(name)` | 🚧 | Read overlay command input |
-| `appendCmdLine(name, text)` | ⚠️ | Main bar only; named widgets 🚧 |
-| `printCmdLine(name, text)` | ⚠️ | JS-exposed for main bar; named widgets 🚧 |
-| `setCmdLineAction(name, fn)` | ⚠️ | Bridge.lua wraps it for the main bar; named widgets 🚧 |
-| `resetCmdLineAction(name)` | ⚠️ | Bridge.lua wraps it for the main bar; named widgets 🚧 |
-| `selectCmdLineText([name])` | ⚠️ | JS-exposed; selects all main command-bar text (emits `script.selectcmd` → ProfileSession `.select()`). Named overlay widgets not yet wired |
-| `enableCommandLine(name)` | 🚧 | |
-| `disableCommandLine(name)` | 🚧 | |
-| `setCmdLineStyleSheet(name, css)` | 🚧 | CSS on overlay input |
-| `addCmdLineSuggestion(name, text)` | 🚧 | Add autocomplete suggestion |
-| `removeCmdLineSuggestion(name, text)` | 🚧 | |
-| `clearCmdLineSuggestions(name)` | 🚧 | |
-
----
-
-## Fonts & Appearance (Overlay Elements)
-
-| Function | Status | Notes |
-|---|---|---|
-| `setFont([window,] font)` | ✅ | Bridge.lua → `__setFont` |
-| `getFont([window])` | ✅ | Bridge.lua → `__getFont` |
-| `setFontSize([window,] size)` | ✅ | Bridge.lua → `__setFontSize` |
-| `getFontSize([window])` | ✅ | Bridge.lua → `__getFontSize` |
-| `calcFontSize(size[, family]) \| calcFontSize(windowName)` | ✅ | Bridge.lua → `__calcFontSize`; canvas-2D measurement of a monospace cell, falls back to the App.css `--font-mono` stack when no family is set |
-| `getAvailableFonts()` | ✅ | JS-exposed; set-style `{[family]=true}` merging web-safe families, FontFaceSet registrations, the profile font, and Local Font Access results |
-| `setMiniConsoleFontSize(name, size)` | ✅ | Bridge.lua → `__setMiniConsoleFontSize`; reuses `WindowManager.setFontSize` but rejects non-miniconsole targets to match Mudlet's CONSOLE-only check |
-| `setAppStyleSheet(css)` | ✅ | JS-exposed — installs/replaces a CSS block in `document.head`, raises `sysAppStyleSheetChange` |
-| `setUserWindowStyleSheet(name, css)` | ✅ | JS-exposed |
-| `getBorderTop()` | ✅ | JS-exposed |
-| `getBorderBottom()` | ✅ | JS-exposed |
-| `getBorderLeft()` | ✅ | JS-exposed |
-| `getBorderRight()` | ✅ | JS-exposed |
-| `getBorderSizes()` | ✅ | JS-exposed |
-| `setBorderTop(px)` | ✅ | JS-exposed |
-| `setBorderBottom(px)` | ✅ | JS-exposed |
-| `setBorderLeft(px)` | ✅ | JS-exposed |
-| `setBorderRight(px)` | ✅ | JS-exposed |
-| `setBorderColor(r,g,b)` | ✅ | JS-exposed (also `resetBorderColor`) |
-
----
-
-## Toolbars / Buttons
-
-| Function | Status | Notes |
-|---|---|---|
-| `showToolBar(name)` | 🚧 | Show/hide a named toolbar in the app chrome |
-| `hideToolBar(name)` | 🚧 | |
-| `tempButton(toolbar, name, code, orientation)` | 🚧 | Add a button to a toolbar |
-| `tempButtonToolbar(name, orientation, float)` | 🚧 | Create a toolbar |
-| `setButtonState(name, state)` | 🚧 | Check/uncheck a toggle button |
-| `getButtonState(name)` | 🚧 | |
-| `setButtonStyleSheet(name, css)` | 🚧 | CSS on button element |
-
----
-
-## Mapper
-
-> Mudix loads Mudlet binary `.dat` map files for display. The programmatic mapper API is a long-term goal.
-
-| Function | Status | Notes |
-|---|---|---|
-| `centerview(roomID)` | ✅ | JS-exposed; sets the player room as a side effect (matches Mudlet) |
-| `getPlayerRoom()` | ✅ | Returns the id last passed to `centerview`; `nil` when unset or the room was deleted |
-| `getPath(fromID, toID)` | ✅ | A* via `__getPath` → `api.map.findPath`; Bridge.lua resets+populates `speedWalkPath`/`speedWalkDir`/`speedWalkWeight` (1-indexed) and unpacks Mudlet's `(true, totalWeight)` / `(false, -1, errMsg)` multi-return |
-| `speedwalk(roomID [, walkcmd, delay])` | ✅ | Pure Lua via Other.lua (uses `send` + `tempTimer`) |
-| `pauseSpeedwalk()` | ✅ | Pure Lua via Other.lua |
-| `resumeSpeedwalk()` | ✅ | Pure Lua via Other.lua |
-| `stopSpeedwalk()` | ✅ | Pure Lua via Other.lua |
-| `getRoomName(roomID)` | ✅ | Bridge.lua → `__getRoomName` |
-| `getRoomCoordinates(roomID)` | ✅ | Bridge.lua → `__getRoomCoordinates` |
-| `getRoomExits(roomID)` | ✅ | JS-exposed |
-| `getRoomArea(roomID)` | ✅ | JS-exposed |
-| `getRoomEnv(roomID)` | ✅ | JS-exposed |
-| `getRooms()` | ✅ | JS-exposed |
-| `getAreaTable()` | ✅ | JS-exposed |
-| `getAreaRooms(areaID)` | ✅ | JS-exposed |
-| `highlightRoom(roomID, ...)` | ✅ | JS-exposed → `api.map.highlightRoom` (color1/color2 + radius + alpha) |
-| `unHighlightRoom(roomID)` | ✅ | JS-exposed → `api.map.unHighlightRoom` |
-| `roomExists(roomID)` | ✅ | JS-exposed |
-| `addRoom(roomID)` | ✅ | JS-exposed |
-| `deleteRoom(roomID)` | ✅ | JS-exposed |
-| `setRoomName(roomID, name)` | ✅ | JS-exposed |
-| `setRoomCoordinates(roomID, x, y, z)` | ✅ | JS-exposed |
-| `setRoomArea(roomID, areaID)` | ✅ | JS-exposed |
-| `setExit(fromID, toID, dir)` | ✅ | JS-exposed |
-| `addSpecialExit(fromID, toID, cmd)` | ✅ | JS-exposed |
-| `removeSpecialExit(fromID, cmd)` | ✅ | JS-exposed |
-| `getSpecialExits(roomID [, listAllExits])` | ✅ | Bridge.lua re-keys `__getSpecialExits` → `{[exitRoomID]={[cmd]="0"\|"1"}}`; lowest-weight command per room unless `listAllExits` |
-| `getSpecialExitsSwap(roomID)` | ✅ | JS-exposed; `{cmd=toId}` |
-| `getExitStubs(roomID)` | ✅ | JS-exposed; returns a 0-indexed table of stub direction numbers (wasmoon array convention, matches Mudlet) |
-| `getExitStubs1(roomID)` | ✅ | Bridge.lua wraps `getExitStubs` and re-indexes to a 1-based table |
-| `getExitStubsNames(roomID)` | ✅ | Stub direction names ("north"/…/"other"), 1-indexed; `(false, errMsg)` when the room is missing |
-| `connectExitStub(fromID, dir)` / `(fromID, toID[, dir])` | ✅ | Connects an exit stub and wires the reverse stub back. Direction-only finds the nearest in-area room with a matching reverse stub (Mudlet's unit-vector/compSign search); toID-only requires exactly one reverse-stub pair; a bare numeric 2–11 is treated as a toID (Mudlet quirk). `(false, errMsg)` on failure |
-| `clearSpecialExits(roomID)` | ✅ | Removes every special exit plus the locks/doors/custom lines keyed by those commands; `false` when the room is missing |
-| `lockSpecialExit(fromID, toID, cmd, lockIfTrue)` | ✅ | Bridge.lua drops the (Mudlet-ignored) `toID`; locks by command → destination id in `mSpecialExitLocks`. `(false, errMsg)` on miss |
-| `hasSpecialExitLock(fromID, toID, cmd)` | ✅ | `toID` ignored; returns the lock boolean or `(nil, errMsg)` when the room/command is missing |
-| `getAllRoomEntrances(roomID)` | ✅ | Sorted, de-duped list of rooms with a stock or special exit into this one; `(false, errMsg)` on miss |
-| `getAreaExits(areaID[, fullData])` | ✅ | Default → sorted id list of in-area rooms with a cross-area exit; `fullData` → `{ [fromRoomID] = { [exit] = toRoomID } }` (Bridge.lua re-keys ids). `(false, errMsg)` when the area is missing |
-| `getAreaRooms1(areaID)` | ✅ | Bridge.lua wraps `getAreaRooms` and re-indexes to a 1-based table |
-| `getRoomsByPosition1(areaID, x, y, z)` | ✅ | Bridge.lua wraps `getRoomsByPosition` and re-indexes to a 1-based table |
-| `searchRoom(roomID \| name[, caseSensitive[, exactMatch]])` | ✅ | By id → name (`false` on miss); by name → `{ [roomID] = name }` (case-insensitive substring by default). Bridge.lua re-keys ids |
-| `searchRoomUserData([key[, value]])` | ✅ | No args → all keys; key only → distinct values; key+value → matching room ids. All 1-indexed |
-| `searchAreaUserData([key[, value]])` | ✅ | Area-level analogue of `searchRoomUserData`, 1-indexed |
-| `gotoRoom(targetRoomID)` | ✅ | Pure Lua (Bridge.lua): `getPath(getPlayerRoom(), target)` then `send`s the moves. `(false, errMsg)` when the current room is unknown, the target is invalid, or no path exists. mudix sends the path immediately (no autonomous timed-walk engine) |
-| `deleteMap()` | ✅ | Wipes every room/area/label back to a single empty default area |
-| `getCustomLines(roomID)` | ✅ | JS-exposed; `{ dir = { attributes={color,style,arrow}, points={[0]={x,y,z},...} } }`. Returns nil for missing rooms, empty table when none |
-| `getCustomLines1(roomID)` | ✅ | Bridge.lua wraps `getCustomLines` with 1-indexed point arrays; nil for a missing room |
-| `removeCustomLine(roomID, direction)` | ✅ | Removes the custom exit line for a direction (1-12/name/special command); `false` when the room or line is missing |
-| `lockRoom(roomID, bool)` | ✅ | JS-exposed; sets `room.isLocked` (honoured by pathfinding) |
-| `roomLocked(roomID)` | ✅ | JS-exposed; lock state, or nil when the room is missing |
-| `lockExit(roomID, dir, bool)` | ⚠️ | Pure-Lua wrapper in Other.lua stores into room user-data; `getPath` honours `room.exitLocks` but the wrapper doesn't write there yet, so locks set via Lua aren't seen by pathfinding |
-| `setRoomWeight(roomID, weight)` | ✅ | JS-exposed; rejects negative weights |
-| `getRoomWeight(roomID)` | ✅ | JS-exposed; false when the room is missing |
-| `getExitWeights(roomID)` | ✅ | JS-exposed; `{exit=weight}` keyed by short direction name or special-exit command |
-| `setExitWeight(roomID, exitCommand, weight)` | ✅ | JS-exposed; weight 0 resets to destination-room weight; rejects negatives/unknown exits |
-| `getRoomUserData(roomID, key)` | ✅ | Bridge.lua → `__getRoomUserData` |
-| `setRoomUserData(roomID, key, value)` | ✅ | JS-exposed |
-| `getRoomUserDataKeys(roomID)` | ✅ | Bridge.lua → `__getRoomUserDataKeys`; re-indexes JS 0-based array to 1-based Lua table; `nil` when room missing |
-| `getAllRoomUserData(roomID)` | ✅ | Bridge.lua → `__getAllRoomUserData`; full `{key=value}` dict, `(false, errMsg)` when room missing |
-| `clearRoomUserData(roomID)` | ✅ | Bridge.lua → `__clearRoomUserData`; `true`/`false`, `(false, errMsg)` when room missing |
-| `clearRoomUserDataItem(roomID, key)` | ✅ | Bridge.lua → `__clearRoomUserDataItem`; `(false, errMsg)` when room missing |
-| `resetRoomArea(roomID)` | ✅ | Bridge.lua → `__resetRoomArea`; moves the room to the void area (-1); `(false, errMsg)` when room missing |
-| `getAreaUserData(areaID, key)` | ✅ | Bridge.lua → `__getAreaUserData`; distinguishes a missing area from a missing key in the `(false, errMsg)` return |
-| `setAreaUserData(areaID, key, value)` | ✅ | JS-exposed; `false` when the area is missing |
-| `getAllAreaUserData(areaID)` | ✅ | Bridge.lua → `__getAllAreaUserData`; full `{key=value}` dict, `(false, errMsg)` when area missing |
-| `clearAreaUserData(areaID)` | ✅ | Bridge.lua → `__clearAreaUserData`; `(false, errMsg)` when area missing |
-| `clearAreaUserDataItem(areaID, key)` | ✅ | Bridge.lua → `__clearAreaUserDataItem`; `(false, errMsg)` when area missing |
-| `getGridMode(areaID)` | ✅ | Bridge.lua → `__getGridMode`; `(false, errMsg)` when area missing (note `false` is also a valid grid-mode value) |
-| `setGridMode(areaID, bool)` | ✅ | JS-exposed (`api.map.setGridMode`); `false` when the area is missing |
-| `getAreaTableSwap()` | ✅ | Bridge.lua → `__getAreaTableSwap`; re-keys numeric-string ids back to integers — `{[areaID]=name}`, inverse of `getAreaTable` |
-| `getMapLabels(areaID)` | ✅ | Bridge.lua → `__getMapLabels`; re-keys numeric-string keys back to integer label ids |
-| `getMapLabel(areaID, labelID\|labelText)` | ✅ | Bridge.lua → `__getMapLabel`; by-id returns flat properties, by-text returns `{[id]=properties}` matches |
-| `loadMap(path)` | ✅ | JS-exposed |
-| `saveMap(path)` | ✅ | JS-exposed; serialises MapStore via `writeMapToBuffer` and writes to VFS / IDB |
-| `saveJsonMap(path)` / `loadJsonMap(path)` | ✅ | JS-exposed via `MapStore.toJsonString` / `loadFromJsonString`. Writes the same `MudletMap` shape `saveMap` serialises, just as JSON (no Mudlet-binary framing). `loadJsonMap` raises `sysMapLoadEvent` on success |
-| `updateMap()` | ✅ | JS-exposed; forces the map panel to re-read MapStore and redraw (via the registered `MapControl.redraw`) |
-| `getMapZoom([areaID])` / `setMapZoom(zoom[, areaID])` | ✅ | JS-exposed via a `MapControl` registered by MapPanel (`get/setZoom` + recenter/redraw). Mudlet-compatible zoom semantics: the value is the number of map units visible across the viewport's **shorter edge** (zoom=3 → 3 rooms across, larger = zoomed out), converted to/from the renderer's pixels-per-room-unit at the panel boundary. `setMapZoom` enforces Mudlet's minimum of 3.0. mudix has a single shared 2D view, so `areaID` is accepted for compat but applies to the current view. `getMapZoom` returns nil / `setMapZoom` returns false when no map panel is open |
-| All other mapper functions | 🚧 | long tail — implement incrementally (the MUDLET_API.md mapper table understates coverage; verify against `MapStore`/`LuaRuntime`/`Bridge.lua` before implementing) |
-
----
-
-## String Utilities
-
-| Function | Status | Notes |
-|---|---|---|
-| `string.starts(s, prefix)` | ✅ | |
-| `string.ends(s, suffix)` | ✅ | |
-| `string.trim(s)` | ✅ | |
-| `string.split(s, sep)` | ✅ | |
-| `string.contains(s, sub)` | ✅ | |
-| `string.title(s)` | ✅ | StringUtils.lua |
-| `string.cut(s, maxlen)` | ✅ | StringUtils.lua |
-| `string.patternEscape(s)` | ✅ | StringUtils.lua |
-| `string.genNocasePattern(s)` | ✅ | StringUtils.lua |
-| `f(str)` | ✅ | StringUtils.lua — string interpolation: `{expr}` inside strings |
-
----
-
-## Table Utilities
-
-| Function | Status | Notes |
-|---|---|---|
-| `table.contains(t, val)` | ✅ | |
-| `table.size(t)` | ✅ | Count all keys including non-integer |
-| `table.deepcopy(t)` | ✅ | TableUtils.lua |
-| `table.keys(t)` | ✅ | TableUtils.lua |
-| `table.index_of(t, val)` | ✅ | TableUtils.lua |
-| `table.union(t1, t2, ...)` | ✅ | TableUtils.lua |
-| `table.complement(t1, t2)` | ✅ | TableUtils.lua |
-| `table.intersection(t1, t2)` | ✅ | TableUtils.lua |
-| `table.is_empty(t)` | ✅ | TableUtils.lua |
-| `table.update(t1, t2)` | ✅ | TableUtils.lua |
-| `table.collect(t, fn)` | ✅ | TableUtils.lua |
-| `table.n_flatten(t)` | ✅ | TableUtils.lua |
-| `table.save(filename, t)` | ✅ | Other.lua, uses `io.open`/VFS (works once VFS is mounted) |
-| `table.load(filename)` | ✅ | Other.lua, uses `dofile`/VFS |
-| `spairs(t [, fn])` | ✅ | TableUtils.lua — sorted-key iterator |
-| `printTable(t)` | ✅ | TableUtils.lua |
-
----
-
-## Date / Time
-
-| Function | Status | Notes |
-|---|---|---|
-| `getTime([returnAsTable, format])` | ✅ | Bridge.lua — full Qt QDateTime token formatting |
-| `getEpoch()` | ✅ | JS-exposed (`Date.now() / 1000`) |
-| `getTimestamp([window,] lineNumber)` | ✅ | Bridge.lua → `__getTimestamp` → "hh:mm:ss.zzz" string. Each `AnsiAwareBuffer` carries a construction-time `timestamp`; `Console.getLineTimestamp` reads it (1-based, matching `getLines`; omit for the current line). `(nil, errMsg)` when out of range |
-
----
-
-## Virtual Filesystem
-
-| Function | Status | Notes |
-|---|---|---|
-| `io.exists(path)` | ✅ | Other.lua (uses `io.open`) backed by ProfileVFS |
-| `io.open(path, mode)` | ✅ | LuaRuntime VFS bridge (`__vfs_io_open__` etc.) |
-| `addFileWatch(path)` | ✅ | JS-exposed; tracks resolved VFS paths and fires `sysPathChanged` on mutation |
-| `removeFileWatch(path)` | ✅ | JS-exposed; stops watching a path |
-| `getMudletHomeDir()` | ✅ | VFS.lua — alias for `getMudixProfilePath()` |
-| `invokeFileDialog(type, title)` | 🚧 | **Blocked on a sync/async design decision.** Mudlet returns the selected path *synchronously* (`QFileDialog::getOpenFileName` blocks); every browser picker (`<input type=file>`, `showOpenFilePicker`) is async, and a Promise can't block the Lua call to honour `local path = invokeFileDialog(...)`. Needs an event-based (`sys*` completion event) or coroutine design first |
-| `table.save(filename, t)` | ✅ | See Table Utilities |
-| `table.load(filename)` | ✅ | See Table Utilities |
-
----
-
-## Profile / Session
-
-| Function | Status | Notes |
-|---|---|---|
-| `getProfileName()` | ✅ | JS-exposed |
-| `getNetworkLatency()` | ✅ | JS-exposed |
-| `getOS()` | ✅ | Sniffs the underlying OS from the user agent → `"windows"`/`"mac"`/`"linux"`/`"freebsd"`/`"openbsd"`/`"netbsd"`/`"unknown"` |
-| `getWindowsCodepage()` | ✅ | Returns `"65001"` (UTF-8) on every platform — the browser VFS is always UTF-8, so the bundled `utf8_filenames.lua` skips legacy-ANSI transcoding |
-| `getMudletVersion()` | ✅ | Bridge.lua — supports `nil`/`"string"`/`"major"`/`"minor"`/`"revision"`/`"build"`/`"table"` modes |
-| `debug(text)` | ✅ | JS-exposed as an alias for `debugc` — both names route to `console.debug`. Mudlet uses both interchangeably; binding both keeps ports portable |
-| `remember(varname)` | ✅ | Other.lua (persists into `SavedVariables.lua` via VFS) |
-| `saveVars()` / `loadVars()` | ✅ | Other.lua |
-| `shms(seconds)` | ✅ | DateTime.lua |
-| `xor(a, b)` | ✅ | Other.lua |
-| `compare(a, b)` | ✅ | Other.lua — alias for `_comp` deep equality |
-| `f(str)` | ✅ | StringUtils.lua (see String section) |
-| `openUrl(url)` | ✅ | JS-exposed — `window.open(url, '_blank')`; a `file:` prefix routes to the VFS file browser (matches Mudlet's `openMudletHomeDir`) |
-| `showNotification(title, text)` | ✅ | Web Notifications API; gated on the Settings opt-in (`client.notificationsEnabled`) which is where the permission prompt is raised. Optional expiry auto-closes |
-| `alert([secs])` | ✅ | JS-exposed; flashes `document.title` for `secs` (default 10). No-op while the tab is focused (matches Mudlet) |
-| `loadReplay(path)` | 🚧 | Replay a recorded session from VFS |
-| `startLogging(bool)` | ✅ | JS-exposed; toggles the per-profile `SessionLogger`. mudix records to the IndexedDB log store (not a VFS file) — the same store the toolbar Logs button browses |
-| `loadProfile(name)` | ❌ | No multi-profile switching |
-| `saveProfile([name])` | ❌ | Auto-persists via localStorage |
-| `closeMudlet()` | ❌ | |
-| `getProfiles()` | ❌ | |
-
----
-
-## Sound / Media
-
-| Function | Status | Notes |
-|---|---|---|
-| `playSoundFile(path [, vol, loops, ch])` | ✅ | Bridge.lua → `SoundManager` (Web Audio + VFS or http(s) URL) |
-| `loadSoundFile(path)` | ✅ | Bridge.lua → `SoundManager.preload`; decodes + caches so the first `playSoundFile` has no latency. Accepts positional or table form |
-| `loadMusicFile(path)` | ✅ | Bridge.lua → `SoundManager.preload` (same decode cache, keyed by path). Positional or table form |
-| `purgeMediaCache()` | ✅ | `SoundManager.purgeCache` — drops every decoded-audio buffer; active playback is unaffected |
-| `pauseSounds([channel])` | ✅ | JS-exposed; Web Audio source nodes cannot truly pause, so this stops all sound sources immediately (optionally filtered by tag/channel). Re-trigger `playSoundFile` to "resume". Music tracks are untouched (see `stopMusic`) |
-| `stopSounds([channel])` | ✅ | JS-exposed |
-| `getPlayingSounds()` | ✅ | Bridge.lua → `SoundManager.getPlaying`; re-indexes to a 1-based array of `{name, key, tag, volume}`. Optional name/key/tag filter |
-| `playMusicFile(path [, vol, loops, ch])` | ✅ | Bridge.lua → `SoundManager` |
-| `stopMusic([channel])` | ✅ | Bridge.lua → `SoundManager` |
-| `playVideoFile(path)` | 🚧 | HTML `<video>` element in overlay |
-| `pauseVideos()` | 🚧 | |
-| `stopVideos()` | 🚧 | |
-
----
-
-## Text-to-Speech
-
-| Function | Status | Notes |
-|---|---|---|
-| `ttsSpeak(text)` | ✅ | Web Speech API (`TtsManager`); speaks immediately, interrupting current. Strips angle brackets like Mudlet |
-| `ttsQueue(text [, index])` | ✅ | Inserts at 1-based `index` (default end); raises `ttsSpeechQueued(text, index)` |
-| `ttsClearQueue([index])` | ✅ | Clears whole queue or the 1-based `index` item (false if out of bounds) |
-| `ttsGetQueue([index])` | ✅ | Bridge.lua re-indexes to a 1-based table; `index` form returns one item or false |
-| `ttsPause()` | ✅ | |
-| `ttsResume()` | ✅ | |
-| `ttsSkip()` | ✅ | Stops current, advances to next queued |
-| `ttsGetVoices()` | ✅ | Bridge.lua re-indexes `speechSynthesis.getVoices()` names to a 1-based table |
-| `ttsGetCurrentVoice()` | ✅ | Selected voice name, or engine default |
-| `ttsGetCurrentLine()` | ✅ | Bridge.lua maps idle/errored to `(nil, "not speaking any text")` |
-| `ttsSetVoiceByName(name)` | ✅ | Returns bool; raises `ttsVoiceChanged` |
-| `ttsSetVoiceByIndex(index)` | ✅ | 1-based index into `ttsGetVoices()`; returns bool |
-| `ttsSetRate(rate)` / `ttsGetRate()` | ✅ | Mudlet range -1..1 (0 = normal); raises `ttsRateChanged`. Mapped to Web Speech range at speak time |
-| `ttsSetPitch(pitch)` / `ttsGetPitch()` | ✅ | Mudlet range -1..1; raises `ttsPitchChanged` |
-| `ttsSetVolume(vol)` / `ttsGetVolume()` | ✅ | Mudlet range 0..1; raises `ttsVolumeChanged` |
-| `ttsGetState()` | ✅ | `ttsSpeechReady`/`ttsSpeechStarted`/`ttsSpeechPaused`/`ttsSpeechError`/`ttsUnknownState`, raised as events on transitions |
+> **mudix-specific events** (no Mudlet equivalent): `output` (per output line), `gmcp.<path>` chain (✅, the real GMCP mechanism — args: eventName, fullKey), `sysMapLoadEvent` (✅, after a binary map ingest), `sysSaveProfileError` (✅), `sysReadModuleEvent` / `sysSyncOnModule` (✅, module-sync internals).
 
 ---
 
 ## Geyser OOP Framework
 
-> Implementable in pure Lua once the overlay primitive API (`createLabel`, `createMiniConsole`, `createGauge`, `createCommandLine`, `moveWindow`, `resizeWindow`) exists. No additional JS required.
+Pure Lua on top of the overlay primitive API. No additional JS required.
 
 | Class | Status | Notes |
 |---|---|---|
-| `Geyser.Container` | ✅ | Bundled Lua file is loaded; pure layout, no missing deps |
-| `Geyser.Label` | ⚠️ | Bundled and mostly working; `getLabelFormat` is partial because `getLabelStyleSheet` is missing |
-| `Geyser.MiniConsole` | ✅ | Bundled; constructor calls `setMiniConsoleFontSize` (now ✅) |
-| `Geyser.Gauge` | ✅ | Bundled; wraps GUIUtils `createGauge`/`setGauge` (both ✅) |
-| `Geyser.HBox` | ✅ | Bundled |
-| `Geyser.VBox` | ✅ | Bundled |
+| `Geyser.Container` | ✅ | Pure layout, no missing deps |
+| `Geyser.Label` | ✅ | Bundled; `getLabelFormat` resolves now that `getLabelStyleSheet` is implemented |
+| `Geyser.MiniConsole` | ✅ | Bundled |
+| `Geyser.Gauge` | ✅ | Bundled; wraps GUIUtils `createGauge`/`setGauge` |
+| `Geyser.HBox` / `Geyser.VBox` | ✅ | Bundled |
 | `Geyser.CommandLine` | ⚠️ | Bundled but `createCommandLine` is missing |
-| `Geyser.UserWindow` | ✅ | Bundled; uses `openUserWindow` ✅ |
+| `Geyser.UserWindow` | ✅ | Bundled; uses `openUserWindow` |
 | `Geyser.ReflowContainer` | 🚧 | Not bundled in `LuaGlobal.lua` load list |
 
 ---
 
 ## Not Applicable
 
+These features have no real implementation in mudix, but to keep imported Mudlet scripts/packages portable they are **still bound as warning-emitting no-op stubs** (see the legend). Stubs log once per call site and return a sensible default — see the per-section notes above for the exact return value of each stub.
+
 | Feature | Reason |
 |---|---|
-| Discord Rich Presence | Requires Discord SDK |
-| IRC client | Separate external service |
-| Multi-profile management (`loadProfile`, `getProfiles`) | Single-connection web app |
-| `setAppStyleSheet(css)` | Qt application-wide CSS |
-| `spawn()` subprocess | No subprocess in browser |
-| `sendATCP(msg)` | Legacy protocol |
-| Module/package installation (`installModule`, etc.) | No package ecosystem |
-| `raiseGlobalEvent` | Multi-profile only |
-
----
-
-## Implementation Priority
-
-### Tier 1 — Core scripting primitives (pure Lua or trivial JS)
-1. `table.deepcopy`, `table.keys`, `table.index_of`, `table.is_empty`, `table.update`
-2. `string.patternEscape`, `string.title`, `string.cut`, `f(str)` interpolation
-3. `getTime()`, `getEpoch()` — timestamps
-4. `shms(seconds)`, `xor`, `compare` — pure Lua utils
-5. Color converters (`cecho2string`, `ansi2string`, `cecho2decho`, etc.) — pure Lua
-6. `killAnonymousEventHandler(id)` — needs ID tracking in `registerAnonymousEventHandler`
-7. Stopwatch API (`createStopWatch`, `startStopWatch`, `stopStopWatch`, `getStopWatchTime`)
-8. `closestColor(r, g, b)`
-
-### Tier 2 — Scripting power features
-9. `sendGMCP(message)` — outbound GMCP
-10. `expandAlias(text)` — alias expansion from Lua
-11. `getCmdLine()` / `clearCmdLine()` — command bar read/clear
-12. Enable/disable permanent aliases, triggers, timers, keys by name
-13. `getHTTP()` / `postHTTP()` — fetch-backed HTTP
-14. `getCurrentLine()`, `getLineCount()`, `getLines()` — output buffer read
-15. `selectString()`, `replace()`, `replaceLine()` — output text rewriting
-16. `getConnectionInfo()`, `getNetworkLatency()`, `getProfileName()`
-
-### Tier 3 — Overlay UI system (requires new subsystem)
-17. Overlay manager: `createMiniConsole`, `createLabel`, `createGauge`, `createCommandLine`
-18. `moveWindow`, `resizeWindow`, `showWindow`, `hideWindow`, `raiseWindow`, `lowerWindow`
-19. Label event callbacks, `setLabelStyleSheet`, `setBackgroundImage`
-20. Gauge API (`setGauge`, `setGaugeText`, `setGaugeStyleSheet`)
-21. Overlay command line API
-22. Geyser framework (pure Lua once overlay primitives exist)
-
-### Tier 4 — Virtual filesystem
-23. IndexedDB VFS with `io.open`, `io.exists`, `getMudletHomeDir`
-24. `table.save` / `table.load`
-25. `downloadFile`, `saveMap`/`loadMap`
-26. `saveVars` / `loadVars` / `remember`
-27. `startLogging`
-
-### Tier 5 — Nice to have
-28. `echoLink()`, `echoPopup()` — clickable output
-29. Sound API (Web Audio + VFS)
-30. TTS API (Web Speech)
-31. Mapper read/write API
-32. `permAlias` / `permTrigger` / `permTimer` / `permKey` from Lua
+| Discord Rich Presence (`getDiscord*` / `setDiscord*`) | Requires Discord SDK |
+| IRC client (`openIRC`, `sendIrc`, `*IrcChannels`, `*IrcNick`, `*IrcServer`, `restartIrc`, `getIrcConnectedHost`) | Separate external service |
+| Multi-profile management (`loadProfile`, `getProfiles`, `raiseGlobalEvent`) | Single-connection web app |
+| `spawn(...)` | No subprocess in the browser |
+| Spell-check API (`spellCheckWord`, `spellSuggestWord`, `addWordToDictionary`, `removeWordFromDictionary`, `getDictionaryWordList`) | No Hunspell in browser |

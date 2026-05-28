@@ -11,7 +11,7 @@ import { FileBrowserModal } from './ui/FileBrowserModal';
 import { LogBrowserModal } from './ui/LogBrowserModal';
 import { QuickOpenPalette } from './ui/QuickOpenPalette';
 import { SessionLogger } from './logging/SessionLogger';
-import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, type MudConnection } from './storage';
+import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, PROTOCOL_DEFAULTS, type MudConnection } from './storage';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
 import { applyAnsiPalette } from './mud/text/colors';
@@ -44,10 +44,22 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // provider always returns the latest value the user has typed.
     const commandRef = useRef(command);
     commandRef.current = command;
+    // Last command actually sent. Used by the password-mode useEffect to tell
+    // the leftover character-name case ("MyChar" still showing when the server
+    // toggles ECHO) apart from a freshly-typed partial password.
+    const lastSentRef = useRef('');
 
     const outputFont = useAppStore(s => selectProfileField(s, connection.id, 'outputFont'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connection.id, 'promptTimeoutMs'));
     const ansiPalette = useAppStore(s => selectProfileField(s, connection.id, 'ansiPalette'));
+    const autoClearInput = useAppStore(s => selectProfileField(s, connection.id, 'autoClearInput')) === true;
+    const commandSeparator = useAppStore(s => selectProfileField(s, connection.id, 'commandSeparator')) ?? '';
+    const protocols = useAppStore(s => selectProfileField(s, connection.id, 'protocols'));
+    const gmcpEnabled = protocols?.gmcp ?? PROTOCOL_DEFAULTS.gmcp;
+    const mttsEnabled = protocols?.mtts ?? PROTOCOL_DEFAULTS.mtts;
+    const msdpEnabled = protocols?.msdp ?? PROTOCOL_DEFAULTS.msdp;
+    const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
+    const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
     const loggingEnabled = useAppStore(s => selectProfileField(s, connection.id, 'loggingEnabled')) !== false;
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
@@ -68,6 +80,11 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         session.windows.setConnectionId(connection.id);
         session.windows.setWindowHints(hints);
     }
+    // Protocol toggles need to be on the session's options before the
+    // autoConnect effect dials — the MudClient reads them at construction. Set
+    // synchronously during render (matching the seededFor pattern); user-driven
+    // toggles after the first connect take effect on the next reconnect.
+    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, charsetEnabled, mspEnabled });
 
     const { engineRef } = useEngines(session, true, connection);
 
@@ -152,12 +169,21 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // — only queries when permission is already granted; never prompts.
     useEffect(() => { void primeLocalFontsCache(); }, []);
 
-    // Clear the input whenever the server toggles IAC ECHO. Otherwise the
-    // previously typed char name remains in state and renders as dots in the
-    // password field — and on the way back out, the password would briefly
-    // surface as plaintext.
+    // When the server toggles IAC ECHO we clear the command line, but only if
+    // the current text is the last command we sent — i.e. the character name
+    // still showing because autoClearInput is off. If the user has already
+    // started typing fresh password chars during the echo-debounce window we
+    // keep them (mirrors Mudlet's TCommandLine "partial password" scenario).
+    // Leaving password mode always clears, otherwise the password would
+    // briefly surface as plaintext on the way back out.
     useEffect(() => {
-        setCommand('');
+        if (passwordMode) {
+            if (commandRef.current && commandRef.current === lastSentRef.current) {
+                setCommand('');
+            }
+        } else {
+            setCommand('');
+        }
     }, [passwordMode]);
 
     useEffect(() => {
@@ -280,19 +306,32 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         setFilesOpen({ initialPath, ...(initialLine !== undefined ? { initialLine } : {}), pickedAt: Date.now() });
 
     const handleSend = () => {
-        const consumed = engineRef.current?.processInput(command) ?? false;
-        if (!consumed) {
+        // Mudlet's command separator: one Enter expands to N commands, each run
+        // through aliases independently. Empty separator (or a separator that
+        // doesn't appear in the text) yields a single-element array, so the
+        // single-command path is just a special case of the loop.
+        const parts = commandSeparator && command.includes(commandSeparator)
+            ? command.split(commandSeparator)
+            : [command];
+        for (const part of parts) {
+            const consumed = engineRef.current?.processInput(part) ?? false;
+            if (consumed) continue;
             // Routes through ScriptingAPI.send so sysDataSendRequest fires and
             // denyCurrentSend() can suppress the command. Falls back to the bare
             // session.send before the engine is ready (offline profile, init race).
             if (engineRef.current) {
-                engineRef.current.sendCommand(command);
+                engineRef.current.sendCommand(part);
             } else {
-                session.echoCommand(command);
-                send(command, false);
+                session.echoCommand(part);
+                send(part, false);
             }
         }
-        commandInputRef.current?.select();
+        lastSentRef.current = command;
+        if (autoClearInput) {
+            setCommand('');
+        } else {
+            commandInputRef.current?.select();
+        }
     };
 
     return (

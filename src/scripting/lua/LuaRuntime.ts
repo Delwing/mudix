@@ -1400,6 +1400,51 @@ export class LuaRuntime implements IScriptingRuntime {
         // numeric envID.
         this.lua.global.set('__getCustomEnvColorTable',
             () => this.api.map.getCustomEnvColorTable());
+        // Mudlet removeCustomEnvColor(envID). Drops the override; the renderer
+        // falls back to the built-in env palette.
+        this.lua.global.set('removeCustomEnvColor', (envId: unknown) => {
+            const id = Number(envId);
+            if (!Number.isFinite(id)) return false;
+            return this.api.map.removeCustomEnvColor(Math.trunc(id));
+        });
+        // Mudlet setRoomCharColor(roomID, r, g, b [, a]). Sets the per-room
+        // colour for the symbol painted by the renderer. (false, errMsg) when
+        // the room is missing.
+        this.lua.global.set('setRoomCharColor', (roomId: unknown, r: unknown, g: unknown, b: unknown, a?: unknown) => {
+            const id = Number(roomId);
+            if (!Number.isFinite(id)) return false;
+            const rr = Math.max(0, Math.min(255, Number(r) || 0));
+            const gg = Math.max(0, Math.min(255, Number(g) || 0));
+            const bb = Math.max(0, Math.min(255, Number(b) || 0));
+            const aa = a == null ? 255 : Math.max(0, Math.min(255, Number(a) || 0));
+            return this.api.map.setRoomCharColor(Math.trunc(id), rr, gg, bb, aa);
+        });
+        // Mudlet getRoomCharColor(roomID) → r, g, b, a; nil when no per-room
+        // colour was ever set. Bridge.lua unpacks the 4-tuple array.
+        this.lua.global.set('__getRoomCharColor', (roomId: unknown) => {
+            const id = Number(roomId);
+            if (!Number.isFinite(id)) return null;
+            const c = this.api.map.getRoomCharColor(Math.trunc(id));
+            return c ? [c.r, c.g, c.b, c.a] : null;
+        });
+        // Mudlet setMapBackgroundColor(r, g, b). Stored on the profile mapper
+        // settings — MapPanel reads from there each render.
+        this.lua.global.set('setMapBackgroundColor', (r: unknown, g: unknown, b: unknown) =>
+            this.api.setMapBackgroundColor(Number(r) || 0, Number(g) || 0, Number(b) || 0));
+        // Mudlet setMapRoomSize(roomSize). The renderer reads this from
+        // settings.roomSize (units = map cells; ~0.6 default).
+        this.lua.global.set('setMapRoomSize', (size: unknown) => this.api.setMapRoomSize(Number(size)));
+        // Mudlet getMapRoomSize() — returns the active room-size value.
+        this.lua.global.set('getMapRoomSize', () => this.api.getMapRoomSize());
+        // Mudlet setMapMode("viewing"|"editing") / getMapMode(). Round-trips the
+        // mode on MapStore; transitions raise mapModeChangeEvent.
+        this.lua.global.set('setMapMode', (mode: unknown) => {
+            const m = String(mode ?? '');
+            if (m !== 'viewing' && m !== 'editing') return false;
+            return this.api.map.setMapMode(m);
+        });
+        this.lua.global.set('getMapMode', () => this.api.map.getMapMode());
+        this.api.map.setMapModeListener((mode) => this.emitEvent('mapModeChangeEvent', [mode]));
 
         // ── Room highlights ──────────────────────────────────────────────────
         // Mudlet highlightRoom(id, c1R, c1G, c1B, c2R, c2G, c2B, radius, c1A, c2A).
@@ -1952,6 +1997,46 @@ export class LuaRuntime implements IScriptingRuntime {
         // store-subscription pipeline.
         this.lua.global.set('__mudix_permTimer', (name: unknown, parent: unknown, delay: unknown, code: unknown) =>
             this.api.permTimer(String(name ?? ''), String(parent ?? ''), Number(delay) || 0, String(code ?? '')));
+        // Mudlet permKey(name, parent, modifier, key, luaCode). modifier is the
+        // Qt::KeyboardModifier int; -1 means "no modifier" (group form). key is
+        // either a Qt::Key int or a string keycode — the JS side translates.
+        this.lua.global.set('__mudix_permKey', (name: unknown, parent: unknown, mod: unknown, key: unknown, code: unknown) => {
+            const k = typeof key === 'number' ? key : String(key ?? '');
+            return this.api.permKey(
+                String(name ?? ''),
+                String(parent ?? ''),
+                Number.isFinite(mod as number) ? Number(mod) : -1,
+                typeof k === 'number' ? String(k) : k,
+                String(code ?? ''),
+            );
+        });
+        // Mudlet button/toolbar APIs operate on the persistent ButtonNode tree.
+        // tempButton / tempButtonToolbar create transient entries; setButtonState
+        // / getButtonState / setButtonStyleSheet / showToolBar / hideToolBar
+        // mutate or read existing entries by name.
+        this.lua.global.set('__mudix_tempButton', (toolbar: unknown, name: unknown, code: unknown, orientation?: unknown) =>
+            this.api.tempButton(
+                String(toolbar ?? ''),
+                String(name ?? ''),
+                String(code ?? ''),
+                Number(orientation) || 0,
+            ));
+        this.lua.global.set('__mudix_tempButtonToolbar', (name: unknown, orientation?: unknown, location?: unknown) =>
+            this.api.tempButtonToolbar(
+                String(name ?? ''),
+                Number(orientation) || 0,
+                Number(location) || 0,
+            ));
+        this.lua.global.set('setButtonState', (name: unknown, state: unknown) =>
+            this.api.setButtonState(String(name ?? ''), !!state));
+        this.lua.global.set('getButtonState', (name: unknown) =>
+            this.api.getButtonState(String(name ?? '')));
+        this.lua.global.set('setButtonStyleSheet', (name: unknown, css: unknown) =>
+            this.api.setButtonStyleSheet(String(name ?? ''), String(css ?? '')));
+        this.lua.global.set('showToolBar', (name: unknown) =>
+            this.api.setToolBarVisibility(String(name ?? ''), true));
+        this.lua.global.set('hideToolBar', (name: unknown) =>
+            this.api.setToolBarVisibility(String(name ?? ''), false));
         // Mudlet setScript(name, luaCode[, pos]) — replace the source of an
         // existing script. pos is 1-indexed; missing/non-numeric falls back to
         // 1. Returns true or -1.
@@ -2376,11 +2461,6 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('debugc', (content: unknown) => {
             console.debug('[Lua]', String(content ?? ''));
         });
-        // Mudlet `debug(text)` — alias for debugc. Older Mudlet scripts use
-        // the unprefixed name; binding both keeps ports portable.
-        this.lua.global.set('debug', (content: unknown) => {
-            console.debug('[Lua]', String(content ?? ''));
-        });
         this.lua.global.set('errorc', (content: unknown, debugInfo?: unknown) => {
             const msg = String(content ?? '');
             const trailer = debugInfo == null ? '' : ` ${String(debugInfo)}`;
@@ -2623,6 +2703,25 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         // Mudlet purgeMediaCache() — drop every decoded-audio buffer.
         this.lua.global.set('purgeMediaCache', () => sounds.purgeCache());
+
+        // ── Video (Mudlet playVideoFile / pauseVideos / stopVideos) ────────────
+        // Same VFS-or-URL loader as sounds; videos mount on the main viewport.
+        // playVideoFile(path [, volume, loops]) | playVideoFile{name=..., ...}.
+        const videos = this.api.videos;
+        this.lua.global.set('__playVideoFile', (t: unknown) => {
+            const o = detachOpts(t);
+            const path = String(o.name ?? '');
+            if (!path) return;
+            void videos.play(path, {
+                name: path,
+                volume: numOpt(o.volume),
+                loops: numOpt(o.loops),
+                width: strOpt(o.width),
+                height: strOpt(o.height),
+            });
+        });
+        this.lua.global.set('pauseVideos', () => { videos.pauseAll(); });
+        this.lua.global.set('stopVideos',  () => { videos.stopAll(); });
 
         // ── Text-to-speech (Mudlet ttsSpeak / ttsQueue / ttsSetRate / ...) ─────
         // Web Speech API backend on this.tts. Fire-and-forget like sounds/HTTP;

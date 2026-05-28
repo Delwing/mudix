@@ -1,0 +1,133 @@
+// Mudlet `playVideoFile / pauseVideos / stopVideos`. mudix mounts <video>
+// elements as absolutely-positioned overlay children of the main viewport.
+// Video files are looked up through the same loader callback the SoundManager
+// uses, so VFS paths and http(s) URLs both work.
+//
+// This is intentionally minimal — Mudlet's spec is just "play a video file";
+// per-channel routing and z-ordering can be added later. Each play creates
+// (or replaces) a single video element keyed by name; pauseVideos pauses all,
+// stopVideos pauses + removes them.
+
+type LoaderFn = (path: string) => Promise<ArrayBuffer | null>;
+
+export interface PlayVideoOptions {
+    name: string;
+    /** 0..100 — Mudlet scale. Default 50. */
+    volume?: number;
+    /** Loop count. 1 = play once (default). -1 = infinite. */
+    loops?: number;
+    /** CSS units; default fills the viewport. */
+    width?: string;
+    height?: string;
+}
+
+interface ActiveVideo {
+    name: string;
+    element: HTMLVideoElement;
+    objectUrl: string | null;
+}
+
+export class VideoManager {
+    private loader: LoaderFn | null = null;
+    /** Returns the DOM element that videos should be attached to. Set by
+     *  WindowManager.observeMain so videos drop onto the main viewport. */
+    private getMount: (() => HTMLElement | null) | null = null;
+    private active = new Map<string, ActiveVideo>();
+    /** Fires when a video ends naturally or is stopped — mirrors Mudlet's
+     *  sysMediaFinished. */
+    onEnded: ((name: string, path: string) => void) | null = null;
+
+    setLoader(fn: LoaderFn | null): void {
+        this.loader = fn;
+    }
+
+    setMountPoint(fn: (() => HTMLElement | null) | null): void {
+        this.getMount = fn;
+    }
+
+    async play(path: string, opts: PlayVideoOptions): Promise<boolean> {
+        const mount = this.getMount?.() ?? null;
+        if (!mount) return false;
+        const name = opts.name || path.split(/[/\\]/).pop() || path;
+        this.stopByName(name);
+
+        let src: string;
+        let objectUrl: string | null = null;
+        if (/^https?:|^data:|^blob:/.test(path)) {
+            src = path;
+        } else {
+            const buf = await this.loader?.(path) ?? null;
+            if (!buf) return false;
+            const blob = new Blob([buf as BlobPart], { type: 'video/mp4' });
+            objectUrl = URL.createObjectURL(blob);
+            src = objectUrl;
+        }
+
+        const el = document.createElement('video');
+        el.src = src;
+        el.autoplay = true;
+        el.controls = false;
+        el.playsInline = true;
+        el.loop = (opts.loops ?? 1) < 0;
+        el.volume = Math.max(0, Math.min(1, (opts.volume ?? 50) / 100));
+        el.style.position = 'absolute';
+        el.style.top = '0';
+        el.style.left = '0';
+        el.style.width = opts.width ?? '100%';
+        el.style.height = opts.height ?? '100%';
+        el.style.objectFit = 'contain';
+        el.style.zIndex = '500';
+        el.style.background = 'transparent';
+        el.style.pointerEvents = 'none';
+
+        const entry: ActiveVideo = { name, element: el, objectUrl };
+        el.addEventListener('ended', () => {
+            // For finite loops > 1, replay manually until counter exhausts.
+            const desired = opts.loops ?? 1;
+            if (desired > 1) {
+                const left = Number(el.dataset.loopsLeft ?? desired) - 1;
+                if (left > 0) {
+                    el.dataset.loopsLeft = String(left);
+                    el.currentTime = 0;
+                    void el.play();
+                    return;
+                }
+            }
+            this.stopByName(name);
+            this.onEnded?.(name, path);
+        });
+        mount.appendChild(el);
+        this.active.set(name, entry);
+        try {
+            await el.play();
+        } catch {
+            // Autoplay may be blocked by user-gesture policy; the element still
+            // exists and the user can recover via pause/resume scripts.
+        }
+        return true;
+    }
+
+    pauseAll(): void {
+        for (const v of this.active.values()) v.element.pause();
+    }
+
+    stopAll(): void {
+        for (const name of Array.from(this.active.keys())) this.stopByName(name);
+    }
+
+    private stopByName(name: string): void {
+        const v = this.active.get(name);
+        if (!v) return;
+        try { v.element.pause(); } catch { /* element may already be detached */ }
+        v.element.remove();
+        if (v.objectUrl) URL.revokeObjectURL(v.objectUrl);
+        this.active.delete(name);
+    }
+
+    destroy(): void {
+        this.stopAll();
+        this.loader = null;
+        this.getMount = null;
+        this.onEnded = null;
+    }
+}

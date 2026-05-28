@@ -113,7 +113,51 @@ export interface ProfileSettings {
      *  to MAPPER_DEFAULTS, which in turn defer to the renderer's own
      *  createSettings() default for anything we don't override. */
     mapper?: MapperSettings;
+    /** Clear the command line after sending. When false (default), the input is
+     *  selected-all instead so the next keystroke overtypes it. */
+    autoClearInput?: boolean;
+    /** Separator that splits one Enter into multiple commands (Mudlet's
+     *  "command separator", default `;;`). Each split is run through aliases
+     *  and sent independently. Empty string disables splitting. */
+    commandSeparator?: string;
+    /** Per-profile telnet protocol toggles. Patches merge so flipping one
+     *  field doesn't wipe siblings. Missing fields fall through to
+     *  PROTOCOL_DEFAULTS. Takes effect on the next connect. */
+    protocols?: ProtocolSettings;
 }
+
+/** Per-profile telnet protocol toggles. Each field gates the client's
+ *  negotiation response for one option — see MudClientOptions for the
+ *  wire-level meaning. Add a new entry here (and a toggle in the General
+ *  tab + a `MudClient` switch) when exposing another option. */
+export interface ProtocolSettings {
+    /** Telnet GMCP (option 201). */
+    gmcp?: boolean;
+    /** Telnet TERMINAL-TYPE / MTTS (option 24). */
+    mtts?: boolean;
+    /** Telnet MSDP (option 69). */
+    msdp?: boolean;
+    /** Telnet CHARSET (option 42 / RFC 2066). When enabled, the client
+     *  accepts the server's REQUEST and switches its byte→char codec to the
+     *  agreed encoding — typically UTF-8. */
+    charset?: boolean;
+    /** Telnet MSP / MUD Sound Protocol (option 90). When enabled, inline
+     *  `!!SOUND(...)` and `!!MUSIC(...)` tags are stripped from text and
+     *  routed to the sound manager. */
+    msp?: boolean;
+}
+
+/** Defaults used when a protocol field is undefined. Off-by-default for MSDP
+ *  matches Mudlet's "MSDP support" preference; GMCP/MTTS/CHARSET are on by
+ *  default because most modern MUDs expect them. MSP is off by default — the
+ *  in-band tag bytes are valid text on MUDs that don't speak the protocol. */
+export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
+    gmcp: true,
+    mtts: true,
+    msdp: false,
+    charset: true,
+    msp: false,
+};
 
 /** User-tunable subset of the map renderer's Settings. Add new entries here
  *  (and a matching control in the Settings modal + a wire-up in MapPanel) as
@@ -161,6 +205,8 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
     showTimestamps: false,
     fontSize: 11,
     outputBackground: '',
+    autoClearInput: false,
+    commandSeparator: ';;',
 };
 
 // ── Tree node base ────────────────────────────────────────────────────────────

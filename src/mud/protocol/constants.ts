@@ -49,3 +49,28 @@ export const ECHO_WILL = "\xFF\xFB\x01"; // IAC WILL ECHO - server will echo (su
 export const ECHO_WONT = "\xFF\xFC\x01"; // IAC WONT ECHO - server won't echo (restore local echo)
 export const ECHO_DO   = "\xFF\xFD\x01"; // IAC DO ECHO   - client accepts server echo
 export const ECHO_DONT = "\xFF\xFE\x01"; // IAC DONT ECHO - client asks server to stop echoing
+
+// MSP (MUD Sound Protocol) — telnet option 90. Negotiation just gates the
+// in-band tag stream: once the option is on, `!!SOUND(...)` and `!!MUSIC(...)`
+// triplets embedded in regular MUD text trigger sound/music playback. The
+// protocol predates strict telnet framing — most servers send tags inline
+// without ever negotiating SB MSP — but some implementations wrap the body
+// inside `IAC SB MSP ... IAC SE`, so we accept both.
+export const MSP_COMMAND_CODE = 90;
+export const OPT_MSP = "\x5A";             // 90
+export const MSP_WILL = "\xFF\xFB\x5A";    // IAC WILL MSP - client offers MSP
+export const MSP_DO   = "\xFF\xFD\x5A";    // IAC DO MSP   - client/server requests MSP
+
+// CHARSET (RFC 2066) — telnet option 42. Either side advertises CHARSET, the
+// other side accepts, then either side may send REQUEST listing IANA charset
+// names; the receiver replies ACCEPTED <name> or REJECTED. The chosen encoding
+// becomes the byte→char codec for both directions of the session. Modern MUDs
+// use this almost exclusively to switch to UTF-8 from the telnet baseline of
+// US-ASCII / Latin-1.
+export const CHARSET_COMMAND_CODE = 42;
+export const OPT_CHARSET = "\x2A";           // 42
+export const CHARSET_REQUEST  = "\x01";      // 1 — "here are the charsets I support"
+export const CHARSET_ACCEPTED = "\x02";      // 2 — "I'll use this one"
+export const CHARSET_REJECTED = "\x03";      // 3 — "none of those work"
+export const CHARSET_WILL = "\xFF\xFB\x2A";  // IAC WILL CHARSET
+export const CHARSET_DO   = "\xFF\xFD\x2A";  // IAC DO CHARSET
