@@ -279,6 +279,14 @@ export class MudClient {
     disconnect(): void {
         if (!this.socket) return;
         const socket = this.socket;
+        // Idempotent on an already-torn-down socket. Without this, a second
+        // disconnect() call — e.g. the Lua `disconnect` global re-entering via
+        // a sysDisconnectionEvent handler, or teardownClient running after the
+        // user clicked Disconnect — would re-emit `client.disconnect` and
+        // re-enter the same chain. wasmoon's registry corrupts and the next
+        // emitEvent crashes with an out-of-bounds wasm trap.
+        const state = socket.readyState;
+        if (state === WebSocket.CLOSED || state === WebSocket.CLOSING) return;
         // Null handlers first so a delayed onclose (server doesn't ACK the
         // close frame — happens with Cloudflare tunnels and unresponsive
         // servers) doesn't re-fire the cleanup after we've already
@@ -287,10 +295,7 @@ export class MudClient {
         socket.onclose = null;
         socket.onerror = null;
         socket.onopen = null;
-        const state = socket.readyState;
-        if (state === WebSocket.CONNECTING || state === WebSocket.OPEN) {
-            socket.close();
-        }
+        socket.close();
         this.flushPendingLineTail(Date.now());
         this.eventBus.emit('client.disconnect');
         this.opened = false;
