@@ -921,6 +921,86 @@ export class LuaRuntime implements IScriptingRuntime {
             return true;
         });
 
+        // Mudlet `saveJsonMap(path)` — write the current MapStore to a JSON
+        // file. The on-disk format is the same shape as the in-memory
+        // MudletMap so `loadJsonMap` can round-trip it. Returns false when
+        // serialisation fails or the VFS write throws.
+        this.lua.global.set('saveJsonMap', (location?: unknown) => {
+            if (typeof location !== 'string' || location.length === 0) return false;
+            if (!this.vfs) return false;
+            let json: string;
+            try { json = this.api.saveJsonMap(); }
+            catch { return false; }
+            try { this.vfs.writeFile(location, json); }
+            catch { return false; }
+            return true;
+        });
+        // Mudlet `loadJsonMap(path)` — read a JSON map previously produced by
+        // saveJsonMap and replace the in-memory map. Raises sysMapLoadEvent
+        // on success. Returns false on missing file / bad JSON / wrong shape.
+        this.lua.global.set('loadJsonMap', (location?: unknown) => {
+            if (typeof location !== 'string' || location.length === 0) return false;
+            if (!this.vfs) return false;
+            let json: string;
+            try { json = this.vfs.readFile(location); }
+            catch { return false; }
+            return this.api.loadJsonMap(json);
+        });
+
+        // Mudlet `addSupportedTelnetOption(option)`. Returns true if the
+        // option is newly registered; false if it was already known or the
+        // option byte is out of range.
+        this.lua.global.set('addSupportedTelnetOption', (option: unknown) => {
+            const n = Number(option);
+            if (!Number.isFinite(n)) return false;
+            return this.api.addSupportedTelnetOption(n);
+        });
+
+        // Mudlet `pauseSounds([channel])`. Stops all in-flight sound effects
+        // (Web Audio source nodes can't truly pause), optionally filtered by
+        // tag. Music isn't affected — stopMusic covers that path.
+        this.lua.global.set('pauseSounds', (channel?: unknown) => {
+            this.api.sounds.pauseSounds(typeof channel === 'string' ? channel : undefined);
+        });
+
+        // Mudlet `startLogging(state)`. Toggle the persistent session logger
+        // for this profile. ProfileSession owns the SessionLogger lifecycle;
+        // the API forwards through a registered toggler.
+        this.lua.global.set('startLogging', (state?: unknown) => this.api.startLogging(!!state));
+
+        // Mudlet `tempColorTrigger(fg, bg, code)`. The trigger fires when the
+        // current rendered line carries a span whose foreground / background
+        // matches the requested ANSI palette index (or -1 for "any colour").
+        // The actual colour scan lives in ScriptingAPI.currentLineMatchesColor
+        // since it needs access to the line's AnsiAwareBuffer (the trigger
+        // engine itself only sees plain text). Self-expires after
+        // `expirationCount` fires.
+        this.lua.global.set('__mudix_tempColorTrigger', (fg: unknown, bg: unknown, cbId: number, expirationCount?: number) => {
+            const wantFg = Number(fg);
+            const wantBg = Number(bg);
+            const max = (typeof expirationCount === 'number' && expirationCount > 0) ? expirationCount : -1;
+            const id = this.nextTempId++;
+            let fires = 0;
+            let killed = false;
+            // Empty-string substring trigger fires once per line; the colour
+            // check then runs against the live buffer to gate the callback.
+            const unsub = this.api.triggers.addTemp('', (lineMatches) => {
+                if (killed) return;
+                if (!this.api.currentLineMatchesColor(wantFg, wantBg)) return;
+                this.setMatches([lineMatches[0] ?? '']);
+                dispatchCb(cbId, 'tempColorTrigger');
+                fires++;
+                if (max > 0 && fires >= max) {
+                    killed = true;
+                    unsub();
+                    releaseCb(cbId);
+                    this.tempIds.delete(id);
+                }
+            }, 'substring');
+            this.tempIds.set(id, () => { unsub(); releaseCb(cbId); });
+            return id;
+        });
+
         // Mudlet saveWindowLayout / loadWindowLayout. Captures the current
         // dock layout (window positions/sizes/docking + dock-area extents) to
         // a per-connection snapshot in persistent storage; loadWindowLayout
@@ -1855,6 +1935,23 @@ export class LuaRuntime implements IScriptingRuntime {
             const regexes = s.length === 0 ? [] : s.split('\x01');
             return this.api.permRegexTrigger(String(name ?? ''), String(parent ?? ''), regexes, String(code ?? ''));
         });
+        // Mudlet permSubstringTrigger(name, parent, patterns, luaCode). Same
+        // flatten/split convention as permRegexTrigger — Bridge.lua hands a
+        // \x01-delimited string and we split it back here.
+        this.lua.global.set('__mudix_permSubstringTrigger', (name: unknown, parent: unknown, patternsStr: unknown, code: unknown) => {
+            const s = String(patternsStr ?? '');
+            const patterns = s.length === 0 ? [] : s.split('\x01');
+            return this.api.permSubstringTrigger(String(name ?? ''), String(parent ?? ''), patterns, String(code ?? ''));
+        });
+        // Mudlet permAlias(name, parent, regex, luaCode). Pattern is a single
+        // PCRE string (Mudlet's TAlias.mRegexCode). Returns the new id or -1.
+        this.lua.global.set('__mudix_permAlias', (name: unknown, parent: unknown, pattern: unknown, code: unknown) =>
+            this.api.permAlias(String(name ?? ''), String(parent ?? ''), String(pattern ?? ''), String(code ?? '')));
+        // Mudlet permTimer(name, parent, seconds, luaCode). One-shot timer
+        // creation; the persistent-timer scheduler picks it up via the
+        // store-subscription pipeline.
+        this.lua.global.set('__mudix_permTimer', (name: unknown, parent: unknown, delay: unknown, code: unknown) =>
+            this.api.permTimer(String(name ?? ''), String(parent ?? ''), Number(delay) || 0, String(code ?? '')));
         // Mudlet setScript(name, luaCode[, pos]) — replace the source of an
         // existing script. pos is 1-indexed; missing/non-numeric falls back to
         // 1. Returns true or -1.
@@ -2277,6 +2374,11 @@ export class LuaRuntime implements IScriptingRuntime {
         // equivalent dock, so debugc lands in devtools and errorc routes
         // through the script log (same destination as printError).
         this.lua.global.set('debugc', (content: unknown) => {
+            console.debug('[Lua]', String(content ?? ''));
+        });
+        // Mudlet `debug(text)` — alias for debugc. Older Mudlet scripts use
+        // the unprefixed name; binding both keeps ports portable.
+        this.lua.global.set('debug', (content: unknown) => {
             console.debug('[Lua]', String(content ?? ''));
         });
         this.lua.global.set('errorc', (content: unknown, debugInfo?: unknown) => {

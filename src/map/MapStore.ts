@@ -391,6 +391,33 @@ export class MapStore {
         try { return readerExport(this.toMudletMap()); } catch { return null; }
     }
 
+    /**
+     * Mudlet `saveJsonMap(path)` backbone — serialise the entire MapStore as a
+     * JSON string with the same shape as the in-memory `MudletMap` (so a later
+     * `loadJsonMap` can hand it straight to `loadFromBinary`). Pixmaps are
+     * already normalised to base64 by `loadFromBinary`, so the result
+     * round-trips cleanly through `JSON.stringify`.
+     */
+    toJsonString(): string { return JSON.stringify(this.toMudletMap()); }
+
+    /**
+     * Mudlet `loadJsonMap(path)` backbone — parse a JSON payload previously
+     * produced by `toJsonString` and replace the store's contents. Returns
+     * true on success, false when the JSON is malformed or doesn't carry the
+     * expected MudletMap shape (no `rooms` / `areas` records).
+     */
+    loadFromJsonString(json: string): boolean {
+        let parsed: unknown;
+        try { parsed = JSON.parse(json); }
+        catch { return false; }
+        if (!parsed || typeof parsed !== 'object') return false;
+        const map = parsed as Partial<MudletMap>;
+        if (!map.rooms || !map.areas) return false;
+        try { this.loadFromBinary(map as MudletMap); }
+        catch { return false; }
+        return true;
+    }
+
     toMudletMap(): MudletMap {
         const areas: Record<number, MudletArea> = {};
         for (const [id, a] of this.areas) areas[id] = a;

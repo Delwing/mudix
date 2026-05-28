@@ -397,6 +397,12 @@ export class ScriptingAPI {
     // -1 signals failure (missing parent group, unknown script name, etc.).
     private permScriptCallback: ((name: string, parent: string, code: string) => number) | null = null;
     private permRegexTriggerCallback: ((name: string, parent: string, regexes: string[], code: string) => number) | null = null;
+    private permSubstringTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
+    private permAliasCallback: ((name: string, parent: string, pattern: string, code: string) => number) | null = null;
+    private permTimerCallback: ((name: string, parent: string, delay: number, code: string) => number) | null = null;
+    /** Mudlet `startLogging(state)`. Forwarded to ProfileSession, which owns
+     *  the SessionLogger instance (created/torn-down on this hook). */
+    private loggingToggler: ((enabled: boolean) => boolean) | null = null;
     private setScriptCallback: ((name: string, code: string, pos: number) => number) | null = null;
     // Mudlet's killTimer/killAlias/killTrigger/killKey accept the name of a
     // permanent item in addition to the numeric id of a temp one. The engine
@@ -432,6 +438,9 @@ export class ScriptingAPI {
         this.keys = keyEngine;
         this.stopwatches = new StopwatchManager(localStorageStopwatchStore(connectionId));
         session.consoles.set('main', this.mainConsole);
+        // Mudlet `sysBufferShrinkEvent("main", linesRemoved)` — named user
+        // windows have the same hook wired in WindowManager.registerConsole.
+        this.mainConsole.onBufferShrink = (n) => this.eventRaiser?.('sysBufferShrinkEvent', ['main', n]);
     }
 
     // ── Connection ────────────────────────────────────────────────────────────
@@ -574,8 +583,33 @@ export class ScriptingAPI {
         this.permRegexTriggerCallback = fn;
     }
 
+    setPermSubstringTriggerCallback(fn: ((name: string, parent: string, patterns: string[], code: string) => number) | null): void {
+        this.permSubstringTriggerCallback = fn;
+    }
+
+    setPermAliasCallback(fn: ((name: string, parent: string, pattern: string, code: string) => number) | null): void {
+        this.permAliasCallback = fn;
+    }
+
+    setPermTimerCallback(fn: ((name: string, parent: string, delay: number, code: string) => number) | null): void {
+        this.permTimerCallback = fn;
+    }
+
     setSetScriptCallback(fn: ((name: string, code: string, pos: number) => number) | null): void {
         this.setScriptCallback = fn;
+    }
+
+    /** Hook for ProfileSession to start/stop the per-connection SessionLogger.
+     *  Mudlet `startLogging(true|false)` toggles whether new output lines are
+     *  recorded; the on/off transition is synchronous. */
+    setLoggingToggler(fn: ((enabled: boolean) => boolean) | null): void {
+        this.loggingToggler = fn;
+    }
+
+    /** Mudlet `startLogging(state)`. Returns true on success, false when
+     *  the toggle isn't wired up yet (e.g. before ProfileSession mounts). */
+    startLogging(enabled: boolean): boolean {
+        return this.loggingToggler?.(enabled) ?? false;
     }
 
     setKillByNameCallback(fn: ((kind: 'timer' | 'alias' | 'trigger' | 'key', name: string) => boolean) | null): void {
@@ -692,6 +726,31 @@ export class ScriptingAPI {
 
     permRegexTrigger(name: string, parent: string, regexes: string[], code: string): number {
         return this.permRegexTriggerCallback?.(name, parent, regexes, code) ?? -1;
+    }
+
+    /** Mudlet `permSubstringTrigger(name, parent, patterns, luaCode)`. Same
+     *  shape as permRegexTrigger but each pattern uses substring matching
+     *  (`String.prototype.includes` semantics, like the temp variant). An
+     *  empty patterns array creates a trigger group. Returns the new id, or
+     *  -1 if `parent` is given but no trigger group of that name exists. */
+    permSubstringTrigger(name: string, parent: string, patterns: string[], code: string): number {
+        return this.permSubstringTriggerCallback?.(name, parent, patterns, code) ?? -1;
+    }
+
+    /** Mudlet `permAlias(name, parent, regex, luaCode)`. Creates a persistent
+     *  alias under the named parent group (empty = root). Returns the new
+     *  alias id, or -1 when `parent` is non-empty but no alias group of that
+     *  name exists. */
+    permAlias(name: string, parent: string, pattern: string, code: string): number {
+        return this.permAliasCallback?.(name, parent, pattern, code) ?? -1;
+    }
+
+    /** Mudlet `permTimer(name, parent, seconds, luaCode)`. Creates a
+     *  persistent one-shot timer under the parent group (empty = root).
+     *  Returns the new timer id, or -1 when `parent` is non-empty but no
+     *  timer group of that name exists. */
+    permTimer(name: string, parent: string, delay: number, code: string): number {
+        return this.permTimerCallback?.(name, parent, delay, code) ?? -1;
     }
 
     setScript(name: string, code: string, pos: number): number {
@@ -1222,6 +1281,30 @@ export class ScriptingAPI {
     endLine(): void {
         this.inTriggerProcessing = false;
         this.selection = null;
+    }
+
+    /**
+     * Mudlet `tempColorTrigger(fg, bg)` colour-scan helper. Walks the
+     * just-appended line buffer (the one beginLine() seeded mainConsole with)
+     * and returns true if any segment carries the requested ANSI palette
+     * indices. `wantFg`/`wantBg` accept -1 as "any colour"; non-indexed
+     * (RGB) segments never match a positive index, matching Mudlet's
+     * palette-only semantics.
+     */
+    currentLineMatchesColor(wantFg: number, wantBg: number): boolean {
+        const buf = this.mainConsole.getBuffer();
+        if (!buf) return false;
+        for (const seg of buf.getSegments()) {
+            if (!seg.text) continue;
+            const fg = seg.state?.foreground;
+            const bg = seg.state?.background;
+            const segFg = fg?.space === 'indexed' ? fg.index : -2;
+            const segBg = bg?.space === 'indexed' ? bg.index : -2;
+            const fgOk = wantFg === -1 || segFg === wantFg;
+            const bgOk = wantBg === -1 || segBg === wantBg;
+            if (fgOk && bgOk) return true;
+        }
+        return false;
     }
 
     /**
@@ -2018,6 +2101,21 @@ export class ScriptingAPI {
     saveMap(): Uint8Array | null {
         const buf = this.session.windows.saveMap();
         return buf ? new Uint8Array(buf) : null;
+    }
+
+    /** Mudlet `saveJsonMap(path)` backbone — serialises the current MapStore
+     *  as JSON. The Lua binding writes the result to the supplied VFS path. */
+    saveJsonMap(): string { return this.session.windows.saveJsonMap(); }
+
+    /** Mudlet `loadJsonMap(path)` backbone — parse a JSON payload previously
+     *  produced by saveJsonMap and reload the map. Returns false when the
+     *  JSON is malformed or doesn't match the MudletMap shape. */
+    loadJsonMap(json: string): boolean { return this.session.windows.loadJsonMap(json); }
+
+    /** Mudlet `addSupportedTelnetOption(option)`. Forwarded to the session
+     *  client so the next IAC WILL/DO from the server can be auto-accepted. */
+    addSupportedTelnetOption(option: number): boolean {
+        return this.session.addSupportedTelnetOption(option);
     }
 
     /**

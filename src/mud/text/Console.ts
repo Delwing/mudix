@@ -26,6 +26,11 @@ export class Console {
     // to _maxLines (the observable cap is identical), but we round-trip the
     // value so getConsoleBufferSize reports back what a script set.
     private _batchDeleteSize = 1000;
+    /** Mudlet `sysBufferShrinkEvent(name, linesRemoved)` hook. Fired by
+     *  `evict()` whenever the scrollback cap drops one or more lines from the
+     *  head of `history`. Set by the owning session (ScriptingAPI for "main",
+     *  WindowManager for named user windows). */
+    onBufferShrink: ((linesRemoved: number) => void) | undefined;
     // Mudlet's TConsole treats `\n` as cursor advance — `moveCursorEnd` followed
     // by `echo("\n")` advances past the last line without producing a blank row.
     // Mudix completes the (empty) partial on `\n` and emits a blank message.
@@ -118,11 +123,14 @@ export class Console {
     }
 
     private evict(): void {
+        let removed = 0;
         while (this.history.length > this._maxLines) {
             const evicted = this.history.shift()!;
             evicted.removeFromDom();
             if (this.cursorIdx > 0) this.cursorIdx--;
+            removed++;
         }
+        if (removed > 0) this.onBufferShrink?.(removed);
     }
 
     /** Drain newly completed lines to hand to the renderer. */

@@ -20,6 +20,10 @@ export type MudClientEvents = {
     'msdp': [payload: { path: string; value: unknown }];
     'gmcp.core.ping': [value: unknown];
     'telnet.echo': [serverEchoing: boolean];
+    /** Mudlet `sysTelnetEvent(type, option, message)` — fired for telnet
+     *  IAC commands the client doesn't natively recognise (everything other
+     *  than the hardcoded GMCP/MSDP/TTYPE/MCCP/ECHO negotiations). */
+    'telnet.event': [type: number, option: number, message: string];
 } & Record<string, any>;
 
 export type MudEvents = MudClientEvents & {

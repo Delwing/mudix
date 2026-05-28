@@ -191,7 +191,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 |---|---|---|
 | `tempAlias(pattern, code)` | ✅ | Temporary Lua regex alias |
 | `killAlias(id)` | ✅ | Delete temp alias by ID |
-| `permAlias(name, parent, pattern, code)` | ⚠️ | Permanent aliases exist in store; no Lua creation API yet |
+| `permAlias(name, parent, pattern, code)` | ✅ | Bridge.lua → `__mudix_permAlias`; pattern is a single PCRE string (Mudlet TAlias.mRegexCode). Returns the new id, or -1 when the parent alias group is missing |
 | `enableAlias(name)` | ✅ | Enable permanent alias by name |
 | `disableAlias(name)` | ✅ | Disable permanent alias by name |
 | `exists(name, type)` | ✅ | JS-exposed (`ScriptingAPI.exists`) |
@@ -208,11 +208,11 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 | `tempRegexTrigger(pattern, code)` | ✅ | Bridge.lua wraps `__mudix_tempRegexTrigger` |
 | `tempBeginOfLineTrigger(pattern, code)` | ✅ | Literal prefix (`String.prototype.startsWith`), NOT regex `^` — matches Mudlet's `match_begin_of_line_substring` |
 | `tempExactMatchTrigger(pattern, code)` | ✅ | Full-line exact match |
-| `tempColorTrigger(fg, bg, code)` | 🚧 | Match on ANSI color in line |
+| `tempColorTrigger(fg, bg, code)` | ✅ | JS-exposed; matches when any segment of the current rendered line carries the requested ANSI palette indices (`-1` = any). Non-indexed RGB segments never match a positive index, matching Mudlet's palette-only semantics. Implementation: empty-string substring temp trigger gated on `ScriptingAPI.currentLineMatchesColor`. Permanent `colorTrigger` patterns use the same scan — the pattern `text` carries `"fg,bg"` and `TriggerEngine.buildMatcher` delegates to the colour matcher `ScriptingEngine` registers via `setColorMatcher` |
 | `tempLineTrigger(from, count, code)` | ✅ | Position-based (no pattern): `TriggerEngine.addTempLine` fires on `count` lines starting `from` lines ahead (from=1 = next line), then self-expires. Bridge.lua wraps `__mudix_tempLineTrigger` |
 | `tempPromptTrigger(code)` | ✅ | Bridge.lua wraps `__mudix_tempPromptTrigger`; fires on lines flagged as a prompt (GA/EOR). expirationCount honoured |
 | `permRegexTrigger(name, parent, pattern, code)` | ⚠️ | `__mudix_permRegexTrigger`/`permRegexTrigger` exist; full Lua API still limited |
-| `permSubstringTrigger(name, parent, pattern, code)` | ⚠️ | Same |
+| `permSubstringTrigger(name, parent, patterns, code)` | ✅ | Bridge.lua → `__mudix_permSubstringTrigger`; same shape as `permRegexTrigger` but each pattern is a literal substring. Empty patterns array creates a trigger group |
 | `enableTrigger(name)` | ✅ | JS-exposed |
 | `disableTrigger(name)` | ✅ | JS-exposed |
 | `killTrigger(name)` | ✅ | JS-exposed; string → `killByName('trigger', name)`, numeric → temp-trigger disposer |
@@ -226,7 +226,7 @@ All of these are pure text-transformation functions implementable in Lua/JS with
 |---|---|---|
 | `tempTimer(delay, code [, repeat])` | ✅ | One-shot or repeating timer |
 | `killTimer(id)` | ✅ | Delete timer by ID |
-| `permTimer(name, parent, delay, code)` | ⚠️ | Permanent timers exist; no Lua creation API yet |
+| `permTimer(name, parent, delay, code)` | ✅ | Bridge.lua → `__mudix_permTimer`. Creates a persistent one-shot timer; returns the new id, or -1 when the parent timer group is missing |
 | `enableTimer(name)` | ✅ | JS-exposed |
 | `disableTimer(name)` | ✅ | JS-exposed |
 | `remainingTime(id)` | ✅ | JS-exposed |
@@ -290,7 +290,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysExitEvent` | ✅ | Fired once at `ScriptingEngine.destroy()` (connection switch/unmount) or on `window` `beforeunload`, whichever comes first — before the Lua runtime tears down so handlers (e.g. Geyser autosave) still run |
 | `sysConnectionEvent` | ✅ | Fired on connect (`ScriptingEngine` bridge), alongside mudix's native `connect` |
 | `sysDisconnectionEvent` | ✅ | Fired on disconnect, alongside mudix's native `disconnect` |
-| `sysProfileFocusChangeEvent` | 🚧 | Could fire on active-connection (tab) focus change — arg: isFocused |
+| `sysProfileFocusChangeEvent` | ✅ | Fired on `document.visibilitychange` (Alt-Tab / tab switch) — arg: isFocused |
 
 **Input / send**
 
@@ -343,10 +343,10 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 |---|---|---|
 | `mapOpenEvent` | ✅ | Mapper opened (`ScriptingEngine`) |
 | `mapModeChangeEvent` | 🚧 | No view/edit mode toggle in mudix's map panel yet — arg: "editing"/"viewing" |
-| `sysManualLocationSetEvent` | 🚧 | Fire from the map "set location" action — arg: roomID |
-| `sysMapAreaChanged` | 🚧 | Fire when the viewed area changes — args: newAreaID, prevAreaID |
+| `sysManualLocationSetEvent` | ✅ | Fired by the `MapPanel` right-click "Set player location" action — arg: roomID |
+| `sysMapAreaChanged` | ✅ | Fired by `MapPanel` whenever the displayed area changes (via the area dropdown, `centerview`, or any other path that re-keys `currentArea`) — args: newAreaID, prevAreaID. `prevAreaID` is -1 on the initial transition |
 | `sysMapDownloadEvent` | 🚧 | No MMP map-protocol support (mudix uses binary maps + `downloadFile`) |
-| `sysMapWindowMousePressEvent` | 🚧 | Left-click on the map panel |
+| `sysMapWindowMousePressEvent` | ✅ | Fired by `MapPanel`'s mousedown listener on every press inside the map widget — args: button (1=left, 2=right, 3=middle), x, y. Coordinates are pixels relative to the map container |
 
 **Windows / UI elements**
 
@@ -356,7 +356,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysUserWindowResizeEvent` | ✅ | User-window / miniconsole resize — args: width, height, name |
 | `sysConsoleSizeChanged` | 🚧 | Char-grid (not pixel) resize — args: name, columns, rows |
 | `sysWindowOverflowEvent` | 🚧 | Non-scrolling console overflows — args: name, overflowLines |
-| `sysBufferShrinkEvent` | 🚧 | Oldest lines trimmed at buffer limit — args: name, linesRemoved |
+| `sysBufferShrinkEvent` | ✅ | Fired by `Console.evict` whenever the scrollback cap drops one or more lines from the head of history — one event per evict batch. The main console wires the hook in `ScriptingAPI`; user-window consoles wire it in `WindowManager.registerConsole` — args: name, linesRemoved |
 | `sysWindowMousePressEvent` | ✅ | Mouse press on a window — args: button, x, y, name. `WindowManager.observeMouse` attaches mousedown listeners to each viewport ('main' + user windows); button is Mudlet-numbered (1=left, 2=right, 3=middle, 4=back, 5=forward, 0=other), x/y are pixels relative to the window |
 | `sysWindowMouseReleaseEvent` | ✅ | Mouse release on a window — same args; fired from the matching mouseup listener |
 | `sysLabelDeleted` | ✅ | Fired on a successful `deleteLabel` (the `__deleteLabel` binding) — arg: name |
@@ -370,14 +370,14 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 |---|---|---|
 | `sysProtocolEnabled` | ✅ | Fired `"GMCP"` on GMCP negotiation (`gmcp.negotiated`); bundled `GMCP.lua` re-subscribes its modules here — arg: protocol |
 | `sysProtocolDisabled` | ✅ | Fired `"GMCP"` on disconnect when GMCP was active — arg: protocol |
-| `sysTelnetEvent` | 🚧 | Unsupported telnet option — args: type, option, message |
+| `sysTelnetEvent` | ✅ | Fired by `MudClient.scanTelnetOptions` for any IAC WILL/WONT/DO/DONT/SB whose option byte isn't natively handled (GMCP/MSDP/TTYPE/MCCP/ECHO are excluded) and isn't in the `addSupportedTelnetOption` registry. `type` mirrors Mudlet's int mapping (1=WILL, 2=WONT, 3=DO, 4=DONT, 5=SB) — args: type, option, message |
 
 **Drag & drop**
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysDropEvent` | 🚧 | File dropped on a window; bundled `Other.lua`/`gui-drop` already listen — args: filepath, suffix, x, y, name |
-| `sysDropUrlEvent` | 🚧 | URL dropped on a window — args: url, schema, x, y, name |
+| `sysDropEvent` | ✅ | Fired by `WindowManager.observeDrop` when a real File is dropped on a window. `path` falls back to the file's `name` since browsers only expose a real path on Electron-flavoured drops — args: filepath, suffix, x, y, name |
+| `sysDropUrlEvent` | ✅ | Fired by `WindowManager.observeDrop` when a textual URL (text/uri-list or a `scheme:`-prefixed text/plain payload) is dropped on a window — args: url, schema, x, y, name |
 
 **Media / misc**
 
@@ -386,7 +386,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysAppStyleSheetChange` | ✅ | `setAppStyleSheet` (`ScriptingAPI`) — args: css, tag |
 | `sysPathChanged` | ✅ | `addFileWatch` — fires on VFS mutation of a watched path — arg: path |
 | `sysMediaFinished` | ✅ | Fired from `SoundManager`'s `onended` when a sound/music source ends or is stopped — args: name (filename), path (as passed) |
-| `sysSettingChanged` | 🚧 | Fire when a profile/app setting changes — args: setting, …value |
+| `sysSettingChanged` | ✅ | Fired on every mutation of the per-connection profile settings slice (`connectionProfile[id]`). One event per changed field — args: setting, newValue. `newValue` is `undefined` when the field is unset/cleared |
 | `sysSoundFinished` | ❌ | Obsolete in Mudlet 4.15 — superseded by `sysMediaFinished` |
 | `sysIrcMessage` | ❌ | No IRC client in mudix |
 
@@ -409,7 +409,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `getNetworkLatency()` | ✅ | JS-exposed |
 | `connectToServer(host, port [, save])` | ✅ | JS-exposed (`ScriptingAPI.connectToServer`); builds the proxy `?host=&port=` URL the connection screen uses and (re)connects the live session. `save` persists host/port onto the active connection (mud-mode). Rejects out-of-range ports |
 | `disconnect()` | ✅ | JS-exposed and bound as a top-level Lua global (`ScriptingAPI.disconnect` → `MudSession.disconnect`) |
-| `addSupportedTelnetOption(option)` | 🚧 | Advertise a custom telnet option via the WebSocket proxy |
+| `addSupportedTelnetOption(option)` | ✅ | JS-exposed (`MudClient.addSupportedTelnetOption`). Registers a telnet option byte (0..255) so the next IAC WILL/DO from the server is auto-accepted (we reply IAC DO / IAC WILL). Hardcoded options (GMCP/MSDP/TTYPE/MCCP/ECHO) already negotiate inline and don't need registration. Returns true if newly added |
 | `sendATCP(msg)` | ❌ | Legacy protocol, no plans |
 
 ---
@@ -648,7 +648,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `getMapLabel(areaID, labelID\|labelText)` | ✅ | Bridge.lua → `__getMapLabel`; by-id returns flat properties, by-text returns `{[id]=properties}` matches |
 | `loadMap(path)` | ✅ | JS-exposed |
 | `saveMap(path)` | ✅ | JS-exposed; serialises MapStore via `writeMapToBuffer` and writes to VFS / IDB |
-| `saveJsonMap(path)` / `loadJsonMap(path)` | 🚧 | JSON map format |
+| `saveJsonMap(path)` / `loadJsonMap(path)` | ✅ | JS-exposed via `MapStore.toJsonString` / `loadFromJsonString`. Writes the same `MudletMap` shape `saveMap` serialises, just as JSON (no Mudlet-binary framing). `loadJsonMap` raises `sysMapLoadEvent` on success |
 | `updateMap()` | ✅ | JS-exposed; forces the map panel to re-read MapStore and redraw (via the registered `MapControl.redraw`) |
 | `getMapZoom([areaID])` / `setMapZoom(zoom[, areaID])` | ✅ | JS-exposed via a `MapControl` registered by MapPanel (`get/setZoom` + recenter/redraw). Mudlet-compatible zoom semantics: the value is the number of map units visible across the viewport's **shorter edge** (zoom=3 → 3 rooms across, larger = zoomed out), converted to/from the renderer's pixels-per-room-unit at the panel boundary. `setMapZoom` enforces Mudlet's minimum of 3.0. mudix has a single shared 2D view, so `areaID` is accepted for compat but applies to the current view. `getMapZoom` returns nil / `setMapZoom` returns false when no map panel is open |
 | All other mapper functions | 🚧 | long tail — implement incrementally (the MUDLET_API.md mapper table understates coverage; verify against `MapStore`/`LuaRuntime`/`Bridge.lua` before implementing) |
@@ -729,7 +729,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `getOS()` | ✅ | Sniffs the underlying OS from the user agent → `"windows"`/`"mac"`/`"linux"`/`"freebsd"`/`"openbsd"`/`"netbsd"`/`"unknown"` |
 | `getWindowsCodepage()` | ✅ | Returns `"65001"` (UTF-8) on every platform — the browser VFS is always UTF-8, so the bundled `utf8_filenames.lua` skips legacy-ANSI transcoding |
 | `getMudletVersion()` | ✅ | Bridge.lua — supports `nil`/`"string"`/`"major"`/`"minor"`/`"revision"`/`"build"`/`"table"` modes |
-| `debug(text)` | ⚠️ | `debugc` is JS-exposed (`console.log`); Mudlet name `debug` not aliased |
+| `debug(text)` | ✅ | JS-exposed as an alias for `debugc` — both names route to `console.debug`. Mudlet uses both interchangeably; binding both keeps ports portable |
 | `remember(varname)` | ✅ | Other.lua (persists into `SavedVariables.lua` via VFS) |
 | `saveVars()` / `loadVars()` | ✅ | Other.lua |
 | `shms(seconds)` | ✅ | DateTime.lua |
@@ -740,7 +740,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `showNotification(title, text)` | ✅ | Web Notifications API; gated on the Settings opt-in (`client.notificationsEnabled`) which is where the permission prompt is raised. Optional expiry auto-closes |
 | `alert([secs])` | ✅ | JS-exposed; flashes `document.title` for `secs` (default 10). No-op while the tab is focused (matches Mudlet) |
 | `loadReplay(path)` | 🚧 | Replay a recorded session from VFS |
-| `startLogging(bool)` | 🚧 | Log session output to VFS file |
+| `startLogging(bool)` | ✅ | JS-exposed; toggles the per-profile `SessionLogger`. mudix records to the IndexedDB log store (not a VFS file) — the same store the toolbar Logs button browses |
 | `loadProfile(name)` | ❌ | No multi-profile switching |
 | `saveProfile([name])` | ❌ | Auto-persists via localStorage |
 | `closeMudlet()` | ❌ | |
@@ -756,7 +756,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `loadSoundFile(path)` | ✅ | Bridge.lua → `SoundManager.preload`; decodes + caches so the first `playSoundFile` has no latency. Accepts positional or table form |
 | `loadMusicFile(path)` | ✅ | Bridge.lua → `SoundManager.preload` (same decode cache, keyed by path). Positional or table form |
 | `purgeMediaCache()` | ✅ | `SoundManager.purgeCache` — drops every decoded-audio buffer; active playback is unaffected |
-| `pauseSounds([channel])` | 🚧 | |
+| `pauseSounds([channel])` | ✅ | JS-exposed; Web Audio source nodes cannot truly pause, so this stops all sound sources immediately (optionally filtered by tag/channel). Re-trigger `playSoundFile` to "resume". Music tracks are untouched (see `stopMusic`) |
 | `stopSounds([channel])` | ✅ | JS-exposed |
 | `getPlayingSounds()` | ✅ | Bridge.lua → `SoundManager.getPlaying`; re-indexes to a 1-based array of `{name, key, tag, volume}`. Optional name/key/tag filter |
 | `playMusicFile(path [, vol, loops, ch])` | ✅ | Bridge.lua → `SoundManager` |

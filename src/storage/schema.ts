@@ -77,6 +77,11 @@ export interface ProfileSettings {
     outputBorders?: { top: number; right: number; bottom: number; left: number };
     /** Mudlet setBorderColor — fill color for the carved border area. rgba 0..255; undefined = inherit page background. */
     outputBorderColor?: { r: number; g: number; b: number; a: number };
+    /** User-overridden ANSI 16-color palette. Indices 0–7 are the dark colors
+     *  (black, red, green, yellow, blue, magenta, cyan, white); 8–15 are the
+     *  bright variants. Each entry is `#rrggbb` or undefined (fall through to
+     *  the built-in default). `undefined` for the whole array = no override. */
+    ansiPalette?: (string | undefined)[];
     /** Mudlet "Network packet timeout": how long (ms) to buffer a partial line
      *  (text after the last `\n` of a WebSocket frame) before flushing it as a
      *  prompt. Mitigates spurious mid-line breaks when long MUD lines arrive

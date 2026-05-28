@@ -188,7 +188,37 @@ html, body, #root {
 .toolbar-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+}
+
+.toolbar-icon {
+    opacity: 0.8;
+    flex-shrink: 0;
+}
+
+.toolbar-actions .btn:hover .toolbar-icon,
+.toolbar-hamburger-menu .btn:hover .toolbar-icon {
+    opacity: 1;
+}
+
+.toolbar-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 2px;
+    flex-shrink: 0;
+}
+
+.toolbar-conn-btn {
+    min-width: 108px;
+    justify-content: flex-start;
+}
+
+.toolbar-hamburger-menu .toolbar-sep {
+    width: auto;
+    height: 1px;
+    margin: 4px 0;
+    align-self: stretch;
 }
 
 .toolbar-hamburger {
@@ -2809,6 +2839,99 @@ html, body, #root {
 
 .settings-color-cell .settings-label {
     min-width: 130px;
+}
+
+.settings-ansi-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 18px 0 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+
+.settings-ansi-grid {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+    align-items: center;
+    gap: 8px 12px;
+}
+
+.settings-ansi-swatch__label {
+    font-size: 12px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.settings-ansi-swatch__label--overridden {
+    color: var(--text);
+    font-weight: 500;
+}
+
+.settings-ansi-swatch__bar {
+    position: relative;
+    display: block;
+    height: 22px;
+    cursor: pointer;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.settings-ansi-swatch__bar input[type="color"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    border: none;
+    padding: 0;
+}
+
+.settings-ansi-swatch__fill {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.settings-ansi-swatch__bar:hover .settings-ansi-swatch__fill {
+    border-color: var(--accent-dim);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 6px var(--accent-glow);
+}
+
+.settings-ansi-swatch__reset {
+    position: absolute;
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 18px;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 50%;
+    color: #fff;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.settings-ansi-swatch__bar:hover .settings-ansi-swatch__reset {
+    opacity: 1;
+}
+
+.settings-ansi-swatch__reset:hover {
+    background: rgba(0, 0, 0, 0.7);
 }
 
 .settings-select {

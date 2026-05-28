@@ -1,7 +1,14 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useAppStore, selectProfileField, MAPPER_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings } from '../storage';
 import { Input, FontPicker, Toggle, HelpTip, Button } from './components';
+import { DEFAULT_ANSI_PALETTE } from '../mud/text/colors';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
+
+const ANSI_LABELS = [
+    'Black', 'Red', 'Green', 'Yellow', 'Blue', 'Magenta', 'Cyan', 'White',
+    'Light Black', 'Light Red', 'Light Green', 'Light Yellow',
+    'Light Blue', 'Light Magenta', 'Light Cyan', 'Light White',
+] as const;
 
 const DEFAULT_BG_FALLBACK = '#090909';
 const DEFAULT_FG_FALLBACK = '#d4d4d4';
@@ -77,6 +84,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const outputForeground = useAppStore(s => selectProfileField(s, connectionId, 'outputForeground'));
     const inputBackground = useAppStore(s => selectProfileField(s, connectionId, 'inputBackground'));
     const inputForeground = useAppStore(s => selectProfileField(s, connectionId, 'inputForeground'));
+    const ansiPalette = useAppStore(s => selectProfileField(s, connectionId, 'ansiPalette'));
     const outputFont = useAppStore(s => selectProfileField(s, connectionId, 'outputFont'));
     const fontSize = useAppStore(s => selectProfileField(s, connectionId, 'fontSize'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connectionId, 'promptTimeoutMs'));
@@ -170,6 +178,25 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         setLineWidthText(String(clamped));
         patchMapper({ lineWidth: clamped });
     };
+
+    const handleAnsiChange = (idx: number, value: string) => {
+        const next: (string | undefined)[] = new Array(16);
+        if (ansiPalette) for (let i = 0; i < 16; i++) next[i] = ansiPalette[i];
+        next[idx] = value;
+        patchProfile({ ansiPalette: next });
+    };
+
+    const handleAnsiResetCell = (idx: number) => {
+        if (!ansiPalette) return;
+        const next: (string | undefined)[] = new Array(16);
+        for (let i = 0; i < 16; i++) next[i] = ansiPalette[i];
+        next[idx] = undefined;
+        // If nothing remains overridden, drop the whole array.
+        const anySet = next.some(v => typeof v === 'string');
+        patchProfile({ ansiPalette: anySet ? next : undefined });
+    };
+
+    const handleAnsiResetAll = () => patchProfile({ ansiPalette: undefined });
 
     const handleBorderChange = (side: BorderSide, raw: string) => {
         // Empty input clears that side back to 0 (Mudlet's no-border state).
@@ -360,6 +387,51 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     onChange={v => patchProfile({ inputForeground: v })}
                                 />
                             </div>
+                            <div className="settings-ansi-header">
+                                <span className="settings-label">
+                                    ANSI palette
+                                    <HelpTip label="About the ANSI palette">
+                                        Redefines the 16 basic ANSI colors used by SGR codes
+                                        30–37 / 90–97 (and their background counterparts).
+                                        Changes apply to lines rendered after the edit; existing
+                                        output keeps its current colors.
+                                    </HelpTip>
+                                </span>
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={handleAnsiResetAll}
+                                    disabled={!ansiPalette}
+                                >
+                                    Reset all
+                                </Button>
+                            </div>
+                            <div className="settings-ansi-grid">
+                                {Array.from({ length: 8 }, (_, row) => {
+                                    const dark = row;
+                                    const light = row + 8;
+                                    return (
+                                        <Fragment key={row}>
+                                            <AnsiSwatch
+                                                label={ANSI_LABELS[dark]}
+                                                index={dark}
+                                                value={ansiPalette?.[dark]}
+                                                fallback={DEFAULT_ANSI_PALETTE[dark]}
+                                                onChange={v => handleAnsiChange(dark, v)}
+                                                onReset={() => handleAnsiResetCell(dark)}
+                                            />
+                                            <AnsiSwatch
+                                                label={ANSI_LABELS[light]}
+                                                index={light}
+                                                value={ansiPalette?.[light]}
+                                                fallback={DEFAULT_ANSI_PALETTE[light]}
+                                                onChange={v => handleAnsiChange(light, v)}
+                                                onReset={() => handleAnsiResetCell(light)}
+                                            />
+                                        </Fragment>
+                                    );
+                                })}
+                            </div>
                         </section>
                     )}
                     {activeTab === 'network' && connectionId && (
@@ -517,5 +589,46 @@ function ColorCell({ label, value, fallback, onChange }: ColorCellProps) {
                 aria-label={label}
             />
         </label>
+    );
+}
+
+interface AnsiSwatchProps {
+    label: string;
+    index: number;
+    value: string | undefined;
+    fallback: string;
+    onChange: (next: string) => void;
+    onReset: () => void;
+}
+
+function AnsiSwatch({ label, index, value, fallback, onChange, onReset }: AnsiSwatchProps) {
+    const picked = isHexColor(value) ? value : fallback;
+    const overridden = isHexColor(value) && value.toLowerCase() !== fallback.toLowerCase();
+    return (
+        <Fragment>
+            <span className={`settings-ansi-swatch__label${overridden ? ' settings-ansi-swatch__label--overridden' : ''}`}>
+                {label}:
+            </span>
+            <label className="settings-ansi-swatch__bar" title={label} aria-label={label}>
+                <input
+                    type="color"
+                    value={picked}
+                    onChange={e => onChange(e.target.value)}
+                    aria-label={`${label} (ANSI ${index})`}
+                />
+                <span className="settings-ansi-swatch__fill" style={{ background: picked }} />
+                {overridden && (
+                    <button
+                        type="button"
+                        className="settings-ansi-swatch__reset"
+                        onClick={(e) => { e.preventDefault(); onReset(); }}
+                        aria-label={`Reset ${label} to default`}
+                        title="Reset to default"
+                    >
+                        ↺
+                    </button>
+                )}
+            </label>
+        </Fragment>
     );
 }

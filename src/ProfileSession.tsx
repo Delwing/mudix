@@ -14,6 +14,7 @@ import { SessionLogger } from './logging/SessionLogger';
 import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, type MudConnection } from './storage';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
+import { applyAnsiPalette } from './mud/text/colors';
 import type { MudSession } from './mud/MudSession';
 
 interface Props {
@@ -46,6 +47,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
 
     const outputFont = useAppStore(s => selectProfileField(s, connection.id, 'outputFont'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connection.id, 'promptTimeoutMs'));
+    const ansiPalette = useAppStore(s => selectProfileField(s, connection.id, 'ansiPalette'));
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
     const loggingEnabled = useAppStore(s => selectProfileField(s, connection.id, 'loggingEnabled')) !== false;
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
@@ -85,15 +87,52 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         }
     }, [promptTimeoutMs, session]);
 
+    // Per-profile ANSI palette override (Mudlet's Settings → Color). Mutates
+    // the global colorCodes table so FormatState picks it up on the next parse;
+    // restored to defaults on profile close so the connection screen / next
+    // profile starts from a clean slate.
+    useEffect(() => {
+        applyAnsiPalette(ansiPalette);
+        return () => applyAnsiPalette(undefined);
+    }, [ansiPalette]);
+
     // Record this session's output to the persistent log store. One logger per
     // profile-session lifetime; reconnects within the same mount append to it.
     // Toggling the setting off stops recording (and flushes what's buffered).
+    // The active logger is held in a ref so Mudlet's startLogging(state) hook
+    // (wired through ScriptingAPI below) can flip the recorder on/off without
+    // racing the effect cleanup.
+    const loggerRef = useRef<SessionLogger | null>(null);
     useEffect(() => {
         if (!loggingEnabled) return;
         const logger = new SessionLogger(session, connection.id, connection.name);
         logger.start();
-        return () => { void logger.stop(); };
+        loggerRef.current = logger;
+        return () => { loggerRef.current = null; void logger.stop(); };
     }, [session, connection.id, connection.name, loggingEnabled]);
+
+    // Mudlet `startLogging(state)` — when true, create a logger on demand;
+    // when false, stop any active one. Returns true so scripts can chain
+    // off the call's success.
+    useEffect(() => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        engine.setLoggingToggler((enabled: boolean) => {
+            if (enabled) {
+                if (loggerRef.current) return true;
+                const l = new SessionLogger(session, connection.id, connection.name);
+                l.start();
+                loggerRef.current = l;
+                return true;
+            }
+            const live = loggerRef.current;
+            if (!live) return true;
+            loggerRef.current = null;
+            void live.stop();
+            return true;
+        });
+        return () => engine.setLoggingToggler(null);
+    }, [session, connection.id, connection.name, engineRef]);
 
     // Index words from this session's output for argument-word Tab completion in
     // the command bar. Lives for the session's lifetime; one per connection.

@@ -1256,6 +1256,54 @@ do
     end
 end
 
+-- Mudlet permSubstringTrigger(name, parent, patterns, luaCode). Same
+-- flatten convention as permRegexTrigger; each pattern matches by
+-- substring (literal `string.find`-style). An empty patterns table makes
+-- a trigger group.
+do
+    local _raw = __mudix_permSubstringTrigger
+    local SEP = '\1'
+    function permSubstringTrigger(name, parent, patterns, code)
+        local ps = {}
+        if type(patterns) == 'table' then
+            for _, p in ipairs(patterns) do ps[#ps + 1] = tostring(p) end
+        end
+        return _raw(tostring(name or ""), tostring(parent or ""), table.concat(ps, SEP), tostring(code or ""))
+    end
+end
+
+-- Mudlet permAlias(name, parent, regex, luaCode). Persistent alias with a
+-- single regex pattern. Returns the new id or -1 if the parent group is
+-- missing.
+do
+    local _raw = __mudix_permAlias
+    function permAlias(name, parent, regex, code)
+        return _raw(tostring(name or ""), tostring(parent or ""), tostring(regex or ""), tostring(code or ""))
+    end
+end
+
+-- Mudlet permTimer(name, parent, seconds, luaCode). Creates a persistent
+-- one-shot timer. Returns the new id or -1 if the parent group is missing.
+do
+    local _raw = __mudix_permTimer
+    function permTimer(name, parent, delay, code)
+        return _raw(tostring(name or ""), tostring(parent or ""), tonumber(delay) or 0, tostring(code or ""))
+    end
+end
+
+-- Mudlet tempColorTrigger(fg, bg, code [, expirationCount]). fg/bg are ANSI
+-- palette indices (0..255), or -1 to match any colour. The callback is
+-- invoked when any segment of the current rendered line carries the
+-- matching foreground/background.
+do
+    local _raw = __mudix_tempColorTrigger
+    function tempColorTrigger(fg, bg, fn, expirationCount)
+        return _raw(tonumber(fg) or -1, tonumber(bg) or -1,
+            __mudix_register_cb(__mudix_to_fn(fn, "tempColorTrigger", 3)),
+            expirationCount)
+    end
+end
+
 -- Mudlet's label-event setters all share a shape: name + (function | code |
 -- nil) + optional trailing args that get baked into the closure. The JS side
 -- (LuaRuntime.setLabelCb) tracks the prior cb id per slot and frees it on

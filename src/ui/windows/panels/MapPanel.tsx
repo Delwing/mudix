@@ -298,6 +298,19 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             });
         });
 
+        // Mudlet `sysMapWindowMousePressEvent(button, x, y)` — fired on every
+        // mouse press inside the map widget. Mudlet's button mapping mirrors
+        // sysWindowMousePressEvent (1=left, 2=right, 3=middle).
+        const mapContainer = containerRef.current;
+        const onMapMouseDown = (e: MouseEvent) => {
+            const rect = mapContainer?.getBoundingClientRect();
+            const x = Math.round(e.clientX - (rect?.left ?? 0));
+            const y = Math.round(e.clientY - (rect?.top ?? 0));
+            const button = e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 3 : 0;
+            manager.onRaiseEvent?.('sysMapWindowMousePressEvent', [button, x, y]);
+        };
+        mapContainer?.addEventListener('mousedown', onMapMouseDown);
+
         // Persist zoom/pan back to the profile whenever the camera moves.
         // Skipped until syncFromStore has applied saved/initial state so the
         // initial fitArea / restored-zoom doesn't trample a still-loading save.
@@ -370,6 +383,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         return () => {
             renderer.events.off('zoom', onZoom);
             panelEl?.removeEventListener('wheel', onWheelCapture, { capture: true });
+            mapContainer?.removeEventListener('mousedown', onMapMouseDown);
             renderer.camera.off('change', onCameraChange);
             renderer.destroy();
             rendererRef.current = null;
@@ -571,8 +585,11 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // front so a reload before the new area's first camera-change save
         // still returns to it. centerview itself keeps the current zoom
         // (mapper-script semantics: follow the player without rescaling).
-        if (currentAreaRef.current !== areaId) {
+        const prevArea = currentAreaRef.current;
+        if (prevArea !== areaId) {
             useAppStore.getState().patchConnectionProfile(connectionId, { mapLastAreaId: areaId });
+            // Mudlet `sysMapAreaChanged(newAreaID, prevAreaID)`.
+            manager.onRaiseEvent?.('sysMapAreaChanged', [areaId, prevArea ?? -1]);
         }
         setLevels(areaLevels);
         setCurrentLevel(zLevel);
@@ -587,7 +604,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // that drawArea would have forced. Cross-area moves still refresh.
         renderer.setPosition(roomId, true);
         recomputeMapInfos();
-    }, [connectionId, recomputeMapInfos]);
+    }, [connectionId, manager, recomputeMapInfos]);
 
     useEffect(() => {
         const handler = (roomId: number) => centerViewImplRef.current(roomId);
@@ -685,8 +702,11 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         if (!renderer) return;
         // Persist the new mapLastAreaId immediately so a tab close before the
         // new area's first camera-change save fires still restores to it.
-        if (currentAreaRef.current !== id) {
+        const prevArea = currentAreaRef.current;
+        if (prevArea !== id) {
             useAppStore.getState().patchConnectionProfile(connectionId, { mapLastAreaId: id });
+            // Mudlet `sysMapAreaChanged(newAreaID, prevAreaID)`.
+            manager.onRaiseEvent?.('sysMapAreaChanged', [id, prevArea ?? -1]);
         }
         const areaLevels = readerRef.current?.getArea(id).getZLevels().sort((a, b) => a - b) ?? [0];
         const saved = getSavedView(id);
@@ -708,7 +728,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             renderer.fitArea();
         }
         recomputeMapInfos();
-    }, [getSavedView, connectionId, syncPositionMarker, recomputeMapInfos]);
+    }, [getSavedView, connectionId, manager, syncPositionMarker, recomputeMapInfos]);
 
     const handleLevelChange = useCallback((delta: number) => {
         if (!rendererRef.current || !currentArea) return;
@@ -842,6 +862,10 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                         {
                             label: 'Set player location',
                             onClick: () => {
+                                // Mudlet `sysManualLocationSetEvent(roomID)` —
+                                // fires when the user pins the player room via
+                                // the map's right-click action.
+                                manager.onRaiseEvent?.('sysManualLocationSetEvent', [contextMenu.roomId]);
                                 centerViewImplRef.current(contextMenu.roomId);
                                 setContextMenu(null);
                             },

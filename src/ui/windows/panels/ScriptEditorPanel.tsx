@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Clock, Filter, Folder, FolderOpen, FolderPlus, Keyboard, MousePointerClick, Package, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
 import { Button, Input, ContextMenu, useConfirm } from '../../components';
-import { useAppStore } from '../../../storage';
+import { useAppStore, useProfileField } from '../../../storage';
+import { DEFAULT_ANSI_PALETTE } from '../../../mud/text/colors';
 import type { AliasNode, ButtonLocation, ButtonNode, ButtonOrientation, KeyNode, PackageManifest, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
 import { isEffectivelyEnabled } from '../../../storage/schema';
 import type { MudSession, ScriptLogSource, ScriptLogSourceKind } from '../../../mud/MudSession';
@@ -14,6 +15,7 @@ import { PackageRepositoryModal } from './PackageRepositoryModal';
 import type { PackageRepoEntry } from '../../../import/packageRepository';
 import { DEFAULT_PROXY_URL } from '../../../storage';
 import { renderMarkdown } from '../../markdown';
+import xterm256 from '../../../mud/text/xterm256';
 import './ScriptEditorPanel.css';
 
 type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys' | 'buttons' | 'packages' | 'errors';
@@ -162,6 +164,38 @@ const PATTERN_TYPE_COLORS: Record<TriggerPatternType, string> = {
 
 const PATTERN_NEEDS_TEXT = new Set<TriggerPatternType>(['substring', 'regex', 'startOfLine', 'exactMatch', 'luaFunction']);
 
+/** Names for the 16 basic ANSI palette entries the colour picker shows by
+ *  default. Indices 16..255 (the xterm 6×6×6 cube + 24-step greyscale) are
+ *  available via the "more…" expander, but the named row covers the colours
+ *  most MUD-side colour triggers actually target. */
+const ANSI_NAMES_16: ReadonlyArray<string> = [
+    'black', 'maroon', 'green', 'olive', 'navy', 'purple', 'teal', 'silver',
+    'gray', 'red', 'lime', 'yellow', 'blue', 'fuchsia', 'cyan', 'white',
+];
+
+/** Parse a `"fg,bg"` colour-trigger pattern text into a `[fg, bg]` pair. Both
+ *  default to -1 ("any") when missing or non-numeric. Mirrors the parser in
+ *  TriggerEngine. */
+function parseColorPattern(text: string): [number, number] {
+    const parts = text.split(',').map(s => s.trim());
+    const parse = (s: string | undefined): number => {
+        if (s === undefined || s === '') return -1;
+        const n = Number(s);
+        return Number.isFinite(n) ? Math.trunc(n) : -1;
+    };
+    return [parse(parts[0]), parse(parts[1])];
+}
+
+function formatColorPattern(fg: number, bg: number): string {
+    return `${fg},${bg}`;
+}
+
+function colorPickerLabel(index: number): string {
+    if (index < 0) return 'any';
+    if (index < ANSI_NAMES_16.length) return ANSI_NAMES_16[index];
+    return `#${index}`;
+}
+
 const ICON_MIME: Record<string, string> = {
     png:  'image/png',
     jpg:  'image/jpeg',
@@ -276,6 +310,249 @@ function PatternTypeSelect({ value, onChange }: { value: TriggerPatternType; onC
                             {label}
                         </button>
                     ))}
+                </ContextMenu>
+            )}
+        </>
+    );
+}
+
+/** xterm 256-colour cube laid out in numerical order, 36 indices per row.
+ *  Because `index = 16 + r*36 + g*6 + b`, 36 contiguous values share the
+ *  same red component — so row 0 is the "no red" slice (16..51, varies
+ *  green×blue), row 1 the next red step (52..87), …, row 5 the max-red
+ *  slice (196..231). The result reads top→bottom as a smooth red ramp
+ *  while every cell sits at a predictable numerical offset. */
+const XTERM_CUBE_ROWS: number[][] = (() => {
+    const rows: number[][] = [];
+    for (let r = 0; r < 6; r++) {
+        const start = 16 + r * 36;
+        rows.push(Array.from({ length: 36 }, (_, i) => start + i));
+    }
+    return rows;
+})();
+
+/** Greyscale ramp indices 232..255 — the bottom 24-step grey strip in the
+ *  xterm 256-colour palette. Already left-to-right dark→light. */
+const XTERM_GREYS: number[] = Array.from({ length: 24 }, (_, i) => 232 + i);
+
+/** Approximate contrast helper: white text on indices where the perceptual
+ *  luma is low, black otherwise. Used so the index labels on the cube grid
+ *  stay readable against arbitrary backgrounds. */
+function luma(hex: string): number {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    if (!m) return 0.5;
+    const r = parseInt(m[1], 16) / 255;
+    const g = parseInt(m[2], 16) / 255;
+    const b = parseInt(m[3], 16) / 255;
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * Full xterm 256-colour picker for a single channel (FG or BG) of a
+ * `colorTrigger` pattern. The popover surfaces:
+ *   - the "any" sentinel (-1 in pattern.text)
+ *   - the 16 named ANSI colours (indices 0..15)
+ *   - the 6×6×6 colour cube (indices 16..231) laid out as 6 rows of 36
+ *     cells with index labels readable against each background
+ *   - the 24-step greyscale ramp (indices 232..255)
+ *   - a number-entry input synced bidirectionally with the live selection
+ *
+ * Clicking any cell commits and closes; the popover clamps to stay on-screen
+ * when its natural anchor would overflow the viewport.
+ */
+function ColorChannelPicker({
+    label, value, onChange,
+}: {
+    label: string;
+    value: number;
+    onChange: (next: number) => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const [pos, setPos]   = useState({ x: 0, y: 0 });
+    const [customInput, setCustomInput] = useState('');
+    const btnRef         = useRef<HTMLButtonElement>(null);
+
+    // Per-profile ANSI palette overrides (Settings → Colors). Only indices
+    // 0..15 are overridable; the xterm cube and greyscale ramp keep their
+    // hardcoded values. Resolved at render so a settings tweak re-paints the
+    // picker immediately. Pattern matching at runtime still keys on the
+    // palette *index* (not RGB), so changing a colour in Settings doesn't
+    // change which lines a colour trigger fires on — just how its swatch
+    // looks here.
+    const ansiPalette = useProfileField('ansiPalette');
+    const HEX_RE = /^#[0-9a-f]{6}$/i;
+    const paletteColor = (index: number): string => {
+        if (index < 0 || index >= xterm256.length) return 'transparent';
+        if (index < 16) {
+            const override = ansiPalette?.[index];
+            if (typeof override === 'string' && HEX_RE.test(override)) return override;
+            return DEFAULT_ANSI_PALETTE[index] ?? xterm256[index];
+        }
+        return xterm256[index];
+    };
+
+    // Picker is wide; anchor underneath the button but clamp inside the
+    // viewport so it doesn't disappear off-screen for buttons near the right
+    // edge of the script editor.
+    const POPOVER_WIDTH = 880;
+    const POPOVER_HEIGHT = 420;
+
+    const toggle = () => {
+        if (!open && btnRef.current) {
+            const r = btnRef.current.getBoundingClientRect();
+            const margin = 8;
+            const maxX = window.innerWidth - POPOVER_WIDTH - margin;
+            const x = Math.max(margin, Math.min(r.left, maxX));
+            const wantY = r.bottom + 2;
+            const maxY = window.innerHeight - POPOVER_HEIGHT - margin;
+            const y = wantY > maxY ? Math.max(margin, r.top - POPOVER_HEIGHT - 2) : wantY;
+            setPos({ x, y });
+            setCustomInput(value >= 0 ? String(value) : '');
+        }
+        setOpen(v => !v);
+    };
+
+    const swatchBg = value < 0 ? 'transparent' : paletteColor(value);
+    const indicator = value < 0 ? '∅' : '';
+
+    const commit = (n: number) => { onChange(n); setOpen(false); };
+
+    const applyCustom = () => {
+        const trimmed = customInput.trim();
+        if (trimmed === '') return;
+        const n = Math.trunc(Number(trimmed));
+        if (Number.isFinite(n) && n >= 0 && n <= 255) commit(n);
+    };
+
+    // Sync the number input when the user clicks a swatch — keeps the
+    // numeric field in step with the visual selection if the picker stays
+    // open across multiple picks (it currently closes on commit, but this
+    // future-proofs against changing that).
+    useEffect(() => {
+        if (open) setCustomInput(value >= 0 ? String(value) : '');
+    }, [value, open]);
+
+    return (
+        <>
+            <button
+                ref={btnRef}
+                type="button"
+                className="script-editor__pattern-color-btn"
+                onClick={toggle}
+                title={`${label}: ${colorPickerLabel(value)}`}
+            >
+                <span className="script-editor__pattern-color-label">{label}</span>
+                <span
+                    className="script-editor__pattern-color-swatch"
+                    style={{ background: swatchBg }}
+                >{indicator}</span>
+                <span className="script-editor__pattern-color-name">{colorPickerLabel(value)}</span>
+            </button>
+            {open && (
+                <ContextMenu x={pos.x} y={pos.y} onClose={() => setOpen(false)}>
+                    <div className="script-editor__color-picker">
+                        <div className="script-editor__color-picker-header">
+                            <span className="script-editor__color-picker-title">
+                                {label === 'FG' ? 'Foreground' : 'Background'}
+                            </span>
+                            <span className="script-editor__color-picker-current">
+                                <span
+                                    className="script-editor__color-picker-current-swatch"
+                                    style={{ background: swatchBg }}
+                                >{indicator}</span>
+                                <span>{colorPickerLabel(value)}</span>
+                                {value >= 0 && (
+                                    <span className="script-editor__color-picker-hex">{paletteColor(value)}</span>
+                                )}
+                            </span>
+                        </div>
+
+                        <button
+                            type="button"
+                            className={`script-editor__color-picker-any${value < 0 ? ' script-editor__color-picker-any--active' : ''}`}
+                            onClick={() => commit(-1)}
+                            title="match any colour (Mudlet -1)"
+                        >∅ Any colour</button>
+
+                        <div className="script-editor__color-picker-section-label">ANSI 16</div>
+                        <div className="script-editor__color-picker-ansi-row">
+                            {ANSI_NAMES_16.map((name, idx) => {
+                                const hex = paletteColor(idx);
+                                return (
+                                <button
+                                    key={idx}
+                                    type="button"
+                                    className={`script-editor__color-picker-ansi-cell${value === idx ? ' script-editor__color-picker-cell--active' : ''}`}
+                                    style={{ background: hex, color: luma(hex) > 0.55 ? '#000' : '#fff' }}
+                                    onClick={() => commit(idx)}
+                                    title={`${idx} — ${name} (${hex})`}
+                                >{idx}</button>
+                                );
+                            })}
+                        </div>
+
+                        <div className="script-editor__color-picker-section-label">6×6×6 cube (16-231)</div>
+                        <div className="script-editor__color-picker-cube">
+                            {XTERM_CUBE_ROWS.map((row, ri) => (
+                                <div key={ri} className="script-editor__color-picker-cube-row">
+                                    {row.map(idx => (
+                                        <button
+                                            key={idx}
+                                            type="button"
+                                            className={`script-editor__color-picker-cube-cell${value === idx ? ' script-editor__color-picker-cell--active' : ''}`}
+                                            style={{ background: xterm256[idx], color: luma(xterm256[idx]) > 0.55 ? '#000' : '#fff' }}
+                                            onClick={() => commit(idx)}
+                                            title={`${idx} — ${xterm256[idx]}`}
+                                        >{idx}</button>
+                                    ))}
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="script-editor__color-picker-section-label">Greyscale (232-255)</div>
+                        <div className="script-editor__color-picker-grey-row">
+                            {XTERM_GREYS.map(idx => (
+                                <button
+                                    key={idx}
+                                    type="button"
+                                    className={`script-editor__color-picker-grey-cell${value === idx ? ' script-editor__color-picker-cell--active' : ''}`}
+                                    style={{ background: xterm256[idx], color: luma(xterm256[idx]) > 0.55 ? '#000' : '#fff' }}
+                                    onClick={() => commit(idx)}
+                                    title={`${idx} — ${xterm256[idx]}`}
+                                >{idx}</button>
+                            ))}
+                        </div>
+
+                        <div className="script-editor__color-picker-custom">
+                            <span>Index:</span>
+                            <input
+                                type="number"
+                                min={0}
+                                max={255}
+                                value={customInput}
+                                onChange={e => setCustomInput(e.target.value)}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        applyCustom();
+                                    }
+                                }}
+                                placeholder="0-255"
+                            />
+                            <button
+                                type="button"
+                                className="script-editor__color-picker-apply"
+                                onClick={applyCustom}
+                            >Apply</button>
+                            {customInput !== '' && Number.isFinite(Number(customInput)) && Number(customInput) >= 0 && Number(customInput) <= 255 && (
+                                <span
+                                    className="script-editor__color-picker-preview"
+                                    style={{ background: paletteColor(Math.trunc(Number(customInput))) }}
+                                    title="preview"
+                                />
+                            )}
+                        </div>
+                    </div>
                 </ContextMenu>
             )}
         </>
@@ -1394,97 +1671,99 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                 const isModule = pkg.kind === 'module';
                                 return (
                                     <div key={pkg.name} className="script-editor__pkg-card">
-                                        <PackageIcon vfs={vfs} pkg={pkg} />
-                                        <div className="script-editor__pkg-body">
-                                            <div className="script-editor__pkg-title">
-                                                {pkg.title || pkg.name}
-                                                {isModule && <span className="script-editor__pkg-tag" style={{ marginLeft: 8, fontSize: 10, padding: '1px 6px', border: '1px solid var(--accent)', color: 'var(--accent)', borderRadius: 3 }}>MODULE</span>}
-                                            </div>
-                                            <div className="script-editor__pkg-byline">
-                                                {pkg.name !== (pkg.title || pkg.name) && <span>{pkg.name}</span>}
-                                                {pkg.version && <><span className="script-editor__pkg-byline-sep">·</span><span>v{pkg.version}</span></>}
-                                                {pkg.author && <><span className="script-editor__pkg-byline-sep">·</span><span>{pkg.author}</span></>}
-                                            </div>
-                                            {pkg.description && <PackageDescription text={pkg.description} />}
-                                            <div className="script-editor__pkg-footer">
-                                                {pkg.sourceFile ?? `${pkg.name}.mpackage`}
-                                                {created && <> · created {created}</>}
-                                                {' · installed '}{installed}
-                                            </div>
-                                            {isModule && (
-                                                <div className="script-editor__pkg-module-actions" style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={!!pkg.sync}
-                                                            onChange={e => handleToggleModuleSync(pkg.name, e.target.checked)}
-                                                            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
-                                                        />
-                                                        Sync edits to file
-                                                    </label>
-                                                    <label
-                                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
-                                                        title="Load priority. Negative values load this module before profile scripts. Takes effect on the next reload."
-                                                    >
-                                                        Priority
-                                                        <input
-                                                            className="input"
-                                                            type="number"
-                                                            value={pkg.priority ?? 0}
-                                                            onChange={e => {
-                                                                const v = parseInt(e.target.value, 10);
-                                                                updatePackageManifest(connectionId, pkg.name, { priority: Number.isFinite(v) ? v : 0 });
-                                                            }}
-                                                            style={{ width: 70, height: 22, padding: '0 6px' }}
-                                                        />
-                                                    </label>
-                                                    <button
-                                                        className="script-editor__error-log-clear"
-                                                        onClick={() => handleSyncModule(pkg.name)}
-                                                        title="Write the current in-app state back to the module's XML file"
-                                                    >
-                                                        Sync to file
-                                                    </button>
-                                                    <button
-                                                        className="script-editor__error-log-clear"
-                                                        onClick={() => handleReloadModule(pkg.name)}
-                                                        title="Discard in-app changes and re-parse the XML file from disk"
-                                                    >
-                                                        Reload from file
-                                                    </button>
+                                        <div className="script-editor__pkg-header">
+                                            <PackageIcon vfs={vfs} pkg={pkg} />
+                                            <div className="script-editor__pkg-heading">
+                                                <div className="script-editor__pkg-title">
+                                                    {pkg.title || pkg.name}
+                                                    {isModule && <span className="script-editor__pkg-tag" style={{ marginLeft: 8, fontSize: 10, padding: '1px 6px', border: '1px solid var(--accent)', color: 'var(--accent)', borderRadius: 3 }}>MODULE</span>}
                                                 </div>
-                                            )}
+                                                <div className="script-editor__pkg-byline">
+                                                    {pkg.name !== (pkg.title || pkg.name) && <span>{pkg.name}</span>}
+                                                    {pkg.version && <><span className="script-editor__pkg-byline-sep">·</span><span>v{pkg.version}</span></>}
+                                                    {pkg.author && <><span className="script-editor__pkg-byline-sep">·</span><span>{pkg.author}</span></>}
+                                                </div>
+                                            </div>
+                                            <button
+                                                className="script-editor__error-log-clear"
+                                                onClick={async () => {
+                                                    const ok = await confirm<boolean>({
+                                                        title: isModule ? 'Uninstall module?' : 'Uninstall package?',
+                                                        tone: 'danger',
+                                                        message: isModule ? (
+                                                            <>
+                                                                Uninstall <strong>{pkg.title || pkg.name}</strong>? All scripts, aliases,
+                                                                triggers, timers and keys it added will be removed. The XML file on
+                                                                disk is left untouched — the module is only unlinked.
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                Uninstall <strong>{pkg.title || pkg.name}</strong>? All scripts, aliases,
+                                                                triggers, timers and keys it added will be removed, along with its files
+                                                                in <code>/{pkg.name}/</code>.
+                                                            </>
+                                                        ),
+                                                        buttons: [
+                                                            { label: 'Cancel', value: false, variant: 'secondary' },
+                                                            { label: 'Uninstall', value: true, variant: 'danger', autoFocus: true },
+                                                        ],
+                                                        dismissValue: false,
+                                                    });
+                                                    if (ok) handleUninstall(pkg.name);
+                                                }}
+                                            >
+                                                Uninstall
+                                            </button>
                                         </div>
-                                        <button
-                                            className="script-editor__error-log-clear"
-                                            onClick={async () => {
-                                                const ok = await confirm<boolean>({
-                                                    title: isModule ? 'Uninstall module?' : 'Uninstall package?',
-                                                    tone: 'danger',
-                                                    message: isModule ? (
-                                                        <>
-                                                            Uninstall <strong>{pkg.title || pkg.name}</strong>? All scripts, aliases,
-                                                            triggers, timers and keys it added will be removed. The XML file on
-                                                            disk is left untouched — the module is only unlinked.
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            Uninstall <strong>{pkg.title || pkg.name}</strong>? All scripts, aliases,
-                                                            triggers, timers and keys it added will be removed, along with its files
-                                                            in <code>/{pkg.name}/</code>.
-                                                        </>
-                                                    ),
-                                                    buttons: [
-                                                        { label: 'Cancel', value: false, variant: 'secondary' },
-                                                        { label: 'Uninstall', value: true, variant: 'danger', autoFocus: true },
-                                                    ],
-                                                    dismissValue: false,
-                                                });
-                                                if (ok) handleUninstall(pkg.name);
-                                            }}
-                                        >
-                                            Uninstall
-                                        </button>
+                                        {pkg.description && <PackageDescription text={pkg.description} />}
+                                        <div className="script-editor__pkg-footer">
+                                            {pkg.sourceFile ?? `${pkg.name}.mpackage`}
+                                            {created && <> · created {created}</>}
+                                            {' · installed '}{installed}
+                                        </div>
+                                        {isModule && (
+                                            <div className="script-editor__pkg-module-actions" style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={!!pkg.sync}
+                                                        onChange={e => handleToggleModuleSync(pkg.name, e.target.checked)}
+                                                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                                                    />
+                                                    Sync edits to file
+                                                </label>
+                                                <label
+                                                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
+                                                    title="Load priority. Negative values load this module before profile scripts. Takes effect on the next reload."
+                                                >
+                                                    Priority
+                                                    <input
+                                                        className="input"
+                                                        type="number"
+                                                        value={pkg.priority ?? 0}
+                                                        onChange={e => {
+                                                            const v = parseInt(e.target.value, 10);
+                                                            updatePackageManifest(connectionId, pkg.name, { priority: Number.isFinite(v) ? v : 0 });
+                                                        }}
+                                                        style={{ width: 70, height: 22, padding: '0 6px' }}
+                                                    />
+                                                </label>
+                                                <button
+                                                    className="script-editor__error-log-clear"
+                                                    onClick={() => handleSyncModule(pkg.name)}
+                                                    title="Write the current in-app state back to the module's XML file"
+                                                >
+                                                    Sync to file
+                                                </button>
+                                                <button
+                                                    className="script-editor__error-log-clear"
+                                                    onClick={() => handleReloadModule(pkg.name)}
+                                                    title="Discard in-app changes and re-parse the XML file from disk"
+                                                >
+                                                    Reload from file
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })
@@ -1599,31 +1878,61 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                 <div className="script-editor__meta-row script-editor__meta-row--col">
                                     <span className="script-editor__field-label">Patterns</span>
                                     <div className="script-editor__pattern-list">
-                                        {editPatterns.map((p, i) => (
+                                        {editPatterns.map((p, i) => {
+                                            const [colorFg, colorBg] = p.type === 'colorTrigger' ? parseColorPattern(p.text) : [-1, -1];
+                                            const setColor = (fg: number, bg: number) => {
+                                                const next = [...editPatterns];
+                                                next[i] = { ...next[i], text: formatColorPattern(fg, bg) };
+                                                setEditPatterns(next);
+                                                setDirty(true);
+                                            };
+                                            return (
                                             <div key={i} className="script-editor__pattern-row">
                                                 <PatternTypeSelect
                                                     value={p.type}
                                                     onChange={t => {
                                                         const next = [...editPatterns];
-                                                        next[i] = { ...next[i], type: t };
+                                                        // Reset pattern text when switching to/from colorTrigger
+                                                        // since "fg,bg" only makes sense for that mode.
+                                                        const resetText = (t === 'colorTrigger' || p.type === 'colorTrigger') && t !== p.type;
+                                                        next[i] = {
+                                                            ...next[i],
+                                                            type: t,
+                                                            text: resetText ? (t === 'colorTrigger' ? '-1,-1' : '') : next[i].text,
+                                                        };
                                                         setEditPatterns(next);
                                                         setDirty(true);
                                                     }}
                                                 />
-                                                <input
-                                                    type="text"
-                                                    className="script-editor__pattern-text"
-                                                    value={p.text}
-                                                    disabled={!PATTERN_NEEDS_TEXT.has(p.type)}
-                                                    placeholder={p.type === 'luaFunction' ? 'function name' : 'pattern'}
-                                                    spellCheck={false}
-                                                    onChange={e => {
-                                                        const next = [...editPatterns];
-                                                        next[i] = { ...next[i], text: e.target.value };
-                                                        setEditPatterns(next);
-                                                        setDirty(true);
-                                                    }}
-                                                />
+                                                {p.type === 'colorTrigger' ? (
+                                                    <div className="script-editor__pattern-color-pair">
+                                                        <ColorChannelPicker
+                                                            label="FG"
+                                                            value={colorFg}
+                                                            onChange={fg => setColor(fg, colorBg)}
+                                                        />
+                                                        <ColorChannelPicker
+                                                            label="BG"
+                                                            value={colorBg}
+                                                            onChange={bg => setColor(colorFg, bg)}
+                                                        />
+                                                    </div>
+                                                ) : (
+                                                    <input
+                                                        type="text"
+                                                        className="script-editor__pattern-text"
+                                                        value={p.text}
+                                                        disabled={!PATTERN_NEEDS_TEXT.has(p.type)}
+                                                        placeholder={p.type === 'luaFunction' ? 'function name' : 'pattern'}
+                                                        spellCheck={false}
+                                                        onChange={e => {
+                                                            const next = [...editPatterns];
+                                                            next[i] = { ...next[i], text: e.target.value };
+                                                            setEditPatterns(next);
+                                                            setDirty(true);
+                                                        }}
+                                                    />
+                                                )}
                                                 <button
                                                     type="button"
                                                     className="script-editor__pattern-remove"
@@ -1631,7 +1940,8 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                                                     title="Remove pattern"
                                                 >×</button>
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                         <button
                                             type="button"
                                             className="script-editor__pattern-add"

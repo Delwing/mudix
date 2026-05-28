@@ -731,6 +731,9 @@ export class ScriptingEngine {
             this.api.setIsActiveCallback((name, type, checkAncestors) => this.isActiveByName(name, type, checkAncestors));
             this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
             this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
+            this.api.setPermSubstringTriggerCallback((name, parent, patterns, code) => this.createPermSubstringTrigger(name, parent, patterns, code));
+            this.api.setPermAliasCallback((name, parent, pattern, code) => this.createPermAlias(name, parent, pattern, code));
+            this.api.setPermTimerCallback((name, parent, delay, code) => this.createPermTimer(name, parent, delay, code));
             this.api.setSetScriptCallback((name, code, pos) => this.setScriptByName(name, code, pos));
             this.api.setKillByNameCallback((kind, name) => this.killByName(kind, name));
             this.api.setCssRewriter((css) => {
@@ -763,6 +766,10 @@ export class ScriptingEngine {
                 const lua = this.runtimes.lua;
                 return lua ? lua.evalTriggerPattern(code) : false;
             });
+            // Perm colorTrigger patterns delegate to the same buffer scan the
+            // tempColorTrigger binding uses — both inspect the line that
+            // beginLine() just appended to the main console.
+            this.triggerEngine.setColorMatcher((fg, bg) => this.api.currentLineMatchesColor(fg, bg));
             return rt;
         }).catch(err => {
             const msg = err instanceof Error ? err.message : String(err);
@@ -1140,6 +1147,25 @@ export class ScriptingEngine {
      * given but no trigger group with that name exists.
      */
     createPermRegexTrigger(name: string, parent: string, regexes: string[], code: string): number {
+        return this.createPermTrigger(name, parent, regexes, 'regex', code);
+    }
+
+    /**
+     * Mudlet `permSubstringTrigger(name, parent, patterns, luaCode)`. Same
+     * shape as createPermRegexTrigger but each pattern matches by substring
+     * (the temp-trigger semantics: literal `String.prototype.includes`).
+     */
+    createPermSubstringTrigger(name: string, parent: string, patterns: string[], code: string): number {
+        return this.createPermTrigger(name, parent, patterns, 'substring', code);
+    }
+
+    private createPermTrigger(
+        name: string,
+        parent: string,
+        patternStrings: string[],
+        kind: 'regex' | 'substring',
+        code: string,
+    ): number {
         if (!name) return -1;
         const store = useAppStore.getState();
         const triggers = store.connectionTriggers[this.connectionId] ?? [];
@@ -1149,8 +1175,8 @@ export class ScriptingEngine {
             if (!group) return -1;
             parentId = group.id;
         }
-        const isGroup = regexes.length === 0;
-        const patterns: TriggerNode['patterns'] = regexes.map(r => ({ type: 'regex', text: r }));
+        const isGroup = patternStrings.length === 0;
+        const patterns: TriggerNode['patterns'] = patternStrings.map(text => ({ type: kind, text }));
         const uuid = store.addTrigger(this.connectionId, {
             name,
             enabled: true,
@@ -1164,6 +1190,66 @@ export class ScriptingEngine {
             multiline: false,
             delta: 0,
             isFilter: false,
+        });
+        return this.numericIdFor(uuid);
+    }
+
+    /**
+     * Mudlet `permAlias(name, parent, regex, luaCode)`. Creates a saved alias
+     * named `name` under the alias group `parent` (empty = root). The pattern
+     * is treated as a PCRE regex (matches Mudlet's TAlias.mRegexCode).
+     * Returns the new alias id, or -1 if `parent` is non-empty but no alias
+     * group of that name exists.
+     */
+    createPermAlias(name: string, parent: string, pattern: string, code: string): number {
+        if (!name) return -1;
+        const store = useAppStore.getState();
+        const aliases = store.connectionAliases[this.connectionId] ?? [];
+        let parentId: string | null = null;
+        if (parent && parent.length > 0) {
+            const group = aliases.find(a => a.isGroup && a.name === parent);
+            if (!group) return -1;
+            parentId = group.id;
+        }
+        const uuid = store.addAlias(this.connectionId, {
+            name,
+            enabled: true,
+            isGroup: false,
+            parentId,
+            pattern,
+            command: '',
+            code,
+            language: 'lua',
+        });
+        return this.numericIdFor(uuid);
+    }
+
+    /**
+     * Mudlet `permTimer(name, parent, seconds, luaCode)`. Creates a saved
+     * one-shot timer under the timer group `parent` (empty = root). Returns
+     * the new timer id, or -1 if `parent` is non-empty but no timer group of
+     * that name exists.
+     */
+    createPermTimer(name: string, parent: string, delay: number, code: string): number {
+        if (!name) return -1;
+        const store = useAppStore.getState();
+        const timers = store.connectionTimers[this.connectionId] ?? [];
+        let parentId: string | null = null;
+        if (parent && parent.length > 0) {
+            const group = timers.find(t => t.isGroup && t.name === parent);
+            if (!group) return -1;
+            parentId = group.id;
+        }
+        const seconds = Number.isFinite(delay) && delay > 0 ? delay : 0;
+        const uuid = store.addTimer(this.connectionId, {
+            name,
+            enabled: true,
+            isGroup: false,
+            parentId,
+            seconds,
+            code,
+            language: 'lua',
+            repeat: false,
         });
         return this.numericIdFor(uuid);
     }
@@ -1333,6 +1419,12 @@ export class ScriptingEngine {
         this.api.setCmdLineProvider(fn);
     }
 
+    /** Hand the API a startLogging hook. Wired by ProfileSession, which owns
+     *  the actual SessionLogger lifecycle. */
+    setLoggingToggler(fn: ((enabled: boolean) => boolean) | null): void {
+        this.api.setLoggingToggler(fn);
+    }
+
     destroy(): void {
         // Fire sysExitEvent before any teardown, while handlers can still run.
         window.removeEventListener('beforeunload', this.beforeUnload);
@@ -1360,6 +1452,7 @@ export class ScriptingEngine {
         this.runtimes.lua?.destroy();
         this.runtimes.lua = null;
         this.triggerEngine.setLuaEval(null);
+        this.triggerEngine.setColorMatcher(null);
         this.api.setExecuteScript(null);
         this.api.setExpandAlias(null);
         this.api.setSendRequestDispatcher(null);
@@ -1608,9 +1701,46 @@ export class ScriptingEngine {
     }
 
     private bridgeEvents(session: MudSession): void {
+        // Mudlet `sysProfileFocusChangeEvent(focused)` — fires on tab/window
+        // focus transitions for this profile. mudix has one active profile at
+        // a time, so we map it to document.visibilitychange (the cheapest
+        // signal that fires both on Alt-Tab and tab switches).
+        const onVisibility = () => {
+            this.raiseEvent('sysProfileFocusChangeEvent', [document.visibilityState === 'visible']);
+        };
+        document.addEventListener('visibilitychange', onVisibility);
+        this.unsubs.push(() => document.removeEventListener('visibilitychange', onVisibility));
+
+        // Mudlet `sysSettingChanged(setting, value)` — fired whenever the
+        // per-connection profile settings slice mutates. We diff the slice
+        // by key so each changed field gets its own event (matching Mudlet's
+        // per-setting granularity).
+        const seedProfile = useAppStore.getState().connectionProfile[this.connectionId];
+        let lastProfile: Record<string, unknown> = (seedProfile ?? {}) as Record<string, unknown>;
+        this.unsubs.push(useAppStore.subscribe((state) => {
+            const next = (state.connectionProfile[this.connectionId] ?? {}) as Record<string, unknown>;
+            if (next === lastProfile) return;
+            for (const key of Object.keys(next)) {
+                if (next[key] !== lastProfile[key]) {
+                    this.raiseEvent('sysSettingChanged', [key, next[key]]);
+                }
+            }
+            for (const key of Object.keys(lastProfile)) {
+                if (!(key in next) && lastProfile[key] !== undefined) {
+                    this.raiseEvent('sysSettingChanged', [key, undefined]);
+                }
+            }
+            lastProfile = next;
+        }));
+
         this.unsubs.push(
             session.events.on('prompt', () => {
                 this.promptPending = true;
+            }),
+            // Mudlet `sysTelnetEvent(type, option, message)` — fired by
+            // MudClient for any unsupported telnet IAC sequence.
+            session.events.on('telnet.event', (type, option, message) => {
+                this.raiseEvent('sysTelnetEvent', [type, option, message]);
             }),
             session.events.on('flushLines', (groups) => {
                 try {

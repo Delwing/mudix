@@ -138,6 +138,14 @@ export class MudSession {
         this.client?.feedTelnet(data);
     }
 
+    /** Mudlet `addSupportedTelnetOption(option)`. Forwards to the live
+     *  MudClient when one is attached so the option will be auto-negotiated
+     *  on the next IAC WILL/DO from the server. Returns false when no client
+     *  is wired up yet. */
+    addSupportedTelnetOption(option: number): boolean {
+        return this.client?.addSupportedTelnetOption(option) ?? false;
+    }
+
     /** Updates both the active client (if any) and the stored options so the
      *  setting survives a reconnect. */
     setPromptTimeoutMs(ms: number): void {

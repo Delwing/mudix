@@ -807,14 +807,30 @@
 /* ── Packages view ────────────────────────────────────────── */
 .script-editor__pkg-card {
     display: flex;
-    gap: 12px;
+    flex-direction: column;
+    gap: 6px;
     padding: 10px 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--bg-input);
     margin-bottom: 8px;
-    align-items: flex-start;
     width: 100%;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+}
+
+.script-editor__pkg-header {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.script-editor__pkg-heading {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .script-editor__pkg-icon-frame {
@@ -1159,6 +1175,310 @@
 .script-editor__pattern-text:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+}
+
+/* Colour trigger picker — two compact swatch buttons (FG and BG) inline,
+ * each opening a 16-cell ANSI palette + "any" sentinel + custom-index input.
+ */
+.script-editor__pattern-color-pair {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    gap: 4px;
+}
+
+.script-editor__pattern-color-btn {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 6px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-ui), sans-serif;
+    font-size: 11px;
+    cursor: pointer;
+    outline: none;
+    text-align: left;
+    transition: border-color 0.15s;
+}
+
+.script-editor__pattern-color-btn:hover,
+.script-editor__pattern-color-btn:focus {
+    border-color: var(--accent-dim, var(--accent));
+}
+
+.script-editor__pattern-color-label {
+    flex-shrink: 0;
+    opacity: 0.6;
+    font-weight: 600;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+}
+
+.script-editor__pattern-color-swatch {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    opacity: 0.9;
+}
+
+.script-editor__pattern-color-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.85;
+}
+
+/* Full xterm 256-colour picker — wide popover with the 16 named ANSI
+ * colours, the 6×6×6 cube, and the 24-step greyscale ramp, plus a sync'd
+ * numeric index field. */
+.script-editor__color-picker {
+    width: 860px;
+    padding: 10px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    /* Strengthen the popover edge — the default ContextMenu border is too
+     * subtle against an 860 px panel, especially in dark theme. The dual
+     * box-shadow gives a visible ring (~30% accent) plus a soft outer halo
+     * so the picker reads as a distinct surface no matter what's behind it. */
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--accent) 25%, var(--border)),
+        0 0 0 4px color-mix(in srgb, var(--bg-surface) 60%, transparent);
+}
+
+.script-editor__color-picker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+}
+
+.script-editor__color-picker-title {
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.4px;
+    opacity: 0.85;
+}
+
+.script-editor__color-picker-current {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+}
+
+.script-editor__color-picker-current-swatch {
+    width: 16px;
+    height: 16px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    opacity: 0.85;
+}
+
+.script-editor__color-picker-hex {
+    font-family: var(--font-mono), monospace;
+    opacity: 0.7;
+}
+
+.script-editor__color-picker-any {
+    width: 100%;
+    padding: 6px 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    text-align: left;
+    transition: border-color 0.12s, background 0.12s;
+}
+
+.script-editor__color-picker-any:hover {
+    border-color: var(--accent-dim, var(--accent));
+}
+
+.script-editor__color-picker-any--active {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+    color: var(--accent);
+}
+
+.script-editor__color-picker-section-label {
+    margin-top: 4px;
+    font-size: 10px;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    opacity: 0.55;
+}
+
+.script-editor__color-picker-ansi-row {
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 3px;
+}
+
+.script-editor__color-picker-ansi-cell {
+    height: 26px;
+    border: none;
+    border-radius: 3px;
+    /* Inset white outline reads on both dark and light swatches — a black
+     * border vanishes on indices 0-2 / 16-21. */
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    cursor: pointer;
+    padding: 0;
+    font-family: var(--font-mono), monospace;
+    font-size: 10px;
+    font-weight: 600;
+    transition: transform 0.08s, box-shadow 0.08s;
+}
+
+.script-editor__color-picker-ansi-cell:hover {
+    transform: scale(1.1);
+    z-index: 2;
+    position: relative;
+}
+
+.script-editor__color-picker-cube {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.script-editor__color-picker-cube-row {
+    display: grid;
+    grid-template-columns: repeat(36, 1fr);
+    gap: 1px;
+}
+
+.script-editor__color-picker-cube-cell {
+    height: 22px;
+    border: none;
+    border-radius: 2px;
+    /* See the ANSI cell note — black-rgba borders disappear on the dark
+     * cube indices (16, 17, 232, …), so use an inset white outline. */
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+    cursor: pointer;
+    padding: 0;
+    font-family: var(--font-mono), monospace;
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1;
+    transition: transform 0.08s, box-shadow 0.08s;
+}
+
+.script-editor__color-picker-cube-cell:hover {
+    transform: scale(1.5);
+    z-index: 2;
+    position: relative;
+}
+
+.script-editor__color-picker-grey-row {
+    display: grid;
+    grid-template-columns: repeat(24, 1fr);
+    gap: 1px;
+}
+
+.script-editor__color-picker-grey-cell {
+    height: 24px;
+    border: none;
+    border-radius: 2px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    cursor: pointer;
+    padding: 0;
+    font-family: var(--font-mono), monospace;
+    font-size: 10px;
+    font-weight: 600;
+    transition: transform 0.08s, box-shadow 0.08s;
+}
+
+.script-editor__color-picker-grey-cell:hover {
+    transform: scale(1.25);
+    z-index: 2;
+    position: relative;
+}
+
+.script-editor__color-picker-cell--active {
+    /* Bright ring that stays on top of the per-cell inset outline. The
+     * dual shadow paints an accent halo around the cell plus a thin dark
+     * separator so the accent reads against bright swatches too. */
+    box-shadow:
+        0 0 0 2px var(--accent),
+        0 0 0 3px rgba(0, 0, 0, 0.55),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+    z-index: 2;
+    position: relative;
+}
+
+.script-editor__color-picker-custom {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    opacity: 0.9;
+}
+
+.script-editor__color-picker-custom input {
+    width: 70px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-mono), monospace;
+    font-size: 12px;
+    padding: 3px 6px;
+    outline: none;
+}
+
+.script-editor__color-picker-custom input:focus {
+    border-color: var(--accent-dim, var(--accent));
+}
+
+.script-editor__color-picker-apply {
+    height: 24px;
+    padding: 0 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 11px;
+    cursor: pointer;
+    transition: border-color 0.12s;
+}
+
+.script-editor__color-picker-apply:hover {
+    border-color: var(--accent-dim, var(--accent));
+    color: var(--accent);
+}
+
+.script-editor__color-picker-preview {
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    flex-shrink: 0;
 }
 
 .script-editor__pattern-remove {

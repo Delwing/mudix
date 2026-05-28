@@ -103,6 +103,10 @@ export class WindowManager {
     /** Per-window teardown for the mousedown/mouseup listeners observeMouse
      *  attaches. Keyed by window id ('main' for the central output). */
     private readonly mouseCleanups = new Map<string, () => void>();
+    /** Per-window teardown for the dragenter/dragover/drop listeners
+     *  observeDrop attaches — these power Mudlet's sysDropEvent /
+     *  sysDropUrlEvent on viewports. */
+    private readonly dropCleanups = new Map<string, () => void>();
     private mapLoadCallback: ((buf?: ArrayBuffer) => boolean) | null = null;
     /** Single in-flight bootstrap promise — both ScriptingEngine.start (which
      *  awaits the map before applying scripts, Mudlet parity) and MapPanel on
@@ -301,6 +305,7 @@ export class WindowManager {
         this.viewports.set(id, element);
         this.observeResize(id, element);
         this.observeMouse(id, element);
+        this.observeDrop(id, element);
         // Re-render: parented miniconsoles whose parent just mounted need a
         // chance to portal into the freshly registered viewport.
         this.notify();
@@ -339,6 +344,8 @@ export class WindowManager {
             this.lastEmittedSize.delete('main');
             this.mouseCleanups.get('main')?.();
             this.mouseCleanups.delete('main');
+            this.dropCleanups.get('main')?.();
+            this.dropCleanups.delete('main');
         }
         // Main-parented miniconsoles portal into this element; re-render so the
         // FloatingWindowLayer picks up the new (or cleared) target.
@@ -401,6 +408,11 @@ export class WindowManager {
 
     registerConsole(id: string, console: Console): void {
         this.consoleRegistry?.set(id, console);
+        // Mudlet `sysBufferShrinkEvent(name, linesRemoved)` — fire once per
+        // batch of evicted lines so script-side buffers that mirror the
+        // console can stay in sync. The main console plumbs its own shrink
+        // hook via ScriptingAPI; this covers user-window consoles.
+        console.onBufferShrink = (n) => this.onRaiseEvent?.('sysBufferShrinkEvent', [id, n]);
     }
 
     unregister(id: string): void {
@@ -413,6 +425,8 @@ export class WindowManager {
         this.lastEmittedSize.delete(id);
         this.mouseCleanups.get(id)?.();
         this.mouseCleanups.delete(id);
+        this.dropCleanups.get(id)?.();
+        this.dropCleanups.delete(id);
     }
 
     /** Watch `element` for size changes and raise sysUserWindowResizeEvent
@@ -465,6 +479,47 @@ export class WindowManager {
         this.mouseCleanups.set(id, () => {
             element.removeEventListener('mousedown', onDown);
             element.removeEventListener('mouseup', onUp);
+        });
+    }
+
+    /** Mudlet `sysDropEvent(filepath, suffix, x, y, name)` and
+     *  `sysDropUrlEvent(url, schema, x, y, name)` — fired when the user drags
+     *  a file or URL onto a window. We only acknowledge drops we can identify
+     *  (a real File for sysDropEvent, a textual URL for sysDropUrlEvent); the
+     *  default DragEvent behaviour is suppressed in both cases so the browser
+     *  doesn't navigate away from the page. */
+    private observeDrop(id: string, element: HTMLElement): void {
+        this.dropCleanups.get(id)?.();
+        const onDragOver = (e: DragEvent) => { e.preventDefault(); };
+        const onDrop = (e: DragEvent) => {
+            const rect = element.getBoundingClientRect();
+            const x = Math.round(e.clientX - rect.left);
+            const y = Math.round(e.clientY - rect.top);
+            const dt = e.dataTransfer;
+            if (!dt) return;
+            const file = dt.files && dt.files.length > 0 ? dt.files[0] : null;
+            if (file) {
+                e.preventDefault();
+                const path = (file as File & { path?: string }).path ?? file.name;
+                const dot = path.lastIndexOf('.');
+                const suffix = dot >= 0 ? path.slice(dot + 1) : '';
+                this.onRaiseEvent?.('sysDropEvent', [path, suffix, x, y, id]);
+                return;
+            }
+            const text = dt.getData('text/uri-list') || dt.getData('text/plain');
+            if (text && /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(text.trim())) {
+                e.preventDefault();
+                const url = text.trim().split(/\r?\n/)[0];
+                const schemaEnd = url.indexOf(':');
+                const schema = schemaEnd >= 0 ? url.slice(0, schemaEnd) : '';
+                this.onRaiseEvent?.('sysDropUrlEvent', [url, schema, x, y, id]);
+            }
+        };
+        element.addEventListener('dragover', onDragOver);
+        element.addEventListener('drop', onDrop);
+        this.dropCleanups.set(id, () => {
+            element.removeEventListener('dragover', onDragOver);
+            element.removeEventListener('drop', onDrop);
         });
     }
 
@@ -660,6 +715,26 @@ export class WindowManager {
                 console.warn('[WindowManager] saveMap persist failed:', err));
         }
         return bytes;
+    }
+
+    /**
+     * Mudlet `saveJsonMap(path)` backbone — serialise the current MapStore
+     * to a JSON string. Used by the Lua binding, which writes the result to
+     * the VFS path the script provided.
+     */
+    saveJsonMap(): string { return this.mapStore.toJsonString(); }
+
+    /**
+     * Mudlet `loadJsonMap(path)` backbone — parse a JSON payload previously
+     * produced by `saveJsonMap` and replace MapStore's contents, then ask any
+     * open map panel to re-render. Returns false on parse failure or when the
+     * JSON doesn't carry the expected MudletMap shape.
+     */
+    loadJsonMap(json: string): boolean {
+        if (!this.mapStore.loadFromJsonString(json)) return false;
+        this.mapLoadCallback?.();
+        this.onRaiseEvent?.('sysMapLoadEvent', []);
+        return true;
     }
 
     markAsMiniConsole(id: string): void {

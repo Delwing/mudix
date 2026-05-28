@@ -150,6 +150,23 @@ type AndState = {
 /** Mutable ref so the Lua eval function can be swapped in after compilation. */
 const luaEvalRef: { fn: ((code: string, line: string) => boolean) | null } = { fn: null };
 
+/** Mutable ref for the buffer-aware colour check. Wired by ScriptingEngine to
+ *  `ScriptingAPI.currentLineMatchesColor`, which inspects the live
+ *  AnsiAwareBuffer on the main console (the trigger engine itself only sees
+ *  the plain-text line, so the check has to come from outside). Used by the
+ *  `colorTrigger` pattern branch — see `buildMatcher`. */
+const colorMatchRef: { fn: ((fg: number, bg: number) => boolean) | null } = { fn: null };
+
+/** Parse a `"fg,bg"` colour-trigger pattern text into a `[fg, bg]` pair. Both
+ *  default to -1 ("any") when missing or non-numeric. Mudlet uses ANSI
+ *  palette indices 0..255 plus -1 for "any". */
+function parseColorPattern(text: string): [number, number] {
+    const parts = text.split(',').map(s => s.trim());
+    const fg = parts[0] !== undefined && parts[0] !== '' && Number.isFinite(Number(parts[0])) ? Math.trunc(Number(parts[0])) : -1;
+    const bg = parts[1] !== undefined && parts[1] !== '' && Number.isFinite(Number(parts[1])) ? Math.trunc(Number(parts[1])) : -1;
+    return [fg, bg];
+}
+
 function pcreToMatchResult(m: PcreMatch): MatchResult {
     const captures: string[] = [];
     const captureSpans: CaptureSpan[] = [];
@@ -223,7 +240,20 @@ function buildMatcher(p: TriggerPattern, register: (re: PcreInstance) => void): 
                 return luaEvalRef.fn(code, line) ? { captures: [], matchedText: line } : null;
             };
         }
-        case 'colorTrigger':
+        case 'colorTrigger': {
+            // `pattern.text` carries "fg,bg" as ANSI palette indices (-1 = any).
+            // Empty / unparsable values fall through to -1, so a freshly-added
+            // perm color trigger (`text: ''`) matches every line until the user
+            // picks specific colours. The actual buffer scan runs via
+            // `colorMatchRef.fn`, which ScriptingEngine wires to
+            // `ScriptingAPI.currentLineMatchesColor`.
+            const [fg, bg] = parseColorPattern(p.text);
+            return (line) => {
+                if (!line) return null;
+                if (!colorMatchRef.fn) return null;
+                return colorMatchRef.fn(fg, bg) ? { captures: [], matchedText: line } : null;
+            };
+        }
         case 'lineSpacer':
             return null;
     }
@@ -609,6 +639,18 @@ export class TriggerEngine {
 
     setLuaEval(fn: ((code: string, line: string) => boolean) | null): void {
         luaEvalRef.fn = fn;
+    }
+
+    /**
+     * Wire the buffer-aware colour check used by `colorTrigger` patterns. The
+     * matcher receives the parsed `(fg, bg)` indices and asks the registered
+     * callback whether the line just appended to the main console carries any
+     * segment with those colours. ScriptingEngine sets this to delegate to
+     * `ScriptingAPI.currentLineMatchesColor`. Passing `null` disables every
+     * colour trigger (e.g. during runtime teardown).
+     */
+    setColorMatcher(fn: ((fg: number, bg: number) => boolean) | null): void {
+        colorMatchRef.fn = fn;
     }
 
     destroy(): void {

@@ -96,6 +96,16 @@ export class MudClient {
      *  through client name (0), terminal type (1), then the MTTS bitvector (2+).
      *  Reset on each connect(). */
     private ttypeStep = 0;
+    /** Mudlet `addSupportedTelnetOption(option)` registry. On IAC WILL <opt>
+     *  we reply IAC DO <opt>; on IAC DO <opt> we reply IAC WILL <opt>. Options
+     *  already negotiated inline (GMCP/MSDP/TTYPE) are excluded — they have
+     *  their own response logic. */
+    private readonly supportedTelnetOptions = new Set<number>();
+    /** Per-incoming-frame index of which IAC sequences we've already announced
+     *  via `telnet.event`. Telnet sequences can repeat across frames (the same
+     *  option byte appears in multiple WILL/DO commands), so we only suppress
+     *  duplicates within a single frame to avoid event storms. */
+    private telnetEventSeen = new Set<number>();
 
     commandEcho: boolean;
 
@@ -161,6 +171,20 @@ export class MudClient {
 
     isMccpEnabled(): boolean {
         return this.mccpHandler.enabled;
+    }
+
+    /** Mudlet `addSupportedTelnetOption(option)`. Marks the telnet option byte
+     *  (0..255) as one the client will accept: on the next IAC WILL <opt> we
+     *  reply IAC DO <opt>; on IAC DO <opt> we reply IAC WILL <opt>. Hardcoded
+     *  options (GMCP=201, MSDP=69, TTYPE=24) already negotiate inline and
+     *  don't need to be registered. Returns true if the option was newly
+     *  added, false if it was already present. */
+    addSupportedTelnetOption(option: number): boolean {
+        if (!Number.isFinite(option)) return false;
+        const opt = Math.trunc(option) & 0xff;
+        if (this.supportedTelnetOptions.has(opt)) return false;
+        this.supportedTelnetOptions.add(opt);
+        return true;
     }
 
     setPromptTimeoutMs(ms: number): void {
@@ -233,6 +257,7 @@ export class MudClient {
                         // offer MSDP/GMCP until this handshake completes.
                         this.sendRaw(TTYPE_WILL);
                     }
+                    this.scanTelnetOptions(data);
                     this.echoHandler.processData(data);
                     this.eventBus.emit('socket.incoming', data);
                     try {
@@ -392,6 +417,47 @@ export class MudClient {
             console.error('Error sending MSDP message:', error);
             this.eventBus.emit('error', error);
             return false;
+        }
+    }
+
+    /** Walk a Latin-1 byte-string for IAC sequences, auto-respond to any
+     *  WILL/DO whose option byte is in `supportedTelnetOptions`, and raise
+     *  `telnet.event` for every WILL/WONT/DO/DONT/SB whose option isn't
+     *  natively handled (the hardcoded GMCP/MSDP/TTYPE/MCCP/ECHO set). The
+     *  Mudlet `sysTelnetEvent(type, option, message)` parity event is fired
+     *  by ScriptingEngine from this signal.
+     *
+     *  `type` mirrors Mudlet's TLuaInterpreter mapping: 1=WILL, 2=WONT,
+     *  3=DO, 4=DONT, 5=SB. */
+    private scanTelnetOptions(data: string): void {
+        this.telnetEventSeen.clear();
+        const IAC = 0xFF;
+        // Telnet command codes
+        const SB = 0xFA, WILL = 0xFB, WONT = 0xFC, DO = 0xFD, DONT = 0xFE;
+        // Options the client negotiates inline elsewhere — exclude from
+        // sysTelnetEvent so handlers see only "everything else".
+        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 69 /* MSDP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 201 /* GMCP */]);
+        for (let i = 0; i < data.length - 2; i++) {
+            if (data.charCodeAt(i) !== IAC) continue;
+            const cmd = data.charCodeAt(i + 1);
+            if (cmd !== WILL && cmd !== WONT && cmd !== DO && cmd !== DONT && cmd !== SB) continue;
+            const opt = data.charCodeAt(i + 2);
+            // Auto-negotiate registered options. SB carries data so we don't
+            // mirror it; for the four negotiation commands we accept WILL/DO
+            // for supported options.
+            if (this.supportedTelnetOptions.has(opt)) {
+                if (cmd === WILL) this.sendRaw(String.fromCharCode(IAC, DO,   opt));
+                if (cmd === DO)   this.sendRaw(String.fromCharCode(IAC, WILL, opt));
+            }
+            if (HARDCODED.has(opt) || this.supportedTelnetOptions.has(opt)) continue;
+            // Dedupe within this frame so a server that spams the same option
+            // doesn't flood handlers.
+            const key = (cmd << 8) | opt;
+            if (this.telnetEventSeen.has(key)) continue;
+            this.telnetEventSeen.add(key);
+            const typeNum = cmd === WILL ? 1 : cmd === WONT ? 2 : cmd === DO ? 3 : cmd === DONT ? 4 : 5;
+            const cmdName = cmd === WILL ? 'WILL' : cmd === WONT ? 'WONT' : cmd === DO ? 'DO' : cmd === DONT ? 'DONT' : 'SB';
+            this.eventBus.emit('telnet.event', typeNum, opt, `IAC ${cmdName} ${opt}`);
         }
     }
 

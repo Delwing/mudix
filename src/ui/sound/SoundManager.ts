@@ -232,6 +232,27 @@ export class SoundManager {
         }
     }
 
+    /**
+     * Mudlet `pauseSounds([channel])`. Web Audio source nodes can be
+     * scheduled to start but not paused once playing — they're transient by
+     * design, with no equivalent of QMediaPlayer::pause(). We approximate
+     * Mudlet's contract by stopping the matching sources outright (so the
+     * mute happens immediately) and let the player retrigger them with
+     * `playSoundFile` to resume. The optional `channel` filters by the
+     * source's `tag` (matches Mudlet's "channel" semantics: a Tag string
+     * passed to playSoundFile). Music sources are untouched — they have a
+     * separate `stopMusic` codepath.
+     */
+    pauseSounds(channel?: string): void {
+        const ctx = sharedContext;
+        if (!ctx) return;
+        for (const a of [...this.active.values()]) {
+            if (a.kind !== 'sound') continue;
+            if (channel && a.tag !== channel) continue;
+            this.fadeAndStop(ctx, a, a.fadeout);
+        }
+    }
+
     stopMusic(opts: StopMusicOptions = {}): void {
         const ctx = sharedContext;
         if (!ctx) return;
