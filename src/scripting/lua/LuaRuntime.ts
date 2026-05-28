@@ -449,6 +449,14 @@ export class LuaRuntime implements IScriptingRuntime {
             });
             return true;
         });
+        // Mudlet `closeMapWidget() → true`. Closes the dockable map widget
+        // (id `map`, opened by `openMapWidget`). Returns false when no map
+        // widget is currently open — Mudlet warns/returns nil in that case.
+        this.lua.global.set('closeMapWidget', () => {
+            if (!this.api.windows.has('map')) return false;
+            this.api.windows.close('map');
+            return true;
+        });
         // Mudlet clearUserWindow([name]) — defaults to clearing the main
         // console when no name is given (matches `clearWindow` behaviour).
         this.lua.global.set("clearUserWindow", (window?: unknown) => {

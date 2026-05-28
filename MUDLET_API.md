@@ -152,7 +152,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `clearRoomUserData(roomID)` | ✅ | Bridge.lua → `__clearRoomUserData` |
 | `clearRoomUserDataItem(roomID, key)` | ✅ | Bridge.lua → `__clearRoomUserDataItem` |
 | `clearSpecialExits(roomID)` | ✅ | Removes special exits and the locks/doors/custom lines keyed by their commands |
-| `closeMapWidget()` | 🚧 | Programmatic close of the mapper panel |
+| `closeMapWidget()` | ✅ | Closes the dockable map widget (id `map`); returns false if none open |
 | `connectExitStub(fromID, dir)` / `(fromID, toID[, dir])` | ✅ | Direction-only finds the nearest in-area room with a matching reverse stub (Mudlet's unit-vector/compSign search); toID-only requires exactly one reverse-stub pair |
 | `createMapLabel(areaID, text, x, y, z, fg, bg, …)` | 🚧 | Programmatic label creation not wired |
 | `createMapImageLabel(areaID, imagePath, x, y, z, w, h, zoom, …)` | 🚧 | |
