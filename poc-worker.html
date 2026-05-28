@@ -17,7 +17,8 @@
         font-size: 13px;
       }
       h1 { font-size: 14px; margin: 0 0 12px 0; }
-      .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+      h2 { font-size: 12px; margin: 16px 0 6px 0; color: #aaa; font-weight: normal; text-transform: uppercase; letter-spacing: 0.05em; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
       button {
         background: #2a2a2a;
         color: #ddd;
@@ -30,6 +31,9 @@
       }
       button:hover:not(:disabled) { background: #333; }
       button:disabled { opacity: 0.4; cursor: not-allowed; }
+      button.worker { border-color: #4a6f8f; }
+      button.main   { border-color: #8f6f4a; }
+      button.compare { border-color: #6f8f4a; }
       input, textarea {
         background: #111;
         color: #ddd;
@@ -44,32 +48,56 @@
         background: #0d0d0d;
         border: 1px solid #333;
         padding: 8px;
-        height: 360px;
+        height: 380px;
         overflow: auto;
         white-space: pre-wrap;
         word-break: break-word;
         border-radius: 3px;
       }
-      .ok  { color: #6fdb6f; }
-      .err { color: #ff7070; }
-      .dim { color: #888; }
+      .ok   { color: #6fdb6f; }
+      .err  { color: #ff7070; }
+      .dim  { color: #888; }
+      .w    { color: #8fbfdf; }
+      .m    { color: #dfbf8f; }
       label { font-size: 12px; color: #aaa; }
+      .legend { font-size: 11px; color: #888; margin-left: 4px; }
     </style>
   </head>
   <body>
-    <h1>mudix · scripting worker PoC</h1>
+    <h1>mudix · scripting worker PoC <span class="legend">(worker vs. main thread)</span></h1>
+
     <div class="row">
       <label>connectionId <input id="cid" value="poc-1" /></label>
-      <button id="init">init worker</button>
-      <button id="shutdown" disabled>shutdown</button>
+      <label>rows/files <input id="rows" type="number" value="1000" style="width:80px"/></label>
+    </div>
+
+    <h2>lifecycle</h2>
+    <div class="row">
+      <button id="init-worker" class="worker">init worker host</button>
+      <button id="init-main" class="main">init main-thread host</button>
+      <button id="init-both" class="compare">init both</button>
+      <button id="shutdown" disabled>shutdown all</button>
+    </div>
+
+    <h2>benchmarks</h2>
+    <div class="row">
+      <button id="bench-sql-worker" class="worker" disabled>sqlite · worker</button>
+      <button id="bench-sql-main"   class="main"   disabled>sqlite · main</button>
+      <button id="bench-sql-cmp"    class="compare" disabled>sqlite · both ▶</button>
     </div>
     <div class="row">
-      <label>rows <input id="rows" type="number" value="1000" style="width:80px"/></label>
-      <button id="bench-sql" disabled>bench: sqlite</button>
-      <button id="bench-vfs" disabled>bench: vfs</button>
-      <button id="bench-boundary" disabled>bench: boundary</button>
+      <button id="bench-vfs-worker" class="worker" disabled>vfs · worker</button>
+      <button id="bench-vfs-main"   class="main"   disabled>vfs · main</button>
+      <button id="bench-vfs-cmp"    class="compare" disabled>vfs · both ▶</button>
     </div>
-    <textarea id="lua" spellcheck="false">-- custom Lua
+    <div class="row">
+      <button id="bench-bnd-worker" class="worker" disabled>boundary · worker</button>
+      <button id="bench-bnd-main"   class="main"   disabled>boundary · main</button>
+      <button id="bench-bnd-cmp"    class="compare" disabled>boundary · both ▶</button>
+    </div>
+
+    <h2>custom lua</h2>
+    <textarea id="lua" spellcheck="false">-- runs against whichever host you click
 local id = mudix.db.open('poc/test.sqlite')
 mudix.db.exec(id, 'CREATE TABLE IF NOT EXISTS hits(at REAL, msg TEXT)')
 mudix.db.exec(id, "INSERT INTO hits VALUES(" .. mudix.now() .. ", 'hello')")
@@ -78,9 +106,11 @@ mudix.log('rows=' .. tostring(r.rows[1][1]))
 mudix.db.close(id)
 </textarea>
     <div class="row">
-      <button id="run" disabled>run lua</button>
+      <button id="run-worker" class="worker" disabled>run on worker</button>
+      <button id="run-main"   class="main"   disabled>run on main</button>
       <button id="clear">clear log</button>
     </div>
+
     <div id="out"></div>
 
     <script type="module" src="/src/poc-worker.ts"></script>
