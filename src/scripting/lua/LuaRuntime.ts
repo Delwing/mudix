@@ -1029,6 +1029,35 @@ export class LuaRuntime implements IScriptingRuntime {
             if (!Number.isFinite(rid)) return null;
             return this.api.map.getRoomUserDataKeys(rid) ?? null;
         });
+        // Mudlet getAllRoomUserData(id) → { key = value }, or (false, errMsg)
+        // when the room is missing. JS hands back the dict (string keys cross
+        // the bridge as-is) or `null`; Bridge.lua shapes the miss.
+        this.lua.global.set('__getAllRoomUserData', (id: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid)) return null;
+            return this.api.map.getAllRoomUserData(rid) ?? null;
+        });
+        // Mudlet clearRoomUserData(id) / clearRoomUserDataItem(id, key) →
+        // bool, or (false, errMsg) when the room is missing. JS returns
+        // `null` for the missing-room case so Bridge.lua can distinguish it
+        // from the "nothing to clear" false.
+        this.lua.global.set('__clearRoomUserData', (id: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid)) return null;
+            return this.api.map.clearRoomUserData(rid) ?? null;
+        });
+        this.lua.global.set('__clearRoomUserDataItem', (id: unknown, k: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid)) return null;
+            return this.api.map.clearRoomUserDataItem(rid, String(k ?? '')) ?? null;
+        });
+        // Mudlet resetRoomArea(id) — move the room to the void area (-1).
+        // (false, errMsg) when the room is missing; Bridge.lua shapes it.
+        this.lua.global.set('__resetRoomArea', (id: unknown) => {
+            const rid = Number(id);
+            if (!Number.isFinite(rid)) return null;
+            return this.api.map.resetRoomArea(rid) ?? null;
+        });
 
         // ── Map-level user data ───────────────────────────────────────────────
         // Mudlet getMapUserData(key) / setMapUserData(key, value) /
@@ -1269,6 +1298,54 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('deleteArea', (idOrName: unknown) =>
             this.api.map.deleteArea(idOrName as number | string));
         this.lua.global.set('getAreaTable',   ()                        => this.api.map.getAreaTable());
+        // Mudlet getAreaTableSwap() → { [areaID] = name }. JS hands back an
+        // object whose numeric ids cross the bridge as stringified keys;
+        // Bridge.lua re-keys them to integers (same dance as getMapLabels).
+        this.lua.global.set('__getAreaTableSwap', ()                    => this.api.map.getAreaTableSwap());
+        // ── Area user data ────────────────────────────────────────────────────
+        // Mudlet getAreaUserData distinguishes a missing area from a missing
+        // key; the raw entry point reports which case applied so Bridge.lua can
+        // shape Mudlet's (false, errMsg) multi-return.
+        this.lua.global.set('__getAreaUserData', (id: unknown, k: unknown) => {
+            const aid = Number(id);
+            const key = String(k ?? '');
+            if (!Number.isFinite(aid) || !this.api.map.hasArea(aid)) {
+                return { miss: 'area', id: aid };
+            }
+            const v = this.api.map.getAreaUserData(aid, key);
+            return v === undefined ? { miss: 'key', key } : { value: v };
+        });
+        this.lua.global.set('setAreaUserData', (id: unknown, k: unknown, v: unknown) =>
+            this.api.map.setAreaUserData(Number(id), String(k ?? ''), String(v ?? '')));
+        // getAllAreaUserData(id) → { key = value }, or (false, errMsg) when the
+        // area is missing (JS hands back `null` for the miss).
+        this.lua.global.set('__getAllAreaUserData', (id: unknown) => {
+            const aid = Number(id);
+            if (!Number.isFinite(aid)) return null;
+            return this.api.map.getAllAreaUserData(aid) ?? null;
+        });
+        // clearAreaUserData(id) / clearAreaUserDataItem(id, key) → bool, or
+        // (false, errMsg) when the area is missing (JS `null`).
+        this.lua.global.set('__clearAreaUserData', (id: unknown) => {
+            const aid = Number(id);
+            if (!Number.isFinite(aid)) return null;
+            return this.api.map.clearAreaUserData(aid) ?? null;
+        });
+        this.lua.global.set('__clearAreaUserDataItem', (id: unknown, k: unknown) => {
+            const aid = Number(id);
+            if (!Number.isFinite(aid)) return null;
+            return this.api.map.clearAreaUserDataItem(aid, String(k ?? '')) ?? null;
+        });
+        // ── Grid mode ─────────────────────────────────────────────────────────
+        // getGridMode(id) → bool, or (false, errMsg) when the area is missing
+        // (JS `null`). setGridMode(id, bool) → bool (false when area missing).
+        this.lua.global.set('__getGridMode', (id: unknown) => {
+            const aid = Number(id);
+            if (!Number.isFinite(aid)) return null;
+            return this.api.map.getGridMode(aid) ?? null;
+        });
+        this.lua.global.set('setGridMode', (id: unknown, b: unknown) =>
+            this.api.map.setGridMode(Number(id), !!b));
         // getRoomAreaName is bidirectional: number → name string, name → number.
         // Returns false when the input cannot be resolved (matches the
         // existing convention; Mudlet returns nil/false on miss).

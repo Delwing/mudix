@@ -614,6 +614,18 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `getRoomUserData(roomID, key)` | ✅ | Bridge.lua → `__getRoomUserData` |
 | `setRoomUserData(roomID, key, value)` | ✅ | JS-exposed |
 | `getRoomUserDataKeys(roomID)` | ✅ | Bridge.lua → `__getRoomUserDataKeys`; re-indexes JS 0-based array to 1-based Lua table; `nil` when room missing |
+| `getAllRoomUserData(roomID)` | ✅ | Bridge.lua → `__getAllRoomUserData`; full `{key=value}` dict, `(false, errMsg)` when room missing |
+| `clearRoomUserData(roomID)` | ✅ | Bridge.lua → `__clearRoomUserData`; `true`/`false`, `(false, errMsg)` when room missing |
+| `clearRoomUserDataItem(roomID, key)` | ✅ | Bridge.lua → `__clearRoomUserDataItem`; `(false, errMsg)` when room missing |
+| `resetRoomArea(roomID)` | ✅ | Bridge.lua → `__resetRoomArea`; moves the room to the void area (-1); `(false, errMsg)` when room missing |
+| `getAreaUserData(areaID, key)` | ✅ | Bridge.lua → `__getAreaUserData`; distinguishes a missing area from a missing key in the `(false, errMsg)` return |
+| `setAreaUserData(areaID, key, value)` | ✅ | JS-exposed; `false` when the area is missing |
+| `getAllAreaUserData(areaID)` | ✅ | Bridge.lua → `__getAllAreaUserData`; full `{key=value}` dict, `(false, errMsg)` when area missing |
+| `clearAreaUserData(areaID)` | ✅ | Bridge.lua → `__clearAreaUserData`; `(false, errMsg)` when area missing |
+| `clearAreaUserDataItem(areaID, key)` | ✅ | Bridge.lua → `__clearAreaUserDataItem`; `(false, errMsg)` when area missing |
+| `getGridMode(areaID)` | ✅ | Bridge.lua → `__getGridMode`; `(false, errMsg)` when area missing (note `false` is also a valid grid-mode value) |
+| `setGridMode(areaID, bool)` | ✅ | JS-exposed (`api.map.setGridMode`); `false` when the area is missing |
+| `getAreaTableSwap()` | ✅ | Bridge.lua → `__getAreaTableSwap`; re-keys numeric-string ids back to integers — `{[areaID]=name}`, inverse of `getAreaTable` |
 | `getMapLabels(areaID)` | ✅ | Bridge.lua → `__getMapLabels`; re-keys numeric-string keys back to integer label ids |
 | `getMapLabel(areaID, labelID\|labelText)` | ✅ | Bridge.lua → `__getMapLabel`; by-id returns flat properties, by-text returns `{[id]=properties}` matches |
 | `loadMap(path)` | ✅ | JS-exposed |

@@ -319,6 +319,99 @@ function getRoomUserData(id, key, fullErr)
     return r or ""
 end
 
+-- Mudlet getAllRoomUserData(id) → { key = value } table, or (false, errMsg)
+-- when the room is missing. JS hands the dict over with its string keys intact
+-- (and `nil` for the miss), so we only shape the miss case.
+function getAllRoomUserData(id)
+    local raw = __getAllRoomUserData(id)
+    if raw == nil then return false, "room with given id not found" end
+    return raw
+end
+
+-- Mudlet clearRoomUserData(id) → true when data was cleared, false when the
+-- room had none, (false, errMsg) when the room is missing (JS hands back nil).
+function clearRoomUserData(id)
+    local r = __clearRoomUserData(id)
+    if r == nil then return false, "room with given id not found" end
+    return r
+end
+
+-- Mudlet clearRoomUserDataItem(id, key) → true when the key existed, false
+-- when it didn't, (false, errMsg) when the room is missing.
+function clearRoomUserDataItem(id, key)
+    local r = __clearRoomUserDataItem(id, key)
+    if r == nil then return false, "room with given id not found" end
+    return r
+end
+
+-- Mudlet resetRoomArea(id) → true on success, (false, errMsg) when the room is
+-- missing. Moves the room to the void area (-1).
+function resetRoomArea(id)
+    local r = __resetRoomArea(id)
+    if r == nil then return false, "room with given id not found" end
+    return r
+end
+
+-- Mudlet getAreaTableSwap() → { [areaID] = name }. JS hands the record over
+-- with numeric ids stringified (wasmoon convention); re-key via tonumber so
+-- scripts can index by integer area id.
+function getAreaTableSwap()
+    local raw = __getAreaTableSwap()
+    local out = {}
+    if type(raw) == 'table' then
+        for k, v in pairs(raw) do
+            local id = tonumber(k)
+            if id then out[id] = v end
+        end
+    end
+    return out
+end
+
+-- Mudlet getAreaUserData(areaID, key) → the stored value, or (false, errMsg)
+-- distinguishing a missing area from a missing key (mirrors getRoomUserData's
+-- fullErr branch — area data has no short-circuit "" default in Mudlet).
+function getAreaUserData(areaId, key)
+    local r = __getAreaUserData(areaId, key)
+    if type(r) == 'table' then
+        if r.value ~= nil then return r.value end
+        if r.miss == 'area' then
+            return false, "no area with id " .. tostring(r.id or areaId) .. " found"
+        end
+        return false, "no user data with key '" .. tostring(r.key or key) .. "' in area"
+    end
+    return false, "no area user data"
+end
+
+-- Mudlet getAllAreaUserData(areaID) → { key = value }, or (false, errMsg) when
+-- the area is missing.
+function getAllAreaUserData(areaId)
+    local raw = __getAllAreaUserData(areaId)
+    if raw == nil then return false, "no area with given id found" end
+    return raw
+end
+
+-- Mudlet clearAreaUserData(areaID) → true/false, or (false, errMsg) when the
+-- area is missing. clearAreaUserDataItem(areaID, key) mirrors it for one key.
+function clearAreaUserData(areaId)
+    local r = __clearAreaUserData(areaId)
+    if r == nil then return false, "no area with given id found" end
+    return r
+end
+
+function clearAreaUserDataItem(areaId, key)
+    local r = __clearAreaUserDataItem(areaId, key)
+    if r == nil then return false, "no area with given id found" end
+    return r
+end
+
+-- Mudlet getGridMode(areaID) → bool, or (false, errMsg) when the area is
+-- missing (JS hands back nil for the miss; false is a valid grid-mode value).
+function getGridMode(areaId)
+    local r = __getGridMode(areaId)
+    if r == nil then return false, "no area with given id found" end
+    return r
+end
+
 -- Mudlet getRoomName(id) → name string on success, (false, errMsg) on miss.
 function getRoomName(id)
     local n = __getRoomName(id)

@@ -236,3 +236,79 @@ describe('msdp global — setMsdpValue', () => {
     expect(env.run('return msdp.ROOM.NAME')).toBe('elsewhere');
   });
 });
+
+// Mapper data completeness: room/area user-data, grid mode, getAreaTableSwap
+// and resetRoomArea. All are pure MapStore operations; these drive the real
+// Lua globals end-to-end (wasmoon → MapStore → back) on an empty in-memory map.
+describe('room user data — getAllRoomUserData / clearRoomUserData(Item) / resetRoomArea', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('round-trips and clears all room user data', () => {
+    env.run('addRoom(10)');
+    env.run('setRoomUserData(10, "name", "Square")');
+    env.run('setRoomUserData(10, "terrain", "grass")');
+    expect(env.run('return (getAllRoomUserData(10)).name')).toBe('Square');
+    expect(env.run('return (getAllRoomUserData(10)).terrain')).toBe('grass');
+    // clear one item
+    expect(env.run('return (clearRoomUserDataItem(10, "terrain"))')).toBe(true);
+    expect(env.run('return (getAllRoomUserData(10)).terrain')).toBe(null);
+    // clear the rest
+    expect(env.run('return (clearRoomUserData(10))')).toBe(true);
+    expect(env.run('return next(getAllRoomUserData(10))')).toBe(null);
+    // a second clear finds nothing
+    expect(env.run('return (clearRoomUserData(10))')).toBe(false);
+  });
+
+  it('reports the miss for a non-existent room', () => {
+    expect(env.run('return (getAllRoomUserData(999))')).toBe(false);
+    expect(env.run('return (clearRoomUserData(999))')).toBe(false);
+    expect(env.run('return (clearRoomUserDataItem(999, "x"))')).toBe(false);
+    expect(env.run('return (resetRoomArea(999))')).toBe(false);
+  });
+
+  it('resetRoomArea moves a room to the void area (-1)', () => {
+    env.run('addRoom(20, 5)');
+    expect(env.run('return getRoomArea(20)')).toBe(5);
+    expect(env.run('return (resetRoomArea(20))')).toBe(true);
+    expect(env.run('return getRoomArea(20)')).toBe(-1);
+  });
+});
+
+describe('area user data + grid mode + getAreaTableSwap', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('round-trips and clears area user data', () => {
+    const aid = env.run('return (addAreaName("Forest"))') as number;
+    expect(typeof aid).toBe('number');
+    expect(env.run(`return (setAreaUserData(${aid}, "music", "birds.mp3"))`)).toBe(true);
+    expect(env.run(`return (getAreaUserData(${aid}, "music"))`)).toBe('birds.mp3');
+    expect(env.run(`return (getAllAreaUserData(${aid})).music`)).toBe('birds.mp3');
+    expect(env.run(`return (clearAreaUserDataItem(${aid}, "music"))`)).toBe(true);
+    expect(env.run(`return (getAreaUserData(${aid}, "music"))`)).toBe(false);
+    expect(env.run(`return (clearAreaUserData(${aid}))`)).toBe(false); // already empty
+  });
+
+  it('reports the miss for a non-existent area', () => {
+    expect(env.run('return (getAreaUserData(999, "k"))')).toBe(false);
+    expect(env.run('return (getAllAreaUserData(999))')).toBe(false);
+    expect(env.run('return (setAreaUserData(999, "k", "v"))')).toBe(false);
+    expect(env.run('return (getGridMode(999))')).toBe(false);
+    expect(env.run('return (setGridMode(999, true))')).toBe(false);
+  });
+
+  it('toggles grid mode on an area', () => {
+    const aid = env.run('return (addAreaName("Cave"))') as number;
+    expect(env.run(`return (getGridMode(${aid}))`)).toBe(false);
+    expect(env.run(`return (setGridMode(${aid}, true))`)).toBe(true);
+    expect(env.run(`return (getGridMode(${aid}))`)).toBe(true);
+  });
+
+  it('getAreaTableSwap keys areas by integer id', () => {
+    const aid = env.run('return (addAreaName("Plains"))') as number;
+    expect(env.run(`return (getAreaTableSwap())[${aid}]`)).toBe('Plains');
+  });
+});

@@ -875,6 +875,55 @@ export class MapStore {
         return Object.keys(room.userData);
     }
 
+    /**
+     * Mudlet `getAllRoomUserData(roomID)` — every key/value pair stored on the
+     * room as `{ key = value }`. Returns `undefined` when the room itself does
+     * not exist (the Lua binding turns that into Mudlet's `(false, errMsg)`).
+     */
+    getAllRoomUserData(id: number): Record<string, string> | undefined {
+        const room = this.rooms.get(id);
+        if (!room) return undefined;
+        return { ...room.userData };
+    }
+
+    /**
+     * Mudlet `clearRoomUserData(roomID)` — wipe every user-data entry on the
+     * room. Returns `true` when something was cleared, `false` when it was
+     * already empty, and `undefined` when the room doesn't exist.
+     */
+    clearRoomUserData(id: number): boolean | undefined {
+        const room = this.rooms.get(id);
+        if (!room) return undefined;
+        if (Object.keys(room.userData).length === 0) return false;
+        room.userData = {};
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `clearRoomUserDataItem(roomID, key)` — drop a single user-data
+     * key. Returns `true` when the key existed, `false` when it didn't, and
+     * `undefined` when the room doesn't exist.
+     */
+    clearRoomUserDataItem(id: number, key: string): boolean | undefined {
+        const room = this.rooms.get(id);
+        if (!room) return undefined;
+        if (!Object.prototype.hasOwnProperty.call(room.userData, key)) return false;
+        delete room.userData[key];
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `resetRoomArea(roomID)` — move the room back to the default "void"
+     * area (-1), matching Mudlet's `setRoomArea(id, -1)`. Returns `true` on
+     * success, `undefined` when the room doesn't exist (Lua → `(false,errMsg)`).
+     */
+    resetRoomArea(id: number): boolean | undefined {
+        if (!this.rooms.has(id)) return undefined;
+        return this.setRoomArea(id, -1);
+    }
+
     // ── Map-level user data ───────────────────────────────────────────────────
     // Mudlet getMapUserData/setMapUserData/clearMapUserData operate on the
     // map's mUserData dict. Loaded binary maps populate this via
@@ -972,6 +1021,113 @@ export class MapStore {
         const out: Record<string, number> = {};
         for (const [id, name] of this.areaNames) out[name] = id;
         return out;
+    }
+
+    /**
+     * Mudlet `getAreaTableSwap()` — the inverse of {@link getAreaTable}: every
+     * area keyed by id → name (`{ [areaID] = name }`). The Lua wrapper re-keys
+     * the wasmoon-stringified ids back to integers.
+     */
+    getAreaTableSwap(): Record<number, string> {
+        const out: Record<number, string> = {};
+        for (const [id, name] of this.areaNames) out[id] = name;
+        return out;
+    }
+
+    /** True when an area with this id exists. */
+    hasArea(id: number): boolean { return this.areas.has(id); }
+
+    // ── Area user data ────────────────────────────────────────────────────────
+    // Mudlet getAreaUserData/setAreaUserData/getAllAreaUserData/clearAreaUserData
+    // operate on the per-area userData dict (MudletArea.userData), which loaded
+    // binary maps populate and which serializes back out via toMudletMap().
+
+    /**
+     * Mudlet `getAreaUserData(areaID, key)` — the stored value, or `undefined`
+     * when the key is absent. Area existence is checked by the binding via
+     * {@link hasArea} so it can distinguish the two miss cases.
+     */
+    getAreaUserData(id: number, key: string): string | undefined {
+        const area = this.areas.get(id);
+        if (!area) return undefined;
+        return Object.prototype.hasOwnProperty.call(area.userData, key)
+            ? area.userData[key]
+            : undefined;
+    }
+
+    /**
+     * Mudlet `setAreaUserData(areaID, key, value)` — store a string value on
+     * the area. Returns `false` when the area doesn't exist.
+     */
+    setAreaUserData(id: number, key: string, value: string): boolean {
+        const area = this.areas.get(id);
+        if (!area) return false;
+        area.userData[key] = value;
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `getAllAreaUserData(areaID)` — every key/value pair on the area.
+     * Returns `undefined` when the area doesn't exist.
+     */
+    getAllAreaUserData(id: number): Record<string, string> | undefined {
+        const area = this.areas.get(id);
+        if (!area) return undefined;
+        return { ...area.userData };
+    }
+
+    /**
+     * Mudlet `clearAreaUserData(areaID)` — wipe every entry. Returns `true`
+     * when something was cleared, `false` when already empty, `undefined` when
+     * the area doesn't exist.
+     */
+    clearAreaUserData(id: number): boolean | undefined {
+        const area = this.areas.get(id);
+        if (!area) return undefined;
+        if (Object.keys(area.userData).length === 0) return false;
+        area.userData = {};
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `clearAreaUserDataItem(areaID, key)` — drop a single key. Returns
+     * `true` when it existed, `false` when it didn't, `undefined` when the area
+     * doesn't exist.
+     */
+    clearAreaUserDataItem(id: number, key: string): boolean | undefined {
+        const area = this.areas.get(id);
+        if (!area) return undefined;
+        if (!Object.prototype.hasOwnProperty.call(area.userData, key)) return false;
+        delete area.userData[key];
+        this.notify();
+        return true;
+    }
+
+    // ── Grid mode ───────────────────────────────────────────────────────────--
+
+    /**
+     * Mudlet `getGridMode(areaID)` — whether the area is drawn on a fixed grid
+     * (rooms snapped to integer coordinates, no custom exit lines). Returns
+     * `undefined` when the area doesn't exist.
+     */
+    getGridMode(id: number): boolean | undefined {
+        const area = this.areas.get(id);
+        if (!area) return undefined;
+        return area.gridMode;
+    }
+
+    /**
+     * Mudlet `setGridMode(areaID, true/false)` — toggle the area's grid layout.
+     * Returns `false` when the area doesn't exist.
+     */
+    setGridMode(id: number, gridMode: boolean): boolean {
+        const area = this.areas.get(id);
+        if (!area) return false;
+        area.gridMode = gridMode;
+        this.notify();
+        return true;
     }
 
     /**
