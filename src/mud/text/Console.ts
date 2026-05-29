@@ -143,6 +143,28 @@ export class Console {
 
     get currentPartial(): AnsiAwareBuffer { return this.partial; }
 
+    /**
+     * Promote the in-flight partial (an echo without a trailing newline, e.g.
+     * a trigger's `cecho("\n text")`) into a finished history line and return
+     * it, leaving a fresh empty partial behind. Returns null when nothing is
+     * pending. Unlike `clear()`, the existing history is preserved so
+     * line-number / selectString lookups for later lines in the same flush
+     * batch stay valid — this is what lets a per-line trigger-echo flush place
+     * the echoed line right after the line it was echoed on. The line is NOT
+     * enqueued into `pending` (the caller emits it explicitly), so a following
+     * `takeLines()` won't re-emit it.
+     */
+    completePartialLine(): AnsiAwareBuffer | null {
+        if (this.partial.length === 0) return null;
+        const buf = this.partial;
+        this.history.push(buf);
+        this.partial = new AnsiAwareBuffer();
+        this.cursorIdx = -1;
+        this.cursorCol = 0;
+        this.evict();
+        return buf;
+    }
+
     clear(): void {
         this.history = [];
         this.pending = [];
@@ -237,9 +259,11 @@ export class Console {
     }
 
     /** Mark cursor as positioned at the end of existing rendered content, so the
-     *  next leading `\n` is treated as cursor advance rather than a blank line. */
-    markCursorAtEnd(): void {
-        this.consumeLeadingNewline = true;
+     *  next leading `\n` is treated as cursor advance rather than a blank line.
+     *  Pass `false` to clear the latch (e.g. when leaving trigger processing) so
+     *  it can't leak onto an unrelated later echo. */
+    markCursorAtEnd(value: boolean = true): void {
+        this.consumeLeadingNewline = value;
     }
 
     // Mudlet's TConsole returns 0-indexed cursor.y() for getLineNumber and

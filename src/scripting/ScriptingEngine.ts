@@ -2388,13 +2388,19 @@ export class ScriptingEngine {
                     if (shouldRender) {
                         this.session.events.emit('message', buffer, type, Date.now());
                     }
+
+                    // Flush this line's trigger echoes right after it renders so
+                    // they land in Mudlet's position — directly after the line
+                    // they fired on — instead of being deferred to the end of
+                    // the whole batch (which dumped every line's echo below the
+                    // last rendered line).
+                    this.api.flushDeferredEcho();
                 }
 
                 if (carryEnabled) this.mudCarryState = carryState;
             } finally {
-                // Flush trigger echoes after the group renders so they never
-                // interleave with the batch. `finally` guarantees isDeferringEcho
-                // is reset even if processing throws.
+                // Safety net: guarantees isDeferringEcho is reset and any echo
+                // left buffered by a mid-line throw is flushed.
                 this.api.flushDeferredEcho();
             }
         }

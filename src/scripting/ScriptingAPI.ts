@@ -1749,6 +1749,10 @@ export class ScriptingAPI {
         this.inTriggerProcessing = true;
         this.selection = null;
         this.isDeferringEcho = true;
+        // The trigger cursor sits at the end of the matched line (Mudlet fires
+        // before the line's terminator), so a trigger's `cecho("\n text")`
+        // should advance to a fresh line rather than emit a leading blank row.
+        this.mainConsole.markCursorAtEnd();
     }
 
     /**
@@ -1759,6 +1763,9 @@ export class ScriptingAPI {
     endLine(): void {
         this.inTriggerProcessing = false;
         this.selection = null;
+        // Clear the leading-newline latch so it can't leak onto a later echo
+        // (timer/alias output) if this line's triggers never echoed.
+        this.mainConsole.markCursorAtEnd(false);
     }
 
     /**
@@ -1786,9 +1793,16 @@ export class ScriptingAPI {
     }
 
     /**
-     * Called after all lines in a flushLines batch have been rendered. Emits
-     * any echo output collected during trigger processing, in order, after the
-     * rendered lines.
+     * Flush echo output collected during the just-processed line's trigger run.
+     * Called once per line (right after that line is rendered) so a trigger's
+     * `echo`/`cecho` lands immediately after the line it fired on — matching
+     * Mudlet, where the trigger cursor sits on the matching line and echoed text
+     * is inserted there, not piled at the end of the whole flush batch.
+     *
+     * Emits the completed echo lines, then promotes any trailing partial (an
+     * echo without a closing newline, e.g. `cecho("\n text")`) into its own
+     * line via `completePartialLine` — which preserves history so later lines in
+     * the batch keep correct line numbers, unlike the old wholesale `clear()`.
      */
     flushDeferredEcho(): void {
         this.isDeferringEcho = false;
@@ -1796,10 +1810,9 @@ export class ScriptingAPI {
             this.session.events.emit('message', line, 'trigger-echo');
         }
         this.echoDeferred = [];
-        const partial = this.mainConsole.currentPartial;
-        if (partial.length > 0) {
+        const partial = this.mainConsole.completePartialLine();
+        if (partial) {
             this.session.events.emit('message', partial, 'trigger-echo');
-            this.mainConsole.clear();
         }
         this.session.windows.flushAllLines();
     }
