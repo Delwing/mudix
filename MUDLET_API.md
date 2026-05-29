@@ -164,7 +164,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `deleteRoom(roomID)` | ✅ | JS-exposed |
 | `disableMapInfo(label)` | ✅ | Toggles a registered info contributor off |
 | `enableMapInfo(label)` | ✅ | Toggles a registered info contributor on |
-| `exportAreaImage(areaID)` | 🚧 | No canvas-export pipeline |
+| `exportAreaImage(areaID, filePath [, zLevel])` | ✅ | Renders the area (optionally one z-level) to a PNG in the profile VFS via a headless `mudlet-map-renderer` `PngBytesExporter` (the live view is untouched). The whole area is fitted into the image; hidden rooms follow the current viewing/editing mode. `(true, absPath)` / `(false, errMsg)` via Bridge.lua. Requires the map widget open (Mudlet requires the mapper open) |
 | `getAllAreaUserData(areaID)` | ✅ | Bridge.lua → `__getAllAreaUserData` |
 | `getAllMapUserData()` | ✅ | JS-exposed |
 | `getAllRoomEntrances(roomID)` | ✅ | Sorted, de-duped list of rooms with a stock or special exit into this one |
@@ -338,7 +338,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `reloadModule(name)` | ✅ | JS-exposed |
 | `removeFileWatch(path)` | ✅ | Stops watching a path |
 | `resetLinkStyle(labelName)` / `setLinkStyle(labelName, linkColor, visitedColor[, underline])` | ✅ | Styles the `<a>` links inside a label. `LabelManager` stores the per-label `linkStyle`; `LabelOverlay` injects a `<style>` scoped via the label's `data-mudix-label` selector (`a { color; text-decoration }`, `a:visited { color }`). `underline` defaults to true |
-| `resetProfile()` | 🚧 | Profile reset utility |
+| `resetProfile()` | ✅ | Reloads the profile as if just reopened: clears every UI surface (windows, labels, gauges, command lines, scroll boxes; stops sound/video), recreates the Lua runtime (fresh globals + event handlers), and re-runs all scripts/aliases/triggers/timers/keys from current profile state, re-firing `sysLoadEvent`. Deferred to a fresh task (it closes the running `lua_State`), so call it from an alias / command line, not a script-item — matching Mudlet's own guidance. mudix reloads from the live store, not a re-read of disk |
 | `resumeNamedEventHandler(name)` | ✅ | IDManager.lua |
 | `saveProfile([name])` | ✅ | Bridge.lua → `__mudix_saveProfile` forces the debounced VFS flush through to IndexedDB; `(nil, errMsg)` when no VFS, else `true, path`. `name` ignored (single-profile) |
 | `setConfig(key, value)` | ✅ | JS-exposed |
@@ -456,7 +456,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `tempButton(toolbar, name, code, orientation)` | ✅ | Appends a transient ButtonNode under the named toolbar |
 | `tempButtonToolbar(name, orientation, location)` | ✅ | `orientation`: 0=horizontal, 1=vertical. `location`: 0=top, 1=bottom, 2=left, 3=right, 4=floating |
 | `tempColorTrigger(fg, bg, code)` | ✅ | Matches on ANSI palette indices on the current rendered line (`-1` = any). Non-indexed RGB segments never match a positive index, matching Mudlet's palette-only semantics |
-| `tempComplexRegexTrigger(...)` | 🚧 | Full-fat trigger constructor variant |
+| `tempComplexRegexTrigger(...)` | ✅ | Bridge.lua over the temp regex-trigger primitive. Honours regex + code/fn, **highlight** (`hlFgColor`/`hlBgColor` — colour name / `#rrggbb` / `"r,g,b"`; all occurrences when `matchAll`), **soundFile**, **expireAfter**, and **named triggers** (re-call with an existing name replaces it; `killTrigger(name)` removes it). `multiline`-AND, `filter`, `fireLength`, `lineDelta` and colour-pattern (`fgColor`/`bgColor`) need a permanent trigger (`permRegexTrigger` + editor) and emit a one-time `printDebug` warning when requested |
 | `tempExactMatchTrigger(pattern, code)` | ✅ | Full-line exact match |
 | `tempKey(modifier, key, code)` | ✅ | |
 | `tempLineTrigger(from, count, code)` | ✅ | Position-based: fires on `count` lines starting `from` lines ahead, then self-expires |
@@ -938,7 +938,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysPathChanged` | ✅ | VFS mutation of a watched path — arg: path |
 | `sysMediaFinished` | ✅ | Sound/music/video source ended or stopped — args: name, path |
 | `sysSettingChanged` | ✅ | Per-connection profile-settings mutation. One event per changed field — args: setting, newValue (`undefined` when unset) |
-| `sysSoundFinished` | 🚧 | Obsolete in Mudlet 4.15 (superseded by `sysMediaFinished`) but worth firing as a compat alias for older scripts |
+| `sysSoundFinished` | ✅ | Pre-4.15 name, superseded by `sysMediaFinished`. Fired as a compat alias alongside it from the `SoundManager` finished path — args: name, path |
 | `sysIrcMessage` | ❌ | No IRC client in mudix; nothing fires it (no stub needed — events don't break callers when never raised) |
 
 > **Not Mudlet events** — do not implement under these names: `sysConnect` / `sysDisconnect` / `sysGmcpMessage` (Mudlet uses `sysConnectionEvent` / `sysDisconnectionEvent` and the `gmcp.<path>` event chain), `sysUserWindowCreated` / `sysUserWindowClosed`, `sysMapperLocationChanged`.
@@ -961,7 +961,6 @@ Pure Lua on top of the overlay primitive API. No additional JS required.
 | `Geyser.CommandLine` | ✅ | Bundled; the underlying `createCommandLine` overlay primitive is now wired |
 | `Geyser.UserWindow` | ✅ | Bundled; uses `openUserWindow` |
 | `Geyser.ScrollBox` | ✅ | Bundled; the underlying `createScrollBox`/`deleteScrollBox` overlay primitives are now wired (see UI Functions) |
-| `Geyser.ReflowContainer` | 🚧 | Not bundled in `LuaGlobal.lua` load list |
 
 ---
 

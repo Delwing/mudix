@@ -1194,3 +1194,114 @@ describe('createScrollBox / deleteScrollBox — overlay container + routing', ()
     expect(env.run('return (deleteScrollBox("sb5"))')).toBe(false);
   });
 });
+
+// tempComplexRegexTrigger is Bridge.lua over the temp regex-trigger primitive.
+// Firing is driven via api.triggers.processTemp (same as the tempLineTrigger
+// Lua-binding tests above). The highlight path reads the live main-console line
+// and needs the full render pipeline, so it isn't exercised here.
+describe('tempComplexRegexTrigger — Lua binding', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('returns a numeric id and runs the code, with capture groups in matches', () => {
+    const id = env.run(String.raw`return tempComplexRegexTrigger("", "^hello ([a-z]+)$", [==[ seen = matches[2] ]==], 0, 0, 0, 0, 0)`);
+    expect(typeof id).toBe('number');
+    expect(id as number).toBeGreaterThan(0);
+    env.api.triggers.processTemp('hello world');
+    expect(env.run('return seen')).toBe('world');
+  });
+
+  it('expireAfter self-removes after N fires', () => {
+    env.run(String.raw`count = 0; tempComplexRegexTrigger("", "^tick$", [==[ count = count + 1 ]==], 0, 0, 0, 0, 0, nil, nil, nil, 0, 0, 2)`);
+    env.api.triggers.processTemp('tick');
+    env.api.triggers.processTemp('tick');
+    env.api.triggers.processTemp('tick'); // already expired
+    expect(env.run('return count')).toBe(2);
+  });
+
+  it('re-calling with an existing name replaces the prior trigger', () => {
+    env.run(String.raw`hits = ""`);
+    env.run(String.raw`tempComplexRegexTrigger("dup", "^ping$", [==[ hits = hits .. "A" ]==], 0, 0, 0, 0, 0)`);
+    env.run(String.raw`tempComplexRegexTrigger("dup", "^ping$", [==[ hits = hits .. "B" ]==], 0, 0, 0, 0, 0)`);
+    env.api.triggers.processTemp('ping');
+    expect(env.run('return hits')).toBe('B'); // only the replacement fires
+  });
+
+  it('killTrigger(name) removes a named temp complex trigger', () => {
+    env.run(String.raw`fired = false; tempComplexRegexTrigger("byname", "^go$", [==[ fired = true ]==], 0, 0, 0, 0, 0)`);
+    expect(env.run('return (killTrigger("byname"))')).toBe(true);
+    env.api.triggers.processTemp('go');
+    expect(env.run('return fired')).toBe(false);
+  });
+
+  it('killTrigger(id) removes by numeric id', () => {
+    const id = env.run(String.raw`fired2 = false; return tempComplexRegexTrigger("", "^go$", [==[ fired2 = true ]==], 0, 0, 0, 0, 0)`) as number;
+    expect(env.run(`return (killTrigger(${id}))`)).toBe(true);
+    env.api.triggers.processTemp('go');
+    expect(env.run('return fired2')).toBe(false);
+  });
+
+  it('accepts (and warns once for) unsupported flags without throwing or blocking the fire', () => {
+    // multiline=1, filter=1, fireLength=3 are not honoured on a temp trigger;
+    // the call must still register and fire the callback.
+    expect(() => env.run(String.raw`okfire = false; tempComplexRegexTrigger("cx", "^run$", [==[ okfire = true ]==], 1, 0, 0, 1, 0, nil, nil, nil, 3, 1, nil)`)).not.toThrow();
+    env.api.triggers.processTemp('run');
+    expect(env.run('return okfire')).toBe(true);
+  });
+});
+
+// exportAreaImage / resetProfile route through engine-owned callbacks (VFS write
+// / runtime reinit) that aren't wired into createTestRuntime, so here we only
+// verify the Lua bindings parse and degrade gracefully. The render→VFS path and
+// the full profile reinit are exercised in the running app.
+describe('exportAreaImage — Lua binding', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('returns (false, errMsg) when no exporter/VFS is wired', () => {
+    expect(env.run('return (exportAreaImage(1, "area1.png"))')).toBe(false);
+    const msg = env.run('local _, m = exportAreaImage(1, "area1.png"); return m');
+    expect(typeof msg).toBe('string');
+    expect((msg as string).length).toBeGreaterThan(0);
+  });
+
+  it('rejects a non-numeric areaID', () => {
+    expect(env.run('return (exportAreaImage("nope", "a.png"))')).toBe(false);
+  });
+
+  it('delegates to ScriptingAPI.exportAreaImage with coerced args', () => {
+    const calls: Array<[number, string, number | undefined]> = [];
+    env.api.setExportAreaImageCallback((areaId, filePath, zLevel) => {
+      calls.push([areaId, filePath, zLevel]);
+      return { path: `/profiles/test/${filePath}` };
+    });
+    const [ok, path] = [
+      env.run('return (exportAreaImage(7, "maps/area7.png", 2))'),
+      env.run('local _, p = exportAreaImage(7, "maps/area7.png", 2); return p'),
+    ];
+    expect(ok).toBe(true);
+    expect(path).toBe('/profiles/test/maps/area7.png');
+    // Both calls ran; args coerced to (number, string, number).
+    expect(calls[0]).toEqual([7, 'maps/area7.png', 2]);
+  });
+});
+
+describe('resetProfile — Lua binding', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('is callable and invokes the wired callback without throwing', () => {
+    let called = 0;
+    env.api.setResetProfileCallback(() => { called++; });
+    expect(() => env.run('resetProfile()')).not.toThrow();
+    expect(called).toBe(1);
+  });
+
+  it('is a no-op (no throw) when no callback is wired', () => {
+    env.api.setResetProfileCallback(null);
+    expect(() => env.run('resetProfile()')).not.toThrow();
+  });
+});

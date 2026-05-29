@@ -35,6 +35,10 @@ export interface MapControl {
     getZoom: () => number | null;
     setZoom: (zoom: number) => void;
     redraw: () => void;
+    /** Mudlet `exportAreaImage` — render an area (optionally a single z-level) to
+     *  PNG bytes via a headless renderer, leaving the live view untouched.
+     *  Returns null when the area is unknown / unrenderable. */
+    exportArea: (areaId: number, zLevel?: number) => Uint8Array | null;
 }
 
 const DEFAULT_SCROLL_STATE: ScrollState = {
@@ -696,6 +700,17 @@ export class WindowManager {
             redrawn = true;
         }
         return redrawn;
+    }
+
+    /** Mudlet `exportAreaImage(areaID, filePath[, zLevel])` — render an area to
+     *  PNG bytes through the mounted map widget's renderer. Returns null when no
+     *  mapper is open (Mudlet requires the mapper open) or the area is unknown. */
+    exportAreaImage(areaId: number, zLevel?: number): Uint8Array | null {
+        for (const c of this.mapControls.values()) {
+            const bytes = c.exportArea(areaId, zLevel);
+            if (bytes) return bytes;
+        }
+        return null;
     }
 
     /** Set by MapPanel on mount; cleared on unmount. The callback parses+renders

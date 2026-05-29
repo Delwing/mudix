@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { MapRenderer, createSettings } from 'mudlet-map-renderer';
+import { MapRenderer, createSettings, PngBytesExporter } from 'mudlet-map-renderer';
 import type { RoomClickEventDetail, RoomContextMenuEventDetail, RoomLens, Settings as MapRendererSettings } from 'mudlet-map-renderer';
 import type { WindowManager, MapControl } from '../WindowManager';
 import type { MapEventEntry, MapInfoResult, MapInfoContributor, MapStore } from '../../../map/MapStore';
@@ -915,7 +915,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     // out). The renderer instead works in pixels-per-room-unit
     // (camera.getScale() === BASE_SCALE * rendererZoom), so we convert at this
     // boundary: pxPerUnit = shorterEdge / mudletZoom.
-    const mapControlImplRef = useRef<MapControl>({ getZoom: () => null, setZoom: () => {}, redraw: () => {} });
+    const mapControlImplRef = useRef<MapControl>({ getZoom: () => null, setZoom: () => {}, redraw: () => {}, exportArea: () => null });
     mapControlImplRef.current = {
         getZoom: () => {
             const renderer = rendererRef.current;
@@ -957,12 +957,71 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 setStatus('error');
             }
         },
+        // Mudlet `exportAreaImage` — rasterize an area to PNG bytes without
+        // disturbing the visible map. A throwaway headless renderer reuses the
+        // live reader (MapStore-backed) and the current Mapper settings; the
+        // PNG export itself is fully off-screen (the renderer's CanvasExporter
+        // rebuilds the scene pipeline from state, so the on-screen view is
+        // never touched). The off-screen container only gives the Konva backend
+        // real dimensions so getAreaBounds resolves an aspect ratio.
+        exportArea: (areaId: number, zLevel?: number): Uint8Array | null => {
+            const reader = readerRef.current;
+            if (!reader) return null;
+            let area;
+            try { area = reader.getArea(areaId); } catch { return null; }
+            if (!area) return null;
+            const levels = area.getZLevels().slice().sort((a, b) => a - b);
+            const z = (zLevel != null && levels.includes(zLevel))
+                ? zLevel
+                : levels.includes(0) ? 0 : (levels[0] ?? 0);
+            const offscreen = document.createElement('div');
+            offscreen.style.cssText = 'position:fixed;left:-100000px;top:0;width:1200px;height:900px;pointer-events:none;';
+            document.body.appendChild(offscreen);
+            const settings = createSettings();
+            settings.areaName = false;
+            settings.highlightCurrentRoom = false;
+            applyMapperSettings(settings, mapperRef.current);
+            const headless = new MapRenderer(reader, settings, offscreen);
+            try {
+                // Mirror viewing-mode hidden-room filtering so the export matches
+                // what the on-screen map shows (editing mode reveals all rooms).
+                const exportLens: RoomLens = {
+                    isVisible: (room) =>
+                        manager.mapStore.getMapMode() === 'editing' || !manager.mapStore.isRoomHidden(room.id),
+                    getExitTreatment: (_exit, a, b) => {
+                        if (manager.mapStore.getMapMode() === 'editing') return 'full';
+                        return (manager.mapStore.isRoomHidden(a.id) || manager.mapStore.isRoomHidden(b.id)) ? 'hidden' : 'full';
+                    },
+                    getVersion: () => manager.mapStore.getHiddenVersion(),
+                };
+                headless.setLens(exportLens);
+                headless.drawArea(areaId, z);
+                // Mudlet renders at a fixed 2.0x zoom; the exporter fits the whole
+                // area into width×height, so this picks a resolution-per-map-unit
+                // and an aspect ratio from the area bounds, clamped to a sane max.
+                const b = headless.getAreaBounds();
+                const PX_PER_UNIT = 48;
+                const PAD = 3;
+                const spanX = b ? Math.max(1, b.maxX - b.minX) : 12;
+                const spanY = b ? Math.max(1, b.maxY - b.minY) : 12;
+                const width = Math.min(8192, Math.max(128, Math.round((spanX + PAD * 2) * PX_PER_UNIT)));
+                const height = Math.min(8192, Math.max(128, Math.round((spanY + PAD * 2) * PX_PER_UNIT)));
+                return headless.export(new PngBytesExporter({ width, height, padding: PAD })) ?? null;
+            } catch (err) {
+                console.warn('[MapPanel] exportArea failed:', err);
+                return null;
+            } finally {
+                headless.destroy();
+                offscreen.remove();
+            }
+        },
     };
     useEffect(() => {
         const ctrl: MapControl = {
             getZoom: () => mapControlImplRef.current.getZoom(),
             setZoom: (z) => mapControlImplRef.current.setZoom(z),
             redraw: () => mapControlImplRef.current.redraw(),
+            exportArea: (areaId, zLevel) => mapControlImplRef.current.exportArea(areaId, zLevel),
         };
         manager.registerMapControl(id, ctrl);
         return () => manager.unregisterMapControl(id);

@@ -196,6 +196,10 @@ export class ScriptingEngine {
     // Last seen script list for the active connection. Used to diff against
     // the next store update so we know which scripts to load/unload.
     private prevScripts: ScriptNode[] = [];
+    // resetProfile() coalescing + a teardown guard so a deferred reset that
+    // fires after the engine was destroyed is a no-op.
+    private resetting = false;
+    private disposed = false;
     // Pending debounced XML writes for sync-enabled modules (key: module name).
     private moduleSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private static readonly MODULE_SYNC_DEBOUNCE_MS = 500;
@@ -247,8 +251,12 @@ export class ScriptingEngine {
         // through the same path as everything else.
         session.windows.onRaiseEvent = (event, args) => this.raiseEvent(event, args);
         // SoundManager raises sysMediaFinished(name, path) when a source ends.
-        session.sounds.onMediaFinished = (name, path) =>
+        // sysSoundFinished is the pre-4.15 name, superseded by sysMediaFinished
+        // but still fired here as a compat alias so older scripts keep working.
+        session.sounds.onMediaFinished = (name, path) => {
             this.raiseEvent('sysMediaFinished', [name, path]);
+            this.raiseEvent('sysSoundFinished', [name, path]);
+        };
         // Mudlet fires sysExitEvent as the profile shuts down. The engine is
         // torn down on connection switch/unmount (destroy), but a full page
         // unload skips React cleanup — cover that with a beforeunload hook.
@@ -910,6 +918,8 @@ export class ScriptingEngine {
             this.api.setToolBarToggler((name, show) => this.toggleToolBarByName(name, show));
             this.api.setSetScriptCallback((name, code, pos) => this.setScriptByName(name, code, pos));
             this.api.setKillByNameCallback((kind, name) => this.killByName(kind, name));
+            this.api.setResetProfileCallback(() => this.resetProfile());
+            this.api.setExportAreaImageCallback((areaId, filePath, zLevel) => this.exportAreaImageToVfs(areaId, filePath, zLevel));
             this.api.setCssRewriter((css) => {
                 const v = this.vfs;
                 if (!v) return css;
@@ -2053,7 +2063,97 @@ export class ScriptingEngine {
         this.api.setCloseProfileCallback(fn);
     }
 
+    /**
+     * Mudlet `exportAreaImage(areaID, filePath[, zLevel])`. Renders the area to
+     * PNG bytes via the mounted map widget's renderer, then writes them to the
+     * profile VFS at `filePath` (relative paths resolve under the profile root,
+     * the same convention as `io.open`/`downloadFile`). Returns the absolute
+     * path written, or an error string (no VFS, mapper not open, or write
+     * failure). Mudlet requires the mapper open; mudix's renderer lives in the
+     * map widget, so the same precondition applies.
+     */
+    exportAreaImageToVfs(areaId: number, filePath: string, zLevel?: number): { path: string } | { error: string } {
+        const vfs = this.vfs;
+        if (!vfs) return { error: 'no profile filesystem mounted' };
+        if (!filePath) return { error: 'filePath is required' };
+        const bytes = this.session.windows.exportAreaImage(areaId, zLevel);
+        if (!bytes) return { error: `area ${areaId} could not be rendered (is the mapper open?)` };
+        const abs = filePath.startsWith('/') ? filePath : `${vfs.profilePath}/${filePath}`;
+        const slash = abs.lastIndexOf('/');
+        const parent = slash > 0 ? abs.slice(0, slash) : '';
+        try {
+            if (parent && !vfs.exists(parent)) vfs.mkdir(parent);
+            vfs.writeBinaryFile(abs, bytes);
+            void vfs.flush();
+            return { path: abs };
+        } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+        }
+    }
+
+    /**
+     * Mudlet `resetProfile()` — reload the entire profile as if just reopened:
+     * clear every UI surface, tear down and recreate the Lua runtime (fresh
+     * globals + event handlers), and re-run all scripts/aliases/triggers/timers/
+     * keys from the current profile state. The reinit is deferred to a fresh
+     * task: we are invoked from inside a Lua→JS call, and closing the lua_State
+     * mid-call would free the VM under the running call (WASM abort). This is
+     * exactly why Mudlet warns against calling it from a script-item — defer it
+     * (`tempTimer(0, resetProfile)` works) or run it from the command line. A
+     * concurrent reset is coalesced.
+     */
+    resetProfile(): void {
+        if (this.resetting || this.disposed) return;
+        this.resetting = true;
+        setTimeout(() => { void this.performReset(); }, 0);
+    }
+
+    private async performReset(): Promise<void> {
+        if (this.disposed) { this.resetting = false; return; }
+        try {
+            // 1. Stop autonomous Lua callers, then tear down the runtime + the
+            //    automation engines (NOT the VFS — unlike destroy(); we reopen
+            //    against the same mount). The engines are reusable after
+            //    destroy(): loadPerm/addTemp repopulate their cleared maps.
+            this.timerEngine.destroy();
+            this.runtimes.lua?.destroy();
+            this.runtimes.lua = null;
+            this.triggerEngine.destroy();
+            this.aliasEngine.destroy();
+            this.keyEngine.destroy();
+            // 2. Clear every UI surface — "all UI elements will be cleared".
+            this.session.windows.clearAll();
+            this.session.labels.clearAll();
+            this.session.cmdLines.clearAll();
+            this.session.scrollBoxes.clearAll();
+            this.session.sounds.stopAll();
+            this.session.videos.stopAll();
+            // 3. Recreate the Lua runtime against the same mounted VFS. This
+            //    re-wires every api.* callback, reloads the bundled Lua, and
+            //    gives a clean global table + empty event-handler registry.
+            await this.createRuntime(this.vfs);
+            // 4. Re-run all automation from the current store state and re-fire
+            //    the load event. Resetting prevScripts forces a full reload
+            //    (every enabled script is treated as new).
+            this.prevScripts = [];
+            this.triggersReady = true; // PCRE wasm resolved long before any reset
+            this.applyScriptsFromStore();
+            this.applyAliasesFromStore();
+            this.applyTriggersFromStore();
+            this.applyTimersFromStore();
+            this.applyKeybindingsFromStore();
+            this.raiseEvent('sysLoadEvent');
+            this.api.flushOutput();
+        } catch (err) {
+            console.warn('[ScriptingEngine] resetProfile failed:', err);
+            this.api.printError(`[resetProfile] ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+            this.resetting = false;
+        }
+    }
+
     destroy(): void {
+        this.disposed = true;
         // Fire sysExitEvent before any teardown, while handlers can still run.
         window.removeEventListener('beforeunload', this.beforeUnload);
         this.fireExit();

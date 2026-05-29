@@ -471,6 +471,12 @@ export class ScriptingAPI {
     /** Mudlet `closeMudlet()`. mudix maps it to "close the active profile":
      *  disconnect, then return to the connection screen. Wired by ProfileSession. */
     private closeProfileCallback: (() => void) | null = null;
+    /** Mudlet `resetProfile()` — reload the whole profile (fresh Lua VM, UI
+     *  cleared, scripts re-run). Wired by ScriptingEngine; deferred internally. */
+    private resetProfileCallback: (() => void) | null = null;
+    /** Mudlet `exportAreaImage(areaID, filePath[, zLevel])` — render an area to a
+     *  PNG in the profile VFS. Wired by ScriptingEngine (which owns the VFS). */
+    private exportAreaImageCallback: ((areaId: number, filePath: string, zLevel?: number) => { path: string } | { error: string }) | null = null;
     private setScriptCallback: ((name: string, code: string, pos: number) => number) | null = null;
     private scriptGetter: ((name: string, pos: number) => { code: string; count: number } | null) | null = null;
     // Mudlet's killTimer/killAlias/killTrigger/killKey accept the name of a
@@ -918,6 +924,33 @@ export class ScriptingAPI {
     closeMudlet(): void {
         this.disconnect();
         this.closeProfileCallback?.();
+    }
+
+    setResetProfileCallback(fn: (() => void) | null): void {
+        this.resetProfileCallback = fn;
+    }
+
+    /** Mudlet `resetProfile()` — reload the entire profile as if just opened:
+     *  clear every UI surface, recreate the Lua runtime, and re-run all scripts.
+     *  The actual work is deferred by the engine (it closes the Lua VM that is
+     *  currently executing this call), so this returns immediately. */
+    resetProfile(): void {
+        this.resetProfileCallback?.();
+    }
+
+    setExportAreaImageCallback(fn: ((areaId: number, filePath: string, zLevel?: number) => { path: string } | { error: string }) | null): void {
+        this.exportAreaImageCallback = fn;
+    }
+
+    /** Mudlet `exportAreaImage(areaID, filePath[, zLevel])` — render the area to a
+     *  PNG file in the profile VFS. Returns `[true, absolutePath]` on success or
+     *  `[false, errorMessage]` (e.g. the mapper isn't open, or the area is
+     *  unknown). The 0-indexed array is unpacked into Mudlet's multi-return by
+     *  Bridge.lua. */
+    exportAreaImage(areaId: number, filePath: string, zLevel?: number): [boolean, string] {
+        const r = this.exportAreaImageCallback?.(areaId, filePath, zLevel);
+        if (!r) return [false, 'exportAreaImage: no profile filesystem'];
+        return 'path' in r ? [true, r.path] : [false, r.error];
     }
 
     setKillByNameCallback(fn: ((kind: 'timer' | 'alias' | 'trigger' | 'key', name: string) => boolean) | null): void {

@@ -2118,6 +2118,23 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet `closeMudlet()`: mudix closes the active profile — disconnect
         // and return to the connection screen.
         this.lua.global.set('closeMudlet', () => { this.api.closeMudlet(); });
+        // Mudlet `resetProfile()`: reload the whole profile (UI cleared, fresh
+        // Lua VM, scripts re-run). The engine defers the actual reinit since it
+        // closes this very lua_State — see ScriptingEngine.resetProfile.
+        this.lua.global.set('resetProfile', () => { this.api.resetProfile(); });
+        // Mudlet `exportAreaImage(areaID, filePath [, zLevel])`: render the area
+        // to a PNG in the profile VFS. Returns a 0-indexed [ok, pathOrErr] array
+        // that Bridge.lua unpacks into Mudlet's (bool[, errMsg]) multi-return.
+        this.lua.global.set('__mudix_exportAreaImage', (areaId: unknown, filePath: unknown, zLevel?: unknown): [boolean, string] => {
+            const aid = Number(areaId);
+            if (!Number.isFinite(aid)) return [false, 'exportAreaImage: areaID must be a number'];
+            const z = zLevel != null && zLevel !== '' ? Number(zLevel) : undefined;
+            return this.api.exportAreaImage(
+                Math.trunc(aid),
+                String(filePath ?? ''),
+                z != null && Number.isFinite(z) ? Math.trunc(z) : undefined,
+            );
+        });
         // Mudlet `clearVisitedLinks()`: forgets which clickable links have been
         // visited (Mudlet greys visited echoLink targets). mudix tracks no
         // visited-link state, so there is nothing to clear — a true no-op.

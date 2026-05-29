@@ -134,6 +134,16 @@ function getConnectionInfo()
     return t[0], t[1], t[2]
 end
 
+-- Mudlet exportAreaImage(areaID, filePath [, zLevel]) → true on success, or
+-- (false, errMsg). JS returns a 0-indexed [ok, pathOrErr] array; unpack it into
+-- the documented multi-return (and surface the written path as the 2nd value on
+-- success, which mudix adds for convenience).
+function exportAreaImage(areaID, filePath, zLevel)
+    local t = __mudix_exportAreaImage(areaID, filePath, zLevel)
+    if t and t[0] then return true, t[1] end
+    return false, (t and t[1]) or "exportAreaImage failed"
+end
+
 -- Mudlet getTimestamp([console_name], lineNumber) → "hh:mm:ss.zzz" string, or
 -- (nil, errMsg) for an out-of-range line / missing window. JS returns false on
 -- the miss case.
@@ -1617,6 +1627,123 @@ do
         return _raw(nf, nb,
             __mudix_register_cb(__mudix_to_fn(fn, "tempAnsiColorTrigger", 3)),
             expirationCount)
+    end
+end
+
+-- Mudlet tempComplexRegexTrigger(name, regex, code, multiline, fgColor,
+-- bgColor, filter, matchAll, hlFgColor, hlBgColor, soundFile, fireLength,
+-- lineDelta, expireAfter). Mudlet's trigger editor emits this whenever a
+-- trigger is built with highlight / sound / fire-length / match-all options,
+-- so imported scripts and packages rely on it.
+--
+-- mudix backs it with the temp regex-trigger primitive plus the existing
+-- highlight (selectString + setFgColor/setBgColor) and sound (playSoundFile)
+-- globals. The features that map cleanly onto a single-pattern temp trigger
+-- are honoured:
+--   • regex pattern + Lua code/function callback
+--   • highlight foreground/background colour on the matched text — all
+--     occurrences when matchAll is set, else just the first
+--   • sound file played on each fire
+--   • expireAfter (fires N times, then self-removes)
+--   • named triggers — re-calling with an existing name replaces it, and
+--     killTrigger(name) removes it
+-- Features that need the full chain/AND machinery of a *permanent* trigger
+-- (multiline-AND across lines, filter chaining, fireLength stay-open,
+-- lineDelta, and colour-pattern matching via the fgColor/bgColor args) are
+-- not applied to a temp trigger; permRegexTrigger plus the trigger editor
+-- cover those. A one-time warning is emitted when such a flag is actually
+-- requested, so the gap is visible rather than silent.
+do
+    local registry = {}   -- name -> temp trigger id (named complex triggers)
+    local warned = {}     -- de-dupe per-feature unsupported warnings
+
+    local function warnOnce(feature)
+        if warned[feature] then return end
+        warned[feature] = true
+        printDebug("tempComplexRegexTrigger: '" .. feature .. "' is not supported "
+            .. "on a temp trigger in mudix — use permRegexTrigger / the trigger "
+            .. "editor for chain, filter, multiline-AND or colour-pattern triggers.")
+    end
+
+    -- Resolve a Mudlet highlight colour spec to r, g, b. Accepts a color_table
+    -- name ("red"), "#rrggbb"/"rrggbb", or "r,g,b". Returns nil when nothing
+    -- recognisable was passed.
+    local function resolveColor(spec)
+        if type(spec) ~= 'string' or spec == '' then return nil end
+        if color_table and color_table[spec] then
+            local c = color_table[spec]
+            return c[1], c[2], c[3]
+        end
+        local hex = spec:match('^#?(%x%x%x%x%x%x)$')
+        if hex then
+            return tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16)
+        end
+        local r, g, b = spec:match('^(%d+)%s*,%s*(%d+)%s*,%s*(%d+)$')
+        if r then return tonumber(r), tonumber(g), tonumber(b) end
+        return nil
+    end
+
+    -- Colorize the matched text on the current line. `matches[1]` is the full
+    -- match (set by the temp-trigger dispatch before the callback runs).
+    local function highlight(hlFg, hlBg, matchAll)
+        local text = matches and matches[1]
+        if not text or text == '' then return end
+        local fr, fg_, fb = resolveColor(hlFg)
+        local br, bg_, bb = resolveColor(hlBg)
+        if not (fr or br) then return end
+        local n = 1
+        while true do
+            local idx = selectString(text, n)
+            if not idx or idx < 0 then break end
+            if fr then setFgColor(fr, fg_, fb) end
+            if br then setBgColor(br, bg_, bb) end
+            if not matchAll then break end
+            n = n + 1
+        end
+        deselect()
+    end
+
+    -- killTrigger(name) must also remove a named temp complex trigger. The
+    -- numeric-id form (and perm triggers by name) still fall through to the
+    -- underlying killTrigger.
+    local _killTrigger = killTrigger
+    function killTrigger(idOrName)
+        if type(idOrName) == 'string' and registry[idOrName] then
+            local id = registry[idOrName]
+            registry[idOrName] = nil
+            return _killTrigger(id)
+        end
+        return _killTrigger(idOrName)
+    end
+
+    function tempComplexRegexTrigger(name, regex, code, multiline, fgColor, bgColor,
+                                     filter, matchAll, hlFgColor, hlBgColor, soundFile,
+                                     fireLength, lineDelta, expireAfter)
+        local userFn = __mudix_to_fn(code, "tempComplexRegexTrigger", 3)
+        local matchAllOn = tonumber(matchAll) == 1
+
+        if tonumber(multiline) == 1 then warnOnce('multiline') end
+        if tonumber(filter) == 1 then warnOnce('filter') end
+        if type(fgColor) == 'string' or type(bgColor) == 'string' then warnOnce('colour pattern (fgColor/bgColor)') end
+        if (tonumber(fireLength) or 0) > 0 then warnOnce('fireLength') end
+        if (tonumber(lineDelta) or 0) > 0 then warnOnce('lineDelta') end
+
+        local hasHighlight = type(hlFgColor) == 'string' or type(hlBgColor) == 'string'
+        local hasSound = type(soundFile) == 'string' and soundFile ~= ''
+        local wrapper = function(...)
+            if hasHighlight then highlight(hlFgColor, hlBgColor, matchAllOn) end
+            if hasSound then playSoundFile(soundFile) end
+            return userFn(...)
+        end
+
+        -- Named trigger: re-calling with an existing name replaces it.
+        if type(name) == 'string' and name ~= '' and registry[name] then
+            _killTrigger(registry[name])
+            registry[name] = nil
+        end
+        local id = __mudix_tempRegexTrigger(regex, __mudix_register_cb(wrapper), tonumber(expireAfter))
+        if type(name) == 'string' and name ~= '' then registry[name] = id end
+        return id
     end
 end
 

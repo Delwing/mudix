@@ -849,6 +849,14 @@ export class MudClient {
         }
 
         if (hasPrompt) {
+            if (debugGaEnabled()) {
+                const marker = processable.includes(TELNET_GA) ? 'GA' : 'EOR';
+                // eslint-disable-next-line no-console
+                console.debug(
+                    `[mudix.ga] prompt marker IAC ${marker} received` +
+                    (this.gaDriver ? '' : ' — latching into GA-driven prompt mode'),
+                );
+            }
             this.flushPendingLineTail(ts);
             this.gaDriver = true;
             this.eventBus.emit('prompt');
@@ -1019,6 +1027,21 @@ function debugFramesEnabled(): boolean {
 function debugMspEnabled(): boolean {
     try {
         return typeof localStorage !== 'undefined' && localStorage.getItem('mudix.debugMsp') === '1';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Diagnostic gate — enable via `localStorage.setItem('mudix.debugGa', '1')` in
+ * the browser console to log every IAC GA / IAC EOR prompt marker the server
+ * sends, plus the one-time moment the client latches into GA-driven prompt
+ * mode. Use this to confirm whether a MUD actually signals its prompts (GA-less
+ * MUDs rely on the `promptTimeoutMs` idle-flush fallback instead).
+ */
+function debugGaEnabled(): boolean {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem('mudix.debugGa') === '1';
     } catch {
         return false;
     }
