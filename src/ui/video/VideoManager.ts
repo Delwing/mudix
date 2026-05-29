@@ -23,6 +23,8 @@ export interface PlayVideoOptions {
 
 interface ActiveVideo {
     name: string;
+    /** Original path/URL the video was played from (for getPlayingVideos). */
+    path: string;
     element: HTMLVideoElement;
     objectUrl: string | null;
 }
@@ -80,7 +82,7 @@ export class VideoManager {
         el.style.background = 'transparent';
         el.style.pointerEvents = 'none';
 
-        const entry: ActiveVideo = { name, element: el, objectUrl };
+        const entry: ActiveVideo = { name, path, element: el, objectUrl };
         el.addEventListener('ended', () => {
             // For finite loops > 1, replay manually until counter exhausts.
             const desired = opts.loops ?? 1;
@@ -109,6 +111,24 @@ export class VideoManager {
 
     pauseAll(): void {
         for (const v of this.active.values()) v.element.pause();
+    }
+
+    /**
+     * Mudlet `getPlayingVideos([settings])` / `getPausedVideos([settings])`.
+     * Lists the videos currently in the requested play state, optionally
+     * filtered by name. Volume is reported on Mudlet's 0..100 scale.
+     */
+    getByState(
+        wantPaused: boolean,
+        filter: { name?: string } = {},
+    ): Array<{ name: string; path: string; volume: number }> {
+        const out: Array<{ name: string; path: string; volume: number }> = [];
+        for (const v of this.active.values()) {
+            if (v.element.paused !== wantPaused) continue;
+            if (filter.name && v.name !== filter.name) continue;
+            out.push({ name: v.name, path: v.path, volume: Math.round(v.element.volume * 100) });
+        }
+        return out;
     }
 
     stopAll(): void {

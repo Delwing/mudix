@@ -241,6 +241,21 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet getMudletInfo() — echoes a diagnostic block, returns nothing.
         this.lua.global.set('getMudletInfo', () => { this.api.getMudletInfo(); });
 
+        // Mudlet getCommandSeparator() — the profile's multi-command separator.
+        this.lua.global.set('getCommandSeparator', () => this.api.getCommandSeparator());
+
+        // Mudlet profile description (single free-text slot). The optional
+        // profile-name argument of the Mudlet overloads is ignored — mudix is
+        // single-profile.
+        this.lua.global.set('getProfileInformation', () => this.api.getProfileInformation());
+        this.lua.global.set('setProfileInformation', (a: unknown, b?: unknown) =>
+            this.api.setProfileInformation(String((b !== undefined ? b : a) ?? '')));
+        this.lua.global.set('clearProfileInformation', () => this.api.clearProfileInformation());
+
+        // Mudlet holdingModifiers(number) — exact match against the held
+        // keyboard modifiers (Qt bitmask, as in mudlet.keymodifier).
+        this.lua.global.set('holdingModifiers', (mods: unknown) => this.api.holdingModifiers(Number(mods)));
+
         this.lua.global.set('getEpoch', () => Date.now() / 1000);
 
         // Mudlet getOS() → platform name scripts branch on. We sniff the
@@ -2112,6 +2127,16 @@ export class LuaRuntime implements IScriptingRuntime {
         // `nil` when no module by that name exists.
         this.lua.global.set('__getModuleInfo', (name: unknown) =>
             this.api.getModuleInfo(String(name ?? '')));
+        // Mudlet setModuleInfo(name, key, value) → stores a custom info field.
+        this.lua.global.set('setModuleInfo', (name: unknown, key: unknown, value: unknown) =>
+            this.api.setModuleInfo(String(name ?? ''), String(key ?? ''), String(value ?? '')));
+        // Mudlet getPackageInfo(name [, key]). The Bridge.lua wrapper handles the
+        // optional `key` projection; here we return the merged info table.
+        this.lua.global.set('__getPackageInfo', (name: unknown) =>
+            this.api.getPackageInfo(String(name ?? '')));
+        // Mudlet setPackageInfo(name, key, value) → stores a custom info field.
+        this.lua.global.set('setPackageInfo', (name: unknown, key: unknown, value: unknown) =>
+            this.api.setPackageInfo(String(name ?? ''), String(key ?? ''), String(value ?? '')));
         // Mudlet getModulePath(name) → absolute VFS path of the module's XML, or
         // nil. Like getModuleInfo, returns nil gracefully for an unknown module
         // (no requireModule raise) so probing scripts don't error.
@@ -2259,6 +2284,19 @@ export class LuaRuntime implements IScriptingRuntime {
                 : String(nameOrId ?? '');
             return this.api.isActive(key, String(type ?? ''), !!checkAncestors);
         });
+
+        // Mudlet tree-walkers. JS returns 0-indexed arrays / nested objects /
+        // null-on-miss; Bridge.lua re-indexes to 1-based, rebuilds the nested
+        // getProfileStats table, and shapes the misses as (false, errMsg).
+        this.lua.global.set('__ancestors', (id: unknown, type: unknown) =>
+            this.api.ancestors(Number(id), String(type ?? '')) ?? false);
+        this.lua.global.set('__findItems', (name: unknown, type: unknown, exact?: unknown, cs?: unknown) =>
+            this.api.findItems(String(name ?? ''), String(type ?? ''), exact !== false, cs !== false));
+        this.lua.global.set('__isAncestorsActive', (id: unknown, type: unknown) => {
+            const r = this.api.isAncestorsActive(Number(id), String(type ?? ''));
+            return r === null ? null : r;
+        });
+        this.lua.global.set('__getProfileStats', () => this.api.getProfileStats());
 
         // ── Async unzip ───────────────────────────────────────────────────────
         // Mudlet's unzipAsync is fire-and-forget: returns immediately, raises
@@ -2877,6 +2915,25 @@ export class LuaRuntime implements IScriptingRuntime {
                 tag: strOpt(o.tag),
             });
         });
+        // getPlayingMusic([filter]) — sister of getPlayingSounds for the music
+        // channel. Same {name,key,tag} filter and {name,key,tag,volume} shape.
+        this.lua.global.set('__getPlayingMusic', (t?: unknown) => {
+            const o = detachOpts(t);
+            return sounds.getPlaying({
+                name: strOpt(o.name),
+                key: strOpt(o.key),
+                tag: strOpt(o.tag),
+            }, 'music');
+        });
+        // getPausedSounds / getPausedMusic — mudix's Web Audio backend stops
+        // sources instead of pausing them (see SoundManager.pauseSounds), so
+        // nothing ever sits in a paused state. These always report empty.
+        this.lua.global.set('__getPausedSounds', () => [] as unknown[]);
+        this.lua.global.set('__getPausedMusic', () => [] as unknown[]);
+        // pauseMusic([channel/tag]) — fade-out + stop matching music tracks.
+        this.lua.global.set('pauseMusic', (channel?: unknown) => {
+            sounds.pauseMusic(typeof channel === 'string' && channel ? channel : undefined);
+        });
         // loadSoundFile(name[, url]) | ({name=...}) — preload/decode so the first
         // playSoundFile has no decode latency. Bridge.lua normalises to a name.
         this.lua.global.set('__loadSoundFile', (t: unknown) => {
@@ -2911,6 +2968,17 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('pauseVideos', () => { videos.pauseAll(); });
         this.lua.global.set('stopVideos',  () => { videos.stopAll(); });
+        // getPlayingVideos / getPausedVideos — list active <video> elements by
+        // their play state, optionally filtered by name. Returns 0-indexed JS
+        // arrays of {name, path, volume}; Bridge.lua re-indexes to 1-based.
+        this.lua.global.set('__getPlayingVideos', (t?: unknown) => {
+            const o = detachOpts(t);
+            return videos.getByState(false, { name: strOpt(o.name) });
+        });
+        this.lua.global.set('__getPausedVideos', (t?: unknown) => {
+            const o = detachOpts(t);
+            return videos.getByState(true, { name: strOpt(o.name) });
+        });
 
         // ── Text-to-speech (Mudlet ttsSpeak / ttsQueue / ttsSetRate / ...) ─────
         // Web Speech API backend on this.tts. Fire-and-forget like sounds/HTTP;

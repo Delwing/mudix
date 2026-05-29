@@ -253,6 +253,24 @@ export class SoundManager {
         }
     }
 
+    /**
+     * Mudlet `pauseMusic([settings])`. Web Audio source nodes can't truly
+     * pause once started (same constraint as {@link pauseSounds}), so this is
+     * an immediate fade-out + stop of the matching music sources — re-trigger
+     * `playMusicFile` to "resume". The optional `channel`/tag filters which
+     * music tracks are affected; sound effects are untouched.
+     */
+    pauseMusic(channel?: string): void {
+        const ctx = sharedContext;
+        if (!ctx) return;
+        for (const a of [...this.active.values()]) {
+            if (a.kind !== 'music') continue;
+            if (channel && a.tag !== channel) continue;
+            this.fadeAndStop(ctx, a, a.fadeout);
+        }
+        this.updateMediaSessionState();
+    }
+
     stopMusic(opts: StopMusicOptions = {}): void {
         const ctx = sharedContext;
         if (!ctx) return;
@@ -268,16 +286,20 @@ export class SoundManager {
     }
 
     /**
-     * Mudlet getPlayingSounds. Returns the currently-playing sound effects
-     * (music is excluded — Mudlet has a separate getPlayingMusic) optionally
-     * filtered by name/key/tag. Volume is reported on Mudlet's 0..100 scale.
+     * Mudlet getPlayingSounds / getPlayingMusic. Returns the currently-playing
+     * sources of the requested `kind` (default 'sound' — music is reported
+     * separately by getPlayingMusic) optionally filtered by name/key/tag.
+     * Volume is reported on Mudlet's 0..100 scale.
      */
-    getPlaying(filter: { name?: string; key?: string; tag?: string } = {}): Array<{
+    getPlaying(
+        filter: { name?: string; key?: string; tag?: string } = {},
+        kind: 'sound' | 'music' = 'sound',
+    ): Array<{
         name: string; key?: string; tag?: string; volume: number;
     }> {
         const out: Array<{ name: string; key?: string; tag?: string; volume: number }> = [];
         for (const a of this.active.values()) {
-            if (a.kind !== 'sound' || a.stopping) continue;
+            if (a.kind !== kind || a.stopping) continue;
             if (filter.name && a.name !== filter.name) continue;
             if (filter.key && a.key !== filter.key) continue;
             if (filter.tag && a.tag !== filter.tag) continue;

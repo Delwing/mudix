@@ -293,7 +293,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `feedTriggers(text)` | ✅ | Feeds text through trigger pipeline + shows in output |
 | `getCharacterName()` | ✅ | mudix maps character→profile (one character per profile); returns the profile name (same as `getProfileName`), "" when unset |
 | `getConfig(key)` | ✅ | Bound on profile config slice |
-| `getCommandSeparator()` | 🚧 | Multi-command separator not user-configurable yet |
+| `getCommandSeparator()` | ✅ | Reads the profile's `commandSeparator` (default `;;`) |
 | `getModuleInfo(name, key)` | ✅ | Bridge.lua |
 | `getModulePath(name)` | ✅ | Absolute VFS path of a module's XML — `xmlVfsPath` verbatim, else `<profilePath>/<name>/<xmlPath>`; nil when not an installed module |
 | `getModulePriority(name)` | ✅ | JS-exposed |
@@ -306,15 +306,17 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getNewIDManager()` | ✅ | IDManager.lua factory |
 | `getOS()` | ✅ | Sniffed from user agent → `"windows"`/`"mac"`/`"linux"`/`"freebsd"`/`"openbsd"`/`"netbsd"`/`"unknown"` |
 | `getPackages()` | ✅ | JS-exposed |
-| `getPackageInfo(name, key)` | 🚧 | Per-package metadata accessor |
-| `getPausedMusic()` / `getPausedSounds()` / `getPausedVideos()` | 🚧 | No paused-track inventory exposed |
-| `getPlayingMusic()` / `getPlayingVideos()` | 🚧 | Sister of `getPlayingSounds` not wired yet |
+| `getPackageInfo(name [, key])` | ✅ | Merged table: manifest fields (name/title/author/version/description/created/icon/installed) overlaid with `setPackageInfo` overrides; single-key form returns `""` when absent |
+| `getPausedMusic()` / `getPausedSounds()` | ✅ | Always empty — mudix's Web Audio backend stops rather than pauses sources, so nothing sits paused (kept for parity) |
+| `getPausedVideos()` | ✅ | Lists genuinely-paused `<video>` elements (`element.paused`), optionally name-filtered. 1-indexed `{name, path, volume}` |
+| `getPlayingMusic()` | ✅ | Sister of `getPlayingSounds` for the music channel; 1-indexed `{name, key, tag, volume}` |
+| `getPlayingVideos()` | ✅ | Currently-playing `<video>` elements, optionally name-filtered. 1-indexed `{name, path, volume}` |
 | `getPlayingSounds([filter])` | ✅ | 1-based array of `{name, key, tag, volume}`; optional name/key/tag filter |
 | `getProfileName()` | ✅ | JS-exposed |
 | `getServerEncoding()` / `setServerEncoding(name)` / `getServerEncodingsList()` | ✅ | Exposes `MudClient`'s CHARSET (RFC 2066) decoder. `getServerEncoding` → current IANA name (default "utf-8"); `setServerEncoding` validates via `normalizeCharsetName` and swaps the `TextDecoder` (false when unsupported); `getServerEncodingsList` → 1-indexed `SUPPORTED_SERVER_ENCODINGS` (UTF-8, ISO-8859-x, Windows-125x, KOI8-R/U) |
 | `getWindowsCodepage()` | ✅ | Returns `"65001"` (UTF-8) on every platform |
 | `hfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `holdingModifiers()` | 🚧 | No global modifier-state poll |
+| `holdingModifiers(number)` | ✅ | Exact-match against the live held modifiers (Qt bitmask, as in `mudlet.keymodifier`). A `heldModifiers` tracker snapshots shift/ctrl/alt/meta off every keyboard/pointer event |
 | `installModule(path)` | ✅ | JS-exposed |
 | `installPackage(path)` | ✅ | JS-exposed |
 | `killAnonymousEventHandler(id)` | ✅ | Other.lua: removes handler by ID |
@@ -326,7 +328,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `playMusicFile(path \| {…})` | ✅ | `SoundManager` (Web Audio + VFS or http(s) URL) |
 | `playSoundFile(path \| {…})` | ✅ | `SoundManager` |
 | `playVideoFile(path \| {…})` | ✅ | `VideoManager`; absolutely-positioned `<video>` on the main viewport. `loops=-1` plays indefinitely. Fires `sysMediaFinished(name, path)` on natural end |
-| `pauseMusic([channel])` | 🚧 | Music tracks not yet exposed via the SoundManager pause API |
+| `pauseMusic([channel])` | ✅ | Web Audio can't truly pause — fades out + stops matching music sources (optionally tag-filtered), mirroring `pauseSounds`. Re-trigger `playMusicFile` to "resume" |
 | `pauseSounds([channel])` | ✅ | Web Audio source nodes can't truly pause — stops sources (optionally tag-filtered). Re-trigger `playSoundFile` to "resume" |
 | `pauseVideos()` | ✅ | Pauses every active `<video>` element |
 | `purgeMediaCache()` | ✅ | Drops every decoded-audio buffer; active playback unaffected |
@@ -341,9 +343,9 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `saveProfile([name])` | 🚧 | Auto-persists via localStorage / IndexedDB with a debounced flush; the Lua call should force the flush (and resolve the `name` arg as a no-op for single-profile parity) |
 | `setConfig(key, value)` | ✅ | JS-exposed |
 | `setMergeTables(t)` | 🚧 | Module-merge config |
-| `setModuleInfo(name, key, value)` | 🚧 | |
+| `setModuleInfo(name, key, value)` | ✅ | Stores a custom info field (in-memory override map) surfaced by `getModuleInfo`; always true |
 | `setModulePriority(name, n)` | ✅ | JS-exposed |
-| `setPackageInfo(name, key, value)` | 🚧 | |
+| `setPackageInfo(name, key, value)` | ✅ | Stores a custom info field (in-memory override map) surfaced by `getPackageInfo`; always true |
 | `showNotification(title, text [, expirySecs])` | ✅ | Web Notifications API; gated on the Settings opt-in |
 | `spawn(...)` | ❌ stub | No subprocess in the browser; stub returns `false` with a warning |
 | `startLogging(bool)` | ✅ | Toggles the per-profile `SessionLogger`. mudix records to IndexedDB (the same store the toolbar Logs button browses) |
@@ -367,12 +369,12 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 |---|---|---|
 | `addCmdLineSuggestion([name,] text)` | ✅ | Main command bar; `name` argument is dropped (Tab-completion merged with command history) |
 | `adjustStopWatch(id\|name, seconds)` | ✅ | Add (or subtract) seconds |
-| `ancestors(id, type)` | 🚧 | Hierarchy walker for any tree node |
+| `ancestors(id, type)` | ✅ | Ancestor chain (immediate parent → root) as 1-indexed `{id, name, node, isActive}`; `node` is "package"/"group"/"item". `(false, errMsg)` when no item of that type has the id |
 | `appendCmdLine([name,] text)` | ✅ | Routes to overlay cmd lines (`createCommandLine`), per-userwindow cmd lines, or the main bar |
 | `appendScript(name, code)` | ✅ | JS-exposed |
 | `clearCmdLine([name])` | ✅ | Routes to overlay cmd lines, per-userwindow cmd lines, or the main bar |
 | `clearCmdLineSuggestions([name])` | ✅ | Main bar |
-| `clearProfileInformation(key)` | 🚧 | Pairs with `setProfileInformation` |
+| `clearProfileInformation()` | ✅ | Resets the profile description to `""` |
 | `createStopWatch([name], [autostart])` | ✅ | `performance.now()`-based high-res stopwatch (`StopwatchManager`). Named watches default autostart off |
 | `deleteAllNamedTimers(parent)` | ✅ | IDManager.lua |
 | `deleteAllNamedTriggers(parent)` | ✅ | IDManager.lua |
@@ -390,15 +392,15 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `enableTimer(name)` | ✅ | JS-exposed |
 | `enableTrigger(name)` | ✅ | JS-exposed |
 | `exists(name, type)` | ✅ | `ScriptingAPI.exists` |
-| `findItems(name, type, exactMatch)` | 🚧 | Tree-wide id lookup |
+| `findItems(name, type [, exact [, caseSensitive]])` | ✅ | 1-indexed numeric ids of matching items/groups. `exact`/`caseSensitive` default true (Mudlet). type as for `exists` |
 | `getButtonState(name)` | ✅ | Two-state button pressed state; nil when missing |
 | `getCmdLine([name])` | ✅ | Reads the live main bar or a named overlay command line |
 | `getConsoleBufferSize([window])` | ✅ | Bridge.lua → linesLimit, batchSize; nil when console missing |
 | `getExitStubsNames(roomID)` | ✅ | Stub direction names ("north"/…/"other"), 1-indexed |
 | `getNamedTimers(parent)` | ✅ | IDManager.lua |
 | `getNamedTriggers(parent)` | ✅ | IDManager.lua |
-| `getProfileInformation([key])` | 🚧 | Per-profile metadata slot |
-| `getProfileStats()` | 🚧 | Per-profile timer/trigger stat dump |
+| `getProfileInformation()` | ✅ | Returns the profile's free-text description (`""` when unset); stored in `ProfileSettings.description` |
+| `getProfileStats()` | ✅ | `{triggers={total,temp,active,patterns={total,active}}, aliases=, timers=, keys=, scripts={total,temp,active}, gifs={total,active}}`. mudix keeps no temp items in the tree (`temp` always 0) and has no gif tracker (`gifs` always 0) |
 | `getProfiles()` | ❌ stub | Single-connection web app; stub returns `{getProfileName()}` so callers that iterate profiles still work |
 | `getStopWatches()` | ✅ | Re-keys to integer ids → `{ name, isRunning, isPersistent, elapsedTime }` |
 | `getStopWatchTime(id\|name)` | ✅ | Elapsed seconds without stopping |
@@ -406,7 +408,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getScript(name [, pos])` | ✅ | → `code, count` for the pos-th (1-indexed) script named `name`; ("", 0) on miss. Bridge.lua unpacks the `{code,count}` from `__getScript`. Unblocks `appendScript`'s code-preserving path (Other.lua) |
 | `invokeFileDialog(type, title)` | 🚧 | Blocked on a sync/async design decision — browser pickers are async; Mudlet's `local p = invokeFileDialog(...)` is synchronous |
 | `isActive(name, type [, checkAncestors])` | ✅ | Count active items by name/id |
-| `isAncestorsActive(name, type)` | 🚧 | |
+| `isAncestorsActive(id, type)` | ✅ | True when every ancestor group of the item is enabled (item's own state ignored). `(false, errMsg)` when no item of that type has the id |
 | `isPrompt()` | ✅ | True when the current trigger fired against a prompt line |
 | `killAlias(id)` | ✅ | |
 | `killKey(id)` | ✅ | |
@@ -437,14 +439,14 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `sendCmdLine(text)` | ✅ | Set + send the main command bar |
 | `setConsoleBufferSize([window,] linesLimit [, batchSize])` | ✅ | Maps to `Console.setMaxLines` |
 | `setProfileIcon(path)` | 🚧 | |
-| `setProfileInformation(key, value)` | 🚧 | |
+| `setProfileInformation(text)` | ✅ | Stores the profile's free-text description (`ProfileSettings.description`); the optional profile-name overload is ignored (single-profile) |
 | `setScript(name, code)` | ✅ | JS-exposed |
 | `setStopWatchName(id\|currentName, newName)` | ✅ | Empty name or duplicate name → false |
 | `setStopWatchPersistence(id\|name, state)` | ✅ | Persistent watches saved to localStorage and restored on reload; running ones keep counting across reloads (wall-clock `Date.now()`) |
 | `setTriggerStayOpen(name, lines)` | ✅ | Extends the named chain head's open window |
 | `startStopWatch(id\|name [, resetAndRestart])` | ✅ | Bare numeric id resets+restarts (legacy); name form resumes |
 | `stopAllNamedTimers(parent)` | ✅ | IDManager.lua |
-| `stopAllNamedTrigger(parent)` | 🚧 | Wiki name is singular; not yet wired |
+| `stopAllNamedTrigger(parent)` | ✅ | IDManager.lua alias of `stopAllNamedTriggers` (the wiki lists the singular name) |
 | `stopNamedTimer(parent, name)` | ✅ | IDManager.lua |
 | `stopNamedTrigger(parent, name)` | ✅ | IDManager.lua |
 | `stopStopWatch(id\|name)` | ✅ | Returns elapsed seconds |
@@ -515,9 +517,9 @@ Standard Lua 5.1 string functions (`string.byte`, `string.char`, `string.find`, 
 | `string.byte` / `string.char` / `string.find` / `string.format` / `string.gmatch` / `string.gsub` / `string.len` / `string.lower` / `string.match` / `string.rep` / `string.reverse` / `string.sub` / `string.upper` | ✅ | Lua 5.1 stdlib (wasmoon) |
 | `string.cut(s, maxlen)` | ✅ | StringUtils.lua |
 | `string.dump(fn)` | ✅ | Lua 5.1 stdlib |
-| `string.enclose(s [, level])` | 🚧 | Mudlet long-bracket helper |
+| `string.enclose(s [, level])` | ✅ | StringUtils.lua (bundled verbatim) |
 | `string.ends(s, suffix)` | ✅ | StringUtils.lua |
-| `string.findPattern(s, pattern)` | 🚧 | Mudlet pattern helper |
+| `string.findPattern(s, pattern)` | ✅ | StringUtils.lua (bundled verbatim) |
 | `string.genNocasePattern(s)` | ✅ | StringUtils.lua |
 | `string.gfind(s, pat)` | ✅ | Lua 5.1 alias for `string.gmatch` (wasmoon) |
 | `string.patternEscape(s)` | ✅ | StringUtils.lua |

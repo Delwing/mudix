@@ -12,6 +12,7 @@ import { namedColorToState } from '../mud/text/colorParsers';
 import { colorCodes } from '../mud/text/colors';
 import { Console } from '../mud/text/Console';
 import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
+import { getHeldModifiers } from './heldModifiers';
 import { useAppStore, selectProfileField, connectionUrl } from '../storage';
 import {
     getUniversalDefaultFonts,
@@ -412,7 +413,10 @@ export class ScriptingAPI {
     private modulePriorityGetter: ((name: string) => number) | null = null;
     private modulesGetter: (() => string[]) | null = null;
     private moduleInfoGetter: ((name: string) => Record<string, unknown> | null) | null = null;
+    private moduleInfoSetter: ((name: string, key: string, value: string) => boolean) | null = null;
     private modulePathGetter: ((name: string) => string | null) | null = null;
+    private packageInfoGetter: ((name: string) => Record<string, string>) | null = null;
+    private packageInfoSetter: ((name: string, key: string, value: string) => boolean) | null = null;
     private cssRewriter: ((css: string) => string) | null = null;
     private scriptToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
@@ -422,6 +426,10 @@ export class ScriptingAPI {
     private keyToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private existsCallback: ((nameOrId: string | number, type: string) => number) | null = null;
     private isActiveCallback: ((nameOrId: string | number, type: string, checkAncestors: boolean) => number) | null = null;
+    private ancestorsCallback: ((id: number, type: string) => Array<{ id: number; name: string; node: string; isActive: boolean }> | null) | null = null;
+    private findItemsCallback: ((name: string, type: string, exact: boolean, caseSensitive: boolean) => number[]) | null = null;
+    private isAncestorsActiveCallback: ((id: number, type: string) => boolean | null) | null = null;
+    private profileStatsCallback: (() => Record<string, unknown>) | null = null;
     // Mudlet returns a numeric script id from permScript/permRegexTrigger/setScript;
     // -1 signals failure (missing parent group, unknown script name, etc.).
     private permScriptCallback: ((name: string, parent: string, code: string) => number) | null = null;
@@ -585,6 +593,43 @@ export class ScriptingAPI {
         for (const line of lines) this.echo(line + '\n');
     }
 
+    /** Mudlet `getCommandSeparator()`. Returns the profile's command separator
+     *  (the string that splits one Enter into multiple commands). Defaults to
+     *  `;;` when the profile hasn't customised it. */
+    getCommandSeparator(): string {
+        const sep = selectProfileField(useAppStore.getState(), this.connectionId, 'commandSeparator');
+        return sep ?? ';;';
+    }
+
+    /** Mudlet `getProfileInformation()`. Returns the profile's free-text
+     *  description, or "" when unset. (mudix is single-profile, so the optional
+     *  profile-name argument is ignored.) */
+    getProfileInformation(): string {
+        return selectProfileField(useAppStore.getState(), this.connectionId, 'description') ?? '';
+    }
+
+    /** Mudlet `setProfileInformation(text)`. Stores the profile's free-text
+     *  description. Always succeeds for the active profile. */
+    setProfileInformation(text: string): boolean {
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { description: String(text ?? '') });
+        return true;
+    }
+
+    /** Mudlet `clearProfileInformation()`. Resets the profile description to
+     *  an empty string. */
+    clearProfileInformation(): boolean {
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { description: '' });
+        return true;
+    }
+
+    /** Mudlet `holdingModifiers(number)`. True when exactly the given set of
+     *  keyboard modifiers (Qt::KeyboardModifier bitmask, as in
+     *  `mudlet.keymodifier`) is currently held — exact equality, matching
+     *  Mudlet. */
+    holdingModifiers(modifiers: number): boolean {
+        return getHeldModifiers() === (Number(modifiers) | 0);
+    }
+
     setSendRequestDispatcher(fn: ((text: string) => boolean) | null): void {
         this.sendRequestDispatcher = fn;
     }
@@ -619,7 +664,10 @@ export class ScriptingAPI {
     setModulePriorityGetter(fn: ((name: string) => number) | null): void { this.modulePriorityGetter = fn; }
     setModulesGetter(fn: (() => string[]) | null): void { this.modulesGetter = fn; }
     setModuleInfoGetter(fn: ((name: string) => Record<string, unknown> | null) | null): void { this.moduleInfoGetter = fn; }
+    setModuleInfoSetter(fn: ((name: string, key: string, value: string) => boolean) | null): void { this.moduleInfoSetter = fn; }
     setModulePathGetter(fn: ((name: string) => string | null) | null): void { this.modulePathGetter = fn; }
+    setPackageInfoGetter(fn: ((name: string) => Record<string, string>) | null): void { this.packageInfoGetter = fn; }
+    setPackageInfoSetter(fn: ((name: string, key: string, value: string) => boolean) | null): void { this.packageInfoSetter = fn; }
 
     installModule(path: string): InstallOutcome { return this.moduleInstaller?.(path) ?? { ok: false, error: 'no module installer available' }; }
     uninstallModule(name: string): boolean { return this.moduleUninstaller?.(name) ?? false; }
@@ -634,7 +682,17 @@ export class ScriptingAPI {
     getModulePriority(name: string): number { return this.modulePriorityGetter?.(name) ?? 0; }
     getModules(): string[] { return this.modulesGetter?.() ?? []; }
     getModuleInfo(name: string): Record<string, unknown> | null { return this.moduleInfoGetter?.(name) ?? null; }
+    /** Mudlet `setModuleInfo(name, key, value)`. Stores a custom info field on a
+     *  module (visible via getModuleInfo). Always true. */
+    setModuleInfo(name: string, key: string, value: string): boolean { return this.moduleInfoSetter?.(name, key, value) ?? false; }
     getModulePath(name: string): string | null { return this.modulePathGetter?.(name) ?? null; }
+    /** Mudlet `getPackageInfo(name)`. Merged info table — the package manifest's
+     *  standard fields overlaid with anything set via setPackageInfo. Empty when
+     *  the package isn't installed and nothing was set. */
+    getPackageInfo(name: string): Record<string, string> { return this.packageInfoGetter?.(name) ?? {}; }
+    /** Mudlet `setPackageInfo(name, key, value)`. Stores a custom info field on a
+     *  package (visible via getPackageInfo). Always true. */
+    setPackageInfo(name: string, key: string, value: string): boolean { return this.packageInfoSetter?.(name, key, value) ?? false; }
 
     setScriptToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
         this.scriptToggler = fn;
@@ -681,6 +739,22 @@ export class ScriptingAPI {
 
     setIsActiveCallback(fn: ((nameOrId: string | number, type: string, checkAncestors: boolean) => number) | null): void {
         this.isActiveCallback = fn;
+    }
+
+    setAncestorsCallback(fn: ((id: number, type: string) => Array<{ id: number; name: string; node: string; isActive: boolean }> | null) | null): void {
+        this.ancestorsCallback = fn;
+    }
+
+    setFindItemsCallback(fn: ((name: string, type: string, exact: boolean, caseSensitive: boolean) => number[]) | null): void {
+        this.findItemsCallback = fn;
+    }
+
+    setIsAncestorsActiveCallback(fn: ((id: number, type: string) => boolean | null) | null): void {
+        this.isAncestorsActiveCallback = fn;
+    }
+
+    setProfileStatsCallback(fn: (() => Record<string, unknown>) | null): void {
+        this.profileStatsCallback = fn;
     }
 
     setPermScriptCallback(fn: ((name: string, parent: string, code: string) => number) | null): void {
@@ -854,6 +928,30 @@ export class ScriptingAPI {
      */
     isActive(nameOrId: string | number, type: string, checkAncestors = false): number {
         return this.isActiveCallback?.(nameOrId, type, checkAncestors) ?? 0;
+    }
+
+    /** Mudlet `ancestors(id, type)`. Ancestor chain (parent→root) of the item,
+     *  or null when no item of that type has the id. */
+    ancestors(id: number, type: string): Array<{ id: number; name: string; node: string; isActive: boolean }> | null {
+        return this.ancestorsCallback?.(id, type) ?? null;
+    }
+
+    /** Mudlet `findItems(name, type [, exact [, caseSensitive]])`. Numeric ids of
+     *  matching items/groups. Empty when none match or the type is unknown. */
+    findItems(name: string, type: string, exact = true, caseSensitive = true): number[] {
+        return this.findItemsCallback?.(name, type, exact, caseSensitive) ?? [];
+    }
+
+    /** Mudlet `isAncestorsActive(id, type)`. True when every ancestor group is
+     *  enabled; null when no item of that type has the id. */
+    isAncestorsActive(id: number, type: string): boolean | null {
+        return this.isAncestorsActiveCallback?.(id, type) ?? null;
+    }
+
+    /** Mudlet `getProfileStats()`. Per-family total/active counts (+ trigger
+     *  patterns). See ScriptingEngine.getProfileStats for mudix's caveats. */
+    getProfileStats(): Record<string, unknown> {
+        return this.profileStatsCallback?.() ?? {};
     }
 
     permScript(name: string, parent: string, code: string): number {

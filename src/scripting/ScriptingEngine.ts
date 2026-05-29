@@ -11,6 +11,19 @@ import type {FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer, computeTrailingState} from '../mud/text/FormatState';
 import type {MspCommand} from '../mud/protocol';
 import {ScriptingAPI, type InstallOutcome} from './ScriptingAPI';
+
+/** The fields every tree node (alias/trigger/timer/key/button/script) shares —
+ *  enough for the tree-walking APIs (ancestors/findItems/isAncestorsActive/
+ *  getProfileStats). `patterns` is trigger-only and optional. */
+type BaseTreeNode = {
+    id: string;
+    name: string;
+    enabled: boolean;
+    isGroup: boolean;
+    parentId: string | null;
+    packageName?: string;
+    patterns?: unknown[];
+};
 import {LuaRuntime} from './lua/LuaRuntime';
 import type {IScriptingRuntime} from './IScriptingRuntime';
 import {ProfileVFS} from './vfs/ProfileVFS';
@@ -564,6 +577,69 @@ export class ScriptingEngine {
     }
 
     /**
+     * In-memory custom info fields set via setPackageInfo / setModuleInfo. These
+     * mirror Mudlet's mPackageInfo / mModuleInfo — volatile string→string maps
+     * that overlay the manifest-derived fields, repopulated by scripts as
+     * needed (Mudlet itself loses them on restart too).
+     */
+    private packageInfoOverrides = new Map<string, Map<string, string>>();
+    private moduleInfoOverrides = new Map<string, Map<string, string>>();
+
+    /** Manifest's standard info fields as a string→string map (Mudlet's
+     *  config.lua-derived package info keys). Empty values are omitted. */
+    private manifestInfoBase(pkg: PackageManifest): Record<string, string> {
+        const base: Record<string, string> = {};
+        const put = (k: string, v: unknown) => {
+            if (v !== undefined && v !== null && v !== '') base[k] = String(v);
+        };
+        put('name', pkg.name);
+        put('title', pkg.title);
+        put('author', pkg.author);
+        put('version', pkg.version);
+        put('description', pkg.description);
+        put('created', pkg.created);
+        put('icon', pkg.icon);
+        put('installed', pkg.installedAt);
+        return base;
+    }
+
+    /** Overlay the in-memory custom fields for `name` onto `base` (mutates). */
+    private applyInfoOverrides(base: Record<string, string>, overrides: Map<string, Map<string, string>>, name: string): void {
+        const ov = overrides.get(name);
+        if (ov) for (const [k, v] of ov) base[k] = v;
+    }
+
+    /** Mudlet `getPackageInfo(name)`. Manifest fields overlaid with anything set
+     *  via setPackageInfo. Empty table when the package is unknown and nothing
+     *  was set for that name. */
+    getPackageInfo(name: string): Record<string, string> {
+        const pkg = this.findManifest(name);
+        const base = pkg ? this.manifestInfoBase(pkg) : {};
+        this.applyInfoOverrides(base, this.packageInfoOverrides, name);
+        return base;
+    }
+
+    /** Mudlet `setPackageInfo(name, key, value)`. Records a custom info field.
+     *  Always succeeds (matches Mudlet, which sets the map unconditionally). */
+    setPackageInfo(name: string, key: string, value: string): boolean {
+        if (!key) return false;
+        let ov = this.packageInfoOverrides.get(name);
+        if (!ov) { ov = new Map(); this.packageInfoOverrides.set(name, ov); }
+        ov.set(key, value);
+        return true;
+    }
+
+    /** Mudlet `setModuleInfo(name, key, value)`. Records a custom info field
+     *  surfaced by getModuleInfo. Always succeeds. */
+    setModuleInfo(name: string, key: string, value: string): boolean {
+        if (!key) return false;
+        let ov = this.moduleInfoOverrides.get(name);
+        if (!ov) { ov = new Map(); this.moduleInfoOverrides.set(name, ov); }
+        ov.set(key, value);
+        return true;
+    }
+
+    /**
      * Mudlet `getModulePath(name) → path`. Absolute VFS path of an installed
      * module's XML. Modules referencing a file outside the managed package dir
      * store it verbatim in `xmlVfsPath`; packaged modules store an XML path
@@ -795,9 +871,15 @@ export class ScriptingEngine {
             this.api.setModulesGetter(() => this.getModuleNames());
             this.api.setModuleInfoGetter((name) => {
                 const info = this.getModuleInfo(name);
-                return info ? (info as unknown as Record<string, unknown>) : null;
+                if (!info) return null;
+                const rec = info as unknown as Record<string, unknown>;
+                this.applyInfoOverrides(rec as Record<string, string>, this.moduleInfoOverrides, name);
+                return rec;
             });
+            this.api.setModuleInfoSetter((name, key, value) => this.setModuleInfo(name, key, value));
             this.api.setModulePathGetter((name) => this.getModulePath(name));
+            this.api.setPackageInfoGetter((name) => this.getPackageInfo(name));
+            this.api.setPackageInfoSetter((name, key, value) => this.setPackageInfo(name, key, value));
             this.api.setScriptToggler((name, enabled) => this.toggleScriptByName(name, enabled));
             this.api.setScriptGetter((name, pos) => this.getScriptByName(name, pos));
             this.api.setTriggerToggler((name, enabled) => this.toggleTriggerByName(name, enabled));
@@ -807,6 +889,10 @@ export class ScriptingEngine {
             this.api.setKeyToggler((name, enabled) => this.toggleKeyByName(name, enabled));
             this.api.setExistsCallback((name, type) => this.existsByName(name, type));
             this.api.setIsActiveCallback((name, type, checkAncestors) => this.isActiveByName(name, type, checkAncestors));
+            this.api.setAncestorsCallback((id, type) => this.ancestorsById(id, type));
+            this.api.setFindItemsCallback((name, type, exact, cs) => this.findItemsByName(name, type, exact, cs));
+            this.api.setIsAncestorsActiveCallback((id, type) => this.isAncestorsActiveById(id, type));
+            this.api.setProfileStatsCallback(() => this.getProfileStats());
             this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
             this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
             this.api.setPermSubstringTriggerCallback((name, parent, patterns, code) => this.createPermSubstringTrigger(name, parent, patterns, code));
@@ -1328,6 +1414,133 @@ export class ScriptingEngine {
         }
         const name = String(nameOrId);
         return list.filter(i => i.name === name && isOn(i)).length;
+    }
+
+    /**
+     * Shared type→node-list lookup for the tree-walking APIs (ancestors,
+     * findItems, isAncestorsActive). Type aliases mirror Mudlet: "key" and
+     * "keybind" both target keybindings. Unknown types return an empty list.
+     */
+    private nodeListForType(type: string): BaseTreeNode[] {
+        const store = useAppStore.getState();
+        const id = this.connectionId;
+        switch (type.toLowerCase()) {
+            case 'alias':   return store.connectionAliases[id]      ?? [];
+            case 'trigger': return store.connectionTriggers[id]     ?? [];
+            case 'timer':   return store.connectionTimers[id]       ?? [];
+            case 'key':
+            case 'keybind': return store.connectionKeybindings[id]  ?? [];
+            case 'button':  return store.connectionButtons[id]      ?? [];
+            case 'script':  return store.connectionScripts[id]      ?? [];
+            default:        return [];
+        }
+    }
+
+    private nodeTypeLabel(node: BaseTreeNode): 'package' | 'group' | 'item' {
+        if (!node.isGroup) return 'item';
+        return node.packageName && node.packageName === node.name ? 'package' : 'group';
+    }
+
+    /**
+     * Mudlet `ancestors(id, type)`. Walks from the item's immediate parent up to
+     * the root, returning each ancestor as `{id, name, node, isActive}` where
+     * `node` is "package"/"group"/"item" and `isActive` is that ancestor's own
+     * enabled flag. Returns null when no item of `type` carries the numeric `id`
+     * (the Lua wrapper turns that into a `(false, errMsg)` miss).
+     */
+    ancestorsById(id: number, type: string): Array<{ id: number; name: string; node: string; isActive: boolean }> | null {
+        const list = this.nodeListForType(type);
+        const byUuid = new Map(list.map(i => [i.id, i]));
+        const start = list.find(i => this.uuidToNumericId.get(i.id) === id);
+        if (!start) return null;
+        const out: Array<{ id: number; name: string; node: string; isActive: boolean }> = [];
+        let node = start.parentId ? byUuid.get(start.parentId) : undefined;
+        while (node) {
+            out.push({
+                id: this.numericIdFor(node.id),
+                name: node.name,
+                node: this.nodeTypeLabel(node),
+                isActive: node.enabled,
+            });
+            node = node.parentId ? byUuid.get(node.parentId) : undefined;
+        }
+        return out;
+    }
+
+    /**
+     * Mudlet `findItems(name, type [, exact [, caseSensitive]])`. Returns the
+     * numeric ids of every item (and group) whose name matches. `exact` (default
+     * true) toggles exact vs substring; `caseSensitive` (default true) toggles
+     * case folding. Empty array when nothing matches or the type is unknown.
+     */
+    findItemsByName(name: string, type: string, exact: boolean, caseSensitive: boolean): number[] {
+        const list = this.nodeListForType(type);
+        const needle = caseSensitive ? name : name.toLowerCase();
+        const out: number[] = [];
+        for (const item of list) {
+            const hay = caseSensitive ? item.name : item.name.toLowerCase();
+            const hit = exact ? hay === needle : hay.includes(needle);
+            if (hit) out.push(this.numericIdFor(item.id));
+        }
+        return out;
+    }
+
+    /**
+     * Mudlet `isAncestorsActive(id, type)`. True when every ancestor group of
+     * the item is enabled (the item's own state is ignored); true when the item
+     * sits at root with no ancestors. Returns null when no item of `type`
+     * carries the numeric `id`.
+     */
+    isAncestorsActiveById(id: number, type: string): boolean | null {
+        const list = this.nodeListForType(type);
+        const byUuid = new Map(list.map(i => [i.id, i]));
+        const start = list.find(i => this.uuidToNumericId.get(i.id) === id);
+        if (!start) return null;
+        let node = start.parentId ? byUuid.get(start.parentId) : undefined;
+        while (node) {
+            if (!node.enabled) return false;
+            node = node.parentId ? byUuid.get(node.parentId) : undefined;
+        }
+        return true;
+    }
+
+    /**
+     * Mudlet `getProfileStats()`. Counts of total/active items per family plus
+     * the trigger pattern tally. mudix doesn't keep temporary items (tempTimer
+     * etc.) in the persisted node tree, so `temp` is always 0, and there's no
+     * animated-GIF tracker, so `gifs` is always zero.
+     */
+    getProfileStats(): Record<string, unknown> {
+        const store = useAppStore.getState();
+        const cid = this.connectionId;
+        const triggers = store.connectionTriggers[cid] ?? [];
+        const aliases = store.connectionAliases[cid] ?? [];
+        const timers = store.connectionTimers[cid] ?? [];
+        const keys = store.connectionKeybindings[cid] ?? [];
+        const scripts = store.connectionScripts[cid] ?? [];
+
+        const tally = (list: BaseTreeNode[]) => {
+            const items = list.filter(i => !i.isGroup);
+            return { total: items.length, temp: 0, active: items.filter(i => i.enabled).length };
+        };
+
+        let patternsTotal = 0;
+        let patternsActive = 0;
+        for (const t of triggers) {
+            if (t.isGroup) continue;
+            const n = Array.isArray(t.patterns) ? t.patterns.length : 0;
+            patternsTotal += n;
+            if (t.enabled) patternsActive += n;
+        }
+
+        return {
+            triggers: { ...tally(triggers), patterns: { total: patternsTotal, active: patternsActive } },
+            aliases: tally(aliases),
+            timers: tally(timers),
+            keys: tally(keys),
+            scripts: tally(scripts),
+            gifs: { total: 0, active: 0 },
+        };
     }
 
     /**

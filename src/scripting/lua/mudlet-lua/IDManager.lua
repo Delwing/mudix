@@ -570,6 +570,11 @@ function stopAllNamedTriggers(user)
   return mgr:stopAllTriggers()
 end
 
+-- Documentation: https://wiki.mudlet.org/w/Manual:Lua_Functions#stopAllNamedTrigger
+-- The wiki lists the function under the singular name; alias it to the plural
+-- implementation so scripts using either spelling work.
+stopAllNamedTrigger = stopAllNamedTriggers
+
 -- Documentation: https://wiki.mudlet.org/w/Manual:Lua_Functions#deleteAllNamedTriggers
 function deleteAllNamedTriggers(user)
   local funcName = "deleteAllNamedTriggers"

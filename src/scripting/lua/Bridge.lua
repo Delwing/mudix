@@ -971,6 +971,16 @@ function getModuleInfo(name, key)
     return info[key]
 end
 
+-- Mudlet getPackageInfo(name [, key]) — returns the merged info table (manifest
+-- fields overlaid with anything set via setPackageInfo) when called with one
+-- argument, or a single string when called with a key (empty string when the
+-- key is absent, matching Mudlet).
+function getPackageInfo(name, key)
+    local info = __getPackageInfo(name) or {}
+    if key == nil then return info end
+    return info[key] or ""
+end
+
 -- Mudlet getTime([asString, format]) → table or string.
 --   getTime()                    → { year, month, day, hour, min, sec, msec }
 --   getTime(true)                → string formatted with "hh:mm:ss.zzz"
@@ -1765,6 +1775,123 @@ function getPlayingSounds(a, b, c)
         end
     end
     return out
+end
+
+-- Mudlet `getPlayingMusic([filter])`. Same filter/shape as getPlayingSounds
+-- but for the music channel.
+function getPlayingMusic(a, b, c)
+    local filter
+    if type(a) == 'table' then
+        filter = { name = a.name, key = a.key, tag = a.tag }
+    else
+        filter = { name = a, key = b, tag = c }
+    end
+    local raw = __getPlayingMusic(filter)
+    local out = {}
+    if type(raw) == 'table' then
+        for _, v in pairs(raw) do
+            out[#out + 1] = { name = v.name, key = v.key, tag = v.tag, volume = v.volume }
+        end
+    end
+    return out
+end
+
+-- Mudlet `getPausedSounds([filter])` / `getPausedMusic([filter])`. mudix's Web
+-- Audio backend stops rather than pauses sources, so these always return an
+-- empty list (kept for ported-script parity). The filter is accepted and
+-- ignored.
+function getPausedSounds() return {} end
+function getPausedMusic() return {} end
+
+-- Mudlet `getPlayingVideos([filter])` / `getPausedVideos([filter])`. Returns a
+-- 1-indexed array of { name=, path=, volume= } for the videos currently in the
+-- requested play state, optionally filtered by name. JS hands back a 0-indexed
+-- array; re-index to 1-based here.
+local function reindexVideos(raw)
+    local out = {}
+    if type(raw) == 'table' then
+        for _, v in pairs(raw) do
+            out[#out + 1] = { name = v.name, path = v.path, volume = v.volume }
+        end
+    end
+    return out
+end
+function getPlayingVideos(a)
+    local filter = (type(a) == 'table') and { name = a.name } or { name = a }
+    return reindexVideos(__getPlayingVideos(filter))
+end
+function getPausedVideos(a)
+    local filter = (type(a) == 'table') and { name = a.name } or { name = a }
+    return reindexVideos(__getPausedVideos(filter))
+end
+
+-- Mudlet `ancestors(id, type)`. Re-index the JS 0-indexed array of
+-- {id, name, node, isActive} (immediate parent → root) to a 1-based Lua
+-- sequence. (false, errMsg) when no item of that type carries the id.
+function ancestors(id, itemType)
+    local raw = __ancestors(id, itemType)
+    if not raw then
+        return false, "ancestors: " .. tostring(itemType) .. " item ID " .. tostring(id) .. " does not exist"
+    end
+    local out = {}
+    local i = 0
+    while raw[i] ~= nil do
+        local v = raw[i]
+        out[#out + 1] = { id = v.id, name = v.name, node = v.node, isActive = v.isActive }
+        i = i + 1
+    end
+    return out
+end
+
+-- Mudlet `findItems(name, type [, exact [, caseSensitive]])`. Both flags default
+-- to true (matching Mudlet). Returns a 1-based array of numeric item ids.
+function findItems(name, itemType, exact, caseSensitive)
+    if exact == nil then exact = true end
+    if caseSensitive == nil then caseSensitive = true end
+    local raw = __findItems(name, itemType, exact, caseSensitive)
+    local out = {}
+    if raw then
+        local i = 0
+        while raw[i] ~= nil do
+            out[#out + 1] = raw[i]
+            i = i + 1
+        end
+    end
+    return out
+end
+
+-- Mudlet `isAncestorsActive(id, type)`. True when every ancestor group is
+-- enabled. (false, errMsg) when no item of that type carries the id. A real
+-- "an ancestor is disabled" result comes back as false (distinct from the nil
+-- miss sentinel).
+function isAncestorsActive(id, itemType)
+    local raw = __isAncestorsActive(id, itemType)
+    if raw == nil then
+        return false, "isAncestorsActive: " .. tostring(itemType) .. " item ID " .. tostring(id) .. " does not exist"
+    end
+    return raw
+end
+
+-- Mudlet `getProfileStats()`. Rebuild the nested counts table off the JS object
+-- so the Lua side always sees a clean, fully-populated structure.
+function getProfileStats()
+    local r = __getProfileStats() or {}
+    local function fam(t)
+        t = t or {}
+        return { total = t.total or 0, temp = t.temp or 0, active = t.active or 0 }
+    end
+    local triggers = fam(r.triggers)
+    local pat = (r.triggers and r.triggers.patterns) or {}
+    triggers.patterns = { total = pat.total or 0, active = pat.active or 0 }
+    local gifs = r.gifs or {}
+    return {
+        triggers = triggers,
+        aliases = fam(r.aliases),
+        timers = fam(r.timers),
+        keys = fam(r.keys),
+        scripts = fam(r.scripts),
+        gifs = { total = gifs.total or 0, active = gifs.active or 0 },
+    }
 end
 
 -- Mudlet registerMapInfo(label, function). The callback runs every time the

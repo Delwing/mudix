@@ -764,3 +764,79 @@ describe('lockExit / hasExitLock', () => {
   });
 });
 
+
+// ── New Mudlet-API batch (media getters, profile info, tree-walker miss paths,
+//    getProfileStats shape, getPackageInfo) ──────────────────────────────────
+// These exercise the wasmoon binding + Bridge.lua wrappers end to end. The
+// tree-walking and package/module-info *data* paths live in ScriptingEngine
+// (not wired into createTestRuntime), so here we assert the binding shapes and
+// the documented miss behaviour; the engine logic is covered by typecheck.
+describe('Mudlet-API batch — Lua bindings', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('getCommandSeparator defaults to ";;"', () => {
+    expect(env.run('return getCommandSeparator()')).toBe(';;');
+  });
+
+  it('profile information set/get/clear round-trips', () => {
+    expect(env.run('return getProfileInformation()')).toBe('');
+    expect(env.run('return (setProfileInformation("a hardy adventurer"))')).toBe(true);
+    expect(env.run('return getProfileInformation()')).toBe('a hardy adventurer');
+    expect(env.run('return (clearProfileInformation())')).toBe(true);
+    expect(env.run('return getProfileInformation()')).toBe('');
+  });
+
+  it('holdingModifiers exact-matches the (empty) held set in node', () => {
+    // No DOM in the node harness → nothing is held → only the 0 (None) mask matches.
+    expect(env.run('return holdingModifiers(0)')).toBe(true);
+    expect(env.run('return holdingModifiers(0x04000000)')).toBe(false);
+  });
+
+  it('media getters return empty lists when nothing is playing', () => {
+    expect(env.run('return #getPlayingMusic()')).toBe(0);
+    expect(env.run('return #getPlayingVideos()')).toBe(0);
+    expect(env.run('return #getPausedVideos()')).toBe(0);
+    expect(env.run('return #getPausedSounds()')).toBe(0);
+    expect(env.run('return #getPausedMusic()')).toBe(0);
+  });
+
+  it('pauseMusic is callable with and without a channel', () => {
+    expect(() => env.run('pauseMusic(); pauseMusic("ambient")')).not.toThrow();
+  });
+
+  it('getProfileStats returns a fully-populated zeroed table', () => {
+    expect(env.run('return getProfileStats().triggers.total')).toBe(0);
+    expect(env.run('return getProfileStats().triggers.patterns.active')).toBe(0);
+    expect(env.run('return getProfileStats().aliases.temp')).toBe(0);
+    expect(env.run('return getProfileStats().gifs.active')).toBe(0);
+    expect(env.run('return getProfileStats().scripts.active')).toBe(0);
+  });
+
+  it('getPackageInfo returns an (empty) table, or "" for an absent key', () => {
+    expect(env.run('return type(getPackageInfo("nope"))')).toBe('table');
+    expect(env.run('return getPackageInfo("nope", "author")')).toBe('');
+  });
+
+  it('findItems returns an empty table with no engine wiring', () => {
+    expect(env.run('return type(findItems("x", "alias"))')).toBe('table');
+    expect(env.run('return #findItems("x", "alias")')).toBe(0);
+  });
+
+  it('ancestors / isAncestorsActive report the documented miss shape', () => {
+    expect(env.run('return (ancestors(123, "trigger"))')).toBe(false);
+    expect(env.run('return (isAncestorsActive(123, "trigger"))')).toBe(false);
+  });
+
+  it('stopAllNamedTrigger is aliased to the plural form', () => {
+    expect(env.run('return type(stopAllNamedTrigger)')).toBe('function');
+    expect(env.run('return stopAllNamedTrigger == stopAllNamedTriggers')).toBe(true);
+  });
+
+  it('setModuleInfo / setPackageInfo are callable (no-op without an install)', () => {
+    // Both return false here because the engine setter callbacks aren't wired
+    // in this harness; the point is the binding exists and doesn't throw.
+    expect(() => env.run('setModuleInfo("m", "k", "v"); setPackageInfo("p", "k", "v")')).not.toThrow();
+  });
+});

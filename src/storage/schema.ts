@@ -118,6 +118,10 @@ export interface ProfileSettings {
      *  "command separator", default `;;`). Each split is run through aliases
      *  and sent independently. Empty string disables splitting. */
     commandSeparator?: string;
+    /** Free-text profile description (Mudlet's profile "description" field,
+     *  read/written by getProfileInformation / setProfileInformation /
+     *  clearProfileInformation). Empty/undefined = no description. */
+    description?: string;
     /** Per-profile telnet protocol toggles. Patches merge so flipping one
      *  field doesn't wipe siblings. Missing fields fall through to
      *  PROTOCOL_DEFAULTS. Takes effect on the next connect. */
