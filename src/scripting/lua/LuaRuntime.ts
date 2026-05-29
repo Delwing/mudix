@@ -236,6 +236,10 @@ export class LuaRuntime implements IScriptingRuntime {
         );
 
         this.lua.global.set('getProfileName', () => this.api.profileName);
+        // Mudlet getCharacterName() — mudix maps this to the profile name.
+        this.lua.global.set('getCharacterName', () => this.api.getCharacterName());
+        // Mudlet getMudletInfo() — echoes a diagnostic block, returns nothing.
+        this.lua.global.set('getMudletInfo', () => { this.api.getMudletInfo(); });
 
         this.lua.global.set('getEpoch', () => Date.now() / 1000);
 
@@ -1846,6 +1850,23 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet `sendSocket(data)`: send literal bytes over the socket, no
         // telnet/encoding processing.
         this.lua.global.set('sendSocket', (data: unknown) => this.api.sendSocket(String(data ?? '')));
+        // Mudlet getServerEncoding/setServerEncoding/getServerEncodingsList —
+        // the CHARSET (RFC 2066) decoder MudClient negotiates. The list is built
+        // 1-indexed (sparse array → wasmoon lands it at t[1..n]).
+        this.lua.global.set('getServerEncoding', () => this.api.getServerEncoding());
+        this.lua.global.set('setServerEncoding', (name: unknown) => this.api.setServerEncoding(String(name ?? '')));
+        this.lua.global.set('getServerEncodingsList', () => {
+            const list = this.api.getServerEncodingsList();
+            const out: string[] = [];
+            for (let i = 0; i < list.length; i++) out[i + 1] = list[i];
+            return out;
+        });
+        // Mudlet sendATCP(message) / sendTelnetChannel102(msg) — raw telnet
+        // subnegotiations (options 200 and 102).
+        this.lua.global.set('sendATCP', (message: unknown) => this.api.sendATCP(String(message ?? '')));
+        this.lua.global.set('sendTelnetChannel102', (msg: unknown) => this.api.sendTelnetChannel102(String(msg ?? '')));
+        // Mudlet reconnect() — disconnect and redial the last URL.
+        this.lua.global.set('reconnect', () => this.api.reconnect());
         // Mudlet `feedTelnet(data)`: inject raw server bytes into the inbound
         // pipeline as if received from the MUD.
         this.lua.global.set('feedTelnet', (data: unknown) => { this.api.feedTelnet(String(data ?? '')); });
@@ -2091,6 +2112,11 @@ export class LuaRuntime implements IScriptingRuntime {
         // `nil` when no module by that name exists.
         this.lua.global.set('__getModuleInfo', (name: unknown) =>
             this.api.getModuleInfo(String(name ?? '')));
+        // Mudlet getModulePath(name) → absolute VFS path of the module's XML, or
+        // nil. Like getModuleInfo, returns nil gracefully for an unknown module
+        // (no requireModule raise) so probing scripts don't error.
+        this.lua.global.set('getModulePath', (name: unknown) =>
+            this.api.getModulePath(String(name ?? '')) ?? false);
 
         // ── Script enable/disable ─────────────────────────────────────────────
         // Mudlet looks scripts up by name; toggling the flag cascades the
@@ -2190,6 +2216,12 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setScript', (name: unknown, code: unknown, pos?: unknown) => {
             const n = typeof pos === 'number' && Number.isFinite(pos) ? pos : 1;
             return this.api.setScript(String(name ?? ''), String(code ?? ''), n);
+        });
+        // Mudlet getScript(name [, pos]) → code, count. JS returns {code,count}
+        // or null; the Bridge.lua wrapper unpacks it to the two return values.
+        this.lua.global.set('__getScript', (name: unknown, pos?: unknown) => {
+            const n = typeof pos === 'number' && Number.isFinite(pos) ? pos : 1;
+            return this.api.getScript(String(name ?? ''), n);
         });
         this.lua.global.set('enableTrigger', (name: string) => this.api.enableTrigger(String(name ?? '')));
         this.lua.global.set('disableTrigger', (name: string) => this.api.disableTrigger(String(name ?? '')));
@@ -2336,6 +2368,16 @@ export class LuaRuntime implements IScriptingRuntime {
             }
             return this.api.setWindowWrap(a, Number(b));
         });
+        // Mudlet getWindowWrap(windowName) → wrap columns (0 unset, -1 missing).
+        this.lua.global.set('getWindowWrap', (name: unknown) =>
+            this.api.getWindowWrap(typeof name === 'string' ? name : 'main'));
+        // Mudlet setMapWindowTitle(title) — empty title resets to the default.
+        this.lua.global.set('setMapWindowTitle', (title: unknown) =>
+            this.api.setMapWindowTitle(String(title ?? '')));
+        // Mudlet isAnsiFgColor/isAnsiBgColor(ansiColor). Number() because regex
+        // captures arrive from Lua as strings.
+        this.lua.global.set('isAnsiFgColor', (c: unknown) => this.api.isAnsiFgColor(Number(c)));
+        this.lua.global.set('isAnsiBgColor', (c: unknown) => this.api.isAnsiBgColor(Number(c)));
         // Mudlet getConsoleBufferSize([consoleName]) → linesLimit, batchSize.
         // JS returns a 0-indexed [limit, batch] array (or nil for a missing
         // console); Bridge.lua unpacks it to the two return values.

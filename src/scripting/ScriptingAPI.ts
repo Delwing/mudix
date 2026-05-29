@@ -36,6 +36,18 @@ function parseHexToRgb(hex: string | undefined): [number, number, number] | null
     return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
 }
 
+/** Map an ANSI / xterm color index to its palette hex string. 0..7 are the
+ *  normal ANSI colors, 8..15 the bright set (both honor a profile palette
+ *  override via colorCodes.ansi), and 16..255 the fixed xterm-256 cube. Returns
+ *  null for out-of-range indices. Used by isAnsiFgColor / isAnsiBgColor. */
+function ansiIndexToHex(idx: number): string | null {
+    const n = Math.floor(Number(idx));
+    if (!Number.isFinite(n) || n < 0 || n > 255) return null;
+    if (n < 8) return colorCodes.ansi.dark[n];
+    if (n < 16) return colorCodes.ansi.bright[n - 8];
+    return colorCodes.xterm[n] ?? null;
+}
+
 /** Build a CSS color string from Mudlet-style 0..255 channels (alpha included).
  *  Channels are clamped and rounded; alpha (Mudlet's 0..255 "transparency") is
  *  mapped to CSS's 0..1 range. Used by setCommand{Background,Foreground}Color. */
@@ -400,6 +412,7 @@ export class ScriptingAPI {
     private modulePriorityGetter: ((name: string) => number) | null = null;
     private modulesGetter: (() => string[]) | null = null;
     private moduleInfoGetter: ((name: string) => Record<string, unknown> | null) | null = null;
+    private modulePathGetter: ((name: string) => string | null) | null = null;
     private cssRewriter: ((css: string) => string) | null = null;
     private scriptToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
@@ -434,6 +447,7 @@ export class ScriptingAPI {
      *  the SessionLogger instance (created/torn-down on this hook). */
     private loggingToggler: ((enabled: boolean) => boolean) | null = null;
     private setScriptCallback: ((name: string, code: string, pos: number) => number) | null = null;
+    private scriptGetter: ((name: string, pos: number) => { code: string; count: number } | null) | null = null;
     // Mudlet's killTimer/killAlias/killTrigger/killKey accept the name of a
     // permanent item in addition to the numeric id of a temp one. The engine
     // wires these to remove the matching store nodes.
@@ -514,6 +528,63 @@ export class ScriptingAPI {
         this.session.feedTelnet(data);
     }
 
+    /** Mudlet `sendATCP(message)`. Frames + sends an ATCP (telnet 200)
+     *  subnegotiation; false when the socket isn't open. */
+    sendATCP(message: string): boolean {
+        return this.session.sendATCP(message);
+    }
+
+    /** Mudlet `sendTelnetChannel102(msg)`. Frames + sends a zMUD channel-102
+     *  (telnet 102) subnegotiation; false when the socket isn't open. */
+    sendTelnetChannel102(msg: string): boolean {
+        return this.session.sendTelnetChannel102(msg);
+    }
+
+    /** Mudlet `reconnect()`. Disconnect and redial the last-connected URL;
+     *  false when no connection has been made this session. */
+    reconnect(): boolean {
+        return this.session.reconnect();
+    }
+
+    /** Mudlet `getServerEncoding()`. IANA name of the decoder applied to the
+     *  inbound stream (default "utf-8"). */
+    getServerEncoding(): string {
+        return this.session.getServerEncoding();
+    }
+
+    /** Mudlet `setServerEncoding(name)`. Switch the server stream decoder to
+     *  `name` (one of getServerEncodingsList()); false when unsupported or no
+     *  connection is active. */
+    setServerEncoding(name: string): boolean {
+        return this.session.setServerEncoding(name);
+    }
+
+    /** Mudlet `getServerEncodingsList()`. The encodings mudix can decode. */
+    getServerEncodingsList(): string[] {
+        return this.session.getServerEncodingsList();
+    }
+
+    /** Mudlet `getCharacterName()`. mudix uses one character per profile, so
+     *  this returns the active profile name (same value as getProfileName());
+     *  empty string when unset. */
+    getCharacterName(): string {
+        return this.profileName;
+    }
+
+    /** Mudlet `getMudletInfo()`. Echoes a short diagnostic block to the main
+     *  window. mudix is a browser client with no Qt build, so it reports the
+     *  web-client equivalents (profile, server encoding, platform). */
+    getMudletInfo(): void {
+        const platform = typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown';
+        const lines = [
+            'mudix — web-based MUD client (Mudlet-compatible Lua API)',
+            `Profile: ${this.profileName || '(none)'}`,
+            `Server encoding: ${this.session.getServerEncoding()}`,
+            `Platform: ${platform}`,
+        ];
+        for (const line of lines) this.echo(line + '\n');
+    }
+
     setSendRequestDispatcher(fn: ((text: string) => boolean) | null): void {
         this.sendRequestDispatcher = fn;
     }
@@ -548,6 +619,7 @@ export class ScriptingAPI {
     setModulePriorityGetter(fn: ((name: string) => number) | null): void { this.modulePriorityGetter = fn; }
     setModulesGetter(fn: (() => string[]) | null): void { this.modulesGetter = fn; }
     setModuleInfoGetter(fn: ((name: string) => Record<string, unknown> | null) | null): void { this.moduleInfoGetter = fn; }
+    setModulePathGetter(fn: ((name: string) => string | null) | null): void { this.modulePathGetter = fn; }
 
     installModule(path: string): InstallOutcome { return this.moduleInstaller?.(path) ?? { ok: false, error: 'no module installer available' }; }
     uninstallModule(name: string): boolean { return this.moduleUninstaller?.(name) ?? false; }
@@ -562,9 +634,14 @@ export class ScriptingAPI {
     getModulePriority(name: string): number { return this.modulePriorityGetter?.(name) ?? 0; }
     getModules(): string[] { return this.modulesGetter?.() ?? []; }
     getModuleInfo(name: string): Record<string, unknown> | null { return this.moduleInfoGetter?.(name) ?? null; }
+    getModulePath(name: string): string | null { return this.modulePathGetter?.(name) ?? null; }
 
     setScriptToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
         this.scriptToggler = fn;
+    }
+
+    setScriptGetter(fn: ((name: string, pos: number) => { code: string; count: number } | null) | null): void {
+        this.scriptGetter = fn;
     }
 
     setTriggerToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
@@ -868,6 +945,13 @@ export class ScriptingAPI {
 
     setScript(name: string, code: string, pos: number): number {
         return this.setScriptCallback?.(name, code, pos) ?? -1;
+    }
+
+    /** Mudlet `getScript(name [, pos]) → code, count`. Returns the source of the
+     *  pos-th (1-indexed) script named `name` and how many scripts share that
+     *  name. Returns null when none exist (Bridge.lua surfaces "", 0). */
+    getScript(name: string, pos: number): { code: string; count: number } | null {
+        return this.scriptGetter?.(name, pos) ?? null;
     }
 
     // ── Echo / output ─────────────────────────────────────────────────────────
@@ -1262,6 +1346,31 @@ export class ScriptingAPI {
 
     getBgColor(windowName?: string): [number, number, number] | null {
         return this.readSelectionColor('background', windowName);
+    }
+
+    /**
+     * Mudlet `isAnsiFgColor(ansiColor)` / `isAnsiBgColor(ansiColor)`. True when
+     * the foreground/background color at the current selection's start equals
+     * ANSI/xterm color index `ansiColor` (0..7 normal, 8..15 bright, 16..255 the
+     * xterm-256 palette). mudix stores rendered RGB rather than the original
+     * ANSI index, so the comparison is against the palette entry's RGB — exact
+     * for the 256 standard slots. Returns false when there's no selection (or it
+     * belongs to another window) or `ansiColor` is out of range.
+     */
+    isAnsiFgColor(ansiColor: number): boolean {
+        return this.matchesAnsiColor('foreground', ansiColor);
+    }
+
+    isAnsiBgColor(ansiColor: number): boolean {
+        return this.matchesAnsiColor('background', ansiColor);
+    }
+
+    private matchesAnsiColor(channel: 'foreground' | 'background', ansiColor: number): boolean {
+        const rgb = this.readSelectionColor(channel, undefined);
+        if (!rgb) return false;
+        const target = parseHexToRgb(ansiIndexToHex(ansiColor) ?? undefined);
+        if (!target) return false;
+        return rgb[0] === target[0] && rgb[1] === target[1] && rgb[2] === target[2];
     }
 
     private readSelectionColor(
@@ -1670,6 +1779,30 @@ export class ScriptingAPI {
             return true;
         }
         return this.session.windows.setWrap(name, v);
+    }
+
+    /**
+     * Mudlet `getWindowWrap(name) → cols`. Reports the visual wrap width set by
+     * setWindowWrap (0 when unset). For "main" reads the profile's stored
+     * override; for a named window reads the WindowManager hint. Returns -1 when
+     * the named window does not exist (Mudlet's invalid-window sentinel).
+     */
+    getWindowWrap(name: string): number {
+        if (!name || name === 'main') {
+            return selectProfileField(useAppStore.getState(), this.connectionId, 'outputWrapAt') ?? 0;
+        }
+        if (!this.session.windows.has(name)) return -1;
+        return this.session.windows.getWrap(name) ?? 0;
+    }
+
+    /**
+     * Mudlet `setMapWindowTitle(title)`. Sets the dockable map panel's tab
+     * title; an empty string resets it to the default ("Map"). Returns false
+     * when the map widget isn't open.
+     */
+    setMapWindowTitle(title: string): boolean {
+        const t = title && title.length ? title : undefined;
+        return this.session.windows.setTitle('map', t);
     }
 
     /**

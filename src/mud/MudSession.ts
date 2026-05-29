@@ -5,7 +5,7 @@ import { CommandLineManager } from '../ui/cmdline/CommandLineManager';
 import { SoundManager } from '../ui/sound/SoundManager';
 import { VideoManager } from '../ui/video/VideoManager';
 import { CmdLineMenuRegistry } from '../ui/CmdLineMenuRegistry';
-import { MudClient, type MudClientOptions } from './connection/MudClient';
+import { MudClient, type MudClientOptions, SUPPORTED_SERVER_ENCODINGS } from './connection/MudClient';
 import { PingTracker } from './connection/PingTracker';
 import { type MudClientEvents, type MudEvents, type SessionStatus } from './events';
 import type { Console } from './text/Console';
@@ -41,6 +41,8 @@ export class MudSession {
     /** Per-window Console instances. 'main' registered by ScriptingAPI; named windows by WindowManager. */
     readonly consoles = new Map<string, Console>();
     private client: MudClient | null = null;
+    /** The most recent URL passed to connect() — replayed by reconnect(). */
+    private lastUrl: string | null = null;
     private pingTracker: PingTracker | null = null;
     private stateUnsubs: (() => void)[] = [];
     private _status: SessionStatus = 'disconnected';
@@ -89,6 +91,7 @@ export class MudSession {
     }
 
     connect(url: string): void {
+        this.lastUrl = url;
         this.teardownClient();
         const client = new MudClient({ url, ...this.options }, this.events as EventBus<MudClientEvents>);
         this.client = client;
@@ -140,6 +143,41 @@ export class MudSession {
 
     feedTelnet(data: string): void {
         this.client?.feedTelnet(data);
+    }
+
+    sendATCP(message: string): boolean {
+        return this.client?.sendATCP(message) ?? false;
+    }
+
+    sendTelnetChannel102(msg: string): boolean {
+        return this.client?.sendTelnetChannel102(msg) ?? false;
+    }
+
+    /** Mudlet `reconnect()`. Disconnect and redial the most recently connected
+     *  URL (set by connect(), so it covers both the app and Lua connect paths).
+     *  Returns false when nothing has been dialed yet. */
+    reconnect(): boolean {
+        if (!this.lastUrl) return false;
+        this.connect(this.lastUrl);
+        return true;
+    }
+
+    /** Mudlet `getServerEncoding()`. The live client's inbound decoder name;
+     *  'utf-8' when no client is attached. */
+    getServerEncoding(): string {
+        return this.client?.getServerEncoding() ?? 'utf-8';
+    }
+
+    /** Mudlet `setServerEncoding(name)`. Returns false when no client is
+     *  attached or the name isn't supported. */
+    setServerEncoding(name: string): boolean {
+        return this.client?.setServerEncoding(name) ?? false;
+    }
+
+    /** Mudlet `getServerEncodingsList()`. The fixed set of encodings mudix can
+     *  decode — available even before a connection is dialed. */
+    getServerEncodingsList(): string[] {
+        return [...SUPPORTED_SERVER_ENCODINGS];
     }
 
     /** Mudlet `addSupportedTelnetOption(option)`. Forwards to the live

@@ -564,6 +564,22 @@ export class ScriptingEngine {
     }
 
     /**
+     * Mudlet `getModulePath(name) → path`. Absolute VFS path of an installed
+     * module's XML. Modules referencing a file outside the managed package dir
+     * store it verbatim in `xmlVfsPath`; packaged modules store an XML path
+     * relative to `<profilePath>/<name>/`. Null when not installed, not a
+     * module, or no path is resolvable.
+     */
+    getModulePath(moduleName: string): string | null {
+        const pkg = this.findManifest(moduleName);
+        if (pkg?.kind !== 'module') return null;
+        if (pkg.xmlVfsPath) return pkg.xmlVfsPath;
+        const vfs = this.vfs;
+        if (!vfs || !pkg.xmlPath) return null;
+        return `${vfs.profilePath}/${pkg.name}/${pkg.xmlPath}`;
+    }
+
+    /**
      * Install a module from a path inside the profile VFS. Plain XML stays in
      * place (manifest holds the absolute VFS path). Zips/.mpackages extract into
      * the standard pkgDir. Raises sysInstall, sysInstallPackage and
@@ -781,7 +797,9 @@ export class ScriptingEngine {
                 const info = this.getModuleInfo(name);
                 return info ? (info as unknown as Record<string, unknown>) : null;
             });
+            this.api.setModulePathGetter((name) => this.getModulePath(name));
             this.api.setScriptToggler((name, enabled) => this.toggleScriptByName(name, enabled));
+            this.api.setScriptGetter((name, pos) => this.getScriptByName(name, pos));
             this.api.setTriggerToggler((name, enabled) => this.toggleTriggerByName(name, enabled));
             this.api.setTriggerStayOpenSetter((name, lines) => this.setTriggerStayOpenByName(name, lines));
             this.api.setTimerToggler((name, enabled) => this.toggleTimerByName(name, enabled));
@@ -1614,6 +1632,24 @@ export class ScriptingEngine {
         if (!target) return -1;
         store.updateScript(this.connectionId, target.id, { code });
         return this.numericIdFor(target.id);
+    }
+
+    /**
+     * Mudlet `getScript(name [, pos]) → code, count`. Returns the source of the
+     * pos-th (1-indexed; default 1) script named `name` and how many scripts
+     * share that name. Returns null when none match — the Bridge.lua wrapper
+     * turns that into ("", 0).
+     */
+    getScriptByName(name: string, pos: number): { code: string; count: number } | null {
+        if (!name) return null;
+        const store = useAppStore.getState();
+        const scripts = store.connectionScripts[this.connectionId] ?? [];
+        const matches = scripts.filter(s => s.name === name);
+        if (matches.length === 0) return null;
+        const index = Math.max(1, Math.floor(pos)) - 1;
+        const target = matches[index];
+        if (!target) return null;
+        return { code: target.code ?? '', count: matches.length };
     }
 
     /**

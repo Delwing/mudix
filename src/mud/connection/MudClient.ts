@@ -28,6 +28,8 @@ import {
     GMCP_IAC,
     GMCP_SB,
     GMCP_SE,
+    OPT_ATCP,
+    OPT_TELNET_102,
     CHARSET_COMMAND_CODE,
     CHARSET_WILL,
     CHARSET_DO,
@@ -532,6 +534,37 @@ export class MudClient {
         }
     }
 
+    /** Mudlet `sendATCP(message)`. Frames `IAC SB ATCP <message> IAC SE` (ATCP =
+     *  telnet option 200, GMCP's predecessor) and sends it raw. Returns false
+     *  when the socket isn't open. */
+    sendATCP(message: string): boolean {
+        return this.sendSubnegotiation(OPT_ATCP, message, 'ATCP');
+    }
+
+    /** Mudlet `sendTelnetChannel102(msg)`. Frames `IAC SB 102 <msg> IAC SE`
+     *  (the zMUD generic out-of-band channel) and sends it raw. Returns false
+     *  when the socket isn't open. */
+    sendTelnetChannel102(msg: string): boolean {
+        return this.sendSubnegotiation(OPT_TELNET_102, msg, 'telnet channel 102');
+    }
+
+    /** Frame a raw `IAC SB <opt> <payload> IAC SE` subnegotiation and send it
+     *  with no encoding conversion (each char → one byte), like the other
+     *  telnet negotiations. Shared by sendATCP / sendTelnetChannel102. */
+    private sendSubnegotiation(opt: string, payload: string, label: string): boolean {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+        try {
+            this.sendRaw(GMCP_IAC + GMCP_SB + opt + payload + GMCP_IAC + GMCP_SE);
+            return true;
+        } catch (error) {
+            console.error(`Error sending ${label} message:`, error);
+            this.eventBus.emit('error', error);
+            return false;
+        }
+    }
+
     /** Walk a Latin-1 byte-string for IAC sequences, auto-respond to any
      *  WILL/DO whose option byte is in `supportedTelnetOptions`, and raise
      *  `telnet.event` for every WILL/WONT/DO/DONT/SB whose option isn't
@@ -644,6 +677,23 @@ export class MudClient {
             return;
         }
         this.eventBus.emit('charset.negotiated', displayName);
+    }
+
+    /** Mudlet `getServerEncoding()`. The IANA name of the decoder currently
+     *  applied to the inbound stream — 'utf-8' until CHARSET negotiation (or an
+     *  explicit setServerEncoding) swaps it. */
+    getServerEncoding(): string {
+        return this.currentEncoding;
+    }
+
+    /** Mudlet `setServerEncoding(name)`. Switch the inbound decoder to `name`
+     *  (any value from getServerEncodingsList()). Returns false — leaving the
+     *  current encoding untouched — when the name isn't one we can decode. */
+    setServerEncoding(name: string): boolean {
+        const norm = normalizeCharsetName(String(name ?? ''));
+        if (!norm) return false;
+        this.setEncoding(norm, String(name));
+        return true;
     }
 
     /** Route an `IAC SB MSP ... IAC SE` body to the MSP parser and dispatch
@@ -987,6 +1037,20 @@ const CHARSET_PRIORITY = [
     'windows-1252',
     'koi8-r',
     'koi8-u',
+];
+
+/** Wire-format names of every charset mudix can decode, surfaced to Lua scripts
+ *  via `getServerEncodingsList()`. Every entry round-trips through
+ *  {@link normalizeCharsetName}, so any name here is a valid `setServerEncoding`
+ *  argument. ("ASCII" maps to the UTF-8 decoder, which handles it byte-for-byte.) */
+export const SUPPORTED_SERVER_ENCODINGS: readonly string[] = [
+    'ASCII', 'UTF-8',
+    'ISO-8859-1', 'ISO-8859-2', 'ISO-8859-3', 'ISO-8859-4', 'ISO-8859-5',
+    'ISO-8859-6', 'ISO-8859-7', 'ISO-8859-8', 'ISO-8859-9', 'ISO-8859-10',
+    'ISO-8859-11', 'ISO-8859-13', 'ISO-8859-14', 'ISO-8859-15', 'ISO-8859-16',
+    'KOI8-R', 'KOI8-U',
+    'WINDOWS-1250', 'WINDOWS-1251', 'WINDOWS-1252', 'WINDOWS-1253', 'WINDOWS-1254',
+    'WINDOWS-1255', 'WINDOWS-1256', 'WINDOWS-1257', 'WINDOWS-1258',
 ];
 
 /**

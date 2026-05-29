@@ -225,6 +225,16 @@ function windowType(name)
     return k
 end
 
+-- Mudlet getScript(name [, pos]) → code, count. Returns the source of the
+-- pos-th (1-indexed) script named `name` and how many scripts share that name.
+-- Falls back to ("", 0) when none exist so appendScript()'s concatenation is
+-- safe.
+function getScript(name, pos)
+    local r = __getScript(name, pos)
+    if r == nil then return "", 0 end
+    return r.code, r.count
+end
+
 -- Mudlet getCurrentLine([window]) → line text, or (nil, errMsg) when the named
 -- window doesn't exist. JS returns `nil` only for that miss case (the main
 -- window always resolves, may simply have an empty current line).

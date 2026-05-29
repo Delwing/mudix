@@ -32,6 +32,17 @@ export const MSDP_DO   = "\xFF\xFD\x45"; // IAC DO MSDP   - client requests MSDP
 export const GMCP_WILL = "\xFF\xFB\xC9"; // IAC WILL GMCP - server offers GMCP
 export const GMCP_DO   = "\xFF\xFD\xC9"; // IAC DO GMCP   - client requests GMCP
 
+// ATCP (Achaea Telnet Client Protocol) — telnet option 200, GMCP's predecessor.
+// Same `IAC SB <opt> <payload> IAC SE` framing as GMCP. mudix only sends it
+// (sendATCP); it doesn't negotiate ATCP inbound.
+export const ATCP_COMMAND_CODE = 200;
+export const OPT_ATCP = "\xC8"; // 200
+
+// zMUD "channel 102" (telnet option 102) — a generic out-of-band data channel
+// some zMUD/CMUD-era servers use. `IAC SB 102 <data> IAC SE` framing.
+export const TELNET_102_COMMAND_CODE = 102;
+export const OPT_TELNET_102 = "\x66"; // 102
+
 // TERMINAL-TYPE (RFC 1091) / MTTS. Servers send IAC DO TTYPE and expect the
 // client to identify itself before they continue negotiating (e.g. offering
 // MSDP/GMCP). The subnegotiation cycle is: server SB TTYPE SEND IAC SE, client

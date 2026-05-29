@@ -291,16 +291,16 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `enableModuleSync(name)` | ✅ | Marks the module syncing |
 | `expandAlias(text [, echo])` | ✅ | `ScriptingAPI.expandAlias` |
 | `feedTriggers(text)` | ✅ | Feeds text through trigger pipeline + shows in output |
-| `getCharacterName()` | 🚧 | Per-profile character-name slot not exposed |
+| `getCharacterName()` | ✅ | mudix maps character→profile (one character per profile); returns the profile name (same as `getProfileName`), "" when unset |
 | `getConfig(key)` | ✅ | Bound on profile config slice |
 | `getCommandSeparator()` | 🚧 | Multi-command separator not user-configurable yet |
 | `getModuleInfo(name, key)` | ✅ | Bridge.lua |
-| `getModulePath(name)` | 🚧 | Modules are VFS-backed; path lookup not wired |
+| `getModulePath(name)` | ✅ | Absolute VFS path of a module's XML — `xmlVfsPath` verbatim, else `<profilePath>/<name>/<xmlPath>`; nil when not an installed module |
 | `getModulePriority(name)` | ✅ | JS-exposed |
 | `getModules()` | ✅ | JS-exposed |
 | `getModuleSync(name)` | ✅ | JS-exposed |
 | `getMudletHomeDir()` | ✅ | VFS.lua — alias for `getMudixProfilePath()` |
-| `getMudletInfo()` | 🚧 | Self-description debug dump not wired |
+| `getMudletInfo()` | ✅ | Echoes a diagnostic block (profile, server encoding, platform/user-agent) to the main window |
 | `getMudletVersion([mode])` | ✅ | Supports `nil`/`"string"`/`"major"`/`"minor"`/`"revision"`/`"build"`/`"table"` |
 | `getNamedEventHandlers()` | ✅ | IDManager.lua |
 | `getNewIDManager()` | ✅ | IDManager.lua factory |
@@ -311,7 +311,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getPlayingMusic()` / `getPlayingVideos()` | 🚧 | Sister of `getPlayingSounds` not wired yet |
 | `getPlayingSounds([filter])` | ✅ | 1-based array of `{name, key, tag, volume}`; optional name/key/tag filter |
 | `getProfileName()` | ✅ | JS-exposed |
-| `getServerEncoding()` / `setServerEncoding(name)` / `getServerEncodingsList()` | 🚧 | CHARSET (RFC 2066) is fully negotiated by `MudClient` and tracked in `currentEncoding`; the Lua-side getters/setters just need to be bound |
+| `getServerEncoding()` / `setServerEncoding(name)` / `getServerEncodingsList()` | ✅ | Exposes `MudClient`'s CHARSET (RFC 2066) decoder. `getServerEncoding` → current IANA name (default "utf-8"); `setServerEncoding` validates via `normalizeCharsetName` and swaps the `TextDecoder` (false when unsupported); `getServerEncodingsList` → 1-indexed `SUPPORTED_SERVER_ENCODINGS` (UTF-8, ISO-8859-x, Windows-125x, KOI8-R/U) |
 | `getWindowsCodepage()` | ✅ | Returns `"65001"` (UTF-8) on every platform |
 | `hfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `holdingModifiers()` | 🚧 | No global modifier-state poll |
@@ -403,7 +403,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getStopWatches()` | ✅ | Re-keys to integer ids → `{ name, isRunning, isPersistent, elapsedTime }` |
 | `getStopWatchTime(id\|name)` | ✅ | Elapsed seconds without stopping |
 | `getStopWatchBrokenDownTime(id\|name)` | ✅ | `{negative, days, hours, minutes, seconds, milliSeconds, decimalSeconds}` off the proxy; `false` on miss |
-| `getScript(name)` | 🚧 | Script-text accessor |
+| `getScript(name [, pos])` | ✅ | → `code, count` for the pos-th (1-indexed) script named `name`; ("", 0) on miss. Bridge.lua unpacks the `{code,count}` from `__getScript`. Unblocks `appendScript`'s code-preserving path (Other.lua) |
 | `invokeFileDialog(type, title)` | 🚧 | Blocked on a sync/async design decision — browser pickers are async; Mudlet's `local p = invokeFileDialog(...)` is synchronous |
 | `isActive(name, type [, checkAncestors])` | ✅ | Count active items by name/id |
 | `isAncestorsActive(name, type)` | 🚧 | |
@@ -485,13 +485,13 @@ mudix-specific extras (not on the wiki): `mudix.windows.write/setTitle/has/focus
 | `openUrl(url)` | ✅ | `window.open(url, '_blank')`; `file:` prefix routes to the VFS file browser |
 | `postHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.postHTTP` |
 | `putHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.putHTTP` |
-| `reconnect()` | 🚧 | One-shot reconnect helper (vs `disconnect` + `connectToServer`) |
+| `reconnect()` | ✅ | Disconnect + redial the last-connected URL (`MudSession.lastUrl`, set by every `connect()`); false when nothing dialed yet |
 | `sendAll(text1, text2, ...)` | ✅ | Other.lua |
-| `sendATCP(msg)` | 🚧 | Legacy precursor to GMCP — IAC SB ATCP <payload> IAC SE framing; would reuse `MudClient.sendRaw` like `sendGMCP` |
+| `sendATCP(msg)` | ✅ | `IAC SB ATCP(200) <payload> IAC SE` via `MudClient.sendRaw` (shared `sendSubnegotiation` helper); false when the socket is closed |
 | `sendGMCP(message)` | ✅ | Frames as IAC SB GMCP … |
 | `sendMSDP(var, ...)` | ✅ | Frames `IAC SB MSDP MSDP_VAR var [MSDP_VAL val]… IAC SE`. Bridge.lua packs varargs |
 | `sendSocket(data)` | ✅ | Literal bytes (no telnet/encoding processing) |
-| `sendTelnetChannel102(data)` | 🚧 | Legacy zMUD channel-102 — `IAC SB 102 <data> IAC SE` framing; trivial wrapper over `sendRaw` |
+| `sendTelnetChannel102(data)` | ✅ | `IAC SB 102 <data> IAC SE` via `MudClient.sendRaw` (shared `sendSubnegotiation` helper); false when the socket is closed |
 
 mudix-specific extras: `gmcp` table, `msdp` table, `gmcp.<path>` per-key event chain.
 
@@ -697,7 +697,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `getSelection([window])` | ✅ | Bridge.lua wraps `__getSelection` |
 | `getTextFormat([window])` | ✅ | Bridge.lua → documented attribute table |
 | `getUserWindowSize(name)` | ✅ | Bridge.lua → `__getUserWindowSize` |
-| `getWindowWrap(name)` | 🚧 | Sister of `setWindowWrap` |
+| `getWindowWrap(name)` | ✅ | → wrap columns (0 unset). "main" reads the profile `outputWrapAt`; a named window reads the `WindowManager` hint. -1 when the window is missing. Used by `Geyser.MiniConsole:getWindowWrap` |
 | `handleWindowResizeEvent()` | ✅ | Fires the resize listener chain (no-op shim that's part of the public API) |
 | `hasFocus([window])` | ✅ | `document.activeElement` check. No name = command bar; a name targets the registered overlay element |
 | `hecho([window,] text)` | ✅ | `#RRGGBBtext` syntax |
@@ -715,7 +715,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `insertPopup([window,] text, cmds, hints)` | ✅ | Bridge.lua flattens cmds/hints tables |
 | `insertText([window,] text)` | ✅ | JS-exposed |
 | `ioprint(...)` | 🚧 | Mudlet's print-to-stdout helper |
-| `isAnsiBgColor(idx)` / `isAnsiFgColor(idx)` | 🚧 | Predicates over the current pen |
+| `isAnsiBgColor(idx)` / `isAnsiFgColor(idx)` | ✅ | True when the fg/bg color at the current selection start equals ANSI/xterm index `idx` (0-7 normal, 8-15 bright, 16-255 xterm-256). mudix stores rendered RGB, so it compares against the palette entry's RGB; false with no selection. Used by Other.lua |
 | `loadWindowLayout()` | ✅ | Re-applies the saved snapshot — re-positions live windows and reopens saved-visible windows |
 | `lowerWindow(name)` | ✅ | JS-exposed |
 | `moveCursor([window,] x, y)` | ✅ | JS-exposed |
@@ -784,7 +784,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setLabelWheelCallback(name, fn)` | ✅ | Bridge.lua |
 | `setLink([window,] cmd, hint)` | ✅ | Bridge.lua maps function `cmd` to a callback id |
 | `setMainWindowSize(w, h)` | 🚧 | The main window IS the browser viewport |
-| `setMapWindowTitle(title)` | 🚧 | Pairs with `resetMapWindowTitle` |
+| `setMapWindowTitle(title)` | ✅ | Sets the dockable map panel (`id "map"`) tab title via `WindowManager.setTitle`; empty title resets to default. False when the map widget is closed. Unblocks `resetMapWindowTitle` (GUIUtils) and `Geyser.Mapper` |
 | `setMiniConsoleFontSize(name, size)` | ✅ | Bridge.lua; rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
 | `setMovie(name, path)` / `setMovieFrame(name, n)` / `setMovieSpeed(name, factor)` / `startMovie(name)` | 🚧 | No QMovie equivalent — could be replaced by `<img>` with animated GIFs |
 | `setOverline([window,] bool)` | 🚧 | No overline rendering path |
