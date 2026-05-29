@@ -122,6 +122,12 @@ export interface ProfileSettings {
      *  read/written by getProfileInformation / setProfileInformation /
      *  clearProfileInformation). Empty/undefined = no description. */
     description?: string;
+    /** Profile icon shown on the connection-selection screen (Mudlet's profile
+     *  icon, set by setProfileIcon / read by getProfileIcon / cleared by
+     *  resetProfileIcon). Stored as a self-contained `data:` URI so the picker
+     *  screen can render it without mounting the profile VFS. Empty/undefined =
+     *  fall back to the auto-generated name tile. */
+    icon?: string;
     /** Per-profile telnet protocol toggles. Patches merge so flipping one
      *  field doesn't wipe siblings. Missing fields fall through to
      *  PROTOCOL_DEFAULTS. Takes effect on the next connect. */

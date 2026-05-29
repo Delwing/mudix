@@ -56,6 +56,34 @@ function luaTableToHeaders(h: unknown): Record<string, string> | undefined {
     return Object.keys(out).length ? out : undefined;
 }
 
+// Image MIME for a VFS path's extension, used when inlining a profile icon as
+// a data: URI. Falls back to image/png for unknown extensions (most icons are
+// PNG and browsers sniff the bytes anyway).
+function imageMimeForPath(path: string): string {
+    const ext = path.toLowerCase().split('.').pop() ?? '';
+    switch (ext) {
+        case 'jpg': case 'jpeg': return 'image/jpeg';
+        case 'gif': return 'image/gif';
+        case 'svg': return 'image/svg+xml';
+        case 'webp': return 'image/webp';
+        case 'bmp': return 'image/bmp';
+        case 'ico': return 'image/x-icon';
+        case 'png': default: return 'image/png';
+    }
+}
+
+// Encode raw image bytes as a self-contained data: URI. Profile icons are
+// small, but chunk the fromCharCode call anyway to stay within its argument
+// limit (same pattern as MudClient's binary-frame encoder).
+function bytesToImageDataUrl(bytes: Uint8Array, path: string): string {
+    const CHUNK = 0x8000;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    return `data:${imageMimeForPath(path)};base64,${btoa(binary)}`;
+}
+
 
 export class LuaRuntime implements IScriptingRuntime {
 
@@ -251,6 +279,26 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setProfileInformation', (a: unknown, b?: unknown) =>
             this.api.setProfileInformation(String((b !== undefined ? b : a) ?? '')));
         this.lua.global.set('clearProfileInformation', () => this.api.clearProfileInformation());
+
+        // Mudlet profile icon (shown on the connection-selection screen).
+        // setProfileIcon(path) takes a VFS image path; we read the bytes here and
+        // inline them as a data: URI so the picker screen can render the icon
+        // without mounting the profile VFS. Returns { ok, path } / { ok:false,
+        // error } — the Bridge.lua wrapper reshapes it into Mudlet's
+        // (true, path) / (false, errorMessage) multi-return.
+        this.lua.global.set('__setProfileIcon', (path: unknown) => {
+            const p = String(path ?? '');
+            if (!p) return { ok: false, error: 'setProfileIcon: no icon path given' };
+            if (!this.vfs) return { ok: false, error: 'setProfileIcon: no profile filesystem available' };
+            let bytes: Uint8Array;
+            try { bytes = this.vfs.readBinaryFile(p); }
+            catch { return { ok: false, error: `setProfileIcon: cannot read "${p}"` }; }
+            const uri = bytesToImageDataUrl(bytes, p);
+            if (!this.api.setProfileIcon(uri)) return { ok: false, error: 'setProfileIcon: failed to store icon' };
+            return { ok: true, path: p };
+        });
+        this.lua.global.set('getProfileIcon', () => this.api.getProfileIcon());
+        this.lua.global.set('resetProfileIcon', () => this.api.resetProfileIcon());
 
         // Mudlet holdingModifiers(number) — exact match against the held
         // keyboard modifiers (Qt bitmask, as in mudlet.keymodifier).

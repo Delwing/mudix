@@ -1184,6 +1184,19 @@ function saveProfile(location)
     return true, r or ''
 end
 
+-- Mudlet setProfileIcon(path) → (true, path) on success, (false, errorMessage)
+-- on failure. The JS bridge reads the VFS image and inlines it, returning a
+-- { ok, path } / { ok=false, error } table (it can only push one Lua value);
+-- reshape into the documented multi-return.
+function setProfileIcon(path)
+    local r = __setProfileIcon(path)
+    if type(r) == 'table' then
+        if r.ok then return true, r.path end
+        return false, r.error
+    end
+    return r and true or false
+end
+
 -- Callback registry: stores Lua functions handed to tempTimer/Alias/Trigger/Key
 -- so JS only ever sees a numeric ID. JS invokes __mudix_dispatch_cb(id) via
 -- doStringSync, sidestepping wasmoon's broken Lua-function-from-JS proxy.

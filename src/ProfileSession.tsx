@@ -9,6 +9,7 @@ import { ScriptEditorModal } from './ui/windows/ScriptEditorModal';
 import { SettingsModal } from './ui/SettingsModal';
 import { FileBrowserModal } from './ui/FileBrowserModal';
 import { LogBrowserModal } from './ui/LogBrowserModal';
+import { ScriptingDocsModal } from './ui/ScriptingDocsModal';
 import { QuickOpenPalette } from './ui/QuickOpenPalette';
 import { SessionLogger } from './logging/SessionLogger';
 import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, PROTOCOL_DEFAULTS, type MudConnection } from './storage';
@@ -33,6 +34,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const [scriptsOpen, setScriptsOpen] = useState(false);
     const [filesOpen, setFilesOpen] = useState<false | { initialPath?: string; initialLine?: number; pickedAt?: number }>(false);
     const [logsOpen, setLogsOpen] = useState(false);
+    const [docsOpen, setDocsOpen] = useState(false);
     const [quickOpenOpen, setQuickOpenOpen] = useState(false);
     const [cmdLineSuggestions, setCmdLineSuggestions] = useState<string[]>([]);
     const [bufferWords, setBufferWords] = useState<BufferWordIndex | null>(null);
@@ -362,6 +364,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                 onOpenScripts={handleOpenScripts}
                 onOpenFiles={handleOpenFiles}
                 onOpenLogs={() => setLogsOpen(true)}
+                onOpenDocs={() => setDocsOpen(true)}
                 onOpenSettings={onToggleSettings}
                 onContextMenu={e => windowContextMenuHandlerRef.current?.(e)}
             />
@@ -421,6 +424,12 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                     connectionId={connection.id}
                     connectionName={connection.name}
                     onClose={() => setLogsOpen(false)}
+                />
+            )}
+            {docsOpen && (
+                <ScriptingDocsModal
+                    connectionId={connection.id}
+                    onClose={() => setDocsOpen(false)}
                 />
             )}
             {quickOpenOpen && engineRef.current?.currentVFS && (

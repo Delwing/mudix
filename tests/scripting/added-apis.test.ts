@@ -816,6 +816,43 @@ describe('Mudlet-API batch — Lua bindings', () => {
     expect(env.run('return getProfileInformation()')).toBe('');
   });
 
+  it('profile icon: empty by default, reset is a no-op success', () => {
+    expect(env.run('return getProfileIcon()')).toBe('');
+    expect(env.run('return (resetProfileIcon())')).toBe(true);
+  });
+
+  it('setProfileIcon fails (false, errMsg) with no path or no filesystem', () => {
+    // No path → validation error.
+    expect(env.run('local ok = setProfileIcon(""); return ok')).toBe(false);
+    expect(env.run('local _, err = setProfileIcon(""); return err')).toContain('no icon path');
+    // A path but no VFS (the test runtime is built with vfs=null).
+    expect(env.run('local ok = setProfileIcon("hero.png"); return ok')).toBe(false);
+    expect(env.run('local _, err = setProfileIcon("hero.png"); return err')).toContain('no profile filesystem');
+  });
+
+  it('setProfileIcon reads the VFS image and inlines it as a data: URI', () => {
+    // Inject a fake VFS so the binding's readBinaryFile path runs without IDB.
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // "‰PNG" signature bytes
+    (env.rt as unknown as { vfs: unknown }).vfs = {
+      readBinaryFile: (p: string) => {
+        if (p === 'missing.png') throw new Error('ENOENT');
+        return png;
+      },
+    };
+    expect(env.run('return (setProfileIcon("hero.png"))')).toBe(true);
+    expect(env.run('return select(2, setProfileIcon("hero.png"))')).toBe('hero.png');
+    expect(env.run('return getProfileIcon()')).toBe('data:image/png;base64,iVBORw==');
+    // Extension drives the MIME type.
+    env.run('setProfileIcon("hero.svg")');
+    expect(env.run('return getProfileIcon()')).toContain('data:image/svg+xml;base64,');
+    // Unreadable file → (false, errMsg); the previous icon is untouched.
+    expect(env.run('local ok = setProfileIcon("missing.png"); return ok')).toBe(false);
+    expect(env.run('local _, err = setProfileIcon("missing.png"); return err')).toContain('cannot read');
+    // resetProfileIcon clears back to empty.
+    expect(env.run('return (resetProfileIcon())')).toBe(true);
+    expect(env.run('return getProfileIcon()')).toBe('');
+  });
+
   it('holdingModifiers exact-matches the (empty) held set in node', () => {
     // No DOM in the node harness → nothing is held → only the 0 (None) mask matches.
     expect(env.run('return holdingModifiers(0)')).toBe(true);

@@ -630,6 +630,31 @@ export class ScriptingAPI {
         return true;
     }
 
+    /** Mudlet `getProfileIcon()`. Returns the stored icon as a `data:` URI, or
+     *  "" when the profile has no custom icon (the connection screen then shows
+     *  the auto-generated name tile). */
+    getProfileIcon(): string {
+        return selectProfileField(useAppStore.getState(), this.connectionId, 'icon') ?? '';
+    }
+
+    /** Mudlet `setProfileIcon(path)`. The LuaRuntime binding reads the VFS image
+     *  and inlines it as a `data:` URI before calling here, so this method only
+     *  stores the already-resolved icon string. Returns false for an empty
+     *  value. */
+    setProfileIcon(icon: string): boolean {
+        const v = String(icon ?? '');
+        if (!v) return false;
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { icon: v });
+        return true;
+    }
+
+    /** Mudlet `resetProfileIcon()`. Clears the custom icon so the connection
+     *  screen falls back to the auto-generated name tile. */
+    resetProfileIcon(): boolean {
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { icon: undefined });
+        return true;
+    }
+
     /** Mudlet `holdingModifiers(number)`. True when exactly the given set of
      *  keyboard modifiers (Qt::KeyboardModifier bitmask, as in
      *  `mudlet.keymodifier`) is currently held — exact equality, matching

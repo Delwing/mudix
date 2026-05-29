@@ -103,6 +103,14 @@ export interface ScriptWindowRenderData {
     /** When true, drag-to-dock is disabled for this floating window. See
      *  WindowOpenOptions.lockFloating. */
     lockFloating?: boolean;
+    /** When true, the panel is detached into a separate browser window. Its
+     *  portal-target div is appended into that window's document instead of a
+     *  dock slot / floating frame; the component never unmounts (scrollback and
+     *  live registrations survive). Closing the popout window pops it back in.
+     *  This is transient runtime state — it is not persisted to the saved hint,
+     *  so a reload restores the panel to its prior docked/floating position
+     *  (re-opening a popup without a user gesture would be blocked anyway). */
+    poppedOut?: boolean;
     /** Mudlet enableCommandLine(name) — when true, the panel renders a single-line
      *  input below the output area. Enter fires the registered cmd-line action;
      *  if none, the text is sent to the MUD via the main connection. */

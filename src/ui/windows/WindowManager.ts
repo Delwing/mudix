@@ -89,6 +89,11 @@ export class WindowManager {
      *  and (Horizontal)ScrollBar APIs back into this. */
     private readonly scrollState   = new Map<string, ScrollState>();
     private readonly portalTargets = new Map<string, HTMLDivElement>();
+    /** Hidden, detached div in the *main* document used as a temporary parking
+     *  spot for a portal target while a popout window is torn down — re-adopting
+     *  the node here before the child window closes keeps its content alive (a
+     *  node orphaned in a closed window's document would be lost). */
+    private portalHolding: HTMLDivElement | null = null;
     private readonly resizeObservers = new Map<string, ResizeObserver>();
     private readonly lastEmittedSize = new Map<string, { w: number; h: number }>();
     /** Per-window last reported character grid (cols, rows) — used to gate
@@ -283,6 +288,45 @@ export class WindowManager {
 
     getPortalTarget(id: string): HTMLDivElement | undefined {
         return this.portalTargets.get(id);
+    }
+
+    /** A hidden, detached holding element in the main document. PopoutWindow
+     *  re-parents a portal target here before closing its child window so the
+     *  panel's DOM survives the teardown; the next docked/floating frame to
+     *  mount appendChilds it back out. Lazily created. */
+    getPortalHolding(): HTMLDivElement {
+        if (!this.portalHolding) {
+            const div = document.createElement('div');
+            div.style.display = 'none';
+            this.portalHolding = div;
+        }
+        return this.portalHolding;
+    }
+
+    // ── Pop out to a separate browser window ──────────────────────────────────
+
+    /** Detach a panel into its own browser window. Layout fields (docked side /
+     *  floating rect) are left untouched so popIn() restores the panel in place.
+     *  The PopoutWindow component reacts to the state change and opens the window. */
+    popOut(id: string): void {
+        const win = this.windows.get(id);
+        if (!win || win.poppedOut) return;
+        win.poppedOut = true;
+        win.visible   = true;
+        this.notify();
+    }
+
+    /** Re-dock/re-float a popped-out panel back into the main window. Triggered
+     *  explicitly or automatically when the popout window closes. */
+    popIn(id: string): void {
+        const win = this.windows.get(id);
+        if (!win || !win.poppedOut) return;
+        win.poppedOut = false;
+        this.notify();
+    }
+
+    isPoppedOut(id: string): boolean {
+        return this.windows.get(id)?.poppedOut ?? false;
     }
 
     // ── Panel mount / unmount ─────────────────────────────────────────────────
@@ -1725,10 +1769,10 @@ export class WindowManager {
 
     private notify(): void {
         const arr = [...this.windows.values()]
-            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent, lockFloating, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }) => ({
+            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent, lockFloating, poppedOut, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }) => ({
                 id, title, kind, visible, x, y, width, height, zIndex,
                 docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex,
-                fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent, lockFloating,
+                fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent, lockFloating, poppedOut,
                 cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq,
                 isActiveTab: dockGroup ? this.activeTabGroups.get(dockGroup) === id : undefined,
             }))

@@ -199,6 +199,7 @@ export function ScriptWindow({
             {!isMiniConsole && (
                 <div className="script-window-titlebar" onPointerDown={handleTitlebarPointerDown} onContextMenu={onTitlebarContextMenu}>
                     <span className="script-window-title">{title}</span>
+                    <button className="script-window-btn popout" title="Pop out to a separate window" onClick={() => manager.popOut(id)}>⧉</button>
                     <button className="script-window-btn close" title="Close" onClick={onHide}>×</button>
                 </div>
             )}

@@ -14,6 +14,54 @@ function modeOf(c: MudConnection): ConnectionMode {
     return c.mode ?? 'websocket';
 }
 
+/** Deterministic background color for a profile's name tile — same name always
+ *  yields the same hue, so each profile gets a stable, distinct color. */
+function avatarColor(name: string): string {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (Math.imul(h, 31) + name.charCodeAt(i)) | 0;
+    return `hsl(${Math.abs(h) % 360} 42% 38%)`;
+}
+
+/** Shared canvas 2D context for measuring text width when fitting a name into
+ *  the icon tile. Created lazily, reused across calls. */
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+/** Largest font (px) at which `name` fits the tile on one line — mirrors
+ *  Mudlet's customIcon(), which starts large and shrinks to a floor until the
+ *  profile name fits the 120×30 box. */
+function fitNameFontSize(name: string): number {
+    const MAX = 18, MIN = 7, MAX_W = 110; // tile is 120px wide, minus padding
+    if (typeof document === 'undefined') return 12;
+    if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+    if (!measureCtx) return 12;
+    for (let size = MAX; size > MIN; size--) {
+        measureCtx.font = `600 ${size}px sans-serif`;
+        if (measureCtx.measureText(name).width <= MAX_W) return size;
+    }
+    return MIN;
+}
+
+/** Mudlet-style profile icon. Renders the custom icon when one is set
+ *  (setProfileIcon), otherwise a colored tile with the profile name — matching
+ *  Mudlet's behaviour of drawing the name onto profiles without an icon. */
+function ProfileAvatar({ name, icon }: { name: string; icon?: string }) {
+    if (icon) {
+        return <img className="connection-avatar" src={icon} alt="" aria-hidden="true" />;
+    }
+    const label = name || '?';
+    return (
+        <span
+            className="connection-avatar connection-avatar--name"
+            style={{ backgroundColor: avatarColor(name) }}
+            aria-hidden="true"
+        >
+            <span className="connection-avatar-text" style={{ fontSize: `${fitNameFontSize(label)}px` }}>
+                {label}
+            </span>
+        </span>
+    );
+}
+
 interface Props {
     connections: MudConnection[];
     connecting: boolean;
@@ -31,6 +79,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     // User's own deployed proxy (saved by ProxyWizardModal). When set, it takes
     // precedence over DEFAULT_PROXY_URL as the suggested default for new connections.
     const userProxyUrl = useAppStore(s => s.client.userProxyUrl);
+    const profiles = useAppStore(s => s.connectionProfile);
     const effectiveDefaultProxy = userProxyUrl || DEFAULT_PROXY_URL;
     const [editingId, setEditingId] = useState<string | null>(null);
     const [mode, setMode] = useState<ConnectionMode>('mud');
@@ -132,6 +181,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                     <div className="connection-list">
                         {connections.map(c => (
                             <div key={c.id} className={`connection-card${editingId === c.id ? ' connection-card--editing' : ''}`}>
+                                <ProfileAvatar name={c.name} icon={profiles[c.id]?.icon} />
                                 <div className="connection-info">
                                     <span className="connection-name">{c.name}</span>
                                     <span className="connection-addr">{connectionDisplayAddr(c)}</span>

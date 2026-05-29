@@ -6,6 +6,7 @@ import type { WindowManager } from '../windows/WindowManager';
 import { OutputArea } from '../output/OutputArea';
 import { DockArea } from './DockArea';
 import { FloatingWindowLayer } from './FloatingWindowLayer';
+import { PopoutWindow } from './PopoutWindow';
 import { WindowContextMenu } from './WindowContextMenu';
 import { TextPanel } from '../windows/panels/TextPanel';
 import { HtmlPanel } from '../windows/panels/HtmlPanel';
@@ -79,10 +80,17 @@ export function ContentLayout({
 
     const dockAreaProps = { manager, dragState, onSetExtent: handleSetExtent, onDragStateChange: setDragState, onTitlebarContextMenu: handleTitlebarContextMenu };
 
-    const hasLeft   = windows.some(w => w.docked === 'left'   && w.visible);
-    const hasRight  = windows.some(w => w.docked === 'right'  && w.visible);
-    const hasTop    = windows.some(w => w.docked === 'top'    && w.visible);
-    const hasBottom = windows.some(w => w.docked === 'bottom' && w.visible);
+    // Popped-out panels are rendered into their own browser window by
+    // PopoutWindow, so they must be excluded from the in-app dock/float layout
+    // (the content-pool createPortal below still renders them — only their
+    // portal-target div lives in the other window).
+    const laidOut    = windows.filter(w => !w.poppedOut);
+    const poppedOut  = windows.filter(w => w.poppedOut && w.visible);
+
+    const hasLeft   = laidOut.some(w => w.docked === 'left'   && w.visible);
+    const hasRight  = laidOut.some(w => w.docked === 'right'  && w.visible);
+    const hasTop    = laidOut.some(w => w.docked === 'top'    && w.visible);
+    const hasBottom = laidOut.some(w => w.docked === 'bottom' && w.visible);
 
     // Show a DockArea when panels are present OR when drag is hovering over that side
     const showLeft   = hasLeft   || dragState?.potentialDock === 'left';
@@ -96,13 +104,13 @@ export function ContentLayout({
         <div className="content-layout">
             {buttonStrips.top}
             {showTop && (
-                <DockArea side="top" windows={windows} extent={dockExtents.top} {...dockAreaProps} />
+                <DockArea side="top" windows={laidOut} extent={dockExtents.top} {...dockAreaProps} />
             )}
 
             <div className="content-middle-row">
                 {buttonStrips.left}
                 {showLeft && (
-                    <DockArea side="left" windows={windows} extent={dockExtents.left} {...dockAreaProps} />
+                    <DockArea side="left" windows={laidOut} extent={dockExtents.left} {...dockAreaProps} />
                 )}
 
                 <div className="main-viewport">
@@ -110,7 +118,7 @@ export function ContentLayout({
                 </div>
 
                 {showRight && (
-                    <DockArea side="right" windows={windows} extent={dockExtents.right} {...dockAreaProps} />
+                    <DockArea side="right" windows={laidOut} extent={dockExtents.right} {...dockAreaProps} />
                 )}
                 {buttonStrips.right}
             </div>
@@ -118,19 +126,34 @@ export function ContentLayout({
             {commandBar}
 
             {showBottom && (
-                <DockArea side="bottom" windows={windows} extent={dockExtents.bottom} {...dockAreaProps} />
+                <DockArea side="bottom" windows={laidOut} extent={dockExtents.bottom} {...dockAreaProps} />
             )}
             {buttonStrips.bottom}
 
             {/* Floating windows live in a position:fixed portal — completely independent of dock layout */}
             <FloatingWindowLayer
-                windows={windows}
+                windows={laidOut}
                 manager={manager}
                 onDragStateChange={setDragState}
                 onTitlebarContextMenu={handleTitlebarContextMenu}
             />
 
             {buttonStrips.floating}
+
+            {/* Panels detached into their own browser window. Each keeps its
+                createPortal entry in the content pool below (component stays
+                mounted); PopoutWindow only relocates the portal-target div. */}
+            {poppedOut.map(w => (
+                <PopoutWindow
+                    key={w.id}
+                    id={w.id}
+                    title={w.title}
+                    width={w.width}
+                    height={w.height}
+                    manager={manager}
+                    onClosed={() => manager.popIn(w.id)}
+                />
+            ))}
 
             {menuPos && (
                 <WindowContextMenu

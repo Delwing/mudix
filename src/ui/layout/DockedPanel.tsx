@@ -152,6 +152,7 @@ export function DockedPanel({ id, title, manager, onHide, onDragStateChange, onT
         <div ref={panelRef} className="docked-panel" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
             <div className="docked-panel-titlebar" onPointerDown={handleTitlebarPointerDown} onContextMenu={onTitlebarContextMenu}>
                 <span className="docked-panel-title">{title}</span>
+                <button className="script-window-btn popout" title="Pop out to a separate window" onClick={() => manager.popOut(id)}>⧉</button>
                 <button className="script-window-btn close" title="Close" onClick={onHide}>×</button>
             </div>
             <div className="docked-panel-content" ref={contentRef} />
