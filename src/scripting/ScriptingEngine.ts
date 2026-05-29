@@ -10,7 +10,7 @@ import {loadProfileData, saveProfileData} from '../storage/profileVfsData';
 import type {FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer, computeTrailingState} from '../mud/text/FormatState';
 import type {MspCommand} from '../mud/protocol';
-import {ScriptingAPI} from './ScriptingAPI';
+import {ScriptingAPI, type InstallOutcome} from './ScriptingAPI';
 import {LuaRuntime} from './lua/LuaRuntime';
 import type {IScriptingRuntime} from './IScriptingRuntime';
 import {ProfileVFS} from './vfs/ProfileVFS';
@@ -223,6 +223,10 @@ export class ScriptingEngine {
     ) {
         this.api = new ScriptingAPI(session, aliasEngine, triggerEngine, timerEngine, keyEngine, connectionId);
         this.api.profileName = connectionName;
+        // The map store keys its saved player room (Mudlet's mRoomIdHash) by the
+        // profile name; set it before start() awaits bootstrapMap() so the
+        // boot-time map load can restore the position.
+        session.windows.mapStore.profileName = connectionName;
         this.connectionId = connectionId;
         this.bridgeEvents(session);
         // Let WindowManager raise system events (e.g. sysUserWindowResizeEvent)
@@ -568,11 +572,12 @@ export class ScriptingEngine {
      * Lua `installModule()` binding, so it also raises Mudlet's
      * `sysLuaInstallModule` (name, fileName) for ported-script parity.
      */
-    installModuleFromPath(path: string): boolean {
+    installModuleFromPath(path: string): InstallOutcome {
         const vfs = this.vfs;
         if (!vfs) {
-            this.api.printError('[installModule] no profile VFS available');
-            return false;
+            const error = 'no profile VFS available';
+            this.api.printError(`[installModule] ${error}`);
+            return { ok: false, error };
         }
         try {
             const { manifest, data } = installModuleFromVfsPath(path, vfs);
@@ -585,11 +590,11 @@ export class ScriptingEngine {
             // this fires locally for ported scripts that listen on it.
             if (manifest.sync) this.raiseEvent('sysSyncInstallModule', [manifest.name, path]);
             void vfs.flush();
-            return true;
+            return { ok: true, error: null };
         } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.api.printError(`[installModule] ${msg}`);
-            return false;
+            const error = err instanceof Error ? err.message : String(err);
+            this.api.printError(`[installModule] ${error}`);
+            return { ok: false, error };
         }
     }
 
@@ -904,18 +909,21 @@ export class ScriptingEngine {
      * Install a package from a path inside the VFS. Reads the bytes synchronously,
      * commits to the store (which loads scripts into Lua synchronously via the
      * store subscription), then raises sysInstallPackage. The disk flush happens
-     * in the background. Returns false on any failure (file missing, parse error,
-     * etc.) and prints a script-log error.
+     * in the background. Returns { ok: false, error } on any failure (file
+     * missing, parse error, etc.) — the error string is both printed to the
+     * script log and handed back to Lua for Mudlet's (ok, err) contract.
      */
-    installPackageFromVfsPath(path: string): boolean {
+    installPackageFromVfsPath(path: string): InstallOutcome {
         const vfs = this.vfs;
         if (!vfs) {
-            this.api.printError(`[installPackage] no profile VFS available`);
-            return false;
+            const error = 'no profile VFS available';
+            this.api.printError(`[installPackage] ${error}`);
+            return { ok: false, error };
         }
         if (!vfs.exists(path)) {
-            this.api.printError(`[installPackage] file not found: ${path}`);
-            return false;
+            const error = `file not found: ${path}`;
+            this.api.printError(`[installPackage] ${error}`);
+            return { ok: false, error };
         }
         try {
             const buf = vfs.readBinaryFile(path);
@@ -924,11 +932,11 @@ export class ScriptingEngine {
             useAppStore.getState().installPackage(this.connectionId, manifest, data);
             this.notifyPackageInstalled(manifest.name);
             void vfs.flush();
-            return true;
+            return { ok: true, error: null };
         } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.api.printError(`[installPackage] ${msg}`);
-            return false;
+            const error = err instanceof Error ? err.message : String(err);
+            this.api.printError(`[installPackage] ${error}`);
+            return { ok: false, error };
         }
     }
 

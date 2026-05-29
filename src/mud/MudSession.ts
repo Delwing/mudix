@@ -191,6 +191,10 @@ export class MudSession {
     destroy(): void {
         if (this._destroyed) return;
         this._destroyed = true;
+        // Persist any pending map view changes (e.g. a just-changed per-area
+        // zoom) before tearing down. The save is async but the worker + IDB
+        // outlive this instance, so an in-app close still completes it.
+        this.windows.flushMapSave();
         this.teardownClient();
         this.sounds.destroy();
         this.videos.destroy();

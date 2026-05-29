@@ -332,6 +332,15 @@ class ScriptingLabelsAPI {
 
 // ── Main API ──────────────────────────────────────────────────────────────────
 
+// Mudlet's installPackage/installModule return (bool ok, string errorMessage).
+// wasmoon JS functions can only push a single Lua value, so the installer
+// callbacks return this shape and a Bridge.lua wrapper reshapes it into the
+// documented multi-return. `error` is null on success.
+export interface InstallOutcome {
+    ok: boolean;
+    error: string | null;
+}
+
 export class ScriptingAPI {
     readonly windows: ScriptingWindowsAPI;
     readonly labels: ScriptingLabelsAPI;
@@ -378,10 +387,10 @@ export class ScriptingAPI {
     // Callbacks set by ScriptingEngine. Wire installPackage / uninstallPackage
     // through to the engine so the package's items reach the appStore (and
     // thus the runtime) and sysInstall* / sysUninstall* events fire in order.
-    private packageInstaller: ((path: string) => boolean) | null = null;
+    private packageInstaller: ((path: string) => InstallOutcome) | null = null;
     private packageUninstaller: ((name: string) => boolean) | null = null;
     private packagesGetter: (() => string[]) | null = null;
-    private moduleInstaller: ((path: string) => boolean) | null = null;
+    private moduleInstaller: ((path: string) => InstallOutcome) | null = null;
     private moduleUninstaller: ((name: string) => boolean) | null = null;
     private moduleSyncer: ((name: string) => Promise<void>) | null = null;
     private moduleReloader: ((name: string) => boolean) | null = null;
@@ -513,7 +522,7 @@ export class ScriptingAPI {
         this.feedDispatcher = fn;
     }
 
-    setPackageInstaller(fn: ((path: string) => boolean) | null): void {
+    setPackageInstaller(fn: ((path: string) => InstallOutcome) | null): void {
         this.packageInstaller = fn;
     }
 
@@ -529,7 +538,7 @@ export class ScriptingAPI {
         return this.packagesGetter?.() ?? [];
     }
 
-    setModuleInstaller(fn: ((path: string) => boolean) | null): void { this.moduleInstaller = fn; }
+    setModuleInstaller(fn: ((path: string) => InstallOutcome) | null): void { this.moduleInstaller = fn; }
     setModuleUninstaller(fn: ((name: string) => boolean) | null): void { this.moduleUninstaller = fn; }
     setModuleSyncer(fn: ((name: string) => Promise<void>) | null): void { this.moduleSyncer = fn; }
     setModuleReloader(fn: ((name: string) => boolean) | null): void { this.moduleReloader = fn; }
@@ -540,7 +549,7 @@ export class ScriptingAPI {
     setModulesGetter(fn: (() => string[]) | null): void { this.modulesGetter = fn; }
     setModuleInfoGetter(fn: ((name: string) => Record<string, unknown> | null) | null): void { this.moduleInfoGetter = fn; }
 
-    installModule(path: string): boolean { return this.moduleInstaller?.(path) ?? false; }
+    installModule(path: string): InstallOutcome { return this.moduleInstaller?.(path) ?? { ok: false, error: 'no module installer available' }; }
     uninstallModule(name: string): boolean { return this.moduleUninstaller?.(name) ?? false; }
     syncModule(name: string): Promise<void> { return this.moduleSyncer?.(name) ?? Promise.resolve(); }
     reloadModule(name: string): boolean { return this.moduleReloader?.(name) ?? false; }
@@ -674,8 +683,8 @@ export class ScriptingAPI {
         this.cssRewriter = fn;
     }
 
-    installPackage(path: string): boolean {
-        return this.packageInstaller?.(path) ?? false;
+    installPackage(path: string): InstallOutcome {
+        return this.packageInstaller?.(path) ?? { ok: false, error: 'no package installer available' };
     }
 
     uninstallPackage(name: string): boolean {
@@ -2135,8 +2144,8 @@ export class ScriptingAPI {
         return true;
     }
 
-    centerView(roomId: number): void {
-        this.session.windows.centerView(roomId);
+    centerView(roomId: number): boolean {
+        return this.session.windows.centerView(roomId);
     }
 
     /**

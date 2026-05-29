@@ -35,6 +35,17 @@ function getPath(from, to)
     return true, res.totalWeight or 0
 end
 
+-- Mudlet centerview(roomID) — center the map on a room and set it as the
+-- player's current room (getPlayerRoom). On an unknown room id Mudlet does not
+-- move the view or touch the player room; it returns (nil, errMsg). The JS side
+-- returns false in that case, so translate it here.
+function centerview(roomID)
+    if __centerview(roomID) then
+        return true
+    end
+    return nil, "centerview: number " .. tostring(roomID) .. " is not a valid room id."
+end
+
 -- Mudlet gotoRoom(targetRoomID) — pathfind from the player's current room to the
 -- target and walk it. mudix has no autonomous timed-walk engine, so the
 -- direction commands getPath produced are sent immediately, in order. Returns
@@ -899,6 +910,28 @@ function getPackages()
     return rebuildJsArray(__getPackages())
 end
 
+-- Mudlet installPackage(path)/installModule(path) → (true) on success,
+-- (false, errorMessage) on failure. The JS bridge can only push one Lua value,
+-- so it hands back a { ok, error } table; reshape into the documented
+-- multi-return so callers like Other.lua's verbosePackageInstall (which does
+-- `local ok, err = installPackage(...)`) get the error string instead of nil.
+local function installOutcome(r)
+    if type(r) == 'table' then
+        if r.ok then return true end
+        return false, r.error
+    end
+    -- Defensive: an unexpected scalar still resolves to a boolean.
+    return r and true or false
+end
+
+function installPackage(path)
+    return installOutcome(__installPackage(path))
+end
+
+function installModule(path)
+    return installOutcome(__installModule(path))
+end
+
 -- Mudlet getModules() — same shape as getPackages(), but lists modules only.
 function getModules()
     return rebuildJsArray(__getModules())
@@ -1740,6 +1773,29 @@ do
         end
         return _raw(label, __mudix_register_cb(fn))
     end
+end
+
+-- Mudlet getMapSelection() → { rooms = {roomIDs}, center = roomID }. JS hands
+-- the rooms array over 0-indexed (wasmoon convention); rebuild as a 1-indexed
+-- Lua sequence so ipairs() / # work the way scripts expect. `center` is null
+-- in JS when nothing is selected — surface that as nil on the Lua side.
+function getMapSelection()
+    local raw = __getMapSelection()
+    local rooms = {}
+    if type(raw) == 'table' and type(raw.rooms) == 'table' then
+        local src = raw.rooms
+        local i = 0
+        while src[i] ~= nil do
+            rooms[#rooms + 1] = src[i]
+            i = i + 1
+        end
+        if #rooms == 0 then
+            for _, v in ipairs(src) do rooms[#rooms + 1] = v end
+        end
+    end
+    local center = nil
+    if type(raw) == 'table' and raw.center ~= nil then center = raw.center end
+    return { rooms = rooms, center = center }
 end
 
 -- Mudlet killMapInfo / enableMapInfo / disableMapInfo. Each returns true on

@@ -5,7 +5,7 @@ import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData 
 import { MapStore } from '../../map/MapStore';
 import { saveMap as saveMapToStorage, loadMap as loadMapFromStorage } from '../../storage/mapStorage';
 import { readMapFromBuffer, writeMapToBuffer } from 'mudlet-map-binary-reader';
-import { parseMapInWorker } from '../../map/mapParserClient';
+import { parseMapInWorker, serializeMapInWorker } from '../../map/mapParserClient';
 import { Buffer } from 'buffer';
 
 interface ScriptWindowData extends ScriptWindowRenderData {
@@ -115,6 +115,11 @@ export class WindowManager {
      *  awaits the map before applying scripts, Mudlet parity) and MapPanel on
      *  mount call into this; whichever lands first triggers the work. */
     private mapBootstrapInflight: Promise<boolean> | null = null;
+    // Debounced background map-save state. scheduleMapSave() coalesces bursts of
+    // view changes (per-area zoom) into one worker-serialised IndexedDB write;
+    // flushMapSave() drains a pending save on session close.
+    private mapSaveTimer: ReturnType<typeof setTimeout> | null = null;
+    private mapSavePending = false;
     private _connectionId = '';
     /** Names of windows created by Lua createMiniConsole — distinguishes them
      *  from openUserWindow panels for windowType() reporting. */
@@ -592,11 +597,18 @@ export class WindowManager {
         this.mapCallbacks.delete(id);
     }
 
-    centerView(roomId: number): void {
-        // Mudlet's centerview sets the player room (mRoomIdHash) as a side
-        // effect, so getPlayerRoom() returns this id afterwards.
+    centerView(roomId: number): boolean {
+        // Mudlet's centerview rejects an unknown room id outright: it returns
+        // (nil, errMsg) and does NOT touch mRoomIdHash. Mirror that — bail
+        // before setting the player room or notifying the view, so a script
+        // centerview()ing a stale/saved id (e.g. on sysLoadEvent before the map
+        // covers it) is a clean failure, not a half-applied position.
+        if (!this.mapStore.roomExists(roomId)) return false;
+        // On success Mudlet sets the player room (mRoomIdHash) as a side effect,
+        // so getPlayerRoom() returns this id afterwards.
         this.mapStore.setPlayerRoom(roomId);
         for (const cb of this.mapCallbacks.values()) cb(roomId);
+        return true;
     }
 
     registerMapControl(id: string, ctrl: MapControl): void {
@@ -776,6 +788,56 @@ export class WindowManager {
                 console.warn('[WindowManager] saveMap persist failed:', err));
         }
         return bytes;
+    }
+
+    /**
+     * Background counterpart to {@link saveMap}: serialise the map to the binary
+     * format in a worker (so the encode never blocks the main thread) and persist
+     * it to this connection's IndexedDB slot. Used for automatic saves — notably
+     * to persist the per-area zoom held in the map's area userData — so they can
+     * run frequently without jank. Returns true on success.
+     */
+    async saveMapAsync(): Promise<boolean> {
+        const connId = this._connectionId;
+        if (!connId || this.mapStore.isEmpty()) return false;
+        this.mapSavePending = false;
+        try {
+            // toMudletMapForSave() is a cheap Map→object copy on the main thread;
+            // the expensive binary encode happens off-thread in the worker.
+            const bytes = await serializeMapInWorker(this.mapStore.toMudletMapForSave());
+            await saveMapToStorage(connId, bytes);
+            return true;
+        } catch (err) {
+            console.warn('[WindowManager] saveMapAsync failed:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Request a debounced background map save. Multiple calls within `delayMs`
+     * collapse into a single {@link saveMapAsync}. Used by the map panel when the
+     * per-area zoom changes so the view is persisted shortly after the user stops
+     * adjusting it, without serialising on every wheel tick.
+     */
+    scheduleMapSave(delayMs = 2000): void {
+        if (!this._connectionId) return;
+        this.mapSavePending = true;
+        if (this.mapSaveTimer) clearTimeout(this.mapSaveTimer);
+        this.mapSaveTimer = setTimeout(() => {
+            this.mapSaveTimer = null;
+            void this.saveMapAsync();
+        }, delayMs);
+    }
+
+    /**
+     * Drain a pending debounced save immediately — called on session close so a
+     * zoom change made just before disconnecting/switching profiles isn't lost.
+     * The write is still async (worker + IndexedDB); on an in-app close it
+     * completes because the worker and IDB outlive the session instance.
+     */
+    flushMapSave(): void {
+        if (this.mapSaveTimer) { clearTimeout(this.mapSaveTimer); this.mapSaveTimer = null; }
+        if (this.mapSavePending) void this.saveMapAsync();
     }
 
     /**

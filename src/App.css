@@ -1370,7 +1370,7 @@ html, body, #root {
     position: absolute;
     top: 8px;
     left: 8px;
-    max-width: 60%;
+    right: 8px;
     padding: 6px 10px;
     background: var(--bg-glass);
     backdrop-filter: blur(8px);
@@ -1444,8 +1444,9 @@ html, body, #root {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: var(--shadow-float);
-    min-width: 130px;
-    overflow: hidden;
+    min-width: 180px;
+    padding: 4px 0;
+    overflow: visible;
     z-index: 100;
 }
 
@@ -1466,6 +1467,69 @@ html, body, #root {
 .map-hamburger-item:hover {
     background: var(--bg-surface);
     color: var(--text);
+}
+
+.map-hamburger-flyout {
+    position: relative;
+}
+
+.map-hamburger-item--expand {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.map-hamburger-flyout:hover > .map-hamburger-item--expand {
+    background: var(--bg-surface);
+    color: var(--text);
+}
+
+.map-hamburger-chevron {
+    font-size: 9px;
+    color: var(--text-dim);
+}
+
+.map-hamburger-separator {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--border);
+}
+
+/* Portaled to <body> with an inline position:fixed anchor (see openInfoFlyout),
+   so it escapes the map panel's clipping. Only appearance lives here. */
+.map-hamburger-sublist {
+    min-width: 120px;
+    padding: 4px 0;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-float);
+    z-index: 1000;
+}
+
+.map-hamburger-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 6px 18px;
+    color: var(--text-dim);
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+}
+
+.map-hamburger-check:hover {
+    background: var(--bg-input);
+    color: var(--text);
+}
+
+.map-hamburger-check input {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--accent);
+    pointer-events: none;
 }
 
 .map-context-menu {

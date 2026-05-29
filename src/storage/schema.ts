@@ -87,20 +87,18 @@ export interface ProfileSettings {
      *  prompt. Mitigates spurious mid-line breaks when long MUD lines arrive
      *  fragmented. `undefined` = use MudClient's built-in default (300ms). */
     promptTimeoutMs?: number;
-    /** Per-area MapPanel camera state. Each area remembers its own zoom,
-     *  pan and last-viewed level so switching between areas (or reopening
-     *  the panel) restores the view you had in that area. Updated whenever
-     *  the camera moves; cleared implicitly for an area that no longer
-     *  exists when the panel falls back to fitArea. */
+    /** Per-area MapPanel last-viewed z-level. Each area remembers which level
+     *  you were on so switching between areas (or reopening the panel) restores
+     *  it. Zoom is no longer kept here — it lives in the map file (per-area
+     *  userData, see {@link MapStore.setAreaZoom}); pan isn't remembered at all
+     *  (areas open centered on the area's middle). Updated when the level
+     *  changes. */
     mapViewStates?: Record<number, {
         level: number;
-        zoom: number;
-        centerX: number;
-        centerY: number;
     }>;
     /** The area id the user was viewing last. Restored as the initial
      *  area on panel mount; the matching {@link mapViewStates} entry drives
-     *  the initial zoom/pan. Falls through to the first area in the map. */
+     *  the initial level. Falls through to the first area in the map. */
     mapLastAreaId?: number;
     /** Record gameplay output (and your echoed commands) to the persistent log
      *  store, browsable via the toolbar's Logs button. Treat `undefined` as

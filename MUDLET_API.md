@@ -146,7 +146,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `centerview(roomID)` | ✅ | JS-exposed; also sets the player room (matches Mudlet) |
 | `clearAreaUserData(areaID)` | ✅ | Bridge.lua → `__clearAreaUserData`; `(false, errMsg)` when area missing |
 | `clearAreaUserDataItem(areaID, key)` | ✅ | Bridge.lua → `__clearAreaUserDataItem` |
-| `clearMapSelection()` | 🚧 | No map selection model yet |
+| `clearMapSelection()` | ✅ | Clears the room-selection set + center. `MapSelectionOverlay` redraws. Returns false when already empty |
 | `clearMapUserData()` | ✅ | JS-exposed |
 | `clearMapUserDataItem(key)` | ✅ | JS-exposed |
 | `clearRoomUserData(roomID)` | ✅ | Bridge.lua → `__clearRoomUserData` |
@@ -188,7 +188,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `getMapLabel(areaID, labelID\|labelText)` | ✅ | Bridge.lua |
 | `getMapLabels(areaID)` | ✅ | Bridge.lua → `__getMapLabels` |
 | `getMapMenus()` | 🚧 | Pairs with `addMapMenu` |
-| `getMapSelection()` | 🚧 | Pairs with `clearMapSelection` |
+| `getMapSelection()` | ✅ | `{ rooms = {1-indexed roomIDs}, center = roomID }`. Selection lives on `MapStore` with a dedicated subscribe channel; UI: left-click selects + sets center, ctrl/cmd-click toggles, click on empty area clears. `registerMapInfo` callbacks now receive the real selection size + center room |
 | `getMapUserData(key)` | ✅ | Bridge.lua |
 | `getMapZoom([areaID])` | ✅ | Mudlet-compatible zoom semantics (units across the shorter viewport edge). `setMapZoom` enforces min of 3.0; `areaID` accepted for compat |
 | `getPath(fromID, toID)` | ✅ | A* via `__getPath`; populates `speedWalkPath`/`speedWalkDir`/`speedWalkWeight` (1-indexed) |
@@ -225,7 +225,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `moveMapWidget(x, y)` | ✅ | JS-exposed (alias for `moveWindow` on the embedded mapper) |
 | `openMapWidget([…])` | ✅ | Opens the dockable mapper panel |
 | `pauseSpeedwalk()` | ✅ | Pure Lua via Other.lua |
-| `registerMapInfo(label, fn)` | ✅ | `MapStore.registerMapInfo` keyed by label; callback receives `(roomId, selectionSize, areaId, displayedAreaId)` and returns `(text, bold?, italic?, r?, g?, b?)`. New contributors land disabled — call `enableMapInfo(label)` to show. MapPanel re-evaluates every enabled contributor on map updates |
+| `registerMapInfo(label, fn)` | ✅ | `MapStore.registerMapInfo` keyed by label; callback receives `(roomId, selectionSize, areaId, displayedAreaId)` and returns `(text, bold?, italic?, r?, g?, b?)`. New contributors land disabled — call `enableMapInfo(label)` to show. MapPanel re-evaluates every enabled contributor on map updates. Two built-in native contributors mirror Mudlet's defaults: **Short** (`name / id (area)`) and **Full** (area extent + room id/position with selection-aware suffix & styling); **Full** is enabled by default, both are evaluated without Lua and can't be `killMapInfo`'d. The map hamburger menu's **Map info overlays** submenu toggles every contributor (built-in + script) with checkboxes plus a **None** entry |
 | `resumeSpeedwalk()` | ✅ | Other.lua |
 | `removeCustomLine(roomID, direction)` | ✅ | Direction = 1-12/name/special command; `false` when missing |
 | `removeMapEvent(uniquename)` | ✅ | Pairs with `addMapEvent` |
@@ -263,7 +263,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `speedwalk(roomID [, walkcmd, delay])` | ✅ | Pure Lua via Other.lua (`send` + `tempTimer`) |
 | `stopSpeedwalk()` | ✅ | Other.lua |
 | `unHighlightRoom(roomID)` | ✅ | JS-exposed |
-| `unsetRoomCharColor(roomID)` | 🚧 | Pairs with `setRoomCharColor` |
+| `unsetRoomCharColor(roomID)` | ✅ | Drops the side-table entry; false when the room is missing or had no override |
 | `updateMap()` | ✅ | Forces the map panel to re-read MapStore and redraw |
 
 mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"editing")`, `getMapRoomSize`/`setMapRoomSize`, `setMapBackgroundColor`, `removeCustomEnvColor`.

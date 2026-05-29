@@ -936,7 +936,9 @@ export class LuaRuntime implements IScriptingRuntime {
         });
 
         // ── Map view ──────────────────────────────────────────────────────────
-        this.lua.global.set('centerview',      (id: number)              => this.api.centerView(id));
+        // Returns a bool; the Bridge.lua `centerview` wrapper turns false into
+        // Mudlet's (nil, errMsg) multi-return for an unknown room id.
+        this.lua.global.set('__centerview',    (id: number)              => this.api.centerView(id));
         // Mudlet getMapZoom([areaID]) / setMapZoom(zoom[, areaID]) / updateMap().
         // mudix has a single shared 2D view, so areaID is accepted for compat but
         // applies to the current view. getMapZoom returns false (→ nil) with no
@@ -1475,6 +1477,26 @@ export class LuaRuntime implements IScriptingRuntime {
             return this.api.map.disableMapInfo(label);
         });
 
+        // ── Map selection (Mudlet getMapSelection / clearMapSelection) ────────
+        // Selection is paint-only — driven by clicks in MapPanel — but Mudlet
+        // surfaces it to Lua. Bridge.lua rebuilds `rooms` as a 1-indexed
+        // table; we hand the JS object straight over.
+        this.lua.global.set('__getMapSelection', () => {
+            const sel = this.api.map.getMapSelection();
+            return { rooms: sel.rooms, center: sel.center };
+        });
+        this.lua.global.set('clearMapSelection', () => this.api.map.clearMapSelection());
+
+        // Mudlet unsetRoomCharColor(roomID) — drop a per-room char-colour
+        // override so the renderer falls back to the default. Pairs with
+        // setRoomCharColor; returns false when the room is missing or there
+        // was no override to clear.
+        this.lua.global.set('unsetRoomCharColor', (roomId: unknown) => {
+            const id = Number(roomId);
+            if (!Number.isFinite(id)) return false;
+            return this.api.map.unsetRoomCharColor(Math.trunc(id));
+        });
+
         // ── Custom env colors ─────────────────────────────────────────────────
         // Mudlet setCustomEnvColor(envID, r, g, b, a). Updates mCustomEnvColors
         // on the active map; the renderer reads this when painting rooms whose
@@ -1987,8 +2009,10 @@ export class LuaRuntime implements IScriptingRuntime {
         // Other.lua wraps this to also accept http(s):// URLs by routing
         // through downloadFile + sysDownloadDone. Our impl reads the path
         // from the profile VFS, commits the parsed nodes to the store, and
-        // raises sysInstall(Package).
-        this.lua.global.set('installPackage', (path: string) => this.api.installPackage(String(path ?? '')));
+        // raises sysInstall(Package). Returns { ok, error }; the Bridge.lua
+        // wrapper reshapes it into Mudlet's (ok, errorMessage) multi-return
+        // (wasmoon JS calls can only push one Lua value).
+        this.lua.global.set('__installPackage', (path: string) => this.api.installPackage(String(path ?? '')));
         // Mudlet `uninstallPackage(name)` → true on success, nil when no package
         // with that name is installed.
         this.lua.global.set('uninstallPackage', (name: string) => {
@@ -2005,9 +2029,10 @@ export class LuaRuntime implements IScriptingRuntime {
         // unlinks rather than deleting source files. Negative priorities load
         // before profile scripts; non-negative load after.
         //
-        // Mudlet `installModule(path)` → true on success. The path argument is
-        // accepted; failures log to printError and report false.
-        this.lua.global.set('installModule', (path: unknown) =>
+        // Mudlet `installModule(path)` → (true) on success, (false, errorMessage)
+        // on failure. Returns { ok, error }; the Bridge.lua wrapper reshapes it
+        // into the documented multi-return.
+        this.lua.global.set('__installModule', (path: unknown) =>
             this.api.installModule(String(path ?? '')));
         this.lua.global.set('uninstallModule', (name: unknown) =>
             this.api.uninstallModule(String(name ?? '')));

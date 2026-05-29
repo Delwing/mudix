@@ -601,19 +601,16 @@ export const useAppStore = create<AppStore>()(
                 }
 
                 // v19: split single mapViewState into per-area mapViewStates +
-                // mapLastAreaId so each area remembers its own zoom/pan/level.
+                // mapLastAreaId so each area remembers its own last-viewed level.
+                // (Zoom now lives in the map file and pan isn't remembered, so we
+                // only carry the level forward.)
                 if (version < 19) {
                     for (const prof of Object.values(connectionProfile) as any[]) {
                         const legacy = prof?.mapViewState;
                         if (!legacy) continue;
                         prof.mapViewStates = {
                             ...(prof.mapViewStates ?? {}),
-                            [legacy.areaId]: {
-                                level: legacy.level,
-                                zoom: legacy.zoom,
-                                centerX: legacy.centerX,
-                                centerY: legacy.centerY,
-                            },
+                            [legacy.areaId]: { level: legacy.level },
                         };
                         prof.mapLastAreaId = legacy.areaId;
                         delete prof.mapViewState;

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { MapRenderer, createSettings } from 'mudlet-map-renderer';
-import type { RoomContextMenuEventDetail, RoomLens, Settings as MapRendererSettings } from 'mudlet-map-renderer';
+import type { RoomClickEventDetail, RoomContextMenuEventDetail, RoomLens, Settings as MapRendererSettings } from 'mudlet-map-renderer';
 import type { WindowManager, MapControl } from '../WindowManager';
-import type { MapEventEntry, MapInfoResult } from '../../../map/MapStore';
+import type { MapEventEntry, MapInfoResult, MapInfoContributor, MapStore } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
 import { MudletHighlightOverlay } from '../../../map/MudletHighlightOverlay';
+import { MapSelectionOverlay } from '../../../map/MapSelectionOverlay';
 import { useAppStore, selectProfileField, type MapperSettings } from '../../../storage';
 import { MapEditorModal } from '../../MapEditorModal';
 
@@ -26,6 +28,44 @@ function applyMapperSettings(target: MapRendererSettings, mapper: MapperSettings
 
 type MapStatus = 'loading' | 'empty' | 'ready' | 'error';
 
+/** Center the 2D view when an area is opened without the player in it. Mudlet
+ *  (T2DMap::switchArea) centers on the room nearest the centroid of the most-
+ *  populated z-level — never the bounding-box midpoint, which can sit on empty
+ *  space for sparse / L-shaped areas. We mirror that via MapStore and center on
+ *  that room. Falls back to the bbox midpoint (then origin) only when the area
+ *  has no rooms to anchor on. */
+function centerOnArea(renderer: MapRenderer, mapStore: MapStore): void {
+    const areaId = renderer.state.currentArea;
+    const centerRoom = areaId != null
+        ? mapStore.getAreaCenterRoomId(areaId, renderer.state.currentZIndex)
+        : null;
+    if (centerRoom != null) {
+        renderer.centerOn(centerRoom);
+        return;
+    }
+    const b = renderer.getAreaBounds();
+    if (b) renderer.camera.panToMapPoint((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2);
+    else renderer.camera.panToMapPoint(0, 0);
+}
+
+/** Open an area for the first time: apply its saved zoom (or fit when none),
+ *  then center on the current room. Mudlet loads the map centered on the player
+ *  room — or, with no known location, a fallback room it paints the marker on
+ *  anyway (room 1, T2DMap::paintEvent / switchArea). When that marker room is in
+ *  this area we center on it; otherwise on the area centroid via
+ *  {@link centerOnArea}. Shared by the first sync and the late layout re-apply. */
+function applyInitialView(renderer: MapRenderer, mapStore: MapStore, areaId: number): void {
+    const savedZoom = mapStore.getAreaZoom(areaId);
+    if (savedZoom != null) renderer.setZoom(savedZoom);
+    else renderer.fitArea();
+    const markerRoom = mapStore.getPlayerRoom() ?? mapStore.getFallbackRoomId();
+    if (markerRoom != null && mapStore.getRoomArea(markerRoom) === areaId) {
+        renderer.centerOn(markerRoom, true);
+    } else {
+        centerOnArea(renderer, mapStore);
+    }
+}
+
 /** Mudlet's hard floor for the 2D map zoom (T2DMap csmMinXYZoom): the shorter
  *  viewport edge may never span fewer than this many map units, i.e. you can't
  *  zoom in any closer. Mirrored here so wheel/pinch zoom obeys the same limit. */
@@ -42,6 +82,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const rendererRef = useRef<MapRenderer | null>(null);
     const readerRef = useRef<MudixMapReader | null>(null);
     const highlightOverlayRef = useRef<MudletHighlightOverlay | null>(null);
+    const selectionOverlayRef = useRef<MapSelectionOverlay | null>(null);
     const prevWidthRef = useRef<number>(0);
     const needsFitRef = useRef<boolean>(false);
     // Tracks the MapStore.hiddenVersion last applied to the renderer so the
@@ -68,6 +109,23 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     } | null>(null);
     const [mapInfos, setMapInfos] = useState<MapInfoResult[]>([]);
     const [editorOpen, setEditorOpen] = useState(false);
+    // Snapshot of the registered map-info contributors (built-in "Short"/"Full"
+    // plus any script-registered ones) backing the hamburger-menu toggle list.
+    const [infoContributors, setInfoContributors] = useState<MapInfoContributor[]>([]);
+    const [infoOverlaysOpen, setInfoOverlaysOpen] = useState(false);
+    // Which side the "Map info overlays" flyout opens toward. Mudlet's submenus
+    // prefer the right and flip to the left when the widget sits too close to
+    // the screen edge for the flyout to fit — decided per-open in openInfoFlyout.
+    const [flyoutSide, setFlyoutSide] = useState<'right' | 'left'>('right');
+    // The flyout is portaled to <body> with position:fixed so it isn't clipped
+    // by the map panel's bounds — these are its viewport-anchored coordinates,
+    // computed per-open from the row's rect (see openInfoFlyout).
+    const [flyoutStyle, setFlyoutStyle] = useState<React.CSSProperties>({});
+    const flyoutItemRef = useRef<HTMLDivElement>(null);
+    const flyoutListRef = useRef<HTMLDivElement>(null);
+    // Closing the flyout is deferred so the mouse can cross the gap from the row
+    // to the portaled list (which isn't a DOM descendant) without it vanishing.
+    const flyoutCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Refs mirror the latest area/level so callbacks captured at mount time
     // can see the current selection (state values would be stale captures).
@@ -94,31 +152,43 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         [connectionId],
     );
 
-    // Persist the camera state for the current area straight to the store.
-    // We don't debounce here: the persist-storage adapter already coalesces
-    // rapid mutations into a single localStorage write (with a pagehide flush),
-    // so an extra in-panel debounce only created a window in which a quick
-    // pan-then-reload would drop the user's last view.
+    // Persist the current area's view: zoom into the map file (per-area
+    // userData) and the last-viewed z-level into the profile. We don't debounce
+    // here — the zoom write is in-memory (MapStore.setAreaZoom doesn't notify),
+    // and the persist-storage adapter already coalesces the level write into a
+    // single localStorage write (with a pagehide flush).
     const saveViewState = useCallback(() => {
         const renderer = rendererRef.current;
         const areaId = currentAreaRef.current;
         if (!renderer || areaId == null) return;
-        const bounds = renderer.getViewportBounds();
+        // Zoom is map data — persist it into the map file (per-area userData), the
+        // same way Mudlet does. Pan is no longer remembered (areas open centered
+        // on the area's middle). Only the last-viewed z-level stays in the
+        // profile. When the zoom actually changes (vs. a pure pan), schedule a
+        // debounced background save so it survives a reload — the encode runs in
+        // a worker, so frequent saves don't block the main thread.
+        const zoom = renderer.getZoom();
+        const prevZoom = manager.mapStore.getAreaZoom(areaId);
+        manager.mapStore.setAreaZoom(areaId, zoom);
+        if (prevZoom == null || Math.abs(prevZoom - zoom) > 1e-6) manager.scheduleMapSave();
         const store = useAppStore.getState();
         const existing = store.connectionProfile[connectionId]?.mapViewStates ?? {};
         store.patchConnectionProfile(connectionId, {
             mapViewStates: {
                 ...existing,
-                [areaId]: {
-                    level: currentLevelRef.current,
-                    zoom: renderer.getZoom(),
-                    centerX: (bounds.minX + bounds.maxX) / 2,
-                    centerY: (bounds.minY + bounds.maxY) / 2,
-                },
+                [areaId]: { level: currentLevelRef.current },
             },
             mapLastAreaId: areaId,
         });
-    }, [connectionId]);
+    }, [connectionId, manager]);
+    // Stable handle to saveViewState for the renderer-init effect's camera
+    // listener. That effect must construct the renderer EXACTLY ONCE per
+    // connection; if it listed saveViewState in its deps, a changed
+    // saveViewState identity (e.g. connectionId/manager re-injection after a
+    // layout restore) would tear the renderer down and rebuild an empty one
+    // without re-running the separate sync effect — leaving a black map.
+    const saveViewStateRef = useRef(saveViewState);
+    saveViewStateRef.current = saveViewState;
 
     // The renderer's player marker isn't gated by area/z — its onPositionChanged
     // runs after every drawArea and re-draws the marker at the player room's
@@ -131,22 +201,25 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     // Re-evaluate every enabled registerMapInfo contributor. Cheap when no
     // contributors are registered (most profiles); contributors are pure-Lua
     // and the dispatcher pcalls each so a broken one can't take the panel
-    // down. roomId is the player's current room (mudix has no selection model
-    // — Mudlet's selectionSize/displayedAreaId distinction only matters there).
+    // down. roomId is the selection's center when there is one (matches
+    // Mudlet — Mudlet passes the selection center to the callback), falling
+    // back to the player's current room when nothing is selected.
     const recomputeMapInfos = useCallback(() => {
         const areaId = currentAreaRef.current;
         if (areaId == null) {
             setMapInfos(prev => (prev.length === 0 ? prev : []));
             return;
         }
+        const center = manager.mapStore.getSelectionCenter();
         const playerRoomId = manager.mapStore.getPlayerRoom();
-        const playerRoomArea = playerRoomId != null
-            ? manager.mapStore.getRoomArea(playerRoomId)
+        const focusRoomId = center ?? playerRoomId;
+        const focusRoomArea = focusRoomId != null
+            ? manager.mapStore.getRoomArea(focusRoomId)
             : areaId;
         const next = manager.mapStore.evaluateMapInfos(
-            playerRoomId,
-            0,
-            playerRoomArea === -1 ? areaId : playerRoomArea,
+            focusRoomId,
+            manager.mapStore.getMapSelectionSize(),
+            focusRoomArea === -1 ? areaId : focusRoomArea,
             areaId,
         );
         // Avoid a state churn (and downstream re-render) when nothing changed.
@@ -170,14 +243,18 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         const renderer = rendererRef.current;
         const reader = readerRef.current;
         if (!renderer || !reader) return;
-        const playerRoomId = manager.mapStore.getPlayerRoom();
-        if (playerRoomId == null) {
+        // Mudlet's T2DMap draws a marker even with no saved location, falling
+        // back to a room for display only (see MapStore.getFallbackRoomId).
+        // Mirror that: prefer the real player room, else the fallback (room 1).
+        const markerRoomId = manager.mapStore.getPlayerRoom()
+            ?? manager.mapStore.getFallbackRoomId();
+        if (markerRoomId == null) {
             renderer.clearPosition();
             return;
         }
-        const room = reader.getRoom(playerRoomId);
+        const room = reader.getRoom(markerRoomId);
         if (room && room.area === areaId && room.z === level) {
-            renderer.updatePositionMarker(playerRoomId);
+            renderer.updatePositionMarker(markerRoomId);
         } else {
             renderer.clearPosition();
         }
@@ -187,7 +264,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     // Used both on initial sync and on every store-change tick. Returns true
     // when the renderer was driven to a ready state; false when the store is
     // still empty (overlay stays up).
-    const syncFromStore = useCallback((opts?: { keepArea?: number; keepLevel?: number }): boolean => {
+    const syncFromStore = useCallback((opts?: { keepArea?: number; keepLevel?: number; fresh?: boolean }): boolean => {
         const reader = readerRef.current;
         const renderer = rendererRef.current;
         if (!reader || !renderer) return false;
@@ -208,16 +285,36 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // user is currently in. Explicit hints (centerview from script) win.
         const profile = useAppStore.getState().connectionProfile[connectionId];
         const lastAreaId = profile?.mapLastAreaId;
+        // Mudlet loads the map centered on the current room's area — the real
+        // player room when known, else a fallback room it shows the marker on
+        // anyway (room 1, see MapStore.getFallbackRoomId). That position takes
+        // priority over the last-viewed area on first open: opening on "wherever
+        // you last looked" while a marker sits in another area is exactly the bug
+        // being fixed. The marker room is always set for a non-empty map, so
+        // lastAreaId only matters as a deeper fallback.
+        const markerRoomId = manager.mapStore.getPlayerRoom()
+            ?? manager.mapStore.getFallbackRoomId();
+        const markerArea = markerRoomId != null ? manager.mapStore.getRoomArea(markerRoomId) : -1;
+        const markerAreaValid = markerArea !== -1 && areaList.some(a => a.id === markerArea);
+        // `fresh` (a full map (re)load) ignores the stale displayed area so the
+        // player position drives the area choice — Mudlet re-centers on the
+        // current room after loadMap, it doesn't keep the pre-load view.
         const keepArea = opts?.keepArea
-            ?? currentAreaRef.current
+            ?? (opts?.fresh ? undefined : currentAreaRef.current)
+            ?? (markerAreaValid ? markerArea : undefined)
             ?? (needsFitRef.current ? undefined : lastAreaId);
         const restoredArea = keepArea != null && areaList.some(a => a.id === keepArea)
             ? keepArea
             : areaList[0].id;
         const areaLevels = reader.getArea(restoredArea).getZLevels().sort((a, b) => a - b);
         const savedForArea = needsFitRef.current ? undefined : getSavedView(restoredArea);
+        // Opening on the marker room's area → prefer that room's own z-level so
+        // the marker is on the level we show (Mudlet sets mMapCenterZ to room z).
+        const markerZ = markerRoomId != null && markerArea === restoredArea
+            ? manager.mapStore.getRoomCoordinates(markerRoomId)?.[2]
+            : undefined;
         const keepLevel = opts?.keepLevel
-            ?? (currentAreaRef.current != null ? currentLevelRef.current : savedForArea?.level);
+            ?? (!opts?.fresh && currentAreaRef.current != null ? currentLevelRef.current : (markerZ ?? savedForArea?.level));
         const restoredLevel =
             keepLevel != null && areaLevels.includes(keepLevel) ? keepLevel
             : areaLevels.includes(0) ? 0 : (areaLevels[0] ?? 0);
@@ -261,16 +358,11 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         lastHiddenVersionRef.current = manager.mapStore.getHiddenVersion();
         syncPositionMarker(restoredArea, restoredLevel);
         recomputeMapInfos();
-        // Only fit on the first successful render; afterwards preserve user pan/zoom.
-        // If we have a saved zoom/center for this area, apply that instead.
+        // Only fit/center on the first successful render; afterwards preserve the
+        // user's live zoom and pan.
         if (!needsFitRef.current) {
             needsFitRef.current = true;
-            if (savedForArea && Number.isFinite(savedForArea.zoom)) {
-                renderer.setZoom(savedForArea.zoom);
-                renderer.camera.panToMapPoint(savedForArea.centerX, savedForArea.centerY);
-            } else {
-                renderer.fitArea();
-            }
+            applyInitialView(renderer, manager.mapStore, restoredArea);
         }
         setStatus('ready');
         return true;
@@ -281,6 +373,13 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     // the Konva stage and event listeners stay alive across map reloads.
     useEffect(() => {
         if (!containerRef.current) return;
+        // A fresh renderer hasn't been positioned yet, so the next syncFromStore
+        // must run its first-fit (zoom + center on the player). needsFitRef is a
+        // ref that survives this effect re-running, so without resetting it a
+        // rebuilt renderer (manager/session swap — a layout restore in prod, or
+        // StrictMode's synthetic session swap in dev) would inherit the previous
+        // renderer's "already fitted" flag and open uncentered at (0,0).
+        needsFitRef.current = false;
         const reader = new MudixMapReader(manager.mapStore);
         readerRef.current = reader;
         const settings = createSettings();
@@ -330,6 +429,39 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         renderer.addSceneOverlay('mudlet-highlights', highlightOverlay);
         highlightOverlayRef.current = highlightOverlay;
 
+        // Map-room selection ring overlay backing Mudlet's getMapSelection /
+        // clearMapSelection. Self-subscribes to the dedicated selection
+        // channel; renderer.destroy() detaches it.
+        const selectionOverlay = new MapSelectionOverlay(manager.mapStore, reader);
+        renderer.addSceneOverlay('mudix-selection', selectionOverlay);
+        selectionOverlayRef.current = selectionOverlay;
+
+        const mapContainer = containerRef.current;
+
+        // Mudlet selection model: plain left-click on a room replaces the
+        // selection (room becomes the center); ctrl/cmd-click toggles
+        // membership without affecting the center beyond center-fallback when
+        // the prior center is removed. Clicking on empty space clears.
+        //
+        // KeyboardEvent state isn't carried by the renderer's typed event, so
+        // a capture-phase mousedown listener snapshots the modifier state
+        // before the renderer's bubble-phase handler dispatches.
+        let lastClickWithModifier = false;
+        const onClickCapture = (e: MouseEvent) => {
+            lastClickWithModifier = e.ctrlKey || e.metaKey || e.shiftKey;
+        };
+        mapContainer?.addEventListener('mousedown', onClickCapture, { capture: true });
+        renderer.backend.events.on('roomclick', (detail: RoomClickEventDetail) => {
+            if (lastClickWithModifier) {
+                manager.mapStore.toggleMapRoomSelection(detail.roomId);
+            } else {
+                manager.mapStore.selectMapRoom(detail.roomId);
+            }
+        });
+        renderer.backend.events.on('mapclick', () => {
+            manager.mapStore.clearMapSelection();
+        });
+
         renderer.backend.events.on('roomcontextmenu', (detail: RoomContextMenuEventDetail) => {
             const items = manager.mapStore.getMapEvents();
             const rect = containerRef.current?.getBoundingClientRect();
@@ -344,7 +476,6 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // Mudlet `sysMapWindowMousePressEvent(button, x, y)` — fired on every
         // mouse press inside the map widget. Mudlet's button mapping mirrors
         // sysWindowMousePressEvent (1=left, 2=right, 3=middle).
-        const mapContainer = containerRef.current;
         const onMapMouseDown = (e: MouseEvent) => {
             const rect = mapContainer?.getBoundingClientRect();
             const x = Math.round(e.clientX - (rect?.left ?? 0));
@@ -357,7 +488,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // Persist zoom/pan back to the profile whenever the camera moves.
         // Skipped until syncFromStore has applied saved/initial state so the
         // initial fitArea / restored-zoom doesn't trample a still-loading save.
-        const onCameraChange = () => { if (needsFitRef.current) saveViewState(); };
+        const onCameraChange = () => { if (needsFitRef.current) saveViewStateRef.current(); };
         renderer.camera.on('change', onCameraChange);
 
         // Enforce Mudlet's zoom-in ceiling: the shorter viewport edge may never
@@ -427,13 +558,19 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             renderer.events.off('zoom', onZoom);
             panelEl?.removeEventListener('wheel', onWheelCapture, { capture: true });
             mapContainer?.removeEventListener('mousedown', onMapMouseDown);
+            mapContainer?.removeEventListener('mousedown', onClickCapture, { capture: true });
             renderer.camera.off('change', onCameraChange);
             renderer.destroy();
             rendererRef.current = null;
             readerRef.current = null;
             highlightOverlayRef.current = null;
+            selectionOverlayRef.current = null;
         };
-    }, [manager, saveViewState]);
+        // Only `manager` (the connection) may rebuild the renderer. saveViewState
+        // is reached through saveViewStateRef so its identity churn no longer
+        // tears the renderer down (which would leave an un-synced black map).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [manager]);
 
     // Forward Mapper-tab edits onto the live renderer.settings. The settings
     // object is shared and mutable, but the renderer caches some derived
@@ -507,7 +644,11 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     useEffect(() => {
         if (!menuOpen) return;
         const onDown = (e: MouseEvent) => {
-            if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+            const target = e.target as Node;
+            // The overlays flyout is portaled to <body>, so it's outside menuRef
+            // — exempt it too or clicking a checkbox would close the whole menu.
+            if (menuRef.current?.contains(target) || flyoutListRef.current?.contains(target)) return;
+            setMenuOpen(false);
         };
         document.addEventListener('mousedown', onDown);
         return () => document.removeEventListener('mousedown', onDown);
@@ -553,29 +694,22 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 el.dispatchEvent(new Event('resize'));
                 // First time the canvas reaches non-zero width: re-apply the
                 // initial view. syncFromStore may have already drawn the area
-                // while the container was 0×0, which makes fit/zoom math
-                // useless — redo it now that we have real dimensions. Prefer
-                // the saved view over fitArea so we don't trample restored
-                // zoom/pan when the dock layout settles late. Don't flip
+                // while the container was 0×0, which makes fit/zoom math useless
+                // — redo it now that we have real dimensions. Don't flip
                 // needsFitRef back to false: a later store mutation could then
-                // trigger another saved-state restore and wipe the user's
-                // live pan/zoom.
+                // trigger another saved-state restore and wipe the user's live
+                // zoom.
                 if (renderer && newWidth > 0 && needsFitRef.current) {
                     const areaId = currentAreaRef.current;
-                    const saved = areaId != null ? getSavedView(areaId) : undefined;
-                    if (saved && Number.isFinite(saved.zoom)) {
-                        renderer.setZoom(saved.zoom);
-                        renderer.camera.panToMapPoint(saved.centerX, saved.centerY);
-                    } else {
-                        renderer.fitArea();
-                    }
+                    if (areaId != null) applyInitialView(renderer, manager.mapStore, areaId);
+                    else renderer.fitArea();
                 }
             }
             prevWidthRef.current = newWidth;
         });
         ro.observe(el);
         return () => ro.disconnect();
-    }, [getSavedView]);
+    }, [manager]);
 
     // Area/level changes don't always move the camera (e.g. level cycling via
     // ▲▼ buttons just redraws the same viewport), so the camera-change handler
@@ -600,14 +734,109 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         return unsub;
     }, [manager, syncFromStore]);
 
+    // Keep the hamburger-menu contributor list in sync. register/kill/enable/
+    // disableMapInfo all fire the store's main notify, so this rides the same
+    // channel. Snapshot on mount too so the built-ins show before any mutation.
+    useEffect(() => {
+        const update = () => setInfoContributors(manager.mapStore.getMapInfoContributors());
+        update();
+        return manager.mapStore.subscribe(update);
+    }, [manager]);
+
+    // Toggle a single contributor on/off. enable/disableMapInfo notify the
+    // store, which re-snapshots the list above and re-runs recomputeMapInfos via
+    // the main subscribe, so the overlay and the checkboxes both update.
+    const toggleInfoContributor = useCallback((label: string, enabled: boolean) => {
+        if (enabled) manager.mapStore.disableMapInfo(label);
+        else manager.mapStore.enableMapInfo(label);
+    }, [manager]);
+
+    // "None": turn every enabled contributor off in one click.
+    const disableAllInfoContributors = useCallback(() => {
+        for (const c of manager.mapStore.getMapInfoContributors()) {
+            if (c.enabled) manager.mapStore.disableMapInfo(c.label);
+        }
+    }, [manager]);
+
+    // Open the flyout, anchoring it to the row in viewport coordinates so the
+    // body-portaled list lands in the right place. We pick a side/vertical and
+    // anchor with left/right + top/bottom (rather than a fixed size) so the
+    // browser still measures the real box: prefer the right (Mudlet's default),
+    // flip left when the submenu would overflow the right viewport edge — i.e.
+    // the map widget is docked against the right of the screen; anchor the top
+    // to the row and extend down by default, rolling up (anchoring the bottom)
+    // when the estimated height would run past the bottom edge. The estimates
+    // only steer the flip decision — actual placement is exact.
+    const FLYOUT_EST_WIDTH = 150;
+    const FLYOUT_ROW_HEIGHT = 30;
+    const FLYOUT_PADDING = 10;
+    const openInfoFlyout = useCallback(() => {
+        if (flyoutCloseTimer.current) { clearTimeout(flyoutCloseTimer.current); flyoutCloseTimer.current = null; }
+        const rect = flyoutItemRef.current?.getBoundingClientRect();
+        if (rect) {
+            const style: React.CSSProperties = { position: 'fixed' };
+            // Horizontal: butt the list against the row's right edge, or its
+            // left edge (anchored via `right`) when there's no room on the right.
+            if (rect.right + FLYOUT_EST_WIDTH > window.innerWidth) {
+                setFlyoutSide('left');
+                style.right = window.innerWidth - rect.left;
+            } else {
+                setFlyoutSide('right');
+                style.left = rect.right;
+            }
+            // Vertical: +1 row for the "None" entry; the list top sits ~5px above
+            // the row, so measure the overflow from there.
+            const estHeight = (infoContributors.length + 1) * FLYOUT_ROW_HEIGHT + FLYOUT_PADDING;
+            if (rect.top - 5 + estHeight > window.innerHeight) {
+                style.bottom = window.innerHeight - rect.bottom - 5; // roll up
+            } else {
+                style.top = rect.top - 5;
+            }
+            setFlyoutStyle(style);
+        }
+        setInfoOverlaysOpen(true);
+    }, [infoContributors.length]);
+
+    // Defer the close so moving from the row onto the portaled list (a non-
+    // descendant in the DOM, so it triggers the row's mouseleave) doesn't shut
+    // it. Re-entering either the row or the list cancels the pending close.
+    const scheduleFlyoutClose = useCallback(() => {
+        if (flyoutCloseTimer.current) clearTimeout(flyoutCloseTimer.current);
+        flyoutCloseTimer.current = setTimeout(() => setInfoOverlaysOpen(false), 120);
+    }, []);
+    const cancelFlyoutClose = useCallback(() => {
+        if (flyoutCloseTimer.current) { clearTimeout(flyoutCloseTimer.current); flyoutCloseTimer.current = null; }
+    }, []);
+    useEffect(() => () => { if (flyoutCloseTimer.current) clearTimeout(flyoutCloseTimer.current); }, []);
+
+    // Collapse the flyout whenever the parent menu closes so it doesn't pop back
+    // up (without a hover) the next time the menu is opened.
+    useEffect(() => { if (!menuOpen) setInfoOverlaysOpen(false); }, [menuOpen]);
+
+    // Selection ride its own subscribe channel so the paint-only overlay
+    // doesn't drag MudixMapReader through a snapshot rebuild on every click.
+    // registerMapInfo contributors still receive the selection size/center in
+    // their args, so re-evaluate them when the selection changes.
+    useEffect(() => {
+        return manager.mapStore.subscribeSelection(() => {
+            recomputeMapInfos();
+        });
+    }, [manager, recomputeMapInfos]);
+
     // Lua loadMap() routes through WindowManager → MapStore. The store's notify
     // will trigger the subscribe handler above; this callback only needs to
     // report whether the renderer reached a ready state.
     useEffect(() => {
-        manager.registerMapLoadCallback(() => syncFromStore({
-            keepArea: currentAreaRef.current ?? undefined,
-            keepLevel: currentLevelRef.current,
-        }));
+        manager.registerMapLoadCallback(() => {
+            // loadMap replaces the whole map. Mudlet re-centers on the current
+            // room afterward, so drop the one-time fit latch and re-derive the
+            // area/level/center from the (re-restored) player position rather
+            // than keeping the pre-load view — otherwise a boot-time reload (e.g.
+            // a package that loadMap()s its own .dat) leaves us at the area
+            // default (0,0) instead of on the player.
+            needsFitRef.current = false;
+            return syncFromStore({ fresh: true });
+        });
         return () => manager.unregisterMapLoadCallback();
     }, [manager, syncFromStore]);
 
@@ -618,12 +847,20 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         const renderer = rendererRef.current;
         const reader = readerRef.current;
         if (!renderer || !reader) return;
+        // WindowManager.centerView already rejected unknown room ids before
+        // notifying us, so room should resolve. Guard anyway: getRoom returns
+        // undefined (it does not throw) for a missing id, and reading .area off
+        // undefined would throw inside this renderer callback.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let room: any;
         try { room = reader.getRoom(roomId); } catch { return; }
+        if (!room) return;
         const areaId: number = room.area;
         const zLevel: number = room.z;
-        const areaLevels = reader.getArea(areaId).getZLevels().sort((a, b) => a - b);
+        let area;
+        try { area = reader.getArea(areaId); } catch { return; }
+        if (!area) return;
+        const areaLevels = area.getZLevels().sort((a, b) => a - b);
         // Crossing into another area — persist the new last-area pointer up
         // front so a reload before the new area's first camera-change save
         // still returns to it. centerview itself keeps the current zoom
@@ -764,9 +1001,10 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         setDropdownOpen(false);
         renderer.drawArea(id, level);
         syncPositionMarker(id, level);
-        if (saved && Number.isFinite(saved.zoom)) {
-            renderer.setZoom(saved.zoom);
-            renderer.camera.panToMapPoint(saved.centerX, saved.centerY);
+        const savedZoom = manager.mapStore.getAreaZoom(id);
+        if (savedZoom != null) {
+            renderer.setZoom(savedZoom);
+            centerOnArea(renderer, manager.mapStore);
         } else {
             renderer.fitArea();
         }
@@ -874,10 +1112,50 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                             >
                                 Edit map…
                             </button>
+                            <div className="map-hamburger-separator" />
+                            <div
+                                ref={flyoutItemRef}
+                                className="map-hamburger-flyout"
+                                onMouseEnter={openInfoFlyout}
+                                onMouseLeave={scheduleFlyoutClose}
+                            >
+                                <div className="map-hamburger-item map-hamburger-item--expand">
+                                    <span>Map info overlays</span>
+                                    <span className="map-hamburger-chevron">{flyoutSide === 'left' ? '◂' : '▸'}</span>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
             </div>
+            {menuOpen && infoOverlaysOpen && createPortal(
+                <div
+                    ref={flyoutListRef}
+                    className="map-hamburger-sublist"
+                    style={flyoutStyle}
+                    onMouseEnter={cancelFlyoutClose}
+                    onMouseLeave={scheduleFlyoutClose}
+                >
+                    <label
+                        className="map-hamburger-check"
+                        onMouseDown={(e) => { e.preventDefault(); disableAllInfoContributors(); }}
+                    >
+                        <input type="checkbox" readOnly checked={infoContributors.every(c => !c.enabled)} />
+                        <span>None</span>
+                    </label>
+                    {infoContributors.map(c => (
+                        <label
+                            key={c.label}
+                            className="map-hamburger-check"
+                            onMouseDown={(e) => { e.preventDefault(); toggleInfoContributor(c.label, c.enabled); }}
+                        >
+                            <input type="checkbox" readOnly checked={c.enabled} />
+                            <span>{c.label}</span>
+                        </label>
+                    ))}
+                </div>,
+                document.body,
+            )}
             {status === 'loading' && (
                 <div className="map-overlay">
                     <span>Loading map…</span>

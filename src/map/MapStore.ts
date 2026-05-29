@@ -89,6 +89,12 @@ const PEN_STYLE_NAMES: Record<number, string> = {
 // set so the file stays interoperable with Mudlet v20 readers.
 const HIDDEN_FALLBACK_KEY = 'system.fallback_hidden';
 
+// Per-area 2D-map zoom. Persisted inside the area's userData so the view zoom
+// round-trips with the map file (mirroring Mudlet, where zoom is map data, not
+// client config). It's an ordinary userData key — scripts can read it like any
+// other area user-data entry; getAreaZoom/setAreaZoom are just typed accessors.
+const AREA_ZOOM_KEY = 'system.2DMapZoom';
+
 const DEFAULT_FONT: MudletFont = {
     family: 'Bitstream Vera Sans Mono', style: 'Normal',
     pointSize: 8, pixelSize: -1, styleHint: 5, styleStrategy: 1,
@@ -184,15 +190,31 @@ export interface MapInfoResult {
     color?: { r: number; g: number; b: number };
 }
 
-/** A registered Mudlet `registerMapInfo` contributor. `callbackId` indexes
- *  into the Lua-side `__mudix_cb` registry; the LuaRuntime evaluator
- *  dispatches to it. Starts disabled (Mudlet semantics — caller must
- *  `enableMapInfo(label)` to show it). */
+/** A registered Mudlet `registerMapInfo` contributor.
+ *
+ *  Two kinds exist. Script-registered ones carry a `callbackId` that indexes
+ *  into the Lua-side `__mudix_cb` registry; the LuaRuntime evaluator dispatches
+ *  to it, and they start disabled (Mudlet semantics — caller must
+ *  `enableMapInfo(label)` to show it). Built-in ones (`builtin: true`,
+ *  `callbackId: null`) mirror Mudlet's native "Short"/"Full" contributors —
+ *  they're evaluated directly from MapStore data (see `builtinMapInfo`), don't
+ *  depend on a live Lua runtime, and can't be removed via `killMapInfo`. */
 export interface MapInfoContributor {
     label: string;
-    callbackId: number;
+    callbackId: number | null;
     enabled: boolean;
+    builtin?: boolean;
 }
+
+/** Native evaluator for a built-in contributor — same argument shape as the
+ *  Lua-backed `mapInfoEvaluator`, but reads MapStore data directly instead of
+ *  calling into Lua. */
+type NativeMapInfoFn = (
+    roomId: number | null,
+    selectionSize: number,
+    areaId: number,
+    displayedAreaId: number,
+) => Omit<MapInfoResult, 'label'> | null;
 
 export interface MapEventEntry {
     /** Stable id used by removeMapEvent and as a parent reference. */
@@ -230,6 +252,16 @@ export class MapStore {
     // hundreds of ms per step.
     private highlightSubscribers = new Set<() => void>();
     private highlightNotifyPending = false;
+    // Map-room selection (Mudlet getMapSelection / clearMapSelection). Selection
+    // is paint-only — it never touches room/area/exit data — so it rides its
+    // own channel just like highlights to keep MudixMapReader / MapPanel's
+    // syncFromStore out of the hot path on every click. `center` is the most
+    // recently single-clicked room; Mudlet returns it in the selection table.
+    private selectedRooms = new Set<number>();
+    private selectionCenter: number | null = null;
+    private selectionVersion = 0;
+    private selectionSubscribers = new Set<() => void>();
+    private selectionNotifyPending = false;
     private mapEvents = new Map<string, MapEventEntry>();
     private customEnvColors = new Map<number, MudletColor>();
     private roomHighlights = new Map<number, RoomHighlight>();
@@ -239,18 +271,37 @@ export class MapStore {
     // behavior). Read by getPlayerRoom; returns null when unset or the room
     // has since been deleted.
     private playerRoomId: number | null = null;
+    // Mudlet stores the per-profile player room inside the map file as
+    // mRoomIdHash (profileName → roomId), so reopening a map restores the
+    // position without any centerview. We keep the whole hash loaded so other
+    // profiles' entries survive a save (Mudlet's "don't clobber shared maps"
+    // behavior); our own entry is (re)derived from playerRoomId on export.
+    private mRoomIdHash: Record<string, number> = {};
+    /** Mudlet's mProfileName — the key into mRoomIdHash for this profile's saved
+     *  player room. Set by ScriptingEngine to the connection name before the map
+     *  loads. Empty string when unknown (then no position is restored/saved). */
+    profileName = '';
     // Set by LuaRuntime so dispatchMapEvent can fire raiseEvent into the runtime.
     // Cleared on runtime teardown to avoid firing into a closed lua_State.
     private mapEventDispatcher: ((eventName: string, args: unknown[]) => void) | null = null;
     // Mudlet registerMapInfo contributors. Insertion-ordered so the panel renders
-    // entries in registration order (Mudlet behaves the same).
+    // entries in registration order (Mudlet behaves the same). Seeded in the
+    // constructor with the two built-in contributors ("Short", "Full").
     private mapInfoContributors: MapInfoContributor[] = [];
+    // Native evaluators for the built-in contributors, keyed by label. Read by
+    // evaluateMapInfos when a contributor is `builtin` — they don't go through
+    // the Lua evaluator, so they keep working with no scripts loaded.
+    private builtinMapInfo = new Map<string, NativeMapInfoFn>();
     // Set by LuaRuntime so evaluateMapInfos can invoke each contributor's
     // Lua callback and capture its multi-return. Cleared on runtime teardown
     // alongside the contributor list — the cb ids are runtime-scoped.
     private mapInfoEvaluator:
         | ((callbackId: number, roomId: number | null, selectionSize: number, areaId: number, displayedAreaId: number) => Omit<MapInfoResult, 'label'> | null)
         | null = null;
+
+    constructor() {
+        this.seedBuiltinMapInfo();
+    }
 
     subscribe(cb: () => void): () => void {
         this.subscribers.add(cb);
@@ -263,6 +314,15 @@ export class MapStore {
     subscribeHighlights(cb: () => void): () => void {
         this.highlightSubscribers.add(cb);
         return () => this.highlightSubscribers.delete(cb);
+    }
+
+    /** Subscribe to selection changes (selectMapRoom / toggleMapRoomSelection /
+     *  clearMapSelection and the bulk clears in newEmptyMap / loadFromBinary).
+     *  MapSelectionOverlay rides this so per-click repaints stay off the main
+     *  store-notify channel. */
+    subscribeSelection(cb: () => void): () => void {
+        this.selectionSubscribers.add(cb);
+        return () => this.selectionSubscribers.delete(cb);
     }
 
     private notify(): void {
@@ -281,6 +341,16 @@ export class MapStore {
         queueMicrotask(() => {
             this.highlightNotifyPending = false;
             for (const cb of this.highlightSubscribers) cb();
+        });
+    }
+
+    private notifySelection(): void {
+        this.selectionVersion++;
+        if (this.selectionNotifyPending) return;
+        this.selectionNotifyPending = true;
+        queueMicrotask(() => {
+            this.selectionNotifyPending = false;
+            for (const cb of this.selectionSubscribers) cb();
         });
     }
 
@@ -307,8 +377,12 @@ export class MapStore {
         this.roomCharColors.clear();
         if (this.hiddenRooms.size > 0) { this.hiddenRooms.clear(); this.hiddenVersion++; }
         this.roomHighlights.clear();
+        const hadSelection = this.selectedRooms.size > 0 || this.selectionCenter != null;
+        this.selectedRooms.clear();
+        this.selectionCenter = null;
         this.mapUserData = {};
         this.playerRoomId = null;
+        this.mRoomIdHash = {};
         this.nextRoomId = 1;
         this.nextAreaId = 2;        // -1 is reserved below
         const defaultArea = makeArea();
@@ -318,6 +392,7 @@ export class MapStore {
         this.initialized = true;
         this.notify();
         this.notifyHighlights();
+        if (hadSelection) this.notifySelection();
     }
 
     /**
@@ -338,6 +413,13 @@ export class MapStore {
         this.roomCharColors.clear();
         if (this.hiddenRooms.size > 0) { this.hiddenRooms.clear(); this.hiddenVersion++; }
         this.roomHighlights.clear();
+        const hadSelection = this.selectedRooms.size > 0 || this.selectionCenter != null;
+        this.selectedRooms.clear();
+        this.selectionCenter = null;
+        // Carry the whole profile→room hash so a later save preserves the
+        // positions of profiles other than ours; our player room is restored
+        // from it below once the rooms exist.
+        this.mRoomIdHash = { ...(mudletMap.mRoomIdHash ?? {}) };
         this.playerRoomId = null;
 
         for (const [k, room] of Object.entries(mudletMap.rooms ?? {})) {
@@ -393,9 +475,15 @@ export class MapStore {
             this.envColors.set(Number(k), v);
         }
         this.mapUserData = { ...(mudletMap.mUserData ?? {}) };
+        // Mudlet restores the player room from mRoomIdHash[mProfileName] on load
+        // (no fallback: a missing key means no position). Only accept an id that
+        // actually resolves to a loaded room.
+        const savedPlayer = this.profileName ? this.mRoomIdHash[this.profileName] : undefined;
+        this.playerRoomId = savedPlayer != null && this.rooms.has(savedPlayer) ? savedPlayer : null;
         this.initialized = true;
         this.notify();
         this.notifyHighlights();
+        if (hadSelection) this.notifySelection();
     }
 
     /**
@@ -476,11 +564,22 @@ export class MapStore {
         for (const [id, v] of this.envColors) envColors[id] = v;
         const labels: Record<number, MudletLabel[]> = {};
         for (const [id, ls] of this.labels) labels[id] = ls;
+        // Preserve other profiles' saved player rooms, and stamp our own from
+        // the live playerRoomId so reopening the map restores the position
+        // (Mudlet's mRoomIdHash[mProfileName] round-trip).
+        const mRoomIdHash = { ...this.mRoomIdHash };
+        if (this.profileName) {
+            if (this.playerRoomId != null && this.rooms.has(this.playerRoomId)) {
+                mRoomIdHash[this.profileName] = this.playerRoomId;
+            } else {
+                delete mRoomIdHash[this.profileName];
+            }
+        }
         return {
             version: 1, envColors, areaNames, mCustomEnvColors,
             mpRoomDbHashToRoomId: hashes, mUserData: { ...this.mapUserData },
             mapSymbolFont: DEFAULT_FONT, mapFontFudgeFactor: 1, useOnlyMapFont: false,
-            areas, mRoomIdHash: {}, labels, rooms,
+            areas, mRoomIdHash, labels, rooms,
         };
     }
 
@@ -529,6 +628,18 @@ export class MapStore {
         }
         if (room.hash) this.hashToRoom.delete(room.hash);
         this.rooms.delete(id);
+        // Selection is paint-only but it tracks room ids — drop the deleted
+        // one so getMapSelection doesn't dangle.
+        if (this.selectedRooms.delete(id)) {
+            if (this.selectionCenter === id) {
+                let next: number | null = null;
+                for (const r of this.selectedRooms) {
+                    if (next == null || r < next) next = r;
+                }
+                this.selectionCenter = next;
+            }
+            this.notifySelection();
+        }
         this.notify();
         return true;
     }
@@ -538,15 +649,32 @@ export class MapStore {
     // ── Player position ───────────────────────────────────────────────────────
 
     /** Mudlet `getPlayerRoom()` — id of the player's current room, or null
-     *  when unset or the room no longer exists. */
+     *  when unset or the room no longer exists. Strict: no fallback room (Mudlet
+     *  keeps the data-layer value empty until centerview/movement sets it). The
+     *  view's "no known location" fallback lives in {@link getFallbackRoomId}. */
     getPlayerRoom(): number | null {
         if (this.playerRoomId == null) return null;
         return this.rooms.has(this.playerRoomId) ? this.playerRoomId : null;
     }
 
+    /** Display-only fallback room for the map view when there is no real player
+     *  position (getPlayerRoom() is null). Mudlet's T2DMap paints the marker on
+     *  getRoomIDList().constFirst() — hash-arbitrary, hence its `randomRoom`
+     *  name. We prefer room 1 (stable and what users expect), then the lowest
+     *  existing id so the marker still lands somewhere on odd maps. null only
+     *  when the map is empty. Never feeds getPlayerRoom — it's purely for
+     *  centering + the marker. */
+    getFallbackRoomId(): number | null {
+        if (this.rooms.has(1)) return 1;
+        let min: number | null = null;
+        for (const id of this.rooms.keys()) if (min == null || id < min) min = id;
+        return min;
+    }
+
     /** Mirror of Mudlet's `mRoomIdHash[host.getName()] = roomId` from centerview.
-     *  Stores even unknown ids so a later `addRoom` makes the position valid;
-     *  getPlayerRoom does the existence check on read. */
+     *  centerView validates the id exists before calling this (Mudlet rejects
+     *  unknown ids), so the stored id is normally live; getPlayerRoom still does
+     *  an existence check on read in case the room is deleted afterwards. */
     setPlayerRoom(id: number): void {
         this.playerRoomId = id;
     }
@@ -1556,6 +1684,37 @@ export class MapStore {
         return ids.sort((x, y) => x - y);
     }
 
+    // ── Area view (zoom) ───────────────────────────────────────────────────────
+
+    /**
+     * Per-area 2D-map zoom stored in the map file (area userData under
+     * {@link AREA_ZOOM_KEY}). Returns `undefined` when the area is missing or has
+     * no saved zoom (caller falls back to fitArea). Mirrors Mudlet's treatment of
+     * zoom as map data rather than client config.
+     */
+    getAreaZoom(id: number): number | undefined {
+        const raw = this.areas.get(id)?.userData[AREA_ZOOM_KEY];
+        if (raw == null) return undefined;
+        const z = Number(raw);
+        return Number.isFinite(z) && z > 0 ? z : undefined;
+    }
+
+    /**
+     * Save the per-area zoom into the area's userData so it round-trips with the
+     * map file. Deliberately does NOT call {@link notify} — zoom is a view-only
+     * datum that no renderer reads from the store snapshot, and the camera-move
+     * handler calls this on every wheel tick; notifying would rebuild the whole
+     * scene on each one. The value persists to IndexedDB the next time the map is
+     * serialised (saveMap → toMudletMapForSave). Returns false when the area is
+     * missing or the zoom isn't a positive finite number.
+     */
+    setAreaZoom(id: number, zoom: number): boolean {
+        const area = this.areas.get(id);
+        if (!area || !Number.isFinite(zoom) || zoom <= 0) return false;
+        area.userData[AREA_ZOOM_KEY] = String(zoom);
+        return true;
+    }
+
     // ── Grid mode ───────────────────────────────────────────────────────────--
 
     /**
@@ -1621,6 +1780,67 @@ export class MapStore {
 
     getAreaRooms(areaId: number): number[] {
         return [...(this.areas.get(areaId)?.rooms ?? [])];
+    }
+
+    /**
+     * Room to center the 2D view on when an area is opened with no player room
+     * in it, mirroring Mudlet's T2DMap::switchArea (T2DMap.cpp). Mudlet does NOT
+     * center on the bounding-box midpoint (which can land on empty space for
+     * sparse / L-shaped areas) — it:
+     *   1. picks a z-level: `preferredZ` if the area has rooms there, otherwise
+     *      the level carrying the most rooms (lowest z wins ties),
+     *   2. takes the geometric centroid (mean x/y) of that level's rooms,
+     *   3. returns the room nearest that centroid.
+     * So the view always lands on an actual room. null when the area has no
+     * rooms (Mudlet falls back to 0,0,0 in that case).
+     */
+    getAreaCenterRoomId(areaId: number, preferredZ?: number): number | null {
+        const area = this.areas.get(areaId);
+        if (!area || area.rooms.length === 0) return null;
+
+        // Bucket the area's rooms by z-level.
+        const byLevel = new Map<number, number[]>();
+        for (const rid of area.rooms) {
+            const r = this.rooms.get(rid);
+            if (!r) continue;
+            const bucket = byLevel.get(r.z);
+            if (bucket) bucket.push(rid); else byLevel.set(r.z, [rid]);
+        }
+        if (byLevel.size === 0) return null;
+
+        // Choose the level: the requested one if it has rooms, else the most
+        // populated (lowest z on a tie — Mudlet's "lowest level with the highest
+        // number of rooms").
+        let level: number;
+        if (preferredZ != null && byLevel.has(preferredZ)) {
+            level = preferredZ;
+        } else {
+            level = [...byLevel.keys()][0];
+            for (const [z, ids] of byLevel) {
+                const best = byLevel.get(level)!.length;
+                if (ids.length > best || (ids.length === best && z < level)) level = z;
+            }
+        }
+
+        const ids = byLevel.get(level)!;
+        // Centroid of the level's rooms.
+        let meanX = 0, meanY = 0, n = 0;
+        for (const rid of ids) {
+            const r = this.rooms.get(rid)!;
+            n++;
+            meanX += (r.x - meanX) / n;
+            meanY += (r.y - meanY) / n;
+        }
+        // Nearest room to the centroid.
+        let bestId: number | null = null;
+        let bestDist = Infinity;
+        for (const rid of ids) {
+            const r = this.rooms.get(rid)!;
+            const dx = r.x - meanX, dy = r.y - meanY;
+            const d = dx * dx + dy * dy;
+            if (d < bestDist) { bestDist = d; bestId = rid; }
+        }
+        return bestId;
     }
 
     /**
@@ -1752,12 +1972,16 @@ export class MapStore {
 
     /** Add or replace a contributor. Re-registering the same label keeps the
      *  current enabled state and returns the prior callbackId so the runtime
-     *  can free the leaked Lua-registry slot. */
+     *  can free the leaked Lua-registry slot. Registering over a built-in label
+     *  ("Short"/"Full") overrides it with the script callback — Mudlet's
+     *  registerMapInfo replaces same-named contributors the same way; the native
+     *  evaluator is dropped so the script's version wins. */
     registerMapInfo(label: string, callbackId: number): { prevCallbackId: number | null } {
         const idx = this.mapInfoContributors.findIndex(c => c.label === label);
         let prev: number | null = null;
         if (idx >= 0) {
             prev = this.mapInfoContributors[idx].callbackId;
+            this.builtinMapInfo.delete(label);
             this.mapInfoContributors[idx] = { label, callbackId, enabled: this.mapInfoContributors[idx].enabled };
         } else {
             this.mapInfoContributors.push({ label, callbackId, enabled: false });
@@ -1768,10 +1992,13 @@ export class MapStore {
 
     /** Remove a contributor entirely. Returns the freed callbackId (so the
      *  runtime can release the Lua-registry slot) or null when the label
-     *  wasn't registered. */
+     *  wasn't registered. Built-in contributors can't be removed (Mudlet's
+     *  native "Short"/"Full" are likewise permanent — only enable/disable
+     *  applies); the call is a no-op reporting removed:false. */
     killMapInfo(label: string): { callbackId: number | null; removed: boolean } {
         const idx = this.mapInfoContributors.findIndex(c => c.label === label);
         if (idx < 0) return { callbackId: null, removed: false };
+        if (this.mapInfoContributors[idx].builtin) return { callbackId: null, removed: false };
         const cb = this.mapInfoContributors[idx].callbackId;
         this.mapInfoContributors.splice(idx, 1);
         this.notify();
@@ -1801,32 +2028,123 @@ export class MapStore {
         return this.mapInfoContributors.map(c => ({ ...c }));
     }
 
-    /** Run every enabled contributor through the LuaRuntime evaluator and
-     *  collect their (text, style, color) results. Empty when the evaluator
-     *  is unhooked or no contributor returned a non-empty text. */
+    /** Run every enabled contributor and collect their (text, style, color)
+     *  results. Built-in contributors are evaluated natively from MapStore data;
+     *  script ones go through the LuaRuntime evaluator (skipped when it's
+     *  unhooked). Empty when no enabled contributor returned a non-empty text. */
     evaluateMapInfos(
         roomId: number | null,
         selectionSize: number,
         areaId: number,
         displayedAreaId: number,
     ): MapInfoResult[] {
+        if (this.mapInfoContributors.length === 0) return [];
         const evaluator = this.mapInfoEvaluator;
-        if (!evaluator || this.mapInfoContributors.length === 0) return [];
         const out: MapInfoResult[] = [];
         for (const c of this.mapInfoContributors) {
             if (!c.enabled) continue;
-            const r = evaluator(c.callbackId, roomId, selectionSize, areaId, displayedAreaId);
+            let r: Omit<MapInfoResult, 'label'> | null = null;
+            if (c.builtin) {
+                const native = this.builtinMapInfo.get(c.label);
+                if (native) r = native(roomId, selectionSize, areaId, displayedAreaId);
+            } else if (c.callbackId != null && evaluator) {
+                r = evaluator(c.callbackId, roomId, selectionSize, areaId, displayedAreaId);
+            }
             if (r && r.text) out.push({ label: c.label, ...r });
         }
         return out;
     }
 
-    /** Drop every registered contributor. Called on LuaRuntime teardown — the
-     *  callback IDs index into the dying runtime's __mudix_cb registry. */
+    /** Drop every script-registered contributor. Called on LuaRuntime teardown
+     *  — the callback IDs index into the dying runtime's __mudix_cb registry.
+     *  Built-in contributors are native (no Lua dependency) so they survive,
+     *  keeping the default "Short"/"Full" overlays available across reconnects
+     *  and script reloads. */
     clearMapInfoContributors(): void {
-        if (this.mapInfoContributors.length === 0) return;
-        this.mapInfoContributors = [];
-        this.notify();
+        const before = this.mapInfoContributors.length;
+        this.mapInfoContributors = this.mapInfoContributors.filter(c => c.builtin);
+        if (this.mapInfoContributors.length !== before) this.notify();
+    }
+
+    // ── Built-in map info contributors (Mudlet's native "Short" / "Full") ─────
+
+    /** Seed the two built-in contributors. Mudlet registers "Short" then "Full"
+     *  and enables "Full" by default (XMLimport seeds {"Full"} for a profile
+     *  with no saved set); we mirror both the order and the default. */
+    private seedBuiltinMapInfo(): void {
+        this.builtinMapInfo.set('Short', (roomId, _selectionSize, areaId) =>
+            this.shortMapInfo(roomId, areaId));
+        this.builtinMapInfo.set('Full', (roomId, selectionSize, areaId, displayedAreaId) =>
+            this.fullMapInfo(roomId, selectionSize, areaId, displayedAreaId));
+        this.mapInfoContributors.push({ label: 'Short', callbackId: null, enabled: false, builtin: true });
+        this.mapInfoContributors.push({ label: 'Full', callbackId: null, enabled: true, builtin: true });
+    }
+
+    /** Mudlet's "Short" contributor: `<room name> / <id> (<area name>)`,
+     *  collapsing to just `<id> (<area name>)` when the room is unnamed or its
+     *  name is exactly its id. Plain (no bold/italic), default colour. */
+    private shortMapInfo(roomId: number | null, areaId: number): Omit<MapInfoResult, 'label'> | null {
+        if (roomId == null) return null;
+        const room = this.rooms.get(roomId);
+        if (!room) return null;
+        const areaName = this.areaNames.get(areaId) ?? '';
+        const idStr = String(roomId);
+        const name = room.name ?? '';
+        const roomFragment = name && name !== idStr ? `${name} / ${idStr}` : idStr;
+        return { text: `${roomFragment} (${areaName})`, isBold: false, isItalic: false };
+    }
+
+    /** Mudlet's "Full" contributor: area name/id + extent, optional room name,
+     *  and the room id + position line whose suffix and styling depend on the
+     *  selection (none → "Current player location"; 1 → "Selected room";
+     *  many → "Center of N selected rooms"). Non-breaking spaces (U+00A0) and
+     *  hyphens (U+2011) match Mudlet so the lines wrap the same way. Selections
+     *  tint the block orange and bold it; with nothing selected the text is
+     *  italic when the room's area isn't the one currently displayed, else bold.
+     *  Mudlet keys the orange shade off the configured info-text lightness — we
+     *  don't surface that, so we use its dark-background variant. */
+    private fullMapInfo(
+        roomId: number | null,
+        selectionSize: number,
+        areaId: number,
+        displayedAreaId: number,
+    ): Omit<MapInfoResult, 'label'> | null {
+        if (roomId == null) return null;
+        const room = this.rooms.get(roomId);
+        if (!room) return null;
+        const NBSP = ' '; // non-breaking space (matches Mudlet line-wrap control)
+        const NBHY = '‑'; // non-breaking hyphen
+        const area = this.areas.get(areaId);
+        const areaName = this.areaNames.get(areaId) ?? '';
+        const lines: string[] = [];
+        if (area) {
+            lines.push(
+                `Area:${NBSP}${areaName} ID:${NBSP}${areaId} ` +
+                `x:${NBSP}${area.min_x}${NBSP}<${NBHY}>${NBSP}${area.max_x} ` +
+                `y:${NBSP}${area.min_y}${NBSP}<${NBHY}>${NBSP}${area.max_y} ` +
+                `z:${NBSP}${area.min_z}${NBSP}<${NBHY}>${NBSP}${area.max_z}`,
+            );
+        }
+        if (room.name) lines.push(`Room Name: ${room.name}`);
+
+        let isBold = false;
+        let isItalic = false;
+        let color: { r: number; g: number; b: number } | undefined;
+        let desc: string;
+        if (selectionSize <= 0) {
+            desc = 'Current player location';
+            if (areaId !== displayedAreaId) isItalic = true;
+            else isBold = true;
+        } else {
+            desc = selectionSize === 1 ? 'Selected room' : `Center of ${selectionSize} selected rooms`;
+            isBold = true;
+            color = { r: 255, g: 223, b: 191 }; // Mudlet's "slightly orange white"
+        }
+        lines.push(
+            `Room${NBSP}ID:${NBSP}${roomId} Position${NBSP}on${NBSP}Map: ` +
+            `(${room.x},${room.y},${room.z}) ${NBHY}${NBSP}${desc}`,
+        );
+        return { text: lines.join('\n'), isBold, isItalic, color };
     }
 
     // ── Custom env colors (Mudlet setCustomEnvColor) ──────────────────────────
@@ -1920,6 +2238,19 @@ export class MapStore {
         return c ? { r: c.r, g: c.g, b: c.b, a: c.alpha } : undefined;
     }
 
+    /**
+     * Mudlet `unsetRoomCharColor(roomID)` — drop the per-room char colour
+     * override so the renderer falls back to the default text colour. Returns
+     * false when the room is missing or had no override to drop (Mudlet's
+     * own semantics).
+     */
+    unsetRoomCharColor(id: number): boolean {
+        if (!this.rooms.has(id)) return false;
+        if (!this.roomCharColors.delete(id)) return false;
+        this.notify();
+        return true;
+    }
+
     // ── Hidden rooms ──────────────────────────────────────────────────────────
 
     /**
@@ -2010,6 +2341,96 @@ export class MapStore {
      *  notify to reconcile the renderer's overlay shapes against the store. */
     getRoomHighlights(): Map<number, RoomHighlight> {
         return this.roomHighlights;
+    }
+
+    // ── Map-room selection (Mudlet getMapSelection / clearMapSelection) ───────
+
+    /** Monotonic counter bumped on every selection mutation. The
+     *  MapSelectionOverlay reads this through its lens-style version channel so
+     *  the renderer's overlay-output cache invalidates only when the set
+     *  actually changes. */
+    getSelectionVersion(): number { return this.selectionVersion; }
+
+    /** True when the room is in the current selection — read by
+     *  MapSelectionOverlay when emitting per-room shapes. */
+    isRoomSelected(id: number): boolean { return this.selectedRooms.has(id); }
+
+    /** The most recently single-clicked room (Mudlet's selection "center"), or
+     *  null when nothing is selected. Used by MapSelectionOverlay to draw a
+     *  distinct marker on the center. */
+    getSelectionCenter(): number | null { return this.selectionCenter; }
+
+    /** Size of the current selection — fed to registerMapInfo callbacks as
+     *  Mudlet's `selectionSize` argument. */
+    getMapSelectionSize(): number { return this.selectedRooms.size; }
+
+    /**
+     * Mudlet `getMapSelection()` → `{ rooms = {roomIDs}, center = roomID }`.
+     * `rooms` is a list of selected room ids (sorted for deterministic
+     * Lua-side iteration); `center` is the room marked as the selection's
+     * focal point (Mudlet uses the last-clicked / right-clicked room). Both
+     * are empty / null when nothing is selected.
+     */
+    getMapSelection(): { rooms: number[]; center: number | null } {
+        return {
+            rooms: [...this.selectedRooms].sort((a, b) => a - b),
+            center: this.selectionCenter,
+        };
+    }
+
+    /**
+     * Replace the selection with a single room and mark it as the center.
+     * Mudlet's plain left-click on a room does the same. Returns false when
+     * the room doesn't exist (silently — the caller is usually a UI handler).
+     */
+    selectMapRoom(id: number): boolean {
+        if (!this.rooms.has(id)) return false;
+        if (this.selectedRooms.size === 1 && this.selectedRooms.has(id) && this.selectionCenter === id) {
+            return true;
+        }
+        this.selectedRooms.clear();
+        this.selectedRooms.add(id);
+        this.selectionCenter = id;
+        this.notifySelection();
+        return true;
+    }
+
+    /**
+     * Toggle a room in/out of the selection (Mudlet ctrl-click). Adding a
+     * room makes it the new center; removing the current center promotes the
+     * lowest remaining id as the new center (and nulls the center when the
+     * selection ends up empty).
+     */
+    toggleMapRoomSelection(id: number): boolean {
+        if (!this.rooms.has(id)) return false;
+        if (this.selectedRooms.has(id)) {
+            this.selectedRooms.delete(id);
+            if (this.selectionCenter === id) {
+                let next: number | null = null;
+                for (const r of this.selectedRooms) {
+                    if (next == null || r < next) next = r;
+                }
+                this.selectionCenter = next;
+            }
+        } else {
+            this.selectedRooms.add(id);
+            this.selectionCenter = id;
+        }
+        this.notifySelection();
+        return true;
+    }
+
+    /**
+     * Mudlet `clearMapSelection()` — wipe the selection set and the center.
+     * Returns true when something was cleared, false when the selection was
+     * already empty (so callers don't spin on a no-op notify).
+     */
+    clearMapSelection(): boolean {
+        if (this.selectedRooms.size === 0 && this.selectionCenter == null) return false;
+        this.selectedRooms.clear();
+        this.selectionCenter = null;
+        this.notifySelection();
+        return true;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
