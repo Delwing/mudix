@@ -1380,6 +1380,56 @@ export class MapStore {
         return true;
     }
 
+    /**
+     * Mudlet `addCustomLine(roomID, id_to, direction, style, color, arrow)`.
+     * `target` is either a destination room id (line drawn to that room's
+     * position, which must be in the same area) or an explicit list of
+     * `[x, y, z]` points. `style` is one of Mudlet's pen-style names
+     * ("solid line", "dot line", "dash line", "dash dot line",
+     * "dash dot dot line"). Returns false when the room/target is invalid, the
+     * areas differ, no points are supplied, or the style name is unknown.
+     */
+    addCustomLine(
+        id: number,
+        target: number | Array<[number, number, number]>,
+        direction: number | string,
+        style: string,
+        color: { r: number; g: number; b: number },
+        arrow: boolean,
+    ): boolean {
+        const room = this.rooms.get(id);
+        if (!room) return false;
+
+        let points: Array<[number, number]>;
+        if (typeof target === 'number') {
+            const to = this.rooms.get(target);
+            if (!to || to.area !== room.area) return false;
+            points = [[to.x, to.y]];
+        } else {
+            if (!Array.isArray(target) || target.length === 0) return false;
+            points = target.map(p => [Number(p[0]), Number(p[1])] as [number, number]);
+        }
+
+        const styleNum = Number(
+            Object.keys(PEN_STYLE_NAMES).find(k => PEN_STYLE_NAMES[Number(k)] === style),
+        );
+        if (!styleNum) return false;
+
+        // Resolve the direction key the same way removeCustomLine reads it:
+        // a stock direction → its canonical long name; anything else (a
+        // special-exit command) → the raw string.
+        const dirInt = parseDirection(direction);
+        const key = dirInt != null ? DIR_FIELD[dirInt] : String(direction);
+        if (!key) return false;
+
+        room.customLines[key] = points;
+        room.customLinesColor[key] = { spec: 1, alpha: 255, r: color.r, g: color.g, b: color.b };
+        room.customLinesStyle[key] = styleNum;
+        room.customLinesArrow[key] = arrow;
+        this.notify();
+        return true;
+    }
+
     // ── Doors ─────────────────────────────────────────────────────────────────
 
     getDoors(id: number): Record<string, number> {

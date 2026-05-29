@@ -14,6 +14,7 @@ import {encodeRowsToLuaSource} from './sqlRowEncoder';
 import YAJL_LUA from './Yajl.lua?raw';
 import {setupRex} from './rex';
 import {setupYajl, type LuaValueTransform} from './yajl';
+import {parseImageSize} from './imageSize';
 import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
 import {QT_CURSOR_NAME_TO_INT, QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
 import {qtKeyToDomCode, qtModifiersToList} from '../../mud/keybindings/qtKeys';
@@ -299,6 +300,19 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('getProfileIcon', () => this.api.getProfileIcon());
         this.lua.global.set('resetProfileIcon', () => this.api.resetProfileIcon());
+
+        // Mudlet getImageSize(path) → width, height (or nil). We parse the
+        // dimensions straight out of the VFS file's header (synchronous, unlike
+        // new Image()). Returns a 0-indexed [w, h] array; Bridge.lua unpacks it.
+        this.lua.global.set('__getImageSize', (path: unknown) => {
+            const p = String(path ?? '');
+            if (!p || !this.vfs) return false;
+            let bytes: Uint8Array;
+            try { bytes = this.vfs.readBinaryFile(p); }
+            catch { return false; }
+            const size = parseImageSize(bytes);
+            return size ? [size.width, size.height] : false;
+        });
 
         // Mudlet holdingModifiers(number) — exact match against the held
         // keyboard modifiers (Qt bitmask, as in mudlet.keymodifier).
@@ -795,6 +809,20 @@ export class LuaRuntime implements IScriptingRuntime {
         // getLabelFormat consumer which only branches on the empty string.
         this.lua.global.set('getLabelStyleSheet', (name: unknown) =>
             this.api.labels.getStyleSheet(typeof name === 'string' ? name : '') ?? '');
+        // Mudlet setLinkStyle(labelName, linkColor, linkVisitedColor [, underline]).
+        // underline defaults to true (matching Mudlet's TLabel). Colors are any
+        // CSS color string; "" leaves that channel at the default.
+        this.lua.global.set('setLinkStyle', (
+            name: unknown, color?: unknown, visited?: unknown, underline?: unknown,
+        ) => this.api.labels.setLinkStyle(
+            String(name ?? ''),
+            color == null ? '' : String(color),
+            visited == null ? '' : String(visited),
+            underline === undefined ? true : !!underline,
+        ));
+        // Mudlet resetLinkStyle(labelName) — clears a setLinkStyle override.
+        this.lua.global.set('resetLinkStyle', (name: unknown) =>
+            this.api.labels.resetLinkStyle(String(name ?? '')));
         // Mudlet getLabelSizeHint(name) → width, height. JS hands back a 0-indexed
         // [w, h] array (wasmoon convention) or false (no such label); Bridge.lua
         // unpacks it into the documented multi-return / (nil, errMsg) shape.
@@ -1475,6 +1503,34 @@ export class LuaRuntime implements IScriptingRuntime {
             else { const s = String(dir ?? ''); d = /^-?\d+$/.test(s.trim()) ? Number(s) : s; }
             return this.api.map.removeCustomLine(Number(id), d);
         });
+        // Mudlet addCustomLine(roomID, id_to, direction, style, color, arrow).
+        // Bridge.lua flattens the table args (the {points} list and {r,g,b}
+        // color) since wasmoon's table proxy doesn't iterate reliably from JS:
+        //   target = "R:<toId>"  OR  "P:x,y,z;x,y,z;..."  (P: with no points → "")
+        // direction arrives as a string; a numeric direction is coerced back so
+        // MapStore's parseDirection recognizes it.
+        this.lua.global.set('__mudix_addCustomLine', (
+            id: unknown, targetStr: unknown, direction: unknown, style: unknown,
+            r: unknown, g: unknown, b: unknown, arrow: unknown,
+        ) => {
+            const ts = String(targetStr ?? '');
+            let target: number | Array<[number, number, number]>;
+            if (ts.startsWith('R:')) {
+                target = Number(ts.slice(2));
+            } else {
+                const body = ts.startsWith('P:') ? ts.slice(2) : ts;
+                target = body.split(';').filter(Boolean).map(seg => {
+                    const [x, y, z] = seg.split(',').map(Number);
+                    return [x, y, z ?? 0] as [number, number, number];
+                });
+            }
+            const ds = String(direction ?? '');
+            const dir: number | string = /^-?\d+$/.test(ds.trim()) ? Number(ds) : ds;
+            return this.api.map.addCustomLine(
+                Number(id), target, dir, String(style ?? ''),
+                { r: Number(r), g: Number(g), b: Number(b) }, !!arrow,
+            );
+        });
         // Mudlet getExitStubsNames(roomID) → 1-indexed direction-name list (or
         // (false, errMsg) when the room is missing). Bridge.lua re-indexes.
         this.lua.global.set('__getExitStubsNames', (id: unknown) => this.api.map.getExitStubsNames(Number(id)) ?? null);
@@ -2054,6 +2110,9 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet `feedTelnet(data)`: inject raw server bytes into the inbound
         // pipeline as if received from the MUD.
         this.lua.global.set('feedTelnet', (data: unknown) => { this.api.feedTelnet(String(data ?? '')); });
+        // Mudlet `receiveMSP(text)`: parse an MSP payload and dispatch its
+        // sound/music commands as if the server had sent them.
+        this.lua.global.set('receiveMSP', (data: unknown) => this.api.receiveMSP(String(data ?? '')));
         // Mudlet `disconnect()`: drop the current connection.
         this.lua.global.set('disconnect', () => { this.api.disconnect(); });
         // Mudlet `closeMudlet()`: mudix closes the active profile — disconnect
@@ -2212,6 +2271,37 @@ export class LuaRuntime implements IScriptingRuntime {
             const out: Record<string, unknown> = {};
             for (const e of this.api.cmdLineMenu.list()) {
                 out[e.uniqueName] = { event: e.eventName, display: e.displayName };
+            }
+            return out;
+        });
+
+        // Mudlet addMouseEvent(uniqueName, eventName [, displayName [, tooltip]]).
+        // Registers a custom entry in the main output area's right-click menu;
+        // clicking it raises eventName. Returns true, or false when the name is
+        // empty or already registered (Mudlet warns + returns nil there).
+        this.api.mouseEvents.setDispatcher((event, args) => this.emitEvent(event, args));
+        this.lua.global.set('addMouseEvent', (
+            uniqueName: unknown, eventName: unknown, displayName?: unknown, tooltip?: unknown,
+        ) => this.api.mouseEvents.add(
+            String(uniqueName ?? ''),
+            String(eventName ?? ''),
+            displayName !== undefined ? String(displayName) : undefined,
+            tooltip !== undefined ? String(tooltip) : undefined,
+        ));
+        // Mudlet removeMouseEvent(uniqueName). Mudlet returns nothing; we return
+        // a boolean for parity with the rest of the registry API.
+        this.lua.global.set('removeMouseEvent', (uniqueName: unknown) =>
+            this.api.mouseEvents.remove(String(uniqueName ?? '')));
+        // Mudlet getMouseEvents() →
+        //   { [uniqueName] = { ["event name"], ["display name"], ["tooltip text"] } }
+        this.lua.global.set('getMouseEvents', () => {
+            const out: Record<string, unknown> = {};
+            for (const e of this.api.mouseEvents.list()) {
+                out[e.uniqueName] = {
+                    'event name': e.eventName,
+                    'display name': e.displayName,
+                    'tooltip text': e.tooltip,
+                };
             }
             return out;
         });
@@ -2597,6 +2687,13 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet getWindowWrap(windowName) → wrap columns (0 unset, -1 missing).
         this.lua.global.set('getWindowWrap', (name: unknown) =>
             this.api.getWindowWrap(typeof name === 'string' ? name : 'main'));
+        // Mudlet setWindowWrapIndent(windowName, indentSize) — indent of
+        // newline-started lines. setWindowWrapHangingIndent — indent of wrapped
+        // continuation lines. Number() because regex captures arrive as strings.
+        this.lua.global.set('setWindowWrapIndent', (name: unknown, indent: unknown) =>
+            this.api.setWindowWrapIndent(typeof name === 'string' ? name : 'main', Number(indent)));
+        this.lua.global.set('setWindowWrapHangingIndent', (name: unknown, indent: unknown) =>
+            this.api.setWindowWrapHangingIndent(typeof name === 'string' ? name : 'main', Number(indent)));
         // Mudlet setMapWindowTitle(title) — empty title resets to the default.
         this.lua.global.set('setMapWindowTitle', (title: unknown) =>
             this.api.setMapWindowTitle(String(title ?? '')));

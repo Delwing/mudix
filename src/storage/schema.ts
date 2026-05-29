@@ -66,6 +66,10 @@ export interface ProfileSettings {
     outputFont?: OutputFontSource;
     /** Mudlet setWindowWrap("main", N). 0/undefined disables character-based wrap. */
     outputWrapAt?: number;
+    /** Mudlet setWindowWrapIndent("main", N). Indent (chars) of newline-started lines. */
+    outputWrapIndent?: number;
+    /** Mudlet setWindowWrapHangingIndent("main", N). Indent (chars) of wrapped continuation lines. */
+    outputWrapHangingIndent?: number;
     /** Mudlet setBackgroundColor for the main window. rgba 0..255. Takes precedence over outputBackground when set. */
     outputBackgroundColor?: { r: number; g: number; b: number; a: number };
     /** Mudlet setBackgroundImage for the main window. `url` is the resolved

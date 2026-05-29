@@ -51,6 +51,10 @@ export interface WindowOpenOptions {
     fontFamily?: string;
     /** Character-column wrap width (Mudlet setWindowWrap). 0/undefined disables. */
     wrapAt?: number;
+    /** Indent (in characters) of newline-started lines (Mudlet setWindowWrapIndent). */
+    wrapIndent?: number;
+    /** Indent (in characters) of wrapped continuation lines (Mudlet setWindowWrapHangingIndent). */
+    wrapHangingIndent?: number;
     /** Window background fill (Mudlet setBackgroundColor). rgba 0..255. */
     backgroundColor?: { r: number; g: number; b: number; a: number };
     /** Mudlet setBackgroundImage. `url` is a resolved href for modes 1-3 or the
@@ -96,6 +100,8 @@ export interface ScriptWindowRenderData {
     fontSize?: number;
     fontFamily?: string;
     wrapAt?: number;
+    wrapIndent?: number;
+    wrapHangingIndent?: number;
     backgroundColor?: { r: number; g: number; b: number; a: number };
     backgroundImage?: { url: string; mode: number };
     /** For miniconsoles created with a parent userwindow — see WindowOpenOptions.parent. */

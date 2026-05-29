@@ -12,6 +12,7 @@ import { AnsiAwareBuffer, type FormatColor, type FormatStateSnapshot, type Forma
 import { namedColorToState } from '../mud/text/colorParsers';
 import { colorCodes } from '../mud/text/colors';
 import { Console } from '../mud/text/Console';
+import { MspParser } from '../mud/protocol';
 import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
 import { getHeldModifiers } from './heldModifiers';
 import { useAppStore, selectProfileField, connectionUrl } from '../storage';
@@ -307,6 +308,12 @@ class ScriptingLabelsAPI {
     getStyleSheet(name: string): string | undefined {
         return this.manager.getStyleSheet(name);
     }
+    setLinkStyle(name: string, color: string, visitedColor: string, underline: boolean): boolean {
+        return this.manager.setLinkStyle(name, color, visitedColor, underline);
+    }
+    resetLinkStyle(name: string): boolean {
+        return this.manager.resetLinkStyle(name);
+    }
     getSizeHint(name: string): { width: number; height: number } | null {
         return this.manager.getSizeHint(name);
     }
@@ -554,6 +561,18 @@ export class ScriptingAPI {
      *  triggers → render). */
     feedTelnet(data: string): void {
         this.session.feedTelnet(data);
+    }
+
+    /** Mudlet `receiveMSP(text)`. Parses an MSP payload (`!!SOUND(...)` /
+     *  `!!MUSIC(...)` tags) as if the server had sent it and dispatches the
+     *  resulting sound/music commands through the normal `msp` event path
+     *  (SoundManager). Returns true when at least one command was parsed. */
+    receiveMSP(payload: string): boolean {
+        const text = String(payload ?? '');
+        if (!text) return false;
+        const { commands } = new MspParser().feed(text);
+        for (const cmd of commands) this.session.events.emit('msp', cmd);
+        return commands.length > 0;
     }
 
     /** Mudlet `sendATCP(message)`. Frames + sends an ATCP (telnet 200)
@@ -2000,6 +2019,36 @@ export class ScriptingAPI {
     }
 
     /**
+     * Mudlet `setWindowWrapIndent(name, indent)`. Sets the indent (in
+     * characters) applied to newline-started lines in the named window or
+     * "main". Returns false when the named window does not exist.
+     */
+    setWindowWrapIndent(name: string, indent: number): boolean {
+        if (!Number.isFinite(indent)) return false;
+        const v = Math.max(0, Math.round(indent));
+        if (!name || name === 'main') {
+            useAppStore.getState().patchConnectionProfile(this.connectionId, { outputWrapIndent: v > 0 ? v : undefined });
+            return true;
+        }
+        return this.session.windows.setWrapIndent(name, v);
+    }
+
+    /**
+     * Mudlet `setWindowWrapHangingIndent(name, indent)`. Sets the indent (in
+     * characters) applied to wrapped continuation lines in the named window or
+     * "main". Returns false when the named window does not exist.
+     */
+    setWindowWrapHangingIndent(name: string, indent: number): boolean {
+        if (!Number.isFinite(indent)) return false;
+        const v = Math.max(0, Math.round(indent));
+        if (!name || name === 'main') {
+            useAppStore.getState().patchConnectionProfile(this.connectionId, { outputWrapHangingIndent: v > 0 ? v : undefined });
+            return true;
+        }
+        return this.session.windows.setWrapHangingIndent(name, v);
+    }
+
+    /**
      * Mudlet `setMapWindowTitle(title)`. Sets the dockable map panel's tab
      * title; an empty string resets it to the default ("Map"). Returns false
      * when the map widget isn't open.
@@ -2575,6 +2624,8 @@ export class ScriptingAPI {
     get map() { return this.session.windows.mapStore; }
 
     get cmdLineMenu() { return this.session.cmdLineMenu; }
+
+    get mouseEvents() { return this.session.mouseEvents; }
 
     get sounds() { return this.session.sounds; }
 

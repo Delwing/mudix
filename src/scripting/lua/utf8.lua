@@ -1079,4 +1079,237 @@ function M.rep()
 	return rep(s)
 end
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- luautf8 (starwing) extensions. Mudlet ships luautf8, so scripts and packages
+-- expect these on top of the Stepets base above. Implemented in pure Lua over
+-- the helpers already defined in this file (utf8charbytes / utf8len / utf8sub /
+-- utf8unicode / utf8char). Signatures follow the luautf8 documentation.
+--
+-- Limitations vs the C library (documented so callers know what to expect):
+--   • Case folding (fold / ncasecmp) uses Lua's byte-wise lower-casing, so it is
+--     exact for ASCII and a no-op elsewhere — fine for the common MUD case
+--     without bundling the full Unicode CaseFolding table.
+--   • Display width (width / widthindex) ports Markus Kuhn's wcwidth ranges
+--     (zero-width combining marks → 0, East-Asian wide/fullwidth → 2, else 1).
+--     The East-Asian "ambiguous" class isn't tabulated, so `ambi_is_double` is
+--     accepted but treated as width 1.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+local concat = table.concat
+local mfloor = math.floor
+
+-- byte position (1-based) of the n-th character of s. When `base` is a byte
+-- offset > 0, the character starting at `base` counts as number 1; otherwise
+-- counting starts from the first character. n may be negative (from the end).
+-- Returns the byte offset, or nil when out of range.
+local function resolveCharByte(s, base, n)
+	local nbytes = len(s)
+	if n < 0 then
+		n = utf8len(s) + 1 + n
+		base = 1
+	end
+	if n < 1 then return nil end
+	local pos = (base and base > 0) and base or 1
+	local count = 1
+	while count < n do
+		pos = pos + utf8charbytes(s, pos)
+		if pos > nbytes then return nil end
+		count = count + 1
+	end
+	if pos > nbytes then return nil end
+	return pos
+end
+
+-- utf8.charpos(s [[, i], n]): byte offset (and codepoint) of the n-th character.
+-- 2-arg form charpos(s, n) counts from the start; 3-arg charpos(s, i, n) counts
+-- from byte offset i. Negative n counts from the end.
+function M.charpos(s, i, n)
+	if n == nil then n, i = i or 1, nil end
+	local pos = resolveCharByte(s, i, n)
+	if not pos then return nil end
+	return pos, (utf8unicode(s, 1, 1, pos))
+end
+
+-- utf8.next(s [, i [, n]]): advance n characters (default 1) from byte offset i
+-- (default 0 = before the string). Returns the byte offset and codepoint of the
+-- landed character, or nil past either end. Usable as a stateless iterator:
+--   for pos, code in utf8.next, s do ... end
+function M.next(s, i, n)
+	i = i or 0
+	n = n or 1
+	local nbytes = len(s)
+	local pos
+	if i < 1 then pos, n = 1, n - 1 else pos = i end
+	while n > 0 do
+		pos = pos + utf8charbytes(s, pos)
+		n = n - 1
+		if pos > nbytes then return nil end
+	end
+	while n < 0 do
+		if pos <= 1 then return nil end
+		pos = pos - 1
+		while pos > 1 and byte(s, pos) >= 0x80 and byte(s, pos) <= 0xBF do
+			pos = pos - 1
+		end
+		n = n + 1
+	end
+	if pos < 1 or pos > nbytes then return nil end
+	return pos, (utf8unicode(s, 1, 1, pos))
+end
+
+-- utf8.insert(s [, n], substring): insert substring before the n-th character
+-- (default: append). n may be negative.
+function M.insert(s, n, substring)
+	if substring == nil then substring, n = n, nil end
+	substring = tostring(substring)
+	if n == nil then return s .. substring end
+	local total = utf8len(s)
+	if n < 0 then n = total + 1 + n end
+	if n < 1 then n = 1 end
+	if n > total then return s .. substring end
+	return utf8sub(s, 1, n - 1) .. substring .. utf8sub(s, n)
+end
+
+-- utf8.remove(s [, i [, j]]): delete characters i..j (inclusive). No range:
+-- drop the last character. Only i: delete from i to the end. Negative indices
+-- count from the end.
+function M.remove(s, i, j)
+	local total = utf8len(s)
+	if i == nil then
+		i, j = total, total
+	elseif j == nil then
+		j = total
+	end
+	if i < 0 then i = total + 1 + i end
+	if j < 0 then j = total + 1 + j end
+	if i < 1 then i = 1 end
+	if j > total then j = total end
+	if i > j then return s end
+	return utf8sub(s, 1, i - 1) .. utf8sub(s, j + 1)
+end
+
+-- utf8.escape(s): expand escape sequences into UTF-8. Recognises %ddd / %{ddd}
+-- (decimal), %xhhh / %x{hhh} and %uhhh / %u{hhh} (hex), and %<char> (literal).
+function M.escape(s)
+	s = tostring(s)
+	local out, i, n = {}, 1, len(s)
+	while i <= n do
+		if sub(s, i, i) == '%' and i < n then
+			local p = sub(s, i + 1, i + 1)
+			local base, j = 10, i + 1
+			if p == 'x' or p == 'X' or p == 'u' or p == 'U' then
+				base, j = 16, i + 2
+			end
+			local digits
+			if sub(s, j, j) == '{' then
+				local close = find(s, '}', j + 1, true)
+				if close then
+					digits = sub(s, j + 1, close - 1)
+					j = close + 1
+				end
+			else
+				local d = s:match(base == 16 and '^%x+' or '^%d+', j)
+				if d then digits, j = d, j + len(d) end
+			end
+			local cp = digits and tonumber(digits, base) or nil
+			if cp then
+				out[#out + 1] = utf8char(cp)
+				i = j
+			else
+				-- %<char>: emit the escaped character literally
+				out[#out + 1] = sub(s, i + 1, i + 1)
+				i = i + 2
+			end
+		else
+			out[#out + 1] = sub(s, i, i)
+			i = i + 1
+		end
+	end
+	return concat(out)
+end
+
+-- utf8.fold(s): case-fold for case-insensitive comparison. A number is treated
+-- as a codepoint and the folded codepoint is returned. ASCII-only (see header).
+function M.fold(s)
+	if type(s) == 'number' then
+		if s >= 65 and s <= 90 then return s + 32 end
+		return s
+	end
+	return lower(s)
+end
+
+-- utf8.ncasecmp(a, b): case-insensitive compare → -1 / 0 / 1.
+function M.ncasecmp(a, b)
+	a, b = M.fold(tostring(a)), M.fold(tostring(b))
+	if a == b then return 0 end
+	if a < b then return -1 end
+	return 1
+end
+
+-- wcwidth tables (Markus Kuhn). Sorted, non-overlapping; binary-searched.
+local zero_ranges = {
+	{0x0300, 0x036F}, {0x0483, 0x0489}, {0x0591, 0x05BD}, {0x0610, 0x061A},
+	{0x064B, 0x065F}, {0x0670, 0x0670}, {0x06D6, 0x06DC}, {0x0E31, 0x0E31},
+	{0x0E34, 0x0E3A}, {0x0EB1, 0x0EB1}, {0x1AB0, 0x1AFF}, {0x1DC0, 0x1DFF},
+	{0x200B, 0x200F}, {0x202A, 0x202E}, {0x2060, 0x2063}, {0x20D0, 0x20FF},
+	{0xFE00, 0xFE0F}, {0xFE20, 0xFE2F}, {0xFEFF, 0xFEFF},
+}
+local wide_ranges = {
+	{0x1100, 0x115F}, {0x2329, 0x232A}, {0x2E80, 0x303E}, {0x3041, 0x33FF},
+	{0x3400, 0x4DBF}, {0x4E00, 0x9FFF}, {0xA000, 0xA4CF}, {0xAC00, 0xD7A3},
+	{0xF900, 0xFAFF}, {0xFE10, 0xFE19}, {0xFE30, 0xFE6F}, {0xFF00, 0xFF60},
+	{0xFFE0, 0xFFE6}, {0x20000, 0x2FFFD}, {0x30000, 0x3FFFD},
+}
+
+local function inRanges(cp, ranges)
+	local lo, hi = 1, #ranges
+	while lo <= hi do
+		local mid = mfloor((lo + hi) / 2)
+		local r = ranges[mid]
+		if cp < r[1] then hi = mid - 1
+		elseif cp > r[2] then lo = mid + 1
+		else return true end
+	end
+	return false
+end
+
+local function codeWidth(cp, default)
+	if cp == 0 then return 0 end
+	if cp < 32 or (cp >= 0x7F and cp < 0xA0) then return default end
+	if inRanges(cp, zero_ranges) then return 0 end
+	if inRanges(cp, wide_ranges) then return 2 end
+	return 1
+end
+
+-- utf8.width(s [, ambi_is_double [, default_width]]): display width in columns.
+-- A number is treated as a single codepoint. `ambi_is_double` is accepted for
+-- compatibility (see header). `default_width` is used for unprintable chars
+-- (default 1).
+function M.width(s, _ambi, default)
+	default = default or 1
+	if type(s) == 'number' then return codeWidth(s, default) end
+	local w, pos, nbytes = 0, 1, len(s)
+	while pos <= nbytes do
+		w = w + codeWidth(utf8unicode(s, 1, 1, pos), default)
+		pos = pos + utf8charbytes(s, pos)
+	end
+	return w
+end
+
+-- utf8.widthindex(s, location [, ambi_is_double [, default_width]]): inverse of
+-- width — the character index at display column `location`. Returns the 1-based
+-- character index, the column offset into that character, and its width.
+function M.widthindex(s, location, _ambi, default)
+	default = default or 1
+	local w, pos, idx, nbytes = 0, 1, 1, len(s)
+	while pos <= nbytes do
+		local cw = codeWidth(utf8unicode(s, 1, 1, pos), default)
+		if w + cw >= location then return idx, location - w, cw end
+		w = w + cw
+		pos = pos + utf8charbytes(s, pos)
+		idx = idx + 1
+	end
+	return idx, location - w, 0
+end
+
 return M

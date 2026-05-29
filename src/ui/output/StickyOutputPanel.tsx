@@ -23,13 +23,15 @@ interface StickyOutputPanelProps {
     fontSize?: number;
     fontFamily?: string;
     wrapAt?: number;
+    wrapIndent?: number;
+    wrapHangingIndent?: number;
 }
 
 export function StickyOutputPanel({
     outputRef, sentinelRef, stickyAreaRef,
     isSplitView, scrollToBottom,
     background, backgroundExtra, foreground, showTimestamps, onToggleTimestamps,
-    commandInputRef, className, fontSize, fontFamily, wrapAt,
+    commandInputRef, className, fontSize, fontFamily, wrapAt, wrapIndent, wrapHangingIndent,
 }: StickyOutputPanelProps) {
     const [stickyHeight, setStickyHeight] = useState(DEFAULT_STICKY_HEIGHT);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -98,13 +100,24 @@ export function StickyOutputPanel({
 
     const containerClass = ['output-container', className].filter(Boolean).join(' ');
 
-    const wrapStyle: React.CSSProperties | undefined = (background || backgroundExtra || foreground || fontSize || fontFamily || (wrapAt && wrapAt > 0)) ? {
+    // Mudlet wrap indents: continuation lines are indented by wrapHangingIndent
+    // (CSS padding-left), and newline-started lines by wrapIndent — expressed
+    // relative to the continuation indent via text-indent.
+    const indent = wrapIndent ?? 0;
+    const hanging = wrapHangingIndent ?? 0;
+    const indentStyle: React.CSSProperties = (indent > 0 || hanging > 0) ? {
+        ['--wrap-hanging' as string]: `${hanging}ch`,
+        ['--wrap-indent' as string]: `${indent - hanging}ch`,
+    } : {};
+
+    const wrapStyle: React.CSSProperties | undefined = (background || backgroundExtra || foreground || fontSize || fontFamily || (wrapAt && wrapAt > 0) || indent > 0 || hanging > 0) ? {
         ...(background ? { background } : {}),
         ...(backgroundExtra ?? {}),
         ...(foreground ? { color: foreground } : {}),
         ...(fontSize ? { fontSize: `${fontSize}pt` } : {}),
         ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),
         ...(wrapAt && wrapAt > 0 ? { ['--wrap-cols' as string]: `${wrapAt}ch` } : {}),
+        ...indentStyle,
     } : undefined;
 
     return (
@@ -137,6 +150,7 @@ export function StickyOutputPanel({
                     ...(fontSize ? { fontSize: `${fontSize}pt` } : {}),
                     ...(fontFamily ? { fontFamily: `${fontFamily}, monospace` } : {}),
                     ...(wrapAt && wrapAt > 0 ? { ['--wrap-cols' as string]: `${wrapAt}ch` } : {}),
+                    ...indentStyle,
                 }}
             >
                 <div className="output-sticky-content" ref={stickyAreaRef} />

@@ -1081,6 +1081,11 @@ html, body, #root {
     flex: 1;
     min-width: 0;
     max-width: var(--wrap-cols, none);
+    /* Mudlet setWindowWrapIndent / setWindowWrapHangingIndent: continuation
+       lines indent by --wrap-hanging (padding-left); newline-started lines get
+       an extra --wrap-indent offset via text-indent. Both default to 0. */
+    padding-left: var(--wrap-hanging, 0);
+    text-indent: var(--wrap-indent, 0);
 }
 
 .output-msg-content span {

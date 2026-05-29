@@ -237,6 +237,8 @@ export class WindowManager {
             win.fontSize        = hint.fontSize;
             win.fontFamily      = hint.fontFamily;
             win.wrapAt          = hint.wrapAt;
+            win.wrapIndent      = hint.wrapIndent;
+            win.wrapHangingIndent = hint.wrapHangingIndent;
             win.backgroundColor = hint.backgroundColor;
             win.backgroundImage = hint.backgroundImage;
 
@@ -983,6 +985,30 @@ export class WindowManager {
         return win?.wrapAt ?? null;
     }
 
+    /** Mudlet setWindowWrapIndent — indent (in characters) of newline-started
+     *  lines. 0 (or negative) clears the override. */
+    setWrapIndent(id: string, indent: number): boolean {
+        const win = this.windows.get(id);
+        if (!win || !Number.isFinite(indent)) return false;
+        const v = Math.round(indent);
+        win.wrapIndent = v > 0 ? v : undefined;
+        this.notify();
+        this.saveHint(id, win);
+        return true;
+    }
+
+    /** Mudlet setWindowWrapHangingIndent — indent (in characters) of wrapped
+     *  continuation lines. 0 (or negative) clears the override. */
+    setWrapHangingIndent(id: string, indent: number): boolean {
+        const win = this.windows.get(id);
+        if (!win || !Number.isFinite(indent)) return false;
+        const v = Math.round(indent);
+        win.wrapHangingIndent = v > 0 ? v : undefined;
+        this.notify();
+        this.saveHint(id, win);
+        return true;
+    }
+
     // ── Scrollbar / scrolling ─────────────────────────────────────────────────
 
     /** Mudlet enable/disableScrollBar — toggle the vertical scrollbar's visibility
@@ -1582,6 +1608,8 @@ export class WindowManager {
             fontSize: hint?.fontSize,
             fontFamily: hint?.fontFamily,
             wrapAt: hint?.wrapAt,
+            wrapIndent: hint?.wrapIndent,
+            wrapHangingIndent: hint?.wrapHangingIndent,
             backgroundColor: hint?.backgroundColor,
             backgroundImage: hint?.backgroundImage,
             parent: options.parent,
@@ -1769,10 +1797,10 @@ export class WindowManager {
 
     private notify(): void {
         const arr = [...this.windows.values()]
-            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent, lockFloating, poppedOut, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }) => ({
+            .map(({ id, title, kind, visible, x, y, width, height, zIndex, docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex, fontSize, fontFamily, wrapAt, wrapIndent, wrapHangingIndent, backgroundColor, backgroundImage, parent, lockFloating, poppedOut, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }) => ({
                 id, title, kind, visible, x, y, width, height, zIndex,
                 docked, dockOrder, dockFlex, dockGroup, tabOrder, splitGroup, splitOrder, splitFlex,
-                fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, parent, lockFloating, poppedOut,
+                fontSize, fontFamily, wrapAt, wrapIndent, wrapHangingIndent, backgroundColor, backgroundImage, parent, lockFloating, poppedOut,
                 cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq,
                 isActiveTab: dockGroup ? this.activeTabGroups.get(dockGroup) === id : undefined,
             }))
@@ -1794,6 +1822,8 @@ export class WindowManager {
             fontSize:  win.fontSize,
             fontFamily: win.fontFamily,
             wrapAt:    win.wrapAt,
+            wrapIndent: win.wrapIndent,
+            wrapHangingIndent: win.wrapHangingIndent,
             backgroundColor: win.backgroundColor,
             backgroundImage: win.backgroundImage,
             lockFloating: win.lockFloating,

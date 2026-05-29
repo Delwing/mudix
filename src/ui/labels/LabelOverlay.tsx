@@ -85,6 +85,27 @@ function Label({ l }: { l: LabelState }) {
         return () => { document.getElementById(id)?.remove(); };
     }, [l.styleSheet, l.name]);
 
+    // Mudlet setLinkStyle: color/underline the <a> links in the label's HTML.
+    // Scoped via the same data-attribute selector as the stylesheet block.
+    const linkStyle = l.linkStyle;
+    useEffect(() => {
+        if (!linkStyle) return;
+        const id = `mudix-label-linkstyle--${l.name}`;
+        let el = document.getElementById(id) as HTMLStyleElement | null;
+        if (!el) {
+            el = document.createElement('style');
+            el.id = id;
+            document.head.appendChild(el);
+        }
+        const sel = `[data-mudix-label="${cssEscape(l.name)}"] a`;
+        const decl: string[] = [`text-decoration: ${linkStyle.underline ? 'underline' : 'none'}`];
+        if (linkStyle.color) decl.push(`color: ${linkStyle.color}`);
+        el.textContent =
+            `${sel} { ${decl.join('; ')} }` +
+            (linkStyle.visitedColor ? `\n${sel}:visited { color: ${linkStyle.visitedColor} }` : '');
+        return () => { document.getElementById(id)?.remove(); };
+    }, [linkStyle, l.name]);
+
     if (!l.visible) return null;
 
     let left = l.x, top = l.y, width = l.width, height = l.height;

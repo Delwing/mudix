@@ -6,6 +6,7 @@ import { ScrollBoxManager } from '../ui/scrollbox/ScrollBoxManager';
 import { SoundManager } from '../ui/sound/SoundManager';
 import { VideoManager } from '../ui/video/VideoManager';
 import { CmdLineMenuRegistry } from '../ui/CmdLineMenuRegistry';
+import { MouseEventRegistry } from '../ui/MouseEventRegistry';
 import { MudClient, type MudClientOptions, SUPPORTED_SERVER_ENCODINGS } from './connection/MudClient';
 import { PingTracker } from './connection/PingTracker';
 import { type MudClientEvents, type MudEvents, type SessionStatus } from './events';
@@ -40,6 +41,7 @@ export class MudSession {
     readonly sounds = new SoundManager();
     readonly videos = new VideoManager();
     readonly cmdLineMenu = new CmdLineMenuRegistry();
+    readonly mouseEvents = new MouseEventRegistry();
     /** Per-window Console instances. 'main' registered by ScriptingAPI; named windows by WindowManager. */
     readonly consoles = new Map<string, Console>();
     private client: MudClient | null = null;

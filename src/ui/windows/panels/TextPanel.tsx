@@ -21,6 +21,8 @@ interface TextPanelProps {
     fontSize?: number;
     fontFamily?: string;
     wrapAt?: number;
+    wrapIndent?: number;
+    wrapHangingIndent?: number;
     backgroundColor?: { r: number; g: number; b: number; a: number };
     backgroundImage?: { url: string; mode: number };
     cmdLineEnabled?: boolean;
@@ -29,7 +31,7 @@ interface TextPanelProps {
     cmdLineValueSeq?: number;
 }
 
-export function TextPanel({ id, manager, labels, cmdLines, scrollBoxes, fontSize, fontFamily, wrapAt, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: TextPanelProps) {
+export function TextPanel({ id, manager, labels, cmdLines, scrollBoxes, fontSize, fontFamily, wrapAt, wrapIndent, wrapHangingIndent, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: TextPanelProps) {
     const viewportRef = useRef<HTMLDivElement>(null);
     const { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom, controls } =
         useStickyOutput(null, { stickyLines: 50 });
@@ -64,6 +66,8 @@ export function TextPanel({ id, manager, labels, cmdLines, scrollBoxes, fontSize
             fontSize={fontSize}
             fontFamily={fontFamily}
             wrapAt={wrapAt}
+            wrapIndent={wrapIndent}
+            wrapHangingIndent={wrapHangingIndent}
             background={background}
             backgroundExtra={backgroundExtra}
         />

@@ -137,7 +137,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | Function | Status | Notes |
 |---|---|---|
 | `addAreaName(name)` | ✅ | Bridge.lua |
-| `addCustomLine(roomID, toID, direction, style, color, arrow)` | 🚧 | Programmatic custom-line editing not wired |
+| `addCustomLine(roomID, toID, direction, style, color, arrow)` | ✅ | `MapStore.addCustomLine` — `toID` is a target room id (same area) or a `{ {x,y,z}, … }` point list. `style` is a Mudlet pen-style name; Bridge.lua flattens the id_to/color tables to a `R:`/`P:` string + r,g,b. Round-trips through `getCustomLines`/`removeCustomLine` |
 | `addMapEvent(uniquename, event, parent, displayName, ...)` | ✅ | Map context-menu event registration |
 | `addMapMenu(name, parent, displayName)` | ✅ | Registers a submenu in the map right-click menu; `MapPanel` surfaces it as a container node so `addMapEvent` entries whose `parent` names it nest underneath. Pairs with `getMapMenus`/`removeMapMenu` |
 | `addRoom(roomID)` | ✅ | JS-exposed |
@@ -332,17 +332,17 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `pauseSounds([channel])` | ✅ | Web Audio source nodes can't truly pause — stops sources (optionally tag-filtered). Re-trigger `playSoundFile` to "resume" |
 | `pauseVideos()` | ✅ | Pauses every active `<video>` element |
 | `purgeMediaCache()` | ✅ | Drops every decoded-audio buffer; active playback unaffected |
-| `receiveMSP(payload)` | 🚧 | Inbound MSP synth not wired (MSP detection exists, dispatch doesn't) |
+| `receiveMSP(payload)` | ✅ | Parses the payload through a fresh `MspParser` and re-emits each `!!SOUND`/`!!MUSIC` command as a `msp` session event, so `ScriptingEngine.handleMspCommand` plays it through `SoundManager`. Returns true when ≥1 command parsed |
 | `registerAnonymousEventHandler(event, fn)` | ✅ | Other.lua override tracks IDs in `handlerIdsToHandlers` |
 | `registerNamedEventHandler(name, event, code)` | ✅ | IDManager.lua |
 | `reloadModule(name)` | ✅ | JS-exposed |
 | `removeFileWatch(path)` | ✅ | Stops watching a path |
-| `resetLinkStyle()` / `setLinkStyle(...)` | 🚧 | Per-profile link styling not exposed |
+| `resetLinkStyle(labelName)` / `setLinkStyle(labelName, linkColor, visitedColor[, underline])` | ✅ | Styles the `<a>` links inside a label. `LabelManager` stores the per-label `linkStyle`; `LabelOverlay` injects a `<style>` scoped via the label's `data-mudix-label` selector (`a { color; text-decoration }`, `a:visited { color }`). `underline` defaults to true |
 | `resetProfile()` | 🚧 | Profile reset utility |
 | `resumeNamedEventHandler(name)` | ✅ | IDManager.lua |
 | `saveProfile([name])` | ✅ | Bridge.lua → `__mudix_saveProfile` forces the debounced VFS flush through to IndexedDB; `(nil, errMsg)` when no VFS, else `true, path`. `name` ignored (single-profile) |
 | `setConfig(key, value)` | ✅ | JS-exposed |
-| `setMergeTables(t)` | 🚧 | Module-merge config |
+| `setMergeTables(...)` | ✅ | Pure Lua (Bridge.lua), mirroring `Host::mGMCP_merge_table_keys`. Accumulates GMCP keys (dotted, e.g. `"Char.Status"`) into `mudlet.mergeTables`; `__mudix_set_gmcp` merges those keys' incoming payloads into the existing `gmcp` sub-table instead of replacing it |
 | `setModuleInfo(name, key, value)` | ✅ | Stores a custom info field (in-memory override map) surfaced by `getModuleInfo`; always true |
 | `setModulePriority(name, n)` | ✅ | JS-exposed |
 | `setPackageInfo(name, key, value)` | ✅ | Stores a custom info field (in-memory override map) surfaced by `getPackageInfo`; always true |
@@ -359,7 +359,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `uninstallModule(name)` | ✅ | JS-exposed |
 | `uninstallPackage(name)` | ✅ | JS-exposed |
 | `unzipAsync(zipPath, destDir)` | ✅ | JS-exposed; fires `sysUnzipDone`/`sysUnzipError` |
-| `yajl.to_string` / `yajl.to_value` | 🚧 | YAJL JSON helpers — `Yajl.lua` bundled but binding not finalised |
+| `yajl.to_string` / `yajl.to_value` | ✅ | `Yajl.lua` (pure-Lua encoder) + `yajl.ts` (JS `JSON.parse` decoder with 1-indexed-array remap and a `yajl.null` sentinel). Loaded at startup via `setupYajl` |
 
 ---
 
@@ -421,7 +421,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `permRegexTrigger(name, parent, patterns, code)` | ✅ | `patterns` is a table of regex strings (empty table → creates a trigger group). Bridge.lua joins to \x01 and the JS binding splits it back |
 | `permBeginOfLineStringTrigger(name, parent, patterns, code)` | ✅ | Like `permSubstringTrigger` but each literal pattern matches only at the start of the line (`startOfLine` kind). Empty patterns array → trigger group |
 | `permSubstringTrigger(name, parent, patterns, code)` | ✅ | Each pattern is a literal substring. Empty patterns array creates a trigger group |
-| `permScript(name, parent, code)` | 🚧 | Persistent script-node constructor |
+| `permScript(name, parent, code)` | ✅ | `ScriptingEngine.createPermScript` creates a saved Lua script node under a script group (parent `""` → root). Returns the new id or -1. Bound via `__mudix_permScript` + Bridge.lua wrapper |
 | `permTimer(name, parent, delay, code)` | ✅ | Persistent one-shot timer; returns the new id or -1 |
 | `permKey(name, parent, modifier, key, code)` | ✅ | `modifier` is the Qt::KeyboardModifier int (1=shift, 2=ctrl, 4=alt, 8=meta; -1 → none). `key` accepts a Qt::Key int or a KeyboardEvent.code string |
 | `printCmdLine([name,] text)` | ✅ | Routes to overlay cmd lines, per-userwindow cmd lines, or the main bar |
@@ -431,14 +431,14 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `registerNamedTrigger(parent, name, pattern, code)` | ✅ | IDManager.lua |
 | `remainingTime(id)` | ✅ | JS-exposed |
 | `removeCmdLineSuggestion([name,] text)` | ✅ | Main bar |
-| `resetProfileIcon()` | 🚧 | |
+| `resetProfileIcon()` | ✅ | Clears `ProfileSettings.icon` so the connection screen falls back to the auto-generated name tile |
 | `resetStopWatch(id\|name)` | ✅ | Zeroes elapsed; a running watch keeps running |
 | `resumeNamedTimer(parent, name)` | ✅ | IDManager.lua |
 | `resumeNamedTrigger(parent, name)` | ✅ | IDManager.lua |
 | `setButtonState(name, state)` | ✅ | Pressed state on a two-state (push-down) button |
 | `sendCmdLine(text)` | ✅ | Set + send the main command bar |
 | `setConsoleBufferSize([window,] linesLimit [, batchSize])` | ✅ | Maps to `Console.setMaxLines` |
-| `setProfileIcon(path)` | 🚧 | |
+| `setProfileIcon(path)` | ✅ | Reads the VFS image and inlines it as a `data:` URI into `ProfileSettings.icon` so the picker screen renders it without mounting the profile VFS. `(true, path)` / `(false, errMsg)` via Bridge.lua |
 | `setProfileInformation(text)` | ✅ | Stores the profile's free-text description (`ProfileSettings.description`); the optional profile-name overload is ignored (single-profile) |
 | `setScript(name, code)` | ✅ | JS-exposed |
 | `setStopWatchName(id\|currentName, newName)` | ✅ | Empty name or duplicate name → false |
@@ -529,7 +529,7 @@ Standard Lua 5.1 string functions (`string.byte`, `string.char`, `string.find`, 
 | `string.trim(s)` | ✅ | StringUtils.lua |
 | `utf8.byte` / `utf8.char` / `utf8.find` / `utf8.gmatch` / `utf8.gsub` / `utf8.len` / `utf8.lower` / `utf8.match` / `utf8.reverse` / `utf8.sub` / `utf8.upper` | ✅ | Bundled `utf8.lua` (Stepets) exposed as the `utf8` global |
 | `utf8.patternEscape` / `utf8.title` | ✅ | StringUtils.lua. `patternEscape` escapes Lua-pattern magic chars (function replacement — the bundled `utf8.gsub` drops table-replacement misses); `title` uppercases the first code point |
-| `utf8.charpos` / `utf8.escape` / `utf8.fold` / `utf8.insert` / `utf8.ncasecmp` / `utf8.next` / `utf8.remove` / `utf8.width` / `utf8.widthindex` | 🚧 | Mudlet extensions (luautf8 surface) |
+| `utf8.charpos` / `utf8.escape` / `utf8.fold` / `utf8.insert` / `utf8.ncasecmp` / `utf8.next` / `utf8.remove` / `utf8.width` / `utf8.widthindex` | ✅ | luautf8 (starwing) extensions ported into `utf8.lua` over the bundled Stepets helpers. `fold`/`ncasecmp` case-fold ASCII (no Unicode CaseFolding table); `width`/`widthindex` use Markus Kuhn's wcwidth ranges (combining → 0, East-Asian wide/fullwidth → 2) and accept (but don't tabulate) `ambi_is_double` |
 
 ---
 
@@ -604,7 +604,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | Function | Status | Notes |
 |---|---|---|
 | `addCommandLineMenuEvent(name, event)` | ✅ | Right-click command-line menu hook |
-| `addMouseEvent(uniquename, event, ...)` | 🚧 | Generic mouse-event registration |
+| `addMouseEvent(uniquename, event [, displayName [, tooltip]])` | ✅ | `MouseEventRegistry` (mirrors `Host::mConsoleActions`) on `MudSession`. Adds a custom entry to the main output area's right-click menu (`OutputArea` context menu); clicking raises `event`. False on a duplicate uniqueName |
 | `ansi2decho(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `ansi2string(text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `appendBuffer([window])` | ✅ | Appends the clipboard (from `copy()`) as a new line to the named console |
@@ -681,7 +681,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `getFont([window])` | ✅ | Bridge.lua → `__getFont` |
 | `getFontSize([window])` | ✅ | Bridge.lua → `__getFontSize` |
 | `getHTMLformat(text)` | ✅ | Mudlet-format → HTML serialisation |
-| `getImageSize(path)` | 🚧 | Async-only in the browser (`Image.onload`) — Mudlet's sync semantics need an async-coroutine plan |
+| `getImageSize(path)` | ✅ | Synchronous — reads dimensions straight out of the VFS file's header (`imageSize.ts` parses PNG/GIF/JPEG/BMP/WebP), no `Image.onload` decode needed. Returns `width, height` or nil; Bridge.lua unpacks the 0-indexed `[w,h]` array |
 | `getLabelFormat(name)` | ✅ | GUIUtils.lua |
 | `getLabelSizeHint(name)` | ✅ | Bridge.lua → `width, height`. Browser analogue of Qt sizeHint (rendered content extent) |
 | `getLabelStyleSheet(name)` | ✅ | Reads the CSS last set via `setLabelStyleSheet` |
@@ -690,7 +690,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `getLines([window,] from, to)` | ✅ | Bridge.lua wraps `__getLines` |
 | `getLineNumber([window])` | ✅ | JS-exposed |
 | `getMainConsoleWidth()` | ✅ | Monospace cell width × (wrap columns + 1) |
-| `getMouseEvents()` | 🚧 | Pairs with `addMouseEvent` |
+| `getMouseEvents()` | ✅ | `{ [uniqueName] = { ["event name"], ["display name"], ["tooltip text"] } }` from the `MouseEventRegistry` |
 | `getMousePosition()` | ✅ | Bridge.lua — last-seen cursor position in main viewport coords |
 | `getProfileTabNumber(name)` | ✅ | No tab UI in mudix; single-profile, so always returns 1 |
 | `getMainWindowSize()` | ✅ | Returns `window.innerWidth, window.innerHeight` |
@@ -732,7 +732,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `print(...)` | ✅ | Alias for echo |
 | `raiseWindow(name)` | ✅ | CSS `z-index` on labels via `raiseLabel`/`lowerLabel` |
 | `removeCommandLineMenuEvent(name, event)` | ✅ | Pairs with `addCommandLineMenuEvent` |
-| `removeMouseEvent(uniquename)` | 🚧 | Pairs with `addMouseEvent` |
+| `removeMouseEvent(uniquename)` | ✅ | Removes a `MouseEventRegistry` entry; pairs with `addMouseEvent` |
 | `replace(text)` | ✅ | JS-exposed |
 | `replaceAll(what, with)` | ✅ | Pure Lua sweep over the current line buffer |
 | `replaceLine(text)` | ✅ | Pure Lua via GUIUtils.lua (selectCurrentLine + replace) |
@@ -800,8 +800,8 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setUserWindowStyleSheet(name, css)` | ✅ | JS-exposed |
 | `setWindow(...)` | 🚧 | Geyser/window parent reparenting |
 | `setWindowWrap(name, col)` | ✅ | JS-exposed |
-| `setWindowWrapHangingIndent(name, n)` | 🚧 | Hanging-indent wrap mode |
-| `setWindowWrapIndent(name, n)` | 🚧 | Indent-on-wrap mode |
+| `setWindowWrapHangingIndent(name, n)` | ✅ | Indent (chars) of wrapped continuation lines. Stored on `ProfileSettings.outputWrapHangingIndent` ("main") or the `WindowManager` hint (named windows); `StickyOutputPanel` applies it as the `--wrap-hanging` CSS var (`.output-msg-content` `padding-left`). 0 clears |
+| `setWindowWrapIndent(name, n)` | ✅ | Indent (chars) of newline-started lines. Stored on `ProfileSettings.outputWrapIndent` ("main") or the `WindowManager` hint; applied via the `--wrap-indent` CSS var (`text-indent`, relative to the hanging indent). 0 clears |
 | `showCaptureGroups()` | ✅ | Pure Lua via DebugTools.lua (uses `matches`) |
 | `showColors([columns])` | ✅ | Pure Lua via GUIUtils.lua |
 | `showGauge(name)` | ✅ | Pure Lua via GUIUtils.lua |

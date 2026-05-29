@@ -33,6 +33,10 @@ export interface LabelState {
     backgroundImage?: { url: string };
     /** Qt-style CSS string set via setLabelStyleSheet; parsed at render time. */
     styleSheet?: string;
+    /** Mudlet setLinkStyle(labelName, linkColor, linkVisitedColor, underline) —
+     *  styling for `<a>` links inside the label's HTML. Cleared by
+     *  resetLinkStyle. Colors are any CSS color string (empty = leave default). */
+    linkStyle?: { color?: string; visitedColor?: string; underline: boolean };
     /** Click handler installed by setLabelClickCallback. The event table mirrors
      *  Mudlet's `mudlet.mouse_button` shape: `{button, x, y, alt, ctrl, shift, meta}`. */
     onClick?: (event: LabelMouseEvent) => void;
@@ -217,6 +221,28 @@ export class LabelManager {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
         lbl.styleSheet = css;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    /** Mudlet `setLinkStyle(labelName, linkColor, linkVisitedColor, underline)`. */
+    setLinkStyle(name: string, color: string, visitedColor: string, underline: boolean): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.linkStyle = {
+            color: color || undefined,
+            visitedColor: visitedColor || undefined,
+            underline,
+        };
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    /** Mudlet `resetLinkStyle(labelName)` — drop any setLinkStyle override. */
+    resetLinkStyle(name: string): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.linkStyle = undefined;
         this.notify(lbl.parent);
         return true;
     }

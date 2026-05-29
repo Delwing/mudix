@@ -83,6 +83,42 @@ function getMainWindowSize()
     return t[0], t[1]
 end
 
+-- Mudlet addCustomLine(roomID, id_to, direction, style, color, arrow). The
+-- id_to (target room id OR list of {x,y,z} points) and color ({r,g,b}) tables
+-- are flattened here — wasmoon's LuaTable proxy doesn't iterate reliably from
+-- JS. Encodes id_to as "R:<id>" (number) or "P:x,y,z;..." (point list).
+function addCustomLine(roomID, id_to, direction, style, color, arrow)
+    local r, g, b = 255, 0, 0
+    if type(color) == 'table' then
+        r = color[1] or color.r or r
+        g = color[2] or color.g or g
+        b = color[3] or color.b or b
+    end
+    local target
+    if type(id_to) == 'table' then
+        local pts = {}
+        for _, p in ipairs(id_to) do
+            if type(p) == 'table' then
+                pts[#pts + 1] = tostring(p[1] or 0) .. ',' .. tostring(p[2] or 0) .. ',' .. tostring(p[3] or 0)
+            end
+        end
+        target = 'P:' .. table.concat(pts, ';')
+    else
+        target = 'R:' .. tostring(id_to)
+    end
+    return __mudix_addCustomLine(roomID, target, tostring(direction), tostring(style),
+        r, g, b, arrow and true or false)
+end
+
+-- Mudlet getImageSize(imageLocation) → width, height (or nil when the file is
+-- missing/unreadable or an unrecognised format). JS returns a 0-indexed [w, h]
+-- array, or false on the miss case.
+function getImageSize(path)
+    local t = __getImageSize(path)
+    if type(t) == 'table' then return t[0], t[1] end
+    return nil
+end
+
 -- Mudlet getConsoleBufferSize([consoleName]) → linesLimit, sizeOfBatchDeletion.
 -- JS returns a 0-indexed [limit, batch] array (wasmoon convention), or nil when
 -- the named console doesn't exist.
@@ -1222,6 +1258,27 @@ end
 -- Mirrors Mudlet's TLuaInterpreter::parseJSON gmcp-table walk: descend
 -- gmcp.<part1>.<part2>... creating intermediate tables on demand and
 -- replace only the leaf, so siblings under the same parent survive.
+-- Mudlet setMergeTables(...): collects GMCP keys (dotted, e.g. "Char.Status")
+-- whose incoming payloads should be merged into the existing gmcp sub-table on
+-- update instead of wholesale-replaced. Mirrors Host::mGMCP_merge_table_keys —
+-- pure Lua, no host call. The accumulated list is visible as mudlet.mergeTables.
+mudlet = mudlet or {}
+mudlet.mergeTables = mudlet.mergeTables or {}
+function setMergeTables(...)
+    -- Re-assert at call time: bundled Lua (LuaGlobal/Other) may reinitialise the
+    -- `mudlet` table after this file loads, so don't rely on the load-time init.
+    mudlet = mudlet or {}
+    mudlet.mergeTables = mudlet.mergeTables or {}
+    for _, name in ipairs({...}) do
+        name = tostring(name)
+        local dup = false
+        for _, existing in ipairs(mudlet.mergeTables) do
+            if existing == name then dup = true; break end
+        end
+        if not dup then mudlet.mergeTables[#mudlet.mergeTables + 1] = name end
+    end
+end
+
 function __mudix_set_gmcp(key, value)
     if type(gmcp) ~= 'table' then gmcp = {} end
     local parts = {}
@@ -1233,7 +1290,20 @@ function __mudix_set_gmcp(key, value)
         if type(node[k]) ~= 'table' then node[k] = {} end
         node = node[k]
     end
-    node[parts[#parts]] = value
+    local leaf = parts[#parts]
+    -- Honour setMergeTables: merge the incoming keys into the existing sub-table
+    -- rather than replacing it, when this exact dotted key was registered.
+    local merge = false
+    if type(mudlet) == 'table' and type(mudlet.mergeTables) == 'table' then
+        for _, name in ipairs(mudlet.mergeTables) do
+            if name == key then merge = true; break end
+        end
+    end
+    if merge and type(node[leaf]) == 'table' and type(value) == 'table' then
+        for k, v in pairs(value) do node[leaf][k] = v end
+    else
+        node[leaf] = value
+    end
 end
 
 -- MSDP equivalent of __mudix_set_gmcp. MSDP variable names are flat (any
