@@ -463,7 +463,17 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         });
 
         renderer.backend.events.on('roomcontextmenu', (detail: RoomContextMenuEventDetail) => {
-            const items = manager.mapStore.getMapEvents();
+            // Submenus registered via addMapMenu are pure containers (no event);
+            // surface them as event-shaped nodes so addMapEvent entries whose
+            // `parent` names a menu nest under them. Menus first, then events.
+            const menuNodes: MapEventEntry[] = manager.mapStore.getMapMenus().map(m => ({
+                uniqueName: m.name,
+                eventName: '',
+                parent: m.parent,
+                displayName: m.displayName,
+                args: [],
+            }));
+            const items = [...menuNodes, ...manager.mapStore.getMapEvents()];
             const rect = containerRef.current?.getBoundingClientRect();
             setContextMenu({
                 x: (rect?.left ?? 0) + detail.position.x,

@@ -160,8 +160,23 @@ function utf8.patternEscape(self)
     ["-"] = "%-",
     ["?"] = "%?",
   }
-  local escaped = gsub(self, ".", replacements)
+  -- The bundled utf8.gsub drops characters its table-replacement misses (unlike
+  -- string.gsub, which keeps the original on a miss), so use a function
+  -- replacement that returns the escaped form or the unchanged character.
+  local escaped = gsub(self, ".", function(ch) return replacements[ch] or ch end)
   return escaped
+end
+
+--- Documentation: https://wiki.mudlet.org/w/Manual:String_Functions#utf8.title
+-- UTF-8-aware variant of string.title: uppercases the first character of the
+-- string (handling multi-byte code points), leaving the rest untouched.
+function utf8.title(self)
+  local selfType = type(self)
+  if selfType ~= "string" then
+    printError(f"utf8.title: bad argument #1 type (string to title as string expected, got {selfType})", true, true)
+  end
+  if utf8.len(self) == 0 then return self end
+  return utf8.upper(utf8.sub(self, 1, 1)) .. utf8.sub(self, 2)
 end
 
 -- following functions fiddled with from https://github.com/hishamhm/f-strings/blob/master/F.lua and https://hisham.hm/2016/01/04/string-interpolation-in-lua/

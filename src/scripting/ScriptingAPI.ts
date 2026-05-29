@@ -435,6 +435,8 @@ export class ScriptingAPI {
     private permScriptCallback: ((name: string, parent: string, code: string) => number) | null = null;
     private permRegexTriggerCallback: ((name: string, parent: string, regexes: string[], code: string) => number) | null = null;
     private permSubstringTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
+    private permBeginOfLineStringTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
+    private permPromptTriggerCallback: ((name: string, parent: string, code: string) => number) | null = null;
     private permAliasCallback: ((name: string, parent: string, pattern: string, code: string) => number) | null = null;
     private permTimerCallback: ((name: string, parent: string, delay: number, code: string) => number) | null = null;
     // Mudlet permKey(name, parent, modifier, key, code). Modifier comes from the
@@ -454,6 +456,12 @@ export class ScriptingAPI {
     /** Mudlet `startLogging(state)`. Forwarded to ProfileSession, which owns
      *  the SessionLogger instance (created/torn-down on this hook). */
     private loggingToggler: ((enabled: boolean) => boolean) | null = null;
+    /** Mudlet `appendLog(text)`. Forwarded to the active SessionLogger (wired by
+     *  ProfileSession, which owns the logger lifecycle). */
+    private logAppender: ((text: string) => void) | null = null;
+    /** Mudlet `closeMudlet()`. mudix maps it to "close the active profile":
+     *  disconnect, then return to the connection screen. Wired by ProfileSession. */
+    private closeProfileCallback: (() => void) | null = null;
     private setScriptCallback: ((name: string, code: string, pos: number) => number) | null = null;
     private scriptGetter: ((name: string, pos: number) => { code: string; count: number } | null) | null = null;
     // Mudlet's killTimer/killAlias/killTrigger/killKey accept the name of a
@@ -769,6 +777,14 @@ export class ScriptingAPI {
         this.permSubstringTriggerCallback = fn;
     }
 
+    setPermBeginOfLineStringTriggerCallback(fn: ((name: string, parent: string, patterns: string[], code: string) => number) | null): void {
+        this.permBeginOfLineStringTriggerCallback = fn;
+    }
+
+    setPermPromptTriggerCallback(fn: ((name: string, parent: string, code: string) => number) | null): void {
+        this.permPromptTriggerCallback = fn;
+    }
+
     setPermAliasCallback(fn: ((name: string, parent: string, pattern: string, code: string) => number) | null): void {
         this.permAliasCallback = fn;
     }
@@ -820,6 +836,32 @@ export class ScriptingAPI {
      *  the toggle isn't wired up yet (e.g. before ProfileSession mounts). */
     startLogging(enabled: boolean): boolean {
         return this.loggingToggler?.(enabled) ?? false;
+    }
+
+    /** Hook for ProfileSession to forward appendLog text to the live logger. */
+    setLogAppender(fn: ((text: string) => void) | null): void {
+        this.logAppender = fn;
+    }
+
+    /** Mudlet `appendLog(text)`. Appends a line to the current session log.
+     *  No-op (returns false) when logging isn't active. */
+    appendLog(text: string): boolean {
+        if (!this.logAppender) return false;
+        this.logAppender(text);
+        return true;
+    }
+
+    /** Hook for ProfileSession to close the active profile (return to the
+     *  connection screen). */
+    setCloseProfileCallback(fn: (() => void) | null): void {
+        this.closeProfileCallback = fn;
+    }
+
+    /** Mudlet `closeMudlet()`. mudix maps it to closing the active profile:
+     *  disconnect, then return to the connection screen. */
+    closeMudlet(): void {
+        this.disconnect();
+        this.closeProfileCallback?.();
     }
 
     setKillByNameCallback(fn: ((kind: 'timer' | 'alias' | 'trigger' | 'key', name: string) => boolean) | null): void {
@@ -969,6 +1011,24 @@ export class ScriptingAPI {
      *  -1 if `parent` is given but no trigger group of that name exists. */
     permSubstringTrigger(name: string, parent: string, patterns: string[], code: string): number {
         return this.permSubstringTriggerCallback?.(name, parent, patterns, code) ?? -1;
+    }
+
+    /** Mudlet `permBeginOfLineStringTrigger(name, parent, patterns, luaCode)`.
+     *  Same shape as permSubstringTrigger but each pattern matches only when it
+     *  appears at the start of the line (`String.prototype.startsWith`, like the
+     *  `tempBeginOfLineTrigger` variant). An empty patterns array creates a
+     *  trigger group. Returns the new id, or -1 if `parent` is given but no
+     *  trigger group of that name exists. */
+    permBeginOfLineStringTrigger(name: string, parent: string, patterns: string[], code: string): number {
+        return this.permBeginOfLineStringTriggerCallback?.(name, parent, patterns, code) ?? -1;
+    }
+
+    /** Mudlet `permPromptTrigger(name, parent, luaCode)`. Creates a persistent
+     *  trigger that fires on every server prompt line (GA/EOR), with no text
+     *  pattern. Returns the new id, or -1 if `parent` is given but no trigger
+     *  group of that name exists. */
+    permPromptTrigger(name: string, parent: string, code: string): number {
+        return this.permPromptTriggerCallback?.(name, parent, code) ?? -1;
     }
 
     /** Mudlet `permAlias(name, parent, regex, luaCode)`. Creates a persistent
@@ -1253,6 +1313,14 @@ export class ScriptingAPI {
         if (this.selectionMatches(win)) this.applyStateToSelection({ strikethrough: v });
         this.outputConsole(win).setStrikethrough(v);
     }
+    /** Mudlet `setOverline([window,] bool)`. Renders a line above the text
+     *  (CSS `text-decoration: overline`, ANSI SGR 53). Mirrors the other style
+     *  setters: applies to the active selection when one matches, and updates
+     *  the resolved console's pen for subsequent echo. */
+    setOverline(v: boolean, win?: string): void {
+        if (this.selectionMatches(win)) this.applyStateToSelection({ overline: v });
+        this.outputConsole(win).setOverline(v);
+    }
     /**
      * Mudlet `setReverse([window,] bool)`. Toggles reverse-video — the renderer
      * swaps the fg/bg pair when `inverse` is set (see Console rendering). Mirrors
@@ -1269,8 +1337,7 @@ export class ScriptingAPI {
      * italics, [strikeout], [overline], [reverse], [blinkMode]) → bool`. Sets
      * the full pen state in one call. r1/g1/b1 is BACKGROUND, r2/g2/b2 is
      * FOREGROUND (a Mudlet quirk — preserved here for parity). `blinkMode` is
-     * "none" / "slow" / "fast"; overline is accepted but a no-op (FormatState
-     * has no overline channel). Returns false when the named window doesn't
+     * "none" / "slow" / "fast". Returns false when the named window doesn't
      * resolve. Mirrors setFgColor & friends: the pen is updated on the resolved
      * console AND applied to the current selection when one is active on it.
      */
@@ -1282,7 +1349,7 @@ export class ScriptingAPI {
         underline: boolean,
         italics: boolean,
         strikeout: boolean,
-        _overline: boolean,
+        overline: boolean,
         reverse: boolean,
         blinkMode: 'none' | 'slow' | 'fast',
     ): boolean {
@@ -1295,6 +1362,7 @@ export class ScriptingAPI {
             italic: italics || undefined,
             underline: underline || undefined,
             strikethrough: strikeout || undefined,
+            overline: overline || undefined,
             inverse: reverse || undefined,
             slowBlink: blinkMode === 'slow' || undefined,
             rapidBlink: blinkMode === 'fast' || undefined,
@@ -1310,6 +1378,7 @@ export class ScriptingAPI {
         con.format.italic = snapshot.italic;
         con.format.underline = snapshot.underline;
         con.format.strikethrough = snapshot.strikethrough;
+        con.format.overline = snapshot.overline;
         con.format.inverse = snapshot.inverse;
         con.format.slowBlink = snapshot.slowBlink;
         con.format.rapidBlink = snapshot.rapidBlink;
@@ -1538,7 +1607,7 @@ export class ScriptingAPI {
             underline: !!state?.underline,
             strikeout: !!state?.strikethrough,
             reverse: !!state?.inverse,
-            overline: false,
+            overline: !!state?.overline,
             concealed: false,
             alternateFont: 0,
             blinking: state?.rapidBlink ? 'fast' : state?.slowBlink ? 'slow' : 'none',

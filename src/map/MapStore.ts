@@ -231,6 +231,16 @@ export interface MapEventEntry {
     args: unknown[];
 }
 
+export interface MapMenuEntry {
+    /** Stable id used by removeMapMenu and as a parent reference from
+     *  addMapEvent/addMapMenu entries. */
+    name: string;
+    /** name of a parent menu this is nested under, or null for top-level. */
+    parent: string | null;
+    /** Label rendered for the submenu. Defaults to name when unspecified. */
+    displayName: string;
+}
+
 export class MapStore {
     private rooms = new Map<number, MudletRoom>();
     private areas = new Map<number, MudletArea>();
@@ -263,6 +273,7 @@ export class MapStore {
     private selectionSubscribers = new Set<() => void>();
     private selectionNotifyPending = false;
     private mapEvents = new Map<string, MapEventEntry>();
+    private mapMenus = new Map<string, MapMenuEntry>();
     private customEnvColors = new Map<number, MudletColor>();
     private roomHighlights = new Map<number, RoomHighlight>();
     private mapUserData: Record<string, string> = {};
@@ -1921,6 +1932,152 @@ export class MapStore {
         return { ok: true, multi };
     }
 
+    /** Next free label id within an area — Mudlet keys labels by an integer that
+     *  is unique per area and starts at 0. */
+    private nextLabelId(areaId: number): number {
+        const labels = this.labels.get(areaId);
+        if (!labels || labels.length === 0) return 0;
+        let max = -1;
+        for (const l of labels) if (l.id > max) max = l.id;
+        return max + 1;
+    }
+
+    /**
+     * Mudlet `createMapLabel(areaID, text, posx, posy, posz, fgRed, fgGreen,
+     * fgBlue, bgRed, bgGreen, bgBlue [, zoom [, fontSize [, showOnTop [,
+     * noScaling]]]])`. Adds a text label to the area and returns its new id, or
+     * -1 if the area does not exist. (`zoom`/`fontSize` are accepted for
+     * signature parity — mudix stores labels but the renderer does not yet draw
+     * them, mirroring how labels loaded from binary maps are kept and queried
+     * but not painted.)
+     */
+    createMapLabel(
+        areaId: number, text: string,
+        x: number, y: number, z: number,
+        fgR: number, fgG: number, fgB: number,
+        bgR: number, bgG: number, bgB: number,
+        fontSize = 10, showOnTop = true, noScaling = false,
+    ): number {
+        if (!this.areas.has(areaId)) return -1;
+        const id = this.nextLabelId(areaId);
+        // The renderer derives a text label's on-map font size from its
+        // Width/Height (a 0×0 box paints invisibly), so size the box in map
+        // units from the requested point size and text length.
+        const str = text ?? '';
+        const fs = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 10;
+        const fontUnits = Math.min(0.75, Math.max(0.2, fs / 20));
+        const width = Math.max(0.5, str.length * fontUnits);
+        const height = fontUnits / 0.9;
+        const label: MudletLabel = {
+            id,
+            pos: [x, y, z],
+            size: [width, height],
+            text: str,
+            fgColor: { spec: 1, alpha: 255, r: fgR, g: fgG, b: fgB },
+            bgColor: { spec: 1, alpha: 255, r: bgR, g: bgG, b: bgB },
+            pixMap: '',
+            noScaling,
+            showOnTop,
+        };
+        const arr = this.labels.get(areaId);
+        if (arr) arr.push(label);
+        else this.labels.set(areaId, [label]);
+        this.notify();
+        return id;
+    }
+
+    /**
+     * Mudlet `createMapImageLabel(areaID, imagePathFileName, posx, posy, posz,
+     * width, height, zoom [, showOnTop [, noScaling]])`. Adds an image label and
+     * returns its new id, or -1 if the area is missing. The image reference is
+     * stored verbatim in the label's `pixMap` (surfaced as `Pixmap` by
+     * getMapLabel); like text labels it is not yet painted by the renderer.
+     */
+    createMapImageLabel(
+        areaId: number, imagePath: string,
+        x: number, y: number, z: number,
+        width: number, height: number,
+        showOnTop = true, noScaling = false,
+    ): number {
+        if (!this.areas.has(areaId)) return -1;
+        const id = this.nextLabelId(areaId);
+        const label: MudletLabel = {
+            id,
+            pos: [x, y, z],
+            size: [width, height],
+            text: '',
+            fgColor: { spec: 1, alpha: 255, r: 255, g: 255, b: 255 },
+            bgColor: { spec: 1, alpha: 0, r: 0, g: 0, b: 0 },
+            pixMap: imagePath ?? '',
+            noScaling,
+            showOnTop,
+        };
+        const arr = this.labels.get(areaId);
+        if (arr) arr.push(label);
+        else this.labels.set(areaId, [label]);
+        this.notify();
+        return id;
+    }
+
+    /** Mudlet `deleteMapLabel(areaID, labelID)`. Removes the label; returns
+     *  false when the area or label id does not exist. */
+    deleteMapLabel(areaId: number, labelId: number): boolean {
+        const arr = this.labels.get(areaId);
+        if (!arr) return false;
+        const idx = arr.findIndex(l => l.id === labelId);
+        if (idx < 0) return false;
+        arr.splice(idx, 1);
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Mudlet `auditAreas()` — sweep the map for area/room consistency problems
+     * and repair what is safe to repair. mudix rebuilds every area's membership
+     * list (`rooms[]`) from the authoritative `room.area` back-pointers, which
+     * drops dangling room ids and re-files rooms that were missing from their
+     * area's list. Rooms whose `area` points at a non-existent area are reported
+     * but left untouched (they may be intentionally parked in the void area -1).
+     * Returns a summary report (Mudlet returns nothing; mudix surfaces the audit
+     * so scripts can act on it).
+     */
+    auditAreas(): {
+        checkedAreas: number; checkedRooms: number; fixedAreas: number;
+        orphanRooms: number[]; danglingRefs: number[];
+    } {
+        // Authoritative membership: group room ids by their `area` field.
+        const byArea = new Map<number, number[]>();
+        const orphanRooms: number[] = [];
+        for (const [id, room] of this.rooms) {
+            if (!this.areas.has(room.area)) orphanRooms.push(id);
+            const list = byArea.get(room.area);
+            if (list) list.push(id);
+            else byArea.set(room.area, [id]);
+        }
+        const danglingSet = new Set<number>();
+        let fixedAreas = 0;
+        for (const [areaId, area] of this.areas) {
+            const want = (byArea.get(areaId) ?? []).slice().sort((a, b) => a - b);
+            const have = area.rooms;
+            for (const rid of have) {
+                if (!this.rooms.has(rid)) danglingSet.add(rid);
+            }
+            const same = have.length === want.length && have.every((v, i) => v === want[i]);
+            if (!same) {
+                area.rooms = want;
+                fixedAreas++;
+            }
+        }
+        if (fixedAreas > 0) this.notify();
+        return {
+            checkedAreas: this.areas.size,
+            checkedRooms: this.rooms.size,
+            fixedAreas,
+            orphanRooms: orphanRooms.sort((a, b) => a - b),
+            danglingRefs: [...danglingSet].sort((a, b) => a - b),
+        };
+    }
+
     // ── Map context-menu events (Mudlet addMapEvent) ──────────────────────────
 
     setMapEventDispatcher(fn: ((eventName: string, args: unknown[]) => void) | null): void {
@@ -1951,6 +2108,30 @@ export class MapStore {
 
     getMapEvents(): MapEventEntry[] {
         return [...this.mapEvents.values()];
+    }
+
+    // ── Map context-menu submenus (Mudlet addMapMenu) ─────────────────────────
+
+    /** Mudlet `addMapMenu(menuName [, parent [, displayName]])`. Registers a
+     *  submenu in the map's right-click context menu that addMapEvent entries
+     *  can nest under via their `parent`. Re-registering the same name replaces
+     *  the prior entry. */
+    addMapMenu(name: string, parent: string | null = null, displayName: string | null = null): boolean {
+        if (!name) return false;
+        this.mapMenus.set(name, {
+            name,
+            parent: parent && parent.length > 0 ? parent : null,
+            displayName: displayName && displayName.length > 0 ? displayName : name,
+        });
+        return true;
+    }
+
+    removeMapMenu(name: string): boolean {
+        return this.mapMenus.delete(name);
+    }
+
+    getMapMenus(): MapMenuEntry[] {
+        return [...this.mapMenus.values()];
     }
 
     /** Fire the registered event for a context-menu entry. Matches Mudlet's

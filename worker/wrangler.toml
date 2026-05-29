@@ -1,0 +1,4 @@
+name = "mudix"
+main = "index.js"
+compatibility_date = "2024-09-23"
+workers_dev = true

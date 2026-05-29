@@ -128,7 +128,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `io.exists(path)` | ✅ | Other.lua (uses `io.open`) backed by ProfileVFS |
 | `lfs.attributes(path [, attrib])` | ✅ | VFS.lua exposes the full `lfs` table over the profile VFS — `attributes` returns `{mode, size, modification, access}` (or the single named attribute). `lfs.currentdir`/`chdir`/`mkdir`/`rmdir`/`dir`/`touch`/`isfile`/`isdir` also wired |
 | `openMudletHomeDir()` | ✅ | `openUrl("file:")` routes to the VFS file browser |
-| `saveProfile([name])` | ❌ | Auto-persists via localStorage / IndexedDB; explicit save is a no-op |
+| `saveProfile([name])` | ✅ | Forces the debounced VFS flush to IndexedDB (see Miscellaneous Functions) |
 
 ---
 
@@ -139,10 +139,10 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `addAreaName(name)` | ✅ | Bridge.lua |
 | `addCustomLine(roomID, toID, direction, style, color, arrow)` | 🚧 | Programmatic custom-line editing not wired |
 | `addMapEvent(uniquename, event, parent, displayName, ...)` | ✅ | Map context-menu event registration |
-| `addMapMenu(name, parent, displayName)` | 🚧 | Map context-menu group registration |
+| `addMapMenu(name, parent, displayName)` | ✅ | Registers a submenu in the map right-click menu; `MapPanel` surfaces it as a container node so `addMapEvent` entries whose `parent` names it nest underneath. Pairs with `getMapMenus`/`removeMapMenu` |
 | `addRoom(roomID)` | ✅ | JS-exposed |
 | `addSpecialExit(fromID, toID, cmd)` | ✅ | JS-exposed |
-| `auditAreas()` | 🚧 | No equivalent integrity-audit hook yet |
+| `auditAreas()` | ✅ | Rebuilds each area's `rooms[]` from the authoritative `room.area` back-pointers (drops dangling ids, re-files missing rooms); returns a summary `{checkedAreas, checkedRooms, fixedAreas, orphanRooms, danglingRefs}` (Mudlet returns nothing) |
 | `centerview(roomID)` | ✅ | JS-exposed; also sets the player room (matches Mudlet) |
 | `clearAreaUserData(areaID)` | ✅ | Bridge.lua → `__clearAreaUserData`; `(false, errMsg)` when area missing |
 | `clearAreaUserDataItem(areaID, key)` | ✅ | Bridge.lua → `__clearAreaUserDataItem` |
@@ -154,13 +154,13 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `clearSpecialExits(roomID)` | ✅ | Removes special exits and the locks/doors/custom lines keyed by their commands |
 | `closeMapWidget()` | ✅ | Closes the dockable map widget (id `map`); returns false if none open |
 | `connectExitStub(fromID, dir)` / `(fromID, toID[, dir])` | ✅ | Direction-only finds the nearest in-area room with a matching reverse stub (Mudlet's unit-vector/compSign search); toID-only requires exactly one reverse-stub pair |
-| `createMapLabel(areaID, text, x, y, z, fg, bg, …)` | 🚧 | Programmatic label creation not wired |
-| `createMapImageLabel(areaID, imagePath, x, y, z, w, h, zoom, …)` | 🚧 | |
+| `createMapLabel(areaID, text, x, y, z, fg, bg, …)` | ✅ | Adds a text label (new per-area id) to `MapStore`; round-trips through `getMapLabels`/`getMapLabel` and binary save, and is painted by the renderer (`mudlet-map-renderer` `ScenePipeline.renderLabels` → `labelToShape`, default `labelRenderMode:"image"`). `-1` when the area is missing |
+| `createMapImageLabel(areaID, imagePath, x, y, z, w, h, zoom, …)` | ✅ | Image-label sibling of `createMapLabel`; stores the image in the label `pixMap` (surfaced as `Pixmap`), which `MudixMapReader` patches through to the renderer so it paints. `scaling` arg is the inverse of the stored `noScaling`. `-1` when the area is missing |
 | `createMapper(x, y, w, h)` | ✅ | Singleton embedded mapper widget sharing MapStore with the dock |
 | `createRoomID([minimumID])` | ✅ | JS-exposed |
 | `deleteArea(areaID\|name)` | ✅ | JS-exposed |
 | `deleteMap()` | ✅ | Wipes every room/area/label back to a single empty default area |
-| `deleteMapLabel(areaID, labelID)` | 🚧 | |
+| `deleteMapLabel(areaID, labelID)` | ✅ | Removes the label by id; false when the area or id is unknown |
 | `deleteRoom(roomID)` | ✅ | JS-exposed |
 | `disableMapInfo(label)` | ✅ | Toggles a registered info contributor off |
 | `enableMapInfo(label)` | ✅ | Toggles a registered info contributor on |
@@ -187,7 +187,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `getMapEvents()` | ✅ | Bridge.lua |
 | `getMapLabel(areaID, labelID\|labelText)` | ✅ | Bridge.lua |
 | `getMapLabels(areaID)` | ✅ | Bridge.lua → `__getMapLabels` |
-| `getMapMenus()` | 🚧 | Pairs with `addMapMenu` |
+| `getMapMenus()` | ✅ | `{ [menuName] = { ["parent"], ["display name"] } }`; Bridge.lua reshapes the JS array |
 | `getMapSelection()` | ✅ | `{ rooms = {1-indexed roomIDs}, center = roomID }`. Selection lives on `MapStore` with a dedicated subscribe channel; UI: left-click selects + sets center, ctrl/cmd-click toggles, click on empty area clears. `registerMapInfo` callbacks now receive the real selection size + center room |
 | `getMapUserData(key)` | ✅ | Bridge.lua |
 | `getMapZoom([areaID])` | ✅ | Mudlet-compatible zoom semantics (units across the shorter viewport edge). `setMapZoom` enforces min of 3.0; `areaID` accepted for compat |
@@ -229,7 +229,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `resumeSpeedwalk()` | ✅ | Other.lua |
 | `removeCustomLine(roomID, direction)` | ✅ | Direction = 1-12/name/special command; `false` when missing |
 | `removeMapEvent(uniquename)` | ✅ | Pairs with `addMapEvent` |
-| `removeMapMenu(name)` | 🚧 | Pairs with `addMapMenu` |
+| `removeMapMenu(name)` | ✅ | Removes a registered submenu; true if it existed |
 | `removeSpecialExit(fromID, cmd)` | ✅ | JS-exposed |
 | `resetRoomArea(roomID)` | ✅ | Bridge.lua → moves the room to the void area (-1) |
 | `resizeMapWidget(w, h)` | ✅ | JS-exposed (alias for `resizeWindow` on the embedded mapper) |
@@ -278,10 +278,10 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `addSupportedTelnetOption(option)` | ✅ | Registers a telnet option byte so the next IAC WILL/DO is auto-accepted |
 | `alert([secs])` | ✅ | Flashes `document.title` for `secs` (default 10). No-op while focused |
 | `announce(text [, processing])` | ✅ | ARIA live region; `processing` (`importantall`/`importantmostrecent` → assertive, else polite) matches Mudlet's politeness mapping |
-| `appendLog(text)` | 🚧 | Append-to-current-log primitive |
+| `appendLog(text)` | ✅ | Appends a line (type `appendLog`) to the active `SessionLogger`; false when logging is off |
 | `cfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `clearVisitedLinks()` | 🚧 | No visited-link state model |
-| `closeMudlet()` | 🚧 | Map to "close the active profile" — disconnect, flush save, and return to the connection screen |
+| `clearVisitedLinks()` | ✅ | True no-op — mudix tracks no visited-link state, so there is nothing to clear (bound for script portability) |
+| `closeMudlet()` | ✅ | Closes the active profile — disconnects then returns to the connection screen (callback wired by `ProfileSession`) |
 | `compare(a, b)` | ✅ | Other.lua — alias for `_comp` deep equality |
 | `deleteAllNamedEventHandlers([type])` | ✅ | IDManager.lua |
 | `deleteNamedEventHandler(name)` | ✅ | IDManager.lua |
@@ -322,7 +322,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `killAnonymousEventHandler(id)` | ✅ | Other.lua: removes handler by ID |
 | `loadMusicFile(path \| {name=…})` | ✅ | `SoundManager.preload` |
 | `loadSoundFile(path \| {name=…})` | ✅ | `SoundManager.preload` |
-| `loadVideoFile(path \| {name=…})` | 🚧 | Preload variant of `playVideoFile` |
+| `loadVideoFile(path \| {name=…})` | ✅ | Preload variant of `playVideoFile` — `VideoManager.preload` fetches + caches a VFS-backed video so the first play has no fetch latency (fire-and-forget; http(s)/data/blob URLs need no preloading) |
 | `mudletOlderThan(major, minor, revision)` | ✅ | Built on `getMudletVersion("table")` |
 | `openWebPage(url)` | ✅ | Routes to `openUrl` |
 | `playMusicFile(path \| {…})` | ✅ | `SoundManager` (Web Audio + VFS or http(s) URL) |
@@ -340,7 +340,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `resetLinkStyle()` / `setLinkStyle(...)` | 🚧 | Per-profile link styling not exposed |
 | `resetProfile()` | 🚧 | Profile reset utility |
 | `resumeNamedEventHandler(name)` | ✅ | IDManager.lua |
-| `saveProfile([name])` | 🚧 | Auto-persists via localStorage / IndexedDB with a debounced flush; the Lua call should force the flush (and resolve the `name` arg as a no-op for single-profile parity) |
+| `saveProfile([name])` | ✅ | Bridge.lua → `__mudix_saveProfile` forces the debounced VFS flush through to IndexedDB; `(nil, errMsg)` when no VFS, else `true, path`. `name` ignored (single-profile) |
 | `setConfig(key, value)` | ✅ | JS-exposed |
 | `setMergeTables(t)` | 🚧 | Module-merge config |
 | `setModuleInfo(name, key, value)` | ✅ | Stores a custom info field (in-memory override map) surfaced by `getModuleInfo`; always true |
@@ -401,7 +401,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getNamedTriggers(parent)` | ✅ | IDManager.lua |
 | `getProfileInformation()` | ✅ | Returns the profile's free-text description (`""` when unset); stored in `ProfileSettings.description` |
 | `getProfileStats()` | ✅ | `{triggers={total,temp,active,patterns={total,active}}, aliases=, timers=, keys=, scripts={total,temp,active}, gifs={total,active}}`. mudix keeps no temp items in the tree (`temp` always 0) and has no gif tracker (`gifs` always 0) |
-| `getProfiles()` | ❌ stub | Single-connection web app; stub returns `{getProfileName()}` so callers that iterate profiles still work |
+| `getProfiles()` | ✅ | Single-connection web app — returns `{getProfileName()}` (1-element list) so callers that iterate profiles still work |
 | `getStopWatches()` | ✅ | Re-keys to integer ids → `{ name, isRunning, isPersistent, elapsedTime }` |
 | `getStopWatchTime(id\|name)` | ✅ | Elapsed seconds without stopping |
 | `getStopWatchBrokenDownTime(id\|name)` | ✅ | `{negative, days, hours, minutes, seconds, milliSeconds, decimalSeconds}` off the proxy; `false` on miss |
@@ -417,9 +417,9 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `loadProfile(name)` | ❌ stub | No multi-profile switching; bind as a warning-emitting no-op stub returning `false` |
 | `permAlias(name, parent, pattern, code)` | ✅ | Pattern is a single PCRE string (Mudlet TAlias.mRegexCode). Returns the new id, or -1 |
 | `permGroup(name, type [, parent])` | ✅ | Creates a group node in the requested family |
-| `permPromptTrigger(name, parent, code)` | 🚧 | Persistent prompt-trigger constructor |
+| `permPromptTrigger(name, parent, code)` | ✅ | Persistent trigger firing on every server prompt (GA/EOR); single `prompt`-type pattern, never a group. Returns the new id or -1 |
 | `permRegexTrigger(name, parent, patterns, code)` | ✅ | `patterns` is a table of regex strings (empty table → creates a trigger group). Bridge.lua joins to \x01 and the JS binding splits it back |
-| `permBeginOfLineStringTrigger(name, parent, patterns, code)` | 🚧 | |
+| `permBeginOfLineStringTrigger(name, parent, patterns, code)` | ✅ | Like `permSubstringTrigger` but each literal pattern matches only at the start of the line (`startOfLine` kind). Empty patterns array → trigger group |
 | `permSubstringTrigger(name, parent, patterns, code)` | ✅ | Each pattern is a literal substring. Empty patterns array creates a trigger group |
 | `permScript(name, parent, code)` | 🚧 | Persistent script-node constructor |
 | `permTimer(name, parent, delay, code)` | ✅ | Persistent one-shot timer; returns the new id or -1 |
@@ -451,7 +451,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `stopNamedTrigger(parent, name)` | ✅ | IDManager.lua |
 | `stopStopWatch(id\|name)` | ✅ | Returns elapsed seconds |
 | `tempAlias(pattern, code)` | ✅ | |
-| `tempAnsiColorTrigger(fg, bg, code)` | 🚧 | Variant of `tempColorTrigger` using ANSI semantics |
+| `tempAnsiColorTrigger(fg, bg, code)` | ✅ | ANSI 256-colour-index variant of `tempColorTrigger` (shares the palette-matching engine); any negative index (Mudlet ColorIgnore/ColorDefault) → match any |
 | `tempBeginOfLineTrigger(pattern, code)` | ✅ | Literal prefix (`String.prototype.startsWith`), NOT regex `^` — matches Mudlet's `match_begin_of_line_substring` |
 | `tempButton(toolbar, name, code, orientation)` | ✅ | Appends a transient ButtonNode under the named toolbar |
 | `tempButtonToolbar(name, orientation, location)` | ✅ | `orientation`: 0=horizontal, 1=vertical. `location`: 0=top, 1=bottom, 2=left, 3=right, 4=floating |
@@ -528,7 +528,7 @@ Standard Lua 5.1 string functions (`string.byte`, `string.char`, `string.find`, 
 | `string.title(s)` | ✅ | StringUtils.lua |
 | `string.trim(s)` | ✅ | StringUtils.lua |
 | `utf8.byte` / `utf8.char` / `utf8.find` / `utf8.gmatch` / `utf8.gsub` / `utf8.len` / `utf8.lower` / `utf8.match` / `utf8.reverse` / `utf8.sub` / `utf8.upper` | ✅ | Bundled `utf8.lua` (Stepets) exposed as the `utf8` global |
-| `utf8.patternEscape` / `utf8.title` | 🚧 | Mudlet extensions over the standard utf8 lib |
+| `utf8.patternEscape` / `utf8.title` | ✅ | StringUtils.lua. `patternEscape` escapes Lua-pattern magic chars (function replacement — the bundled `utf8.gsub` drops table-replacement misses); `title` uppercases the first code point |
 | `utf8.charpos` / `utf8.escape` / `utf8.fold` / `utf8.insert` / `utf8.ncasecmp` / `utf8.next` / `utf8.remove` / `utf8.width` / `utf8.widthindex` | 🚧 | Mudlet extensions (luautf8 surface) |
 
 ---
@@ -692,7 +692,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `getMainConsoleWidth()` | ✅ | Monospace cell width × (wrap columns + 1) |
 | `getMouseEvents()` | 🚧 | Pairs with `addMouseEvent` |
 | `getMousePosition()` | ✅ | Bridge.lua — last-seen cursor position in main viewport coords |
-| `getProfileTabNumber(name)` | 🚧 | No tab UI in mudix |
+| `getProfileTabNumber(name)` | ✅ | No tab UI in mudix; single-profile, so always returns 1 |
 | `getMainWindowSize()` | ✅ | Returns `window.innerWidth, window.innerHeight` |
 | `getRowCount([window])` | ✅ | JS-exposed |
 | `getScroll([window])` | ✅ | Returns the scroll position (top-most visible line) |
@@ -716,7 +716,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `insertLink([window,] text, cmd, hint)` | ✅ | Bridge.lua maps function `cmd` to a callback id |
 | `insertPopup([window,] text, cmds, hints)` | ✅ | Bridge.lua flattens cmds/hints tables |
 | `insertText([window,] text)` | ✅ | JS-exposed |
-| `ioprint(...)` | 🚧 | Mudlet's print-to-stdout helper |
+| `ioprint(...)` | ✅ | Mudlet's print-to-stdout helper; routes to the devtools `console.log` in the browser |
 | `isAnsiBgColor(idx)` / `isAnsiFgColor(idx)` | ✅ | True when the fg/bg color at the current selection start equals ANSI/xterm index `idx` (0-7 normal, 8-15 bright, 16-255 xterm-256). mudix stores rendered RGB, so it compares against the palette entry's RGB; false with no selection. Used by Other.lua |
 | `loadWindowLayout()` | ✅ | Re-applies the saved snapshot — re-positions live windows and reopens saved-visible windows |
 | `lowerWindow(name)` | ✅ | JS-exposed |
@@ -789,7 +789,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setMapWindowTitle(title)` | ✅ | Sets the dockable map panel (`id "map"`) tab title via `WindowManager.setTitle`; empty title resets to default. False when the map widget is closed. Unblocks `resetMapWindowTitle` (GUIUtils) and `Geyser.Mapper` |
 | `setMiniConsoleFontSize(name, size)` | ✅ | Bridge.lua; rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
 | `setMovie(name, path)` / `setMovieFrame(name, n)` / `setMovieSpeed(name, factor)` / `startMovie(name)` | 🚧 | No QMovie equivalent — could be replaced by `<img>` with animated GIFs |
-| `setOverline([window,] bool)` | 🚧 | No overline rendering path |
+| `setOverline([window,] bool)` | ✅ | FormatState `overline` channel (ANSI SGR 53/55) → CSS `text-decoration: overline`; selection-aware like the other style setters. `setTextFormat`/`getTextFormat` carry it too |
 | `setPopup([window,] cmds, hints)` | ✅ | Right-click popup on the current selection (preserves formatting, like `setLink`) |
 | `setProfileStyleSheet(css)` | 🚧 | Per-profile theme override |
 | `setReverse([window,] bool)` | ✅ | Sets `FormatState.inverse` on pen + selection (renderer swaps fg/bg) |

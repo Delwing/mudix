@@ -102,6 +102,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const gmcpEnabled = protocols?.gmcp ?? PROTOCOL_DEFAULTS.gmcp;
     const mttsEnabled = protocols?.mtts ?? PROTOCOL_DEFAULTS.mtts;
     const msdpEnabled = protocols?.msdp ?? PROTOCOL_DEFAULTS.msdp;
+    const msspEnabled = protocols?.mssp ?? PROTOCOL_DEFAULTS.mssp;
     const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
     const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
@@ -303,6 +304,23 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     aria-labelledby="protocol-msdp-label"
                                     checked={msdpEnabled}
                                     onChange={next => patchProtocols({ msdp: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-mssp-label">
+                                    MSSP
+                                    <HelpTip label="About MSSP">
+                                        Telnet option 70. Mud Server Status Protocol — the server
+                                        reports read-only status fields (player count, uptime,
+                                        codebase, …) once per connection into the <code>mssp</code>
+                                        table in Lua. On by default; harmless to leave enabled.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-mssp"
+                                    aria-labelledby="protocol-mssp-label"
+                                    checked={msspEnabled}
+                                    onChange={next => patchProtocols({ mssp: next })}
                                 />
                             </div>
                             <div className="settings-row">

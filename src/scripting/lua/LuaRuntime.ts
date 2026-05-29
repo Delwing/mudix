@@ -193,6 +193,7 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('setItalics',   styleSetter((v, w) => this.api.setItalic(v, w)));
         this.lua.global.set('setUnderline', styleSetter((v, w) => this.api.setUnderline(v, w)));
         this.lua.global.set('setStrikeOut', styleSetter((v, w) => this.api.setStrikethrough(v, w)));
+        this.lua.global.set('setOverline',  styleSetter((v, w) => this.api.setOverline(v, w)));
         this.lua.global.set('setReverse',   styleSetter((v, w) => this.api.setReverse(v, w)));
         this.lua.global.set('resetFormat', (_win?: string) => this.api.resetFormat(_win));
 
@@ -200,9 +201,8 @@ export class LuaRuntime implements IScriptingRuntime {
         // underline, italics, [strikeout], [overline], [reverse], [blinkMode]).
         // r1/g1/b1 is BACKGROUND, r2/g2/b2 is FOREGROUND (Mudlet quirk).
         // Boolean attrs accept boolean or number (non-zero = true) per Mudlet.
-        // blinkMode is "none"/"slow"/"fast"; mudix renders slow/rapid blink but
-        // has no overline channel — that flag is accepted and silently dropped.
-        // Returns true on success, false when the named window doesn't exist.
+        // blinkMode is "none"/"slow"/"fast". Returns true on success, false when
+        // the named window doesn't exist.
         const boolOrNum = (v: unknown): boolean => {
             if (typeof v === 'boolean') return v;
             if (typeof v === 'number') return v !== 0;
@@ -1056,6 +1056,15 @@ export class LuaRuntime implements IScriptingRuntime {
         // for this profile. ProfileSession owns the SessionLogger lifecycle;
         // the API forwards through a registered toggler.
         this.lua.global.set('startLogging', (state?: unknown) => this.api.startLogging(!!state));
+        // Mudlet `appendLog(text)`. Append an arbitrary line to the active log.
+        this.lua.global.set('appendLog', (text?: unknown) => this.api.appendLog(String(text ?? '')));
+        // Mudlet `getProfileTabNumber([name])`. Single-profile web app — always 1.
+        this.lua.global.set('getProfileTabNumber', (_name?: unknown) => 1);
+        // Mudlet `ioprint(...)`. Prints to stdout in desktop Mudlet; in the
+        // browser the closest analogue is the devtools console.
+        this.lua.global.set('ioprint', (...args: unknown[]) => {
+            console.log(...args.map(a => (a == null ? '' : String(a))));
+        });
 
         // Mudlet `tempColorTrigger(fg, bg, code)`. The trigger fires when the
         // current rendered line carries a span whose foreground / background
@@ -1465,6 +1474,28 @@ export class LuaRuntime implements IScriptingRuntime {
         // would otherwise key a JS array 0..n-1).
         this.lua.global.set('__getMapEvents', () => this.api.map.getMapEvents());
 
+        // ── Map context-menu submenus (Mudlet addMapMenu) ─────────────────────
+        // addMapMenu(menuName [, parent [, displayName]]) registers a submenu
+        // that addMapEvent entries nest under via their parent. Mutating
+        // primitives — drop the JS bool result so Lua can't pattern on an extra
+        // return.
+        this.lua.global.set('addMapMenu', (
+            name: unknown, parent?: unknown, displayName?: unknown,
+        ) => {
+            this.api.map.addMapMenu(
+                String(name ?? ''),
+                parent == null ? null : String(parent),
+                displayName == null ? null : String(displayName),
+            );
+        });
+        this.lua.global.set('removeMapMenu', (name: unknown) => {
+            this.api.map.removeMapMenu(String(name ?? ''));
+        });
+        // Mudlet shape: { [menuName] = { ["parent"]=..., ["display name"]=... } }.
+        // JS hands back an array of entries (0-indexed); Bridge.lua rebuilds the
+        // keyed Lua table.
+        this.lua.global.set('__getMapMenus', () => this.api.map.getMapMenus());
+
         // ── Map info contributors (Mudlet registerMapInfo) ────────────────────
         // Bridge.lua compiles the callback into the `__mudix_cb` registry and
         // hands JS only the numeric id (same pattern as label/timer callbacks).
@@ -1712,6 +1743,43 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet's (false, errMsg) multi-return.
         this.lua.global.set('__getMapLabel', (areaId: unknown, key: unknown) =>
             this.api.map.getMapLabel(Number(areaId), typeof key === 'number' ? key : String(key ?? '')));
+        // Mudlet createMapLabel(areaID, text, x, y, z, fgR,fgG,fgB, bgR,bgG,bgB,
+        // [zoom,] fontSize, showOnTop, noScaling). Bridge.lua drops the unused
+        // zoom arg and coerces flags to bool; → new labelID or -1.
+        this.lua.global.set('__createMapLabel', (
+            areaId: unknown, text: unknown,
+            x: unknown, y: unknown, z: unknown,
+            fgR: unknown, fgG: unknown, fgB: unknown,
+            bgR: unknown, bgG: unknown, bgB: unknown,
+            fontSize?: unknown, showOnTop?: unknown, noScaling?: unknown,
+        ) => this.api.map.createMapLabel(
+            Number(areaId), String(text ?? ''),
+            Number(x) || 0, Number(y) || 0, Number(z) || 0,
+            Number(fgR) || 0, Number(fgG) || 0, Number(fgB) || 0,
+            Number(bgR) || 0, Number(bgG) || 0, Number(bgB) || 0,
+            Number(fontSize) || 10,
+            showOnTop == null ? true : !!showOnTop,
+            !!noScaling,
+        ));
+        // Mudlet createMapImageLabel(areaID, imagePath, x, y, z, w, h, [zoom,]
+        // showOnTop, noScaling). → new labelID or -1.
+        this.lua.global.set('__createMapImageLabel', (
+            areaId: unknown, imagePath: unknown,
+            x: unknown, y: unknown, z: unknown,
+            w: unknown, h: unknown,
+            showOnTop?: unknown, noScaling?: unknown,
+        ) => this.api.map.createMapImageLabel(
+            Number(areaId), String(imagePath ?? ''),
+            Number(x) || 0, Number(y) || 0, Number(z) || 0,
+            Number(w) || 0, Number(h) || 0,
+            showOnTop == null ? true : !!showOnTop,
+            !!noScaling,
+        ));
+        this.lua.global.set('deleteMapLabel', (areaId: unknown, labelId: unknown) =>
+            this.api.map.deleteMapLabel(Number(areaId), Number(labelId)));
+        // Mudlet auditAreas() — repair area/room membership consistency. Returns
+        // a summary; Bridge.lua 1-indexes the orphanRooms/danglingRefs arrays.
+        this.lua.global.set('__auditAreas', () => this.api.map.auditAreas());
 
         // ── Output / format ───────────────────────────────────────────────────
         this.lua.global.set('fg',          (name: string)  => this.api.fg(name));
@@ -1887,6 +1955,13 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('feedTelnet', (data: unknown) => { this.api.feedTelnet(String(data ?? '')); });
         // Mudlet `disconnect()`: drop the current connection.
         this.lua.global.set('disconnect', () => { this.api.disconnect(); });
+        // Mudlet `closeMudlet()`: mudix closes the active profile — disconnect
+        // and return to the connection screen.
+        this.lua.global.set('closeMudlet', () => { this.api.closeMudlet(); });
+        // Mudlet `clearVisitedLinks()`: forgets which clickable links have been
+        // visited (Mudlet greys visited echoLink targets). mudix tracks no
+        // visited-link state, so there is nothing to clear — a true no-op.
+        this.lua.global.set('clearVisitedLinks', () => {});
         // Mudlet `connectToServer(host, port [, save])`: (re)connect through the
         // proxy; `save` persists host/port onto the active connection.
         this.lua.global.set('connectToServer', (host: unknown, port?: unknown, save?: unknown) =>
@@ -2186,6 +2261,18 @@ export class LuaRuntime implements IScriptingRuntime {
             const patterns = s.length === 0 ? [] : s.split('\x01');
             return this.api.permSubstringTrigger(String(name ?? ''), String(parent ?? ''), patterns, String(code ?? ''));
         });
+        // Mudlet permBeginOfLineStringTrigger(name, parent, patterns, luaCode).
+        // Same flatten/split convention as permSubstringTrigger; each pattern
+        // matches only at the start of the line. Empty patterns → trigger group.
+        this.lua.global.set('__mudix_permBeginOfLineStringTrigger', (name: unknown, parent: unknown, patternsStr: unknown, code: unknown) => {
+            const s = String(patternsStr ?? '');
+            const patterns = s.length === 0 ? [] : s.split('\x01');
+            return this.api.permBeginOfLineStringTrigger(String(name ?? ''), String(parent ?? ''), patterns, String(code ?? ''));
+        });
+        // Mudlet permPromptTrigger(name, parent, luaCode). Persistent trigger
+        // that fires on every server prompt line (GA/EOR); no text pattern.
+        this.lua.global.set('__mudix_permPromptTrigger', (name: unknown, parent: unknown, code: unknown) =>
+            this.api.permPromptTrigger(String(name ?? ''), String(parent ?? ''), String(code ?? '')));
         // Mudlet permAlias(name, parent, regex, luaCode). Pattern is a single
         // PCRE string (Mudlet's TAlias.mRegexCode). Returns the new id or -1.
         this.lua.global.set('__mudix_permAlias', (name: unknown, parent: unknown, pattern: unknown, code: unknown) =>
@@ -2966,6 +3053,15 @@ export class LuaRuntime implements IScriptingRuntime {
                 height: strOpt(o.height),
             });
         });
+        // loadVideoFile(name) | ({name=...}) — preload/cache so the first
+        // playVideoFile has no fetch latency. Bridge.lua normalises to a name.
+        this.lua.global.set('__loadVideoFile', (t: unknown) => {
+            const o = detachOpts(t);
+            const path = String(o.name ?? '');
+            if (!path) return false;
+            void videos.preload(path);
+            return true;
+        });
         this.lua.global.set('pauseVideos', () => { videos.pauseAll(); });
         this.lua.global.set('stopVideos',  () => { videos.stopAll(); });
         // getPlayingVideos / getPausedVideos — list active <video> elements by
@@ -3729,6 +3825,15 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__mudix_msdp_path', path);
         this.lua.global.set('__mudix_msdp_val', this.toLuaValue(value));
         this.runChunk('__mudix_set_msdp(__mudix_msdp_path, __mudix_msdp_val)', `set-msdp "${path}"`);
+    }
+
+    // Bridges a single MSSP variable into the Lua `mssp` global. `name` is the
+    // flat variable name (e.g. "PLAYERS"); `value` is the reported string.
+    setMsspValue(name: string, value: string): void {
+        if (this.destroyed || !name) return;
+        this.lua.global.set('__mudix_mssp_name', name);
+        this.lua.global.set('__mudix_mssp_val', value);
+        this.runChunk('__mudix_set_mssp(__mudix_mssp_name, __mudix_mssp_val)', `set-mssp "${name}"`);
     }
 
     /**

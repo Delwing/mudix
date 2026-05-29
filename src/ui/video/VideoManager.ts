@@ -35,6 +35,8 @@ export class VideoManager {
      *  WindowManager.observeMain so videos drop onto the main viewport. */
     private getMount: (() => HTMLElement | null) | null = null;
     private active = new Map<string, ActiveVideo>();
+    /** Buffers fetched ahead of play via loadVideoFile, keyed by VFS path. */
+    private prefetched = new Map<string, ArrayBuffer>();
     /** Fires when a video ends naturally or is stopped — mirrors Mudlet's
      *  sysMediaFinished. */
     onEnded: ((name: string, path: string) => void) | null = null;
@@ -45,6 +47,23 @@ export class VideoManager {
 
     setMountPoint(fn: (() => HTMLElement | null) | null): void {
         this.getMount = fn;
+    }
+
+    /**
+     * Mudlet `loadVideoFile`. Preloads (fetches + caches) a VFS-backed video so
+     * the first playVideoFile has no fetch latency. http(s)/data/blob URLs need
+     * no preloading (the element fetches them directly) and report success.
+     * Returns false when no loader is wired or the fetch fails.
+     */
+    async preload(path: string): Promise<boolean> {
+        const target = (path ?? '').trim();
+        if (!target) return false;
+        if (/^https?:|^data:|^blob:/.test(target)) return true;
+        if (this.prefetched.has(target)) return true;
+        const buf = await this.loader?.(target) ?? null;
+        if (!buf) return false;
+        this.prefetched.set(target, buf);
+        return true;
     }
 
     async play(path: string, opts: PlayVideoOptions): Promise<boolean> {
@@ -58,7 +77,7 @@ export class VideoManager {
         if (/^https?:|^data:|^blob:/.test(path)) {
             src = path;
         } else {
-            const buf = await this.loader?.(path) ?? null;
+            const buf = this.prefetched.get(path) ?? await this.loader?.(path) ?? null;
             if (!buf) return false;
             const blob = new Blob([buf as BlobPart], { type: 'video/mp4' });
             objectUrl = URL.createObjectURL(blob);
@@ -146,6 +165,7 @@ export class VideoManager {
 
     destroy(): void {
         this.stopAll();
+        this.prefetched.clear();
         this.loader = null;
         this.getMount = null;
         this.onEnded = null;

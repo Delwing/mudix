@@ -58,6 +58,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const gmcpEnabled = protocols?.gmcp ?? PROTOCOL_DEFAULTS.gmcp;
     const mttsEnabled = protocols?.mtts ?? PROTOCOL_DEFAULTS.mtts;
     const msdpEnabled = protocols?.msdp ?? PROTOCOL_DEFAULTS.msdp;
+    const msspEnabled = protocols?.mssp ?? PROTOCOL_DEFAULTS.mssp;
     const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
     const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
@@ -84,7 +85,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // autoConnect effect dials — the MudClient reads them at construction. Set
     // synchronously during render (matching the seededFor pattern); user-driven
     // toggles after the first connect take effect on the next reconnect.
-    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, charsetEnabled, mspEnabled });
+    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled });
 
     const { engineRef } = useEngines(session, true, connection);
 
@@ -150,6 +151,19 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         });
         return () => engine.setLoggingToggler(null);
     }, [session, connection.id, connection.name, engineRef]);
+
+    // Mudlet `appendLog(text)` → append a line to the live logger, and
+    // `closeMudlet()` → disconnect + return to the connection screen.
+    useEffect(() => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        engine.setLogAppender((text: string) => loggerRef.current?.appendLine(text));
+        engine.setCloseProfileCallback(() => onCloseProfile());
+        return () => {
+            engine.setLogAppender(null);
+            engine.setCloseProfileCallback(null);
+        };
+    }, [engineRef, onCloseProfile]);
 
     // Index words from this session's output for argument-word Tab completion in
     // the command bar. Lives for the session's lifetime; one per connection.

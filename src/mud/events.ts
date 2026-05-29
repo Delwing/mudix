@@ -13,6 +13,7 @@ export type MudClientEvents = {
     'client.error': [message: string];
     'gmcp.negotiated': void;
     'msdp.negotiated': void;
+    'mssp.negotiated': void;
     'msp.negotiated': void;
     /** Fired for every `!!SOUND` / `!!MUSIC` tag parsed from the in-band text
      *  stream (or an `IAC SB MSP ... IAC SE` subnegotiation body). The
@@ -29,6 +30,7 @@ export type MudClientEvents = {
     'flushLines': [groups: { text: string; type: string }[]];
     'gmcp': [payload: { path: string; value: unknown }];
     'msdp': [payload: { path: string; value: unknown }];
+    'mssp': [payload: { name: string; value: string }];
     'gmcp.core.ping': [value: unknown];
     'telnet.echo': [serverEchoing: boolean];
     /** Mirror of Mudlet's `sysEchoAnomalyDetected`. Fires once per session when

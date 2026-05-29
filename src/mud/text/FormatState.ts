@@ -48,6 +48,7 @@ export interface FormatStateSnapshot {
     underline?: boolean;
     inverse?: boolean;
     strikethrough?: boolean;
+    overline?: boolean;
     slowBlink?: boolean;
     rapidBlink?: boolean;
     dim?: DimEffect;
@@ -105,6 +106,7 @@ function hasVisualFormatting(state?: FormatStateSnapshot): boolean {
         state.underline ||
         state.inverse ||
         state.strikethrough ||
+        state.overline ||
         state.slowBlink ||
         state.rapidBlink ||
         state.dim ||
@@ -137,6 +139,7 @@ function cloneState(state?: FormatStateSnapshot): FormatStateSnapshot | undefine
         underline: state.underline,
         inverse: state.inverse,
         strikethrough: state.strikethrough,
+        overline: state.overline,
         slowBlink: state.slowBlink,
         rapidBlink: state.rapidBlink,
         dim: state.dim ? {...state.dim} : undefined,
@@ -156,6 +159,7 @@ function statesEqual(a?: FormatStateSnapshot, b?: FormatStateSnapshot): boolean 
         !!a.underline === !!b.underline &&
         !!a.inverse === !!b.inverse &&
         !!a.strikethrough === !!b.strikethrough &&
+        !!a.overline === !!b.overline &&
         !!a.slowBlink === !!b.slowBlink &&
         !!a.rapidBlink === !!b.rapidBlink &&
         dimEffectsEqual(a.dim, b.dim) &&
@@ -175,6 +179,7 @@ export class FormatState {
     underline?: boolean;
     inverse?: boolean;
     strikethrough?: boolean;
+    overline?: boolean;
     slowBlink?: boolean;
     rapidBlink?: boolean;
     dim?: DimEffect;
@@ -194,6 +199,7 @@ export class FormatState {
         this.underline = snapshot.underline ? true : undefined;
         this.inverse = snapshot.inverse ? true : undefined;
         this.strikethrough = snapshot.strikethrough ? true : undefined;
+        this.overline = snapshot.overline ? true : undefined;
         this.slowBlink = snapshot.slowBlink ? true : undefined;
         this.rapidBlink = snapshot.rapidBlink ? true : undefined;
         this.dim = snapshot.dim ? {...snapshot.dim} : undefined;
@@ -208,6 +214,7 @@ export class FormatState {
         this.underline = undefined;
         this.inverse = undefined;
         this.strikethrough = undefined;
+        this.overline = undefined;
         this.slowBlink = undefined;
         this.rapidBlink = undefined;
         this.dim = undefined;
@@ -222,6 +229,7 @@ export class FormatState {
             underline: this.underline ? true : undefined,
             inverse: this.inverse ? true : undefined,
             strikethrough: this.strikethrough ? true : undefined,
+            overline: this.overline ? true : undefined,
             slowBlink: this.slowBlink ? true : undefined,
             rapidBlink: this.rapidBlink ? true : undefined,
             dim: this.dim ? {...this.dim} : undefined,
@@ -261,6 +269,9 @@ export class FormatState {
                 case 9:
                     this.strikethrough = true;
                     break;
+                case 53:
+                    this.overline = true;
+                    break;
                 case 22:
                     this.bold = undefined;
                     break;
@@ -279,6 +290,9 @@ export class FormatState {
                     break;
                 case 29:
                     this.strikethrough = undefined;
+                    break;
+                case 55:
+                    this.overline = undefined;
                     break;
                 case 39:
                     this.foreground = undefined;
@@ -822,6 +836,7 @@ export class AnsiAwareBuffer {
             const decorations: string[] = [];
             if (state.underline) decorations.push("underline");
             if (state.strikethrough) decorations.push("line-through");
+            if (state.overline) decorations.push("overline");
             if (decorations.length > 0) styles.push(`text-decoration: ${decorations.join(" ")}`);
 
             if (state.hyperlink) {
@@ -872,6 +887,7 @@ export class AnsiAwareBuffer {
             const decorations: string[] = [];
             if (state.underline) decorations.push("underline");
             if (state.strikethrough) decorations.push("line-through");
+            if (state.overline) decorations.push("overline");
             if (decorations.length > 0) styles.push(`text-decoration: ${decorations.join(" ")}`);
 
             if (state.hyperlink) {

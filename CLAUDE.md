@@ -5,32 +5,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev        # Start Vite dev server
-npm run build      # TypeScript check + production build (tsc && vite build)
-npm run preview    # Preview production build
-npm run typecheck  # Type-check only (tsc --noEmit)
+npm run dev         # Start Vite dev server
+npm run build       # TypeScript check + production build (tsc && vite build)
+npm run preview     # Preview production build
+npm run typecheck   # Type-check (tsc -p tsconfig.test.json — covers src + tests)
+npm test            # Run the Vitest suite once
+npm run test:watch  # Vitest in watch mode
 ```
 
-There are no tests at this time.
+Tests live in `tests/` and run through Vite (so `?raw` Lua imports, `import.meta.glob`, and
+JSON imports resolve exactly as in the app build). The default environment is `happy-dom`;
+Lua/runtime suites opt into the `node` environment per-file (`// @vitest-environment node`) so
+wasmoon/pcre2 WASM loads from the filesystem. See `tests/setup.ts` and `vitest.config.ts`.
+
+A standalone telnet→WebSocket proxy lives in `proxy/` (run `yarn` then `yarn start` there);
+deploys to GitHub Pages via `.github/workflows/deploy.yml` on push to `master`.
 
 ## What This Is
 
-Mudix is a **web-based MUD (Multi-User Dungeon) client** built with React + TypeScript. It connects to MUD servers via WebSocket (with GMCP protocol support), renders ANSI-colored text output, supports Lua scripting for automation, and provides a dockable multi-panel UI.
+Mudix is a **web-based MUD (Multi-User Dungeon) client** built with React + TypeScript. It connects to MUD servers over WebSocket (directly or through a telnet proxy) with full telnet/GMCP/MSDP/MSSP/MCCP/MSP support, renders ANSI-colored output, runs **Mudlet-compatible Lua scripting** in the browser, and aims for drop-in compatibility with Mudlet packages, maps, and the XML profile format. It ships a custom dock/float multi-panel UI, a per-profile virtual filesystem, an in-browser SQLite database, and session logging.
 
-Key libraries: `dockview-react` (docking), `wasmoon-lua5.1` (Lua in browser, WASM-compiled Lua 5.1), `mudlet-map-binary-reader/renderer` (map files), `zustand` (state), `pako` (compression).
+Key libraries: `wasmoon-lua5.1` (WASM-compiled Lua 5.1), `pcre2-wasm-universal` (PCRE regex for triggers/aliases), `@sqlite.org/sqlite-wasm` (the `db:*` API), `@zenfs/core` + `@zenfs/dom` (the profile VFS), `mudlet-map-binary-reader`/`-renderer`/`-editor` (map files), `zustand` (state), `pako`/`fflate` (compression), `@codemirror/*` (the script editor), `dompurify` + `marked` (HTML/markdown panels).
 
 ## Architecture Overview
 
 ### Event-Driven Core
 
-`MudSession` owns a `MudClient` (WebSocket) and an `EventBus`. All MUD events flow through `session.events`:
+`MudSession` owns a `MudClient`, a typed `EventBus` (`src/core/EventBus.ts`), the `Console` registry, the `WindowManager`, and the `SessionLogger`. All MUD activity flows through `session.events`:
 
 ```
-MudClient (WebSocket)
-  → MudSession.events (flushLines, gmcp, message, status, ping, client.connect/disconnect)
-    → ScriptingEngine (Lua handlers, alias processing)
-    → React components (OutputPanel, Toolbar, etc.)
+MudClient (WebSocket — direct or via telnet proxy)
+  → telnet/protocol parsing (GMCP, MSDP, MSSP, MCCP, MSP, CHARSET, TTYPE/MTTS)
+  → MudSession.events (flushLines, message, prompt, gmcp, msdp, mssp, msp,
+                       status, ping, client.connect/disconnect, *.negotiated, ...)
+    → ScriptingEngine (Lua handlers, alias/trigger/timer/key engines)
+    → React components (OutputArea, Toolbar, panels)
+    → SessionLogger (persists output to IndexedDB)
 ```
+
+### Connection & Protocols
+
+`MudClient` (`src/mud/connection/MudClient.ts`) speaks telnet over a WebSocket using binary frames. Two connection modes (`MudConnection.mode` in `storage/schema.ts`):
+- **`websocket`** — connect directly to a `ws(s)://` URL (servers that expose a native WebSocket endpoint).
+- **`mud`** — connect to a raw `host:port` through the telnet→WebSocket **proxy** (`proxy/server.ts`, default URL overridable per-profile). The browser can't open raw TCP, so the proxy bridges it.
+
+Protocol handlers live in `src/mud/protocol/`: **GMCP** (201), **MSDP**, **MSSP** (server status), **MCCP** (compression via pako), **MSP** (sound), plus telnet **CHARSET**, **TTYPE/MTTS**, **ECHO**, and GA/EOR prompt detection. `index.ts` re-exports the option codes and stream factories `MudClient` wires together. The client latches into "GA-driven" prompt mode once a server sends IAC GA/EOR; otherwise it flushes trailing partial lines after `promptTimeoutMs` (default 300ms).
 
 ### Command Processing Pipeline
 
@@ -46,36 +65,40 @@ User input (CommandBar)
 
 ### Scripting Architecture
 
-**`ScriptingEngine`** orchestrates runtimes via the **`IScriptingRuntime`** interface (`load`, `emitEvent`, `processInput`, `runWithMatches`, `destroy`). Only Lua is implemented today but the interface is designed for extension.
+**`ScriptingEngine`** orchestrates runtimes via the **`IScriptingRuntime`** interface (`load`, `emitEvent`, `processInput`, `runWithMatches`, `destroy`). Only Lua is implemented today but the interface is designed for extension. The engine also owns the JS-side automation engines (`AliasEngine`, `TriggerEngine`, `TimerEngine`, `KeyEngine`), the per-profile VFS lifecycle, and profile-data load/save.
 
-**`LuaRuntime`** uses wasmoon-lua5.1 to run Lua in the browser. It exposes the `mudix` global table:
+**`LuaRuntime`** uses wasmoon-lua5.1 to run Lua 5.1 in the browser. The API surface is **Mudlet-native global functions**, not a namespaced table — the goal is drop-in compatibility with real Mudlet scripts and packages:
 
 ```lua
-mudix.send(text)                  -- send command to MUD
-mudix.echo/cecho/decho/hecho()    -- output (plain, Mudlet-color, decimal-RGB, hex-RGB)
-mudix.windows.open/write/clear/setTitle()
-mudix.timers.after(seconds, fn)
-mudix.aliases.add(pattern, fn) / .remove(id)
-mudix.on(event, handler) / .off()
-gmcp                              -- auto-populated table from GMCP packets
-matches                           -- [full_input, cap1, cap2, ...] inside alias handlers
+send(text)                        -- send command to MUD
+echo / cecho / decho / hecho      -- output (plain, Mudlet-color, decimal-RGB, hex-RGB)
+tempTimer(secs, code) / tempAlias / tempTrigger / tempRegexTrigger
+openUserWindow / cecho to window / setWindowWrap / ...
+gmcp / msdp                        -- auto-populated tables from GMCP/MSDP packets
+matches / multimatches             -- capture groups inside trigger/alias handlers
+db:* (sqlite), io.* / lfs (VFS), rex (PCRE)
 ```
 
-**`ScriptingAPI`** is the bridge layer — it translates Lua calls into MUD sends, window operations, and timer scheduling. It holds references to `MudSession` and `WindowManager`.
+> **Do not invent a `mudix.*` table** — older docs reference one, but it was never bound. Use the Mudlet-native globals. See `MUDLET_API.md` for the full implementation checklist and `luaCompletions.ts` for the autocomplete catalogue (every new global must be added there too).
 
-Scripts are stored per-connection in Zustand (`connectionScripts`). When the active connection changes, `App` destroys the old `LuaRuntime` and creates a fresh one, loading each script sequentially.
+Bundled Mudlet Lua (`src/scripting/lua/mudlet-lua/`) is loaded at startup: `LuaGlobal.lua`, GUI/Geyser, the generic mapper, string/table/db utilities, plus shims (`Luasql.lua` → sqlite-wasm, `VFS.lua`, `Yajl.lua`, `utf8.lua`, `rex` via `pcre2-wasm`). **Order matters**: JS globals must be bound *before* `LuaGlobal.lua` runs, because Other.lua installs `if not X then X = dummy` stubs that would otherwise shadow real bindings. Never bind a global named `debug` — bundled code calls `debug.getinfo/traceback`.
+
+**`ScriptingAPI`** is the bridge layer — it translates Lua calls into MUD sends, window/overlay operations, timer scheduling, file I/O, SQL, sound/TTS/video, etc. It holds references to `MudSession`, `WindowManager`, and the profile's `ProfileVFS`.
+
+Scripts/aliases/triggers/timers/keys/buttons are stored per-connection in Zustand as Mudlet-style trees (`isGroup` + `parentId`; see `storage/schema.ts`). When the active connection changes, the old `LuaRuntime` is destroyed and a fresh one is created, loading each script sequentially. **Teardown ordering**: stop the timer engine (the only autonomous Lua caller) before `lua_close`.
 
 ### Window/Docking System
 
-**`WindowManager`** (`src/ui/windows/WindowManager.ts`): Adapter between the scripting API and dockview. Manages a panel registry, buffers writes before the dockview API is ready, and queues deferred opens.
+The UI uses a **custom dock/float layout** (`src/ui/layout/`) — dockview was removed. `ContentLayout` is the root: it renders the main `OutputArea`, the docked-panel regions, and the floating layer.
 
-**`DockRoot`** (`src/ui/windows/DockRoot.tsx`): React wrapper around dockview-react. Registers four panel types:
-- `OutputPanel` — main MUD output (locked position, sticky scroll, hidden header)
-- `TextPanel` — script-written ANSI text
-- `HtmlPanel` — raw HTML injection
-- `MapPanel` — Mudlet binary map renderer
+- **`DockArea`** — panels docked to the four sides (left/right/top/bottom) with resizable extents.
+- **`FloatingWindowLayer`** — free-floating windows (`ScriptWindow`) rendered via portals; draggable/resizable.
+- **`SplitGroupPanel` / `TabGroupPanel`** — group multiple panels into splits or tab stacks.
+- **`dockDetect.ts`** — drag-to-dock hit-testing; **`WindowContextMenu`** — per-window actions.
 
-Layout is serialized per-connection to Zustand with a 400ms debounce. On restore, live refs (`session`, `manager`) are re-injected since they can't be serialized.
+**`WindowManager`** (`src/ui/windows/WindowManager.ts`): Adapter between the scripting API and the layout. Owns the panel registry, buffers writes before a panel mounts, and queues deferred opens. Panel types: `TextPanel` (script-written ANSI text), `HtmlPanel` (raw HTML injection), `MapPanel` (Mudlet binary map renderer). It also backs map APIs via a live `MapControl` handle registered by `MapPanel`.
+
+Overlay-based Geyser widgets (mini-consoles, labels, gauges, command lines) are separate from docked panels — they're absolutely-positioned HTML in overlay layers (`LabelManager`, `CommandLineManager`) mirroring Mudlet's pixel coordinates. Layout is serialized per-connection to Zustand (debounced); live refs (`session`, `manager`) are re-injected on restore since they can't be serialized.
 
 ### Storage
 
@@ -86,6 +109,26 @@ Layout is serialized per-connection to Zustand with a 400ms debounce. On restore
 **`mapStorage`** (`src/storage/mapStorage.ts`): Separate IndexedDB (`mudix_maps` DB) for Mudlet binary map data. Async `saveMap(ArrayBuffer)` / `loadMap()`.
 
 **`logStorage`** (`src/storage/logStorage.ts`): Separate IndexedDB (`mudix_logs` DB, `sessions` + `entries` stores) for persisted gameplay logs. `SessionLogger` (`src/logging/SessionLogger.ts`) subscribes to `session.events('message')` — the choke point all output (including echoed commands) flows through — snapshots each line's `toHtml()` + plain text, and batch-writes. Browsable via `LogBrowserModal` (toolbar **Logs** button); export helpers in `logExport.ts`. Per-profile toggle: `ProfileSettings.loggingEnabled` (default on).
+
+### Profile VFS (virtual filesystem)
+
+Each profile gets its own **`ProfileVFS`** (`src/scripting/vfs/ProfileVFS.ts`), built on **ZenFS**, mounted at `/profiles/<connectionId>`. It backs Lua file I/O (`io.*`, `lfs`, `table.save/load`), package storage, fonts, sounds, and `getMudletHomeDir()`. Two backends:
+- **IndexedDB** (default) — `@zenfs/core` IndexedDB store.
+- **Linked local folder** — `@zenfs/dom` `WebAccess` over a `FileSystemDirectoryHandle` chosen via the File System Access API. The handle is persisted (`folderHandleStore`) and re-used on cold start only when permission is already `granted` (prompts need a user gesture). `folderSync.ts` handles two-way sync and `MergeConflictModal` resolves divergence. `atime` tracking is disabled (`no_atime`) — it otherwise turned every file read into a synchronous IDB write.
+
+A **service worker** (`public/vfs-sw.js`, registered in `main.tsx`) serves VFS files as real HTTP assets at `<scope>__vfs/<connectionId>/<path>` so CSS `url(...)`, images, and fonts can reference profile files. The page is the source of truth; each SW request round-trips to the client over a `MessageChannel` (`vfsBridge.ts`). `cssRewrite.ts` rewrites VFS-relative URLs in stylesheets to that prefix.
+
+### SQLite & Database API
+
+`@sqlite.org/sqlite-wasm` (`src/db/sqliteClient.ts`) backs Mudlet's `db:*` Lua API. Bundled `DB.lua` runs against a `Luasql.lua` shim that targets sqlite-wasm; `sqlRowEncoder.ts` marshals rows between Lua and JS.
+
+### Packages & Import
+
+mudix installs **Mudlet packages/modules** (`.mpackage`/`.zip`/XML). `src/import/` handles it: `mudletXmlImport`/`mudletXmlExport` (the Mudlet XML format for scripts/aliases/triggers/etc.), `packageInstaller` (unpack into the VFS + register tree nodes), `packageRepository` + `PackageRepositoryModal` (browse the public Mudlet package repo — fetch the manifest from `raw.githubusercontent.com`, **not** the stale github.io mirror), `remotePackageInstall` (install from URL / `sysInstall` GUI payloads), and `defaultPackages` (seed bundled defaults like `run-lua-code` on first profile open).
+
+### Media: Sound, TTS, Video
+
+`SoundManager` (MSP + Mudlet `playSoundFile`/`stopSounds`), `TtsManager` (Web Speech `ttsSpeak`/`ttsQueue`...), and `VideoManager` (`playVideoFile` and music utilities) implement Mudlet's media APIs against browser primitives; file paths resolve through the profile VFS.
 
 ### JS API Parity with Mudlet
 

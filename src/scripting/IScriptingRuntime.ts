@@ -21,6 +21,11 @@ export interface IScriptingRuntime {
      * the flat top-level variable name; the top-level key is replaced.
      */
     setMsdpValue(path: string, value: unknown): void;
+    /**
+     * Write a single MSSP status variable into the runtime's `mssp` table.
+     * `name` is the flat variable name; the value is a scalar string.
+     */
+    setMsspValue(name: string, value: string): void;
     runWithMatches(
         code: string,
         name: string,

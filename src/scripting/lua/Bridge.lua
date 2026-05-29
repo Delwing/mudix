@@ -733,6 +733,26 @@ function getMapEvents()
     return out
 end
 
+-- Mudlet getMapMenus() → { [menuName] = { ["parent"]=..., ["display name"]=... } }.
+-- JS hands back an array of entries (0-indexed); rebuild into Mudlet's keyed
+-- shape so scripts can index by literal menu name.
+function getMapMenus()
+    local raw = __getMapMenus()
+    local out = {}
+    if type(raw) == 'table' then
+        local i = 0
+        while raw[i] ~= nil do
+            local m = raw[i]
+            out[m.name] = {
+                ["parent"]       = m.parent or "",
+                ["display name"] = m.displayName,
+            }
+            i = i + 1
+        end
+    end
+    return out
+end
+
 -- Mudlet getStopWatches() → { [watchID] = { name, isRunning, isPersistent,
 -- elapsedTime = {...} } }. JS hands ids over as stringified keys (wasmoon
 -- convention); re-key via tonumber to integer ids and rebuild each record off
@@ -873,6 +893,55 @@ function getMapLabel(areaId, key)
         return out
     end
     return {}
+end
+
+-- Mudlet getProfiles() — list of open profile names. mudix is a single-profile
+-- web app, so this is always the one active profile (matching the documented
+-- stub: callers that iterate profiles still get a 1-element list).
+function getProfiles()
+    return { getProfileName() }
+end
+
+-- Mudlet auditAreas() — repair area/room membership consistency. mudix returns
+-- a summary report: { checkedAreas, checkedRooms, fixedAreas, orphanRooms={...},
+-- danglingRefs={...} }. JS hands the id arrays over 0-indexed; rebuild them as
+-- 1-indexed Lua arrays.
+function auditAreas()
+    local r = __auditAreas()
+    local function reindex(a)
+        local out = {}
+        if type(a) == 'table' then
+            local i = 0
+            while a[i] ~= nil do out[#out + 1] = a[i]; i = i + 1 end
+            if #out == 0 then for _, v in ipairs(a) do out[#out + 1] = v end end
+        end
+        return out
+    end
+    if type(r) ~= 'table' then return {} end
+    return {
+        checkedAreas = r.checkedAreas or 0,
+        checkedRooms = r.checkedRooms or 0,
+        fixedAreas   = r.fixedAreas or 0,
+        orphanRooms  = reindex(r.orphanRooms),
+        danglingRefs = reindex(r.danglingRefs),
+    }
+end
+
+-- Mudlet createMapLabel(areaID, text, posx, posy, posz, fgRed, fgGreen, fgBlue,
+-- bgRed, bgGreen, bgBlue, zoom, fontSize, showOnTop, noScaling). The label is
+-- stored, queryable via getMapLabel, and painted by the renderer; the (display)
+-- `zoom` arg is dropped while `fontSize` sizes the label box. → new labelID, or
+-- -1 if the area is missing.
+function createMapLabel(areaID, text, posx, posy, posz, fgR, fgG, fgB, bgR, bgG, bgB, _zoom, fontSize, showOnTop, noScaling)
+    return __createMapLabel(areaID, tostring(text or ''), posx, posy, posz, fgR, fgG, fgB, bgR, bgG, bgB, fontSize, showOnTop, noScaling)
+end
+
+-- Mudlet createMapImageLabel(areaID, imagePathFileName, posx, posy, posz, width,
+-- height, zoom, showOnTop, scaling). `scaling` (Mudlet) is the inverse of the
+-- stored noScaling flag; default scaling=true. → new labelID, or -1 if missing.
+function createMapImageLabel(areaID, imagePath, posx, posy, posz, width, height, _zoom, showOnTop, scaling)
+    local noScaling = (scaling == false)
+    return __createMapImageLabel(areaID, tostring(imagePath or ''), posx, posy, posz, width, height, showOnTop, noScaling)
 end
 
 -- Mudlet addAreaName(name) → areaID on success, or (false, errMsg) on
@@ -1161,6 +1230,13 @@ function __mudix_set_msdp(key, value)
     msdp[key] = value
 end
 
+-- MSSP equivalent: flat scalar status fields keyed by variable name, mirroring
+-- Mudlet's `mssp` global (mssp.PLAYERS, mssp.UPTIME, ...).
+function __mudix_set_mssp(key, value)
+    if type(mssp) ~= 'table' then mssp = {} end
+    mssp[key] = value
+end
+
 -- Mirrors Mudlet's C++ TLuaInterpreter::registerAnonymousEventHandler: stores
 -- (event name → list of Lua function names) keyed registrations made by scripts
 -- loaded before Other.lua's Lua-side override takes effect (notably
@@ -1363,6 +1439,28 @@ do
     end
 end
 
+-- Mudlet permBeginOfLineStringTrigger(name, parent, patterns, luaCode). Same
+-- flatten convention as permSubstringTrigger; each pattern matches only when it
+-- appears at the start of the line. An empty patterns table makes a trigger
+-- group.
+do
+    local _raw = __mudix_permBeginOfLineStringTrigger
+    local SEP = '\1'
+    function permBeginOfLineStringTrigger(name, parent, patterns, code)
+        local ps = {}
+        if type(patterns) == 'table' then
+            for _, p in ipairs(patterns) do ps[#ps + 1] = tostring(p) end
+        end
+        return _raw(tostring(name or ""), tostring(parent or ""), table.concat(ps, SEP), tostring(code or ""))
+    end
+end
+
+-- Mudlet permPromptTrigger(name, parent, luaCode). Persistent trigger that
+-- fires on every server prompt line (GA/EOR); no text pattern.
+function permPromptTrigger(name, parent, code)
+    return __mudix_permPromptTrigger(tostring(name or ""), tostring(parent or ""), tostring(code or ""))
+end
+
 -- Mudlet permAlias(name, parent, regex, luaCode). Persistent alias with a
 -- single regex pattern. Returns the new id or -1 if the parent group is
 -- missing.
@@ -1421,6 +1519,20 @@ do
     function tempColorTrigger(fg, bg, fn, expirationCount)
         return _raw(tonumber(fg) or -1, tonumber(bg) or -1,
             __mudix_register_cb(__mudix_to_fn(fn, "tempColorTrigger", 3)),
+            expirationCount)
+    end
+    -- Mudlet tempAnsiColorTrigger(ansiFg, ansiBg, code [, expirationCount]).
+    -- ANSI 256-colour indices (0..255). mudix already matches tempColorTrigger
+    -- against ANSI palette indices, so this shares the same primitive; any
+    -- negative value (Mudlet's ColorIgnore/ColorDefault sentinels) maps to -1
+    -- = "match any", since mudix has no separate default-colour index.
+    function tempAnsiColorTrigger(fg, bg, fn, expirationCount)
+        local nf = tonumber(fg)
+        local nb = tonumber(bg)
+        if not nf or nf < 0 then nf = -1 end
+        if not nb or nb < 0 then nb = -1 end
+        return _raw(nf, nb,
+            __mudix_register_cb(__mudix_to_fn(fn, "tempAnsiColorTrigger", 3)),
             expirationCount)
     end
 end
@@ -1718,6 +1830,18 @@ function playVideoFile(a, b, c)
         return __playVideoFile(a)
     end
     return __playVideoFile({ name = tostring(a or ''), volume = b, loops = c })
+end
+
+-- Mudlet `loadVideoFile`. Preloads/caches a video so the first playVideoFile
+-- has no fetch latency. Accepts:
+--   loadVideoFile(name)            -- positional
+--   loadVideoFile({name=...})      -- table
+-- name resolves against the profile VFS or may be an http(s):// URL.
+function loadVideoFile(a)
+    if type(a) == 'table' then
+        return __loadVideoFile({ name = tostring(a.name or a.url or '') })
+    end
+    return __loadVideoFile({ name = tostring(a or '') })
 end
 
 -- Mudlet `playMusicFile`. Table-arg only:

@@ -64,6 +64,26 @@ const STRING_EXT: Completion[] = [
     fn('contains', '(s, sub) → bool',   'Check if string contains substring'),
 ];
 
+// ── utf8 extensions ───────────────────────────────────────────────────────────
+
+const UTF8_EXT: Completion[] = [
+    fn('len',     '(s) → number',                'Number of UTF-8 code points'),
+    fn('sub',     '(s, i, j?) → string',         'Substring by code-point index'),
+    fn('reverse', '(s) → string',                'Reverse by code point'),
+    fn('char',    '(...) → string',              'Build string from Unicode code points'),
+    fn('byte',    '(s, i?, j?)',                  'Code points at the given indices'),
+    fn('unicode', '(s, i?, j?)',                  'Code points at the given indices'),
+    fn('find',    '(s, pattern, init?, plain?)',  'Find pattern (UTF-8 aware)'),
+    fn('match',   '(s, pattern, init?)',          'Match pattern, return captures'),
+    fn('gmatch',  '(s, pattern, all?)',           'Iterator over all matches'),
+    fn('gsub',    '(s, pattern, repl, n?)',       'Global substitution (UTF-8 aware)'),
+    fn('lower',   '(s) → string',                 'Convert to lowercase'),
+    fn('upper',   '(s) → string',                 'Convert to uppercase'),
+    // Mudlet extensions
+    fn('patternEscape', '(s) → string', 'Escape Lua pattern magic characters in a UTF-8 string'),
+    fn('title',         '(s) → string', 'Uppercase the first code point of the string (UTF-8 aware)'),
+];
+
 // ── table extensions ──────────────────────────────────────────────────────────
 
 const TABLE_EXT: Completion[] = [
@@ -162,6 +182,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('sendSocket',   '(data)',           'Send literal bytes over the socket (no telnet/encoding processing)'),
     fn('feedTelnet',   '(data)',           'Inject raw server bytes into the inbound pipeline as if received from the MUD'),
     fn('disconnect',   '()',               'Drop the current connection'),
+    fn('closeMudlet',  '()',               'Close the active profile: disconnect and return to the connection screen (mudix maps Mudlet\'s closeMudlet to closing the open profile).'),
     fn('connectToServer', '(host, port [, save]) → bool', 'Connect the session to host:port through the proxy. With save=true the host/port are persisted onto the active connection (mud mode).'),
     fn('denyCurrentSend', '()',            'Inside a sysDataSendRequest handler, cancels the in-flight command'),
     fn('echo',         '([window,] text)', 'Print plain text (optional window name as 1st arg)'),
@@ -241,6 +262,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('copy',            '([window])',    'Copy the current selection (with formatting) into the clipboard for paste()/appendBuffer()'),
     fn('paste',           '([window])',    'Paste the copied rich text at the cursor (or append at the end of the last line)'),
     fn('appendBuffer',    '([window])',    'Append the copied rich text (see copy) as a new line to a window or buffer'),
+    fn('clearVisitedLinks', '()',          'Forget which clickable links have been visited. mudix tracks no visited-link state, so this is a no-op (kept for Mudlet script portability).'),
     fn('clearWindow',     '([name])',      'Clear window contents'),
     fn('setUserWindowTitle', '(name, title)', 'Set user window title'),
     fn('setUserWindowStyleSheet', '(name, css)', 'Apply Qt-style CSS to a userwindow viewport. `QWidget { … }` (and bare declarations) auto-scope to that window so padding/background actually affect it; non-QWidget selectors are dropped.'),
@@ -348,6 +370,10 @@ const MUDLET_GLOBALS: Completion[] = [
         'Create a persistent regex trigger under parent group (""=root). regexes is a Lua array of regex strings (any-match). Empty regexes creates a trigger group. Returns the new id, or -1 if parent is given but no trigger group with that name exists.'),
     fn('permSubstringTrigger', '(name, parent, patterns, code) → id',
         'Create a persistent substring trigger under parent group (""=root). patterns is a Lua array of literal substrings (any-match). Empty patterns creates a trigger group. Returns the new id, or -1 if parent is given but no trigger group with that name exists.'),
+    fn('permBeginOfLineStringTrigger', '(name, parent, patterns, code) → id',
+        'Create a persistent begin-of-line substring trigger under parent group (""=root). patterns is a Lua array of literal substrings, each matched only at the start of the line. Empty patterns creates a trigger group. Returns the new id, or -1 if parent is given but no trigger group with that name exists.'),
+    fn('permPromptTrigger', '(name, parent, code) → id',
+        'Create a persistent trigger that fires on every server prompt line (GA/EOR), with no text pattern, under parent group (""=root). Returns the new id, or -1 if parent is given but no trigger group with that name exists.'),
     fn('permAlias',        '(name, parent, regex, code) → id',
         'Create a persistent alias under parent group (""=root). regex is a single PCRE pattern (Mudlet TAlias.mRegexCode). Returns the new id, or -1 if parent is given but no alias group of that name exists.'),
     fn('permTimer',        '(name, parent, seconds, code) → id',
@@ -427,6 +453,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('tempLineTrigger','(linesAhead, count, code)', 'Trigger N lines ahead'),
     fn('tempColorTrigger','(fg, bg, fn, expirationCount?) → id',
         'Create a temporary trigger that fires when any segment of the current rendered line carries the requested ANSI palette indices. Pass -1 for either colour to match any. expirationCount: positive N auto-kills after N fires; omitted/<=0 = unlimited. Non-indexed (RGB) segments do not match a positive index.'),
+    fn('tempAnsiColorTrigger','(ansiFg, ansiBg, fn, expirationCount?) → id',
+        'Create a temporary trigger that fires on ANSI 256-colour indices (0..255) in the current rendered line. Shares the palette-matching engine of tempColorTrigger; any negative value (Mudlet ColorIgnore/ColorDefault) matches any colour. expirationCount: positive N auto-kills after N fires; omitted/<=0 = unlimited.'),
     // Keys
     fn('tempKey',        '(modifier, key, fn) → id',  'Create a temporary keybinding. modifier: Qt bitflag (0=none, 67108864=Ctrl, 33554432=Shift, 134217728=Alt). key: Qt::Key int or web code string'),
     fn('killKey',        '(id)',                       'Remove a keybinding'),
@@ -509,6 +537,10 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('saveProfile',        '([location]) → true, path', 'Force pending profile data (VFS files, SQL snapshots) through to durable storage. zustand state auto-saves on every change so this is a no-op for triggers/aliases/scripts; useful after io.open/db: writes. The optional location arg is accepted for Mudlet compatibility but ignored.'),
     fn('addSupportedTelnetOption', '(option) → bool',     'Mark a telnet option byte (0..255) as one the client accepts. On the next IAC WILL <opt> we reply IAC DO <opt>; on IAC DO <opt> we reply IAC WILL <opt>. Hardcoded options (GMCP/MSDP/TTYPE/MCCP/ECHO) already negotiate inline; this registry is for everything else. Returns true if newly added.'),
     fn('startLogging',       '(state) → bool',            'Toggle the per-profile session logger that records output (and your echoed commands) to the persistent log store. Mirrors the Logs toolbar toggle; returns true once the toggle is wired up.'),
+    fn('appendLog',          '(text) → bool',             'Append an arbitrary line to the current session log (outside the normal output stream). Returns false when logging is not active.'),
+    fn('ioprint',            '(...)',                     'Print to the developer console (Mudlet prints to stdout; in the browser the closest analogue is the devtools console).'),
+    fn('getProfileTabNumber', '([name]) → number',        'Tab index of a profile. mudix is a single-profile web app, so this always returns 1.'),
+    fn('getProfiles',         '() → {name}',               'List of open profile names. mudix is single-profile, so this is always a 1-element list with the active profile name.'),
     fn('loadRawFile',        '(path) → string',    'Read entire file from VFS and return its contents'),
     fn('loadfile',           '(filename)',          'Load a Lua file from VFS'),
     fn('dofile',             '(filename)',          'Load and execute a Lua file from VFS'),
@@ -520,6 +552,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('killAnonymousEventHandler',     '(id) → bool',       'Remove an event handler by ID'),
     // Formatting
     fn('setUnderline',      '(bool)',                          'Toggle underline text formatting'),
+    fn('setOverline',       '([window,] bool)',                'Toggle overline (a line above the text) on the current pen and selection'),
     fn('setReverse',        '([window,] bool)',                'Toggle reverse-video (swaps foreground/background) on the current pen and selection'),
     fn('setTextFormat',     '(windowName, r1, g1, b1, r2, g2, b2, bold, underline, italics, [strikeout], [overline], [reverse], [blinkMode]) → bool',
         'Set pen state in one call. r1/g1/b1 is BACKGROUND, r2/g2/b2 is FOREGROUND (Mudlet quirk). Booleans accept true/false or 1/0. blinkMode is "none"/"slow"/"fast". overline is accepted but a no-op (no overline channel). windowName "" or "main" targets the main console. Returns false when the named window does not exist.'),
@@ -620,6 +653,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('setRoomChar',          '(id, char)',                        'Set room symbol/character'),
     fn('addAreaName',          '(name) → areaId',                  'Create a new area'),
     fn('deleteArea',           '(areaId)',                          'Delete an area and its rooms'),
+    fn('auditAreas',           '() → {checkedAreas,checkedRooms,fixedAreas,orphanRooms,danglingRefs}',
+       "Sweep the map for area/room consistency issues and repair them: rebuilds each area's room-membership list from the authoritative room.area back-pointers (dropping dangling ids, re-filing missing rooms). Rooms pointing at a missing area are reported (orphanRooms) but left in place."),
     fn('getAreaTable',         '() → {name=id}',                   'Get all areas (name→id)'),
     fn('getAreaTableSwap',     '() → {id=name}',                   'Get all areas keyed by id (id→name); the inverse of getAreaTable'),
     fn('getRoomAreaName',      '(areaId) → name',                  'Get an area name'),
@@ -646,11 +681,21 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('getMapLabels',         '(areaID) → {labelID=labelText}',   'Get all map labels in an area, keyed by label id'),
     fn('getMapLabel',          '(areaID, labelID|labelText) → info|{labelID=info}',
        'Get a map label by id (returns a properties table: X,Y,Z,Width,Height,Text,Pixmap,OnTop,Scaling,Temporary,FgColor,BgColor) or by text (returns matches keyed by label id). Returns (false, errMsg) when the area is missing or the labelID is unknown.'),
+    fn('createMapLabel',       '(areaID, text, x, y, z, fgR, fgG, fgB, bgR, bgG, bgB, zoom, fontSize, showOnTop, noScaling) → labelID',
+       'Add a text label to an area. Returns the new label id, or -1 if the area is missing. Stored and queryable via getMapLabel; not yet painted by the renderer (zoom/fontSize accepted for parity).'),
+    fn('createMapImageLabel',  '(areaID, imagePath, x, y, z, width, height, zoom, showOnTop, scaling) → labelID',
+       'Add an image label to an area; the image path is stored in the label Pixmap. Returns the new label id, or -1 if the area is missing.'),
+    fn('deleteMapLabel',       '(areaID, labelID) → bool',         'Delete a map label by id. Returns false when the area or label id does not exist.'),
     fn('addMapEvent',          '(uniqueName, eventName [, parent [, displayName [, ...args]]]) → bool',
        "Add an entry to the map's right-click context menu. On click, raises eventName with the right-clicked roomId as the first arg, followed by your extra args. Pass another entry's uniqueName as `parent` to nest as a submenu."),
     fn('removeMapEvent',       '(uniqueName) → bool',              'Remove a previously registered map context-menu entry. Returns true if the entry existed.'),
     fn('getMapEvents',         '() → {uniqueName = {event,parent,display,args}}',
        'Get all registered map context-menu entries.'),
+    fn('addMapMenu',           '(menuName [, parent [, displayName]]) → bool',
+       "Add a submenu to the map's right-click context menu. addMapEvent entries nest under it by passing menuName as their `parent`. Pass another menu's name as `parent` to nest submenus."),
+    fn('removeMapMenu',        '(menuName) → bool',                'Remove a previously registered map context-menu submenu. Returns true if it existed.'),
+    fn('getMapMenus',          '() → {menuName = {parent, display}}',
+       'Get all registered map context-menu submenus.'),
     fn('registerMapInfo',      '(label, function) → true',
        'Register a callback that contributes a custom text line to the mapper widget. The callback receives (roomId, selectionSize, areaId, displayedAreaId) and returns (text, isBold?, isItalic?, r?, g?, b?). New contributors land disabled — call enableMapInfo(label) to show. Re-registering the same label replaces the prior callback.'),
     fn('killMapInfo',          '(label) → true | (false, errMsg)',
@@ -736,6 +781,7 @@ const MUDLET_GLOBALS: Completion[] = [
     // Video playback (HTML <video> overlay on the main viewport).
     fn('playVideoFile',       '(filename [, volume [, loops]]) | ({name=..., volume=..., loops=..., width=..., height=...})',
        'Play a video file. Filename resolves against the profile VFS or may be an http(s):// URL. Mounts an absolutely-positioned <video> element on the main viewport that fills the visible area; loops=-1 plays indefinitely.'),
+    fn('loadVideoFile',       '(name) | ({name=...})',               'Preload (fetch + cache) a video so the first playVideoFile has no fetch latency. name resolves against the profile VFS or may be an http(s):// URL.'),
     fn('getPlayingVideos',    '([{name=...}] | name) → {{name, path, volume}, ...}', 'Return the videos currently playing, optionally filtered by name. Volume is on the 0..100 scale.'),
     fn('getPausedVideos',     '([{name=...}] | name) → {{name, path, volume}, ...}', 'Return the videos currently paused (via pauseVideos), optionally filtered by name. Volume is on the 0..100 scale.'),
     fn('pauseVideos',         '()',                                  'Pause every currently playing video (preserves position; resume by re-issuing playVideoFile).'),
@@ -780,6 +826,7 @@ const MUDLET_GLOBALS: Completion[] = [
     // Globals / tables
     variable('gmcp',         'GMCP state table — auto-populated from server packets'),
     variable('msdp',         'MSDP state table — auto-populated from server packets'),
+    variable('mssp',         'MSSP server-status table — auto-populated once per connection'),
     variable('matches',      'Regex captures in trigger/alias context: [full, cap1, cap2, ...]'),
     variable('line',         'Current trigger line text'),
     variable('multimatches', 'Multiline trigger captures'),
@@ -815,6 +862,7 @@ export const REFERENCE_GROUPS: ReferenceGroup[] = [
     { title: 'math',            prefix: 'math.',           entries: MATH_EXT       },
     { title: 'io',              prefix: 'io.',             entries: IO_COMPLETIONS },
     { title: 'lfs',             prefix: 'lfs.',            entries: LFS_COMPLETIONS },
+    { title: 'utf8',            prefix: 'utf8.',           entries: UTF8_EXT       },
 ];
 
 // ── Hover lookup map: full dotted name → completion entry ────────────────────
@@ -830,6 +878,7 @@ export const HOVER_MAP = new Map<string, Completion>([
     ...STRING_EXT    .map(c => [`string.${c.label}`,         c] as [string, Completion]),
     ...TABLE_EXT     .map(c => [`table.${c.label}`,          c] as [string, Completion]),
     ...MATH_EXT      .map(c => [`math.${c.label}`,           c] as [string, Completion]),
+    ...UTF8_EXT      .map(c => [`utf8.${c.label}`,           c] as [string, Completion]),
 ]);
 
 // ── Namespace map: prefix → completions for that sub-namespace ────────────────
@@ -841,6 +890,7 @@ const NAMESPACE_MAP: Array<[string, Completion[]]> = [
     ['string.', STRING_EXT],
     ['table.',  TABLE_EXT],
     ['math.',   MATH_EXT],
+    ['utf8.',   UTF8_EXT],
 ];
 
 // ── Completion source ─────────────────────────────────────────────────────────

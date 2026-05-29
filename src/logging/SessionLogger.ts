@@ -70,6 +70,15 @@ export class SessionLogger {
         if (this.buffer.length >= FLUSH_AT) void this.flush();
     }
 
+    /**
+     * Mudlet `appendLog(text)` — append an arbitrary line to the current log,
+     * outside the normal output stream. Recorded with type 'appendLog'; any
+     * embedded ANSI is parsed for the HTML snapshot.
+     */
+    appendLine(text: string): void {
+        this.capture(text ?? '', 'appendLog');
+    }
+
     /** Persist any buffered lines and bump the session's end time/count. */
     flush(): Promise<void> {
         this.flushing = this.flushing.then(() => this.doFlush());

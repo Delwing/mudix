@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestRuntime, type TestRuntime } from '../createTestRuntime';
 import { TriggerEngine } from '../../src/mud/triggers/TriggerEngine';
+import { AnsiAwareBuffer } from '../../src/mud/text/FormatState';
 
 // tempLineTrigger's counting logic lives in TriggerEngine.addTempLine, which is
 // exercised here directly (the dispatch pipeline that drives processTemp from
@@ -234,6 +235,33 @@ describe('msdp global — setMsdpValue', () => {
     env.rt.setMsdpValue('ROOM', { NAME: 'elsewhere' });
     expect(env.run('return msdp.ROOM.VNUM')).toBe(null);
     expect(env.run('return msdp.ROOM.NAME')).toBe('elsewhere');
+  });
+});
+
+// setMsspValue is the bridge from a decoded MSSP variable into the Lua `mssp`
+// global (mirrors setMsdpValue → msdp). Subnegotiation parsing is covered in
+// tests/mud/protocol/mssp.test.ts; here we confirm the value lands in the
+// expected flat Lua shape.
+describe('mssp global — setMsspValue', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('exposes an empty mssp table before any packet', () => {
+    expect(env.run('return type(mssp)')).toBe('table');
+  });
+
+  it('writes scalar status fields to flat top-level keys', () => {
+    env.rt.setMsspValue('PLAYERS', '52');
+    env.rt.setMsspValue('UPTIME', '1234567890');
+    expect(env.run('return mssp.PLAYERS')).toBe('52');
+    expect(env.run('return mssp.UPTIME')).toBe('1234567890');
+  });
+
+  it('replaces an existing value on update', () => {
+    env.rt.setMsspValue('PLAYERS', '52');
+    env.rt.setMsspValue('PLAYERS', '60');
+    expect(env.run('return mssp.PLAYERS')).toBe('60');
   });
 });
 
@@ -838,5 +866,200 @@ describe('Mudlet-API batch — Lua bindings', () => {
     // Both return false here because the engine setter callbacks aren't wired
     // in this harness; the point is the binding exists and doesn't throw.
     expect(() => env.run('setModuleInfo("m", "k", "v"); setPackageInfo("p", "k", "v")')).not.toThrow();
+  });
+});
+
+// ── New batch: trigger constructors, map menus/labels, auditAreas, overline,
+//    utf8 helpers, and the misc forwarders ─────────────────────────────────────
+
+describe('trigger constructors — permPromptTrigger / permBeginOfLineStringTrigger / tempAnsiColorTrigger', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  // The perm* tree-creation callbacks live in ScriptingEngine (not wired here),
+  // so these return -1 — the point is the Lua binding + Bridge.lua wrapper run
+  // cleanly and produce the documented miss value.
+  it('permPromptTrigger / permBeginOfLineStringTrigger return -1 without engine wiring', () => {
+    expect(env.run('return (permPromptTrigger("p", "", [[echo("x")]]))')).toBe(-1);
+    expect(env.run('return (permBeginOfLineStringTrigger("b", "", {"hp"}, [[echo("x")]]))')).toBe(-1);
+    expect(env.run('return (permBeginOfLineStringTrigger("g", "", {}, ""))')).toBe(-1); // empty → group
+  });
+
+  it('tempAnsiColorTrigger registers and returns a numeric id', () => {
+    const id = env.run('return (tempAnsiColorTrigger(31, -1, [[echo("hit\\n")]]))');
+    expect(typeof id).toBe('number');
+    // A second registration yields a distinct id.
+    const id2 = env.run('return (tempAnsiColorTrigger(-1, -1, function() end))');
+    expect(id2).not.toBe(id);
+  });
+});
+
+describe('map menus — addMapMenu / getMapMenus / removeMapMenu', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('registers, lists (keyed by name), and removes submenus', () => {
+    env.run('addMapMenu("combat", nil, "Combat")');
+    env.run('addMapMenu("sub", "combat")'); // displayName defaults to name
+    expect(env.run('return (getMapMenus()).combat["display name"]')).toBe('Combat');
+    expect(env.run('return (getMapMenus()).combat.parent')).toBe('');
+    expect(env.run('return (getMapMenus()).sub.parent')).toBe('combat');
+    expect(env.run('return (getMapMenus()).sub["display name"]')).toBe('sub');
+    expect(env.api.map.getMapMenus().length).toBe(2);
+    expect(env.run('return next(getMapMenus()) ~= nil')).toBe(true);
+    // removal
+    env.run('removeMapMenu("sub")');
+    expect(env.run('return (getMapMenus()).sub')).toBe(null);
+    expect(env.api.map.getMapMenus().length).toBe(1);
+  });
+});
+
+describe('map labels — createMapLabel / createMapImageLabel / deleteMapLabel', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('creates a text label, queryable by id and by text, then deletes it', () => {
+    const a = env.run('return (addAreaName("Lbl"))') as number;
+    const id = env.run(`return (createMapLabel(${a}, "Town", 1, 2, 0, 255, 0, 0, 0, 0, 0, 1, 12, true, false))`);
+    expect(id).toBe(0); // first label in the area
+    expect(env.run(`return (getMapLabels(${a}))[0]`)).toBe('Town');
+    expect(env.run(`return (getMapLabel(${a}, 0)).Text`)).toBe('Town');
+    expect(env.run(`return (getMapLabel(${a}, 0)).X`)).toBe(1);
+    expect(env.run(`return (getMapLabel(${a}, 0)).FgColor.r`)).toBe(255);
+    // by-text lookup returns matches keyed by id
+    expect(env.run(`return (getMapLabel(${a}, "Town"))[0].Text`)).toBe('Town');
+    // delete
+    expect(env.run(`return (deleteMapLabel(${a}, 0))`)).toBe(true);
+    expect(env.run(`return next(getMapLabels(${a}))`)).toBe(null);
+    expect(env.run(`return (deleteMapLabel(${a}, 0))`)).toBe(false); // already gone
+  });
+
+  it('createMapImageLabel stores the image path in Pixmap; both reject a missing area', () => {
+    const a = env.run('return (addAreaName("Img"))') as number;
+    const id = env.run(`return (createMapImageLabel(${a}, "pic.png", 0, 0, 0, 32, 32, 1, true, true))`);
+    expect(id).toBe(0);
+    expect(env.run(`return (getMapLabel(${a}, 0)).Pixmap`)).toBe('pic.png');
+    expect(env.run(`return (getMapLabel(${a}, 0)).Width`)).toBe(32);
+    expect(env.run('return (createMapLabel(999, "x", 0,0,0, 0,0,0, 0,0,0, 1, 12, true, false))')).toBe(-1);
+    expect(env.run('return (createMapImageLabel(999, "p", 0,0,0, 1,1, 1, true, true))')).toBe(-1);
+  });
+});
+
+describe('auditAreas', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  // The public API keeps area membership and room.area in lock-step (addRoom /
+  // setRoomArea auto-create and re-file), so an inconsistency is injected
+  // white-box to exercise the repair + reporting path.
+  it('drops a dangling room id from an area list and reports it', () => {
+    const a = env.run('return (addAreaName("Aud"))') as number;
+    env.run(`addRoom(1, ${a}); addRoom(2, ${a})`);
+    const store = env.api.map as unknown as { areas: Map<number, { rooms: number[] }> };
+    store.areas.get(a)!.rooms.push(999); // 999 isn't a real room
+    env.run('_audit = auditAreas()');
+    expect(env.run('return _audit.fixedAreas') as number).toBeGreaterThanOrEqual(1);
+    expect(env.run('return #_audit.danglingRefs')).toBe(1);
+    expect(env.run('return _audit.danglingRefs[1]')).toBe(999);
+    expect(env.run('return _audit.checkedRooms')).toBe(2);
+    // The dangling id was removed; the two real rooms remain.
+    expect(env.run(`return #getAreaRooms1(${a})`)).toBe(2);
+  });
+
+  it('is a clean no-op on a consistent map (no fixes, no orphans)', () => {
+    const a = env.run('return (addAreaName("OK"))') as number;
+    env.run(`addRoom(1, ${a}); addRoom(2, ${a})`);
+    env.run('_a2 = auditAreas()');
+    expect(env.run('return _a2.fixedAreas')).toBe(0);
+    expect(env.run('return #_a2.orphanRooms')).toBe(0);
+    expect(env.run('return #_a2.danglingRefs')).toBe(0);
+  });
+});
+
+describe('setOverline — ANSI SGR 53/55 rendering', () => {
+  it('SGR 53 turns overline on and 55 turns it off in the rendered HTML', () => {
+    const buf = new AnsiAwareBuffer('\x1b[53mUP\x1b[55mDOWN');
+    const html = buf.toHtml();
+    expect(html).toContain('overline');
+    // The post-55 run must not carry the overline decoration.
+    expect(html).toMatch(/overline[^<]*<\/span>[^]*DOWN/);
+  });
+
+  it('plain text with no overline has no overline decoration', () => {
+    expect(new AnsiAwareBuffer('plain').toHtml()).not.toContain('overline');
+  });
+});
+
+describe('setOverline — Lua binding round-trips through getTextFormat', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('applies to the current selection and is read back by getTextFormat', () => {
+    env.run('createBuffer("tb"); cecho("tb", "Hello\\n"); selectCurrentLine("tb")');
+    env.run('setOverline("tb", true)');
+    expect(env.run('return (getTextFormat("tb")).overline')).toBe(true);
+  });
+
+  it('setTextFormat carries the overline flag through to getTextFormat', () => {
+    env.run('createBuffer("tb2"); cecho("tb2", "X\\n"); selectCurrentLine("tb2")');
+    // setTextFormat(win, r1,g1,b1, r2,g2,b2, bold, underline, italics, strikeout, overline, reverse)
+    env.run('setTextFormat("tb2", 0,0,0, 255,255,255, false, false, false, false, true, false)');
+    expect(env.run('return (getTextFormat("tb2")).overline')).toBe(true);
+  });
+});
+
+describe('utf8.patternEscape / utf8.title', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('utf8.patternEscape escapes Lua pattern magic characters', () => {
+    expect(env.run('return (utf8.patternEscape("a.b*c"))')).toBe('a%.b%*c');
+  });
+
+  it('utf8.title uppercases the first code point only', () => {
+    expect(env.run('return (utf8.title("hello world"))')).toBe('Hello world');
+    expect(env.run('return (utf8.title(""))')).toBe('');
+  });
+});
+
+describe('misc forwarders — appendLog / getProfileTabNumber / getProfiles / ioprint / clearVisitedLinks / closeMudlet / loadVideoFile', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('getProfileTabNumber is always 1 (single-profile web app)', () => {
+    expect(env.run('return getProfileTabNumber()')).toBe(1);
+    expect(env.run('return getProfileTabNumber("anything")')).toBe(1);
+  });
+
+  it('getProfiles returns a 1-element list with the active profile name', () => {
+    expect(env.run('return #getProfiles()')).toBe(1);
+    expect(env.run('return getProfiles()[1]')).toBe(env.run('return getProfileName()'));
+  });
+
+  it('appendLog returns false without an active logger', () => {
+    expect(env.run('return (appendLog("a manual line"))')).toBe(false);
+  });
+
+  it('ioprint / clearVisitedLinks / closeMudlet are callable without throwing', () => {
+    expect(() => env.run('ioprint("hello", 42, nil)')).not.toThrow();
+    expect(() => env.run('clearVisitedLinks()')).not.toThrow();
+    // closeMudlet → disconnect() (no socket) + close callback (unwired) — clean.
+    expect(() => env.run('closeMudlet()')).not.toThrow();
+  });
+
+  it('loadVideoFile is fire-and-forget: accepts URL/VFS/table forms, false on empty', () => {
+    // preload is async, so the binding returns true once the request is
+    // accepted (mirrors playVideoFile); an empty name is rejected.
+    expect(env.run('return (loadVideoFile("https://example.org/clip.mp4"))')).toBe(true);
+    expect(env.run('return (loadVideoFile("clip.mp4"))')).toBe(true);
+    expect(env.run('return (loadVideoFile({name = "https://example.org/x.webm"}))')).toBe(true);
+    expect(env.run('return (loadVideoFile(""))')).toBe(false);
   });
 });

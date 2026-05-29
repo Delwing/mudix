@@ -4,6 +4,7 @@ import { createPassthroughProcessor, type ChunkProcessor } from "../triggers/Chu
 import {
     createGmcpStream,
     createMsdpStream,
+    createMsspStream,
     createTelnetOptionParser,
     EchoHandler,
     encodeGmcp,
@@ -16,6 +17,9 @@ import {
     MSDP_COMMAND_CODE,
     MSDP_DO,
     MSDP_WILL,
+    MSSP_COMMAND_CODE,
+    MSSP_DO,
+    MSSP_WILL,
     stripTelnetSequences,
     TELNET_GA,
     TELNET_EOR,
@@ -68,6 +72,10 @@ export interface MudClientOptions {
     /** Whether to accept MSDP (telnet option 69) negotiation. Default false.
      *  When false, IAC WILL/DO MSDP is ignored and no MSDP envelopes flow. */
     msdpEnabled?: boolean;
+    /** Whether to accept MSSP (telnet option 70) negotiation. Default true
+     *  (matching Mudlet). When false, IAC WILL/DO MSSP is ignored and the
+     *  server's status subnegotiation never arrives. */
+    msspEnabled?: boolean;
     /** Whether to accept CHARSET (telnet option 42, RFC 2066) negotiation.
      *  Default true. When false, IAC WILL/DO CHARSET is ignored and the
      *  session stays on the UTF-8 baseline (so non-ASCII bytes from non-UTF-8
@@ -105,6 +113,7 @@ export class MudClient {
     private messageBuffer: { text: string; type: string }[] = [];
     private readonly gmcpStream: (data: string) => void;
     private readonly msdpStream: (data: string) => void;
+    private readonly msspStream: (data: string) => void;
     private readonly telnetOptionHandler: (optionData: string) => string;
     private readonly mccpHandler: MccpHandler;
     private readonly echoHandler: EchoHandler;
@@ -147,6 +156,7 @@ export class MudClient {
     private gmcpEnabled: boolean;
     private mttsEnabled: boolean;
     private msdpEnabled: boolean;
+    private msspEnabled: boolean;
     private charsetEnabled: boolean;
     private mspEnabled: boolean;
     private readonly mspParser = new MspParser();
@@ -166,6 +176,7 @@ export class MudClient {
             gmcpEnabled = true,
             mttsEnabled = true,
             msdpEnabled = false,
+            msspEnabled = true,
             charsetEnabled = true,
             mspEnabled = false,
         }: MudClientOptions,
@@ -179,6 +190,7 @@ export class MudClient {
         this.gmcpEnabled = gmcpEnabled;
         this.mttsEnabled = mttsEnabled;
         this.msdpEnabled = msdpEnabled;
+        this.msspEnabled = msspEnabled;
         this.charsetEnabled = charsetEnabled;
         this.mspEnabled = mspEnabled;
 
@@ -199,12 +211,20 @@ export class MudClient {
             },
         });
 
+        this.msspStream = createMsspStream({
+            onEnvelope: ({ name, value }) => {
+                (this.eventBus.emit as (event: string, ...args: unknown[]) => void)(`mssp.${name}`, value);
+                this.eventBus.emit('mssp', { name, value });
+            },
+        });
+
         // A telnet subnegotiation body opens with its option code; route GMCP
         // (201) and MSDP (69) to their respective parsers and ignore the rest.
         this.telnetOptionHandler = createTelnetOptionParser((subneg) => {
             const code = subneg.charCodeAt(0);
             if (code === GMCP_COMMAND_CODE) this.gmcpStream(subneg);
             else if (code === MSDP_COMMAND_CODE) this.msdpStream(subneg);
+            else if (code === MSSP_COMMAND_CODE) this.msspStream(subneg);
             else if (code === TTYPE_COMMAND_CODE) this.respondTerminalType(subneg);
             else if (code === CHARSET_COMMAND_CODE) this.handleCharsetSubneg(subneg);
             else if (code === MSP_COMMAND_CODE) this.handleMspSubneg(subneg);
@@ -310,6 +330,19 @@ export class MudClient {
                         // this branch we'd never reply and never fire msdp.negotiated.
                         this.sendRaw(MSDP_WILL);
                         this.eventBus.emit('msdp.negotiated');
+                    }
+                    if (this.msspEnabled && data.includes(MSSP_WILL)) {
+                        // Server offers MSSP (IAC WILL MSSP) → we accept (IAC DO
+                        // MSSP). The server then sends its status fields in a
+                        // single SB MSSP … SE subnegotiation handled by msspStream.
+                        this.sendRaw(MSSP_DO);
+                        this.eventBus.emit('mssp.negotiated');
+                    } else if (this.msspEnabled && data.includes(MSSP_DO)) {
+                        // Server requests we enable MSSP (IAC DO MSSP) → we accept
+                        // (IAC WILL MSSP). Telnet negotiation is symmetric, so
+                        // handle both directions like MSDP/GMCP above.
+                        this.sendRaw(MSSP_WILL);
+                        this.eventBus.emit('mssp.negotiated');
                     }
                     if (this.mttsEnabled && data.includes(TTYPE_DO)) {
                         // Server asks us to identify our terminal (IAC DO TTYPE).
@@ -581,7 +614,7 @@ export class MudClient {
         const SB = 0xFA, WILL = 0xFB, WONT = 0xFC, DO = 0xFD, DONT = 0xFE;
         // Options the client negotiates inline elsewhere — exclude from
         // sysTelnetEvent so handlers see only "everything else".
-        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 42 /* CHARSET */, 69 /* MSDP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 90 /* MSP */, 201 /* GMCP */]);
+        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 42 /* CHARSET */, 69 /* MSDP */, 70 /* MSSP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 90 /* MSP */, 201 /* GMCP */]);
         for (let i = 0; i < data.length - 2; i++) {
             if (data.charCodeAt(i) !== IAC) continue;
             const cmd = data.charCodeAt(i + 1);

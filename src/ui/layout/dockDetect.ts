@@ -27,7 +27,35 @@ export function detectDock(mx: number, my: number): {
     splitTargetId?: string;
     splitBefore?: boolean;
 } {
-    for (const side of ['left', 'right', 'top', 'bottom'] as DockSide[]) {
+    // ── Bottom dock is special ─────────────────────────────────────────────────
+    // It lives *below* the command bar in the content-layout column, so when it
+    // pops in at its extent the middle row shrinks and .main-viewport's bottom
+    // edge jumps up. Using that moving edge for activation but the (low) dock
+    // area's own bottom edge for the empty-dock re-check is asymmetric: the
+    // cursor that triggered activation sits near the dock's TOP, >EMPTY_DOCK_ZONE
+    // from its bottom, so it deactivates → viewport grows back → reactivates →
+    // flicker. Anchor instead to the command bar's top: once the cursor reaches
+    // the input-bar level (or anywhere below it) bottom activates, and because
+    // the bar moves *up* with the dock the active zone only grows — stable
+    // hysteresis, no oscillation.
+    const commandBar = document.querySelector<HTMLElement>('.command-bar');
+    if (commandBar) {
+        const cr = commandBar.getBoundingClientRect();
+        if (mx >= cr.left && mx <= cr.right && my >= cr.top) {
+            const bottomDock = document.querySelector<HTMLElement>('.dock-area-bottom');
+            if (bottomDock) {
+                const br = bottomDock.getBoundingClientRect();
+                const inDock = mx >= br.left && mx <= br.right && my >= br.top && my <= br.bottom;
+                const hasRealPanels = !!bottomDock.querySelector('.dock-panel-slot:not(.dock-panel-slot--preview)');
+                if (inDock && hasRealPanels) {
+                    return { side: 'bottom', ...slotDropInfo(bottomDock, 'bottom', mx, my) };
+                }
+            }
+            return { side: 'bottom', slotIndex: 0 };
+        }
+    }
+
+    for (const side of ['left', 'right', 'top'] as DockSide[]) {
         const el = document.querySelector<HTMLElement>(`.dock-area-${side}`);
         if (!el) continue;
         const r = el.getBoundingClientRect();
@@ -40,8 +68,7 @@ export function detectDock(mx: number, my: number): {
             const inZone =
                 side === 'left'   ? mx - r.left   < EMPTY_DOCK_ZONE :
                 side === 'right'  ? r.right  - mx < EMPTY_DOCK_ZONE :
-                side === 'top'    ? my - r.top    < EMPTY_DOCK_ZONE :
-                /* bottom */        r.bottom - my < EMPTY_DOCK_ZONE;
+                /* top */           my - r.top    < EMPTY_DOCK_ZONE;
             if (!inZone) continue;
             return { side, slotIndex: 0 };
         }
@@ -52,10 +79,10 @@ export function detectDock(mx: number, my: number): {
     const vp = document.querySelector<HTMLElement>('.main-viewport');
     if (vp) {
         const r = vp.getBoundingClientRect();
+        // Bottom side is handled above, anchored to the command bar.
         if (!document.querySelector('.dock-area-left')   && mx - r.left   < EMPTY_DOCK_ZONE) return { side: 'left',   slotIndex: 0 };
         if (!document.querySelector('.dock-area-right')  && r.right  - mx < EMPTY_DOCK_ZONE) return { side: 'right',  slotIndex: 0 };
         if (!document.querySelector('.dock-area-top')    && my - r.top    < EMPTY_DOCK_ZONE) return { side: 'top',    slotIndex: 0 };
-        if (!document.querySelector('.dock-area-bottom') && r.bottom - my < EMPTY_DOCK_ZONE) return { side: 'bottom', slotIndex: 0 };
     }
     return { side: null, slotIndex: 0 };
 }

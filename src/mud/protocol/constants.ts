@@ -28,6 +28,19 @@ export const MSDP_ARRAY_CLOSE = "\x06"; // 6
 export const MSDP_WILL = "\xFF\xFB\x45"; // IAC WILL MSDP - server offers MSDP
 export const MSDP_DO   = "\xFF\xFD\x45"; // IAC DO MSDP   - client requests MSDP
 
+// MSSP (Mud Server Status Protocol) — telnet option 70. Once negotiated the
+// server reports status fields (player count, uptime, codebase, hostname, …)
+// in a single `IAC SB MSSP MSSP_VAR <name> MSSP_VAL <value> … IAC SE`
+// subnegotiation, reusing MSDP's VAR/VAL framing bytes (1/2). Typically sent
+// once right after the handshake. Used by MUD-list crawlers, but a client can
+// negotiate it too to read the server's self-reported status.
+export const MSSP_COMMAND_CODE = 70;
+export const OPT_MSSP = "\x46"; // 70
+export const MSSP_VAR = "\x01"; // 1 (same byte as MSDP_VAR)
+export const MSSP_VAL = "\x02"; // 2 (same byte as MSDP_VAL)
+export const MSSP_WILL = "\xFF\xFB\x46"; // IAC WILL MSSP - server offers MSSP
+export const MSSP_DO   = "\xFF\xFD\x46"; // IAC DO MSSP   - client requests MSSP
+
 // GMCP (Generic MUD Communication Protocol) negotiation sequences
 export const GMCP_WILL = "\xFF\xFB\xC9"; // IAC WILL GMCP - server offers GMCP
 export const GMCP_DO   = "\xFF\xFD\xC9"; // IAC DO GMCP   - client requests GMCP

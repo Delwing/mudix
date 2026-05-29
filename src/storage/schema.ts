@@ -139,6 +139,9 @@ export interface ProtocolSettings {
     mtts?: boolean;
     /** Telnet MSDP (option 69). */
     msdp?: boolean;
+    /** Telnet MSSP (option 70). Mud Server Status Protocol — populates the
+     *  read-only `mssp` Lua table with the server's self-reported status. */
+    mssp?: boolean;
     /** Telnet CHARSET (option 42 / RFC 2066). When enabled, the client
      *  accepts the server's REQUEST and switches its byte→char codec to the
      *  agreed encoding — typically UTF-8. */
@@ -150,8 +153,9 @@ export interface ProtocolSettings {
 }
 
 /** Defaults used when a protocol field is undefined. Off-by-default for MSDP
- *  matches Mudlet's "MSDP support" preference; GMCP/MTTS/CHARSET/MSP are on by
- *  default because most modern MUDs expect them. MSP is on so `!!SOUND/!!MUSIC`
+ *  matches Mudlet's "MSDP support" preference; GMCP/MTTS/CHARSET/MSP/MSSP are on
+ *  by default because most modern MUDs expect them (Mudlet also enables MSSP by
+ *  default — it's read-only status the server pushes once per connection). MSP is on so `!!SOUND/!!MUSIC`
  *  tags are stripped and routed to sound inline (the zMUD model — most MSP MUDs
  *  never negotiate option 90, they just emit the tags); the tag bytes are
  *  legitimate text on non-MSP MUDs but that collision is rare in practice. */
@@ -159,6 +163,7 @@ export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
     gmcp: true,
     mtts: true,
     msdp: false,
+    mssp: true,
     charset: true,
     msp: true,
 };

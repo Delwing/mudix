@@ -175,6 +175,7 @@ export class ScriptingEngine {
     // disconnect.
     private gmcpNegotiated = false;
     private msdpNegotiated = false;
+    private msspNegotiated = false;
     private vfs: ProfileVFS | null = null;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
     private readonly mapOpen = new MapOpenNotifier(() => this.raiseEvent('mapOpenEvent'));
@@ -896,6 +897,8 @@ export class ScriptingEngine {
             this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
             this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
             this.api.setPermSubstringTriggerCallback((name, parent, patterns, code) => this.createPermSubstringTrigger(name, parent, patterns, code));
+            this.api.setPermBeginOfLineStringTriggerCallback((name, parent, patterns, code) => this.createPermBeginOfLineStringTrigger(name, parent, patterns, code));
+            this.api.setPermPromptTriggerCallback((name, parent, code) => this.createPermPromptTrigger(name, parent, code));
             this.api.setPermAliasCallback((name, parent, pattern, code) => this.createPermAlias(name, parent, pattern, code));
             this.api.setPermTimerCallback((name, parent, delay, code) => this.createPermTimer(name, parent, delay, code));
             this.api.setPermKeyCallback((name, parent, modifier, key, code) => this.createPermKey(name, parent, modifier, key, code));
@@ -1593,11 +1596,29 @@ export class ScriptingEngine {
         return this.createPermTrigger(name, parent, patterns, 'substring', code);
     }
 
+    /**
+     * Mudlet `permBeginOfLineStringTrigger(name, parent, patterns, luaCode)`.
+     * Same shape as createPermSubstringTrigger but each pattern only matches at
+     * the start of the line (`String.prototype.startsWith`).
+     */
+    createPermBeginOfLineStringTrigger(name: string, parent: string, patterns: string[], code: string): number {
+        return this.createPermTrigger(name, parent, patterns, 'startOfLine', code);
+    }
+
+    /**
+     * Mudlet `permPromptTrigger(name, parent, luaCode)`. Creates a persistent
+     * trigger that fires on every server prompt line (GA/EOR). It carries a
+     * single pattern of type 'prompt' with empty text — not a group.
+     */
+    createPermPromptTrigger(name: string, parent: string, code: string): number {
+        return this.createPermTrigger(name, parent, [''], 'prompt', code);
+    }
+
     private createPermTrigger(
         name: string,
         parent: string,
         patternStrings: string[],
-        kind: 'regex' | 'substring',
+        kind: 'regex' | 'substring' | 'startOfLine' | 'prompt',
         code: string,
     ): number {
         if (!name) return -1;
@@ -1609,8 +1630,12 @@ export class ScriptingEngine {
             if (!group) return -1;
             parentId = group.id;
         }
-        const isGroup = patternStrings.length === 0;
-        const patterns: TriggerNode['patterns'] = patternStrings.map(text => ({ type: kind, text }));
+        // A prompt trigger has no text pattern but is never a group; every other
+        // kind treats an empty pattern list as a request to create a group.
+        const isGroup = kind !== 'prompt' && patternStrings.length === 0;
+        const patterns: TriggerNode['patterns'] = isGroup
+            ? []
+            : patternStrings.map(text => ({ type: kind, text }));
         const uuid = store.addTrigger(this.connectionId, {
             name,
             enabled: true,
@@ -2017,6 +2042,17 @@ export class ScriptingEngine {
         this.api.setLoggingToggler(fn);
     }
 
+    /** Mudlet `appendLog(text)` — forward to the active SessionLogger. */
+    setLogAppender(fn: ((text: string) => void) | null): void {
+        this.api.setLogAppender(fn);
+    }
+
+    /** Mudlet `closeMudlet()` — close the active profile (disconnect + return
+     *  to the connection screen). */
+    setCloseProfileCallback(fn: (() => void) | null): void {
+        this.api.setCloseProfileCallback(fn);
+    }
+
     destroy(): void {
         // Fire sysExitEvent before any teardown, while handlers can still run.
         window.removeEventListener('beforeunload', this.beforeUnload);
@@ -2383,6 +2419,10 @@ export class ScriptingEngine {
                     this.msdpNegotiated = false;
                     this.emit('sysProtocolDisabled', ['MSDP']);
                 }
+                if (this.msspNegotiated) {
+                    this.msspNegotiated = false;
+                    this.emit('sysProtocolDisabled', ['MSSP']);
+                }
             }),
             // GMCP finished negotiating (server WILL → client DO). Mudlet's
             // bundled GMCP.lua re-subscribes its registered modules on this
@@ -2427,6 +2467,22 @@ export class ScriptingEngine {
                 if (!path) return;
                 this.runtimes.lua?.setMsdpValue(path, value);
                 const token = `msdp.${path}`;
+                this.emit(token, [token, token]);
+            }),
+            // MSSP finished negotiating — mirrors the GMCP/MSDP pair so scripts
+            // can hook sysProtocolEnabled('MSSP').
+            session.events.on('mssp.negotiated', () => {
+                this.msspNegotiated = true;
+                this.emit('sysProtocolEnabled', ['MSSP']);
+            }),
+            session.events.on('mssp', ({ name, value }) => {
+                // Mirror Mudlet TLuaInterpreter::parseMSSP: write the value into
+                // the Lua `mssp` global, then raise a single `mssp.<VARNAME>`
+                // event with args (eventName, fullKey). MSSP variables are flat
+                // scalar strings.
+                if (!name) return;
+                this.runtimes.lua?.setMsspValue(name, value);
+                const token = `mssp.${name}`;
                 this.emit(token, [token, token]);
             }),
             // MSP — translate parsed `!!SOUND` / `!!MUSIC` tags into

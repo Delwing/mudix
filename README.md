@@ -1,0 +1,139 @@
+<div align="center">
+
+# 🗺️ mudix
+
+### A modern, web-based MUD client with Mudlet-compatible Lua scripting — running entirely in your browser.
+
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vite.dev)
+[![Lua 5.1](https://img.shields.io/badge/Lua-5.1%20(WASM)-000080?logo=lua&logoColor=white)](https://www.lua.org)
+
+*No installs. No native dependencies. Open a tab and play.*
+
+</div>
+
+---
+
+## What is mudix?
+
+**mudix** is a [MUD](https://en.wikipedia.org/wiki/Multi-user_dungeon) (Multi-User Dungeon) client that lives in the browser. It speaks the full telnet protocol stack that modern MUDs use, renders rich ANSI output, and runs **real Lua scripting** compiled to WebAssembly — with an API designed for **drop-in compatibility with [Mudlet](https://www.mudlet.org/)** packages, maps, and profiles.
+
+If you have Mudlet scripts, triggers, aliases, or maps, mudix aims to run them unchanged — anywhere you have a web browser.
+
+## ✨ Features
+
+### 🔌 Connectivity
+- **Direct WebSocket** connections to MUDs that expose a `ws(s)://` endpoint.
+- **Telnet via proxy** — connect to any classic `host:port` MUD through the bundled telnet→WebSocket proxy.
+- Full protocol support: **GMCP**, **MSDP**, **MSSP**, **MCCP** (compression), **MSP** (sound), telnet **CHARSET**, **TTYPE/MTTS**, and GA/EOR prompt detection.
+
+### 📜 Mudlet-compatible Lua scripting
+- A complete **Lua 5.1** runtime (WASM) with Mudlet-native globals — `send`, `echo`/`cecho`/`decho`/`hecho`, `tempTimer`, `tempTrigger`, `tempAlias`, and [hundreds more](./MUDLET_API.md).
+- **Triggers, aliases, timers, keybindings, and buttons** organized in Mudlet-style folder trees.
+- **PCRE regex** powered by `pcre2-wasm` — the same engine flavor as Mudlet.
+- Bundled Mudlet standard library: Geyser GUI toolkit, the generic mapper, string/table utilities, and the `db:*` database API.
+- A built-in **CodeMirror** script editor with autocompletion for the entire API surface.
+
+### 🗺️ Maps & GUI
+- Renders **Mudlet binary maps** with a built-in viewer and editor.
+- **Geyser** mini-consoles, labels, gauges, and command lines as pixel-positioned overlays.
+- A **custom dock/float window system** — split, tab, dock to any edge, or tear off into free-floating windows.
+
+### 💾 Storage & persistence
+- A **per-profile virtual filesystem** (ZenFS) backed by IndexedDB — or linked to a **real folder on your disk** via the File System Access API, with two-way sync.
+- An in-browser **SQLite** database for the Mudlet `db:*` API.
+- **Session logging** to IndexedDB, browsable and exportable.
+- Install Mudlet **packages and modules** (`.mpackage` / `.zip` / XML) — including browsing the public Mudlet package repository.
+
+### 🎨 Polish
+- Multiple themes (dark, light, amber, sky), custom fonts, configurable colors and backgrounds.
+- Text-to-speech, sound, and video playback wired to Mudlet's media APIs.
+
+## 🚀 Getting Started
+
+### Prerequisites
+- [Node.js](https://nodejs.org/) 20+ and npm (or yarn).
+
+### Run the client
+
+```bash
+git clone <repo-url> mudix
+cd mudix
+npm install
+npm run dev
+```
+
+Open the printed local URL (usually `http://localhost:5173`) in your browser, then create a connection on the start screen.
+
+### Run the telnet proxy (for `host:port` MUDs)
+
+The browser cannot open raw TCP sockets, so connecting to a classic telnet MUD needs the small bundled proxy:
+
+```bash
+cd proxy
+yarn          # or: npm install
+yarn start    # listens on ws://localhost:3001 by default
+```
+
+Then choose **MUD (host:port)** mode when creating a connection. Servers that expose a native WebSocket endpoint don't need the proxy — use **WebSocket** mode and point it straight at the `ws(s)://` URL.
+
+## 🛠️ Development
+
+```bash
+npm run dev         # Start the Vite dev server
+npm run build       # Type-check + production build
+npm run preview     # Preview the production build
+npm run typecheck   # Type-check only (src + tests)
+npm test            # Run the Vitest suite
+npm run test:watch  # Vitest in watch mode
+```
+
+Production builds deploy to **GitHub Pages** automatically on push to `master`.
+
+## 🧱 Architecture at a glance
+
+```
+MudClient (WebSocket — direct or via telnet proxy)
+  → telnet/protocol parsing (GMCP · MSDP · MSSP · MCCP · MSP · CHARSET · TTYPE)
+  → MudSession.events  (a typed EventBus — the spine of the app)
+      ├─ ScriptingEngine → LuaRuntime (WASM)  +  alias/trigger/timer/key engines
+      ├─ React UI         (output area, dock/float panels, toolbar)
+      └─ SessionLogger    (persists output to IndexedDB)
+```
+
+| Layer | Lives in | Notes |
+|---|---|---|
+| **Connection** | `src/mud/connection`, `src/mud/protocol` | Telnet over binary WebSocket frames |
+| **Scripting** | `src/scripting` | wasmoon Lua 5.1, Mudlet-native API, bundled Mudlet Lua |
+| **UI / Windows** | `src/ui` | Custom dock/float layout, CodeMirror editor, overlays |
+| **Maps** | `src/map`, `MapPanel` | Mudlet binary map reader/renderer/editor |
+| **Storage** | `src/storage`, `src/scripting/vfs`, `src/db` | Zustand + per-profile VFS + SQLite + IndexedDB logs |
+| **Import** | `src/import` | Mudlet XML & package install/export |
+
+A deeper tour of the internals lives in [`CLAUDE.md`](./CLAUDE.md); the full Mudlet API implementation status is tracked in [`MUDLET_API.md`](./MUDLET_API.md).
+
+## ⚠️ Limitations & known constraints
+
+mudix runs inside a browser sandbox, which trades some of Mudlet's native reach for zero-install portability. Worth knowing before you switch:
+
+- **Telnet MUDs need the proxy.** Browsers can't open raw TCP sockets, so classic `host:port` MUDs are reachable only through the bundled telnet→WebSocket proxy. Servers with a native `ws(s)://` endpoint connect directly.
+- **One profile at a time.** There's no Mudlet-style multi-profile tabbing yet — you open a single connection per tab. `loadProfile()` and related multi-profile calls are no-op stubs.
+- **Storage is browser-scoped.** Profiles, scripts, maps, and logs live in the browser's IndexedDB/localStorage for the app's origin. Clearing site data wipes them — unless you **link a real disk folder** for that profile (see below). Different browsers/machines don't share state automatically.
+- **Disk-folder linking is Chromium-only.** The "link a folder on disk" feature uses the File System Access API, which Firefox and Safari don't implement. Those browsers fall back to IndexedDB-only storage.
+- **Secure context required.** The VFS service worker (which serves profile images/fonts/CSS) needs HTTPS or `localhost`.
+- **Some Mudlet APIs are stubbed or partial.** Anything fundamentally native is bound as a warning-emitting no-op so imported packages still load, but does nothing: **Discord** Rich Presence, **IRC** client, OS `spawn`/subprocess, and the system dictionary. A few synchronous Mudlet calls (`invokeFileDialog`, `getImageSize`) don't map cleanly onto the browser's async pickers/loaders and are still in progress. See [`MUDLET_API.md`](./MUDLET_API.md) for the per-function status (✅ / ⚠️ / 🚧 / ❌).
+- **The main window is the viewport.** Calls like `setMainWindowSize` are no-ops — the browser window is the main window.
+- **The Lua↔JS boundary has a per-call cost.** Each crossing between the Lua VM and JS is cheap individually but adds up — a script that makes thousands of tiny boundary calls in a tight loop (e.g. iterating every room in a large area one `getRoom*` call at a time) will feel noticeably slower than in native Mudlet. The hot paths you actually hit constantly (line/trigger processing, GMCP) are batched and stay fast; prefer bulk/batched APIs over per-item calls when you can.
+
+## 🤝 Contributing
+
+When adding a Mudlet API function, implement the JS-side method in `ScriptingAPI`, bind the Lua global in `LuaRuntime`, and add the autocomplete entry in `luaCompletions.ts`. Run `npm run typecheck` and `npm test` before opening a PR.
+
+## License
+
+No license has been specified yet. Until one is added, all rights are reserved by the authors — open an issue if you'd like to use or distribute mudix.
+
+<div align="center">
+<sub>Built with React, TypeScript, and a lot of WebAssembly. Happy MUDding. 🐉</sub>
+</div>
