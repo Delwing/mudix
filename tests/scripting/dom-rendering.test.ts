@@ -58,6 +58,43 @@ describe('wrapLine — in-place DOM re-render', () => {
   });
 });
 
+describe('setProfileStyleSheet — installs a <style> block in document.head', () => {
+  it('creates a single profile-keyed style tag and replaces its content on re-call', () => {
+    expect(env.run('return (setProfileStyleSheet(".foo { color: red; }"))')).toBe(true);
+    const el = env.body.ownerDocument.getElementById('mudix-profile-stylesheet') as HTMLStyleElement | null;
+    expect(el).toBeTruthy();
+    expect(el!.tagName).toBe('STYLE');
+    expect(el!.parentElement).toBe(env.body.ownerDocument.head);
+    expect(el!.textContent).toBe('.foo { color: red; }');
+
+    // A second call replaces the content in place — no duplicate tag.
+    env.run('setProfileStyleSheet(".bar { color: blue; }")');
+    const all = env.body.ownerDocument.querySelectorAll('#mudix-profile-stylesheet');
+    expect(all.length).toBe(1);
+    expect((all[0] as HTMLStyleElement).textContent).toBe('.bar { color: blue; }');
+
+    // It's distinct from the setAppStyleSheet block (different ids coexist).
+    env.run('setAppStyleSheet(".app { margin: 0; }")');
+    expect(env.body.ownerDocument.getElementById('mudix-profile-stylesheet')).toBeTruthy();
+    expect((env.body.ownerDocument.getElementById('mudix-profile-stylesheet') as HTMLStyleElement).textContent)
+      .toBe('.bar { color: blue; }');
+  });
+
+  it('raises sysAppStyleSheetChange with tag "profile"', () => {
+    // Wire api → runtime event routing exactly as ScriptingEngine does (the
+    // bare test runtime doesn't set this up). Restored after the assertion.
+    env.api.setEventRaiser((event, args) => env.rt.emitEvent(event, args));
+    env.run([
+      'sawCss, sawTag = nil, nil',
+      'registerAnonymousEventHandler("sysAppStyleSheetChange", function(_, css, tag) sawCss = css; sawTag = tag end)',
+      'setProfileStyleSheet(".x { top: 0; }")',
+    ].join('\n'));
+    expect(env.run('return sawTag')).toBe('profile');
+    expect(env.run('return sawCss')).toBe('.x { top: 0; }');
+    env.api.setEventRaiser(null);
+  });
+});
+
 describe('echoPopup — right-click menu in the real DOM', () => {
   it('opens a popup on contextmenu and runs the chosen command', () => {
     env.run('clicked = nil');

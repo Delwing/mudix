@@ -450,6 +450,7 @@ export class LuaRuntime implements IScriptingRuntime {
             if (this.api.labels.has(window)) return 'label';
             if (this.api.windows.isMiniConsole(window)) return 'miniconsole';
             if (this.api.windows.has(window)) return 'userwindow';
+            if (this.api.scrollBoxes.has(window)) return 'scrollbox';
             if (this.api.isBuffer(window)) return 'buffer';
             return null;
         });
@@ -583,6 +584,33 @@ export class LuaRuntime implements IScriptingRuntime {
         // dock panels, unknown names).
         this.lua.global.set('deleteMiniConsole', (name: unknown) =>
             typeof name === 'string' ? this.api.deleteMiniConsole(name) : false);
+        // Mudlet createScrollBox([parent,] name, x, y, w, h) — absolutely-
+        // positioned scrollable container on the named parent viewport (defaults
+        // to 'main'). Other overlay widgets nest inside it by passing this box's
+        // name as their parent. Returns false when a box of that name already
+        // exists. Picked up by the unified moveWindow / resizeWindow / showWindow
+        // / hideWindow / raiseWindow / lowerWindow lookups below.
+        this.lua.global.set('createScrollBox', (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown, f?: unknown) => {
+            const hasParent = f !== undefined;
+            const [parent, name, x, y, w, h] = hasParent
+                ? [a as string, b, c, d, e, f]
+                : [undefined, a, b, c, d, e];
+            if (typeof name !== 'string' || !name) return false;
+            return this.api.scrollBoxes.create(name, {
+                parent: parent && parent !== 'main' ? parent : 'main',
+                x: Number(x), y: Number(y),
+                width: Number(w), height: Number(h),
+            });
+        });
+        // Mudlet deleteScrollBox(name) → bool. Destroys a scroll box created via
+        // createScrollBox. Fires sysScrollBoxDeleted(name) on success, matching
+        // sysCommandLineDeleted / sysMiniConsoleDeleted.
+        this.lua.global.set('deleteScrollBox', (name: unknown) => {
+            if (typeof name !== 'string') return false;
+            const ok = this.api.scrollBoxes.destroy(name);
+            if (ok) this.emitEvent('sysScrollBoxDeleted', [name]);
+            return ok;
+        });
         // Mudlet `createBuffer(name)`. Off-screen text buffer (no panel) for
         // formatting/storing rich text — like a hidden miniconsole.
         this.lua.global.set('createBuffer', (name: unknown) => {
@@ -622,27 +650,31 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('hideWindow', (name: string) => {
             if (this.api.labels.has(name)) this.api.labels.hide(name);
             else if (this.api.cmdLines.has(name)) this.api.cmdLines.hide(name);
+            else if (this.api.scrollBoxes.has(name)) this.api.scrollBoxes.hide(name);
             else this.api.windows.hide(name);
         });
         // Mudlet showWindow(name) → bool. Returns true when the named label,
-        // overlay command line, or userwindow exists and is now visible; false
-        // when nothing matches.
+        // overlay command line, scroll box, or userwindow exists and is now
+        // visible; false when nothing matches.
         this.lua.global.set('showWindow', (name: string) => {
             if (typeof name !== 'string' || !name) return false;
             if (this.api.labels.has(name)) return this.api.labels.show(name);
             if (this.api.cmdLines.has(name)) return this.api.cmdLines.show(name);
+            if (this.api.scrollBoxes.has(name)) return this.api.scrollBoxes.show(name);
             return this.api.windows.show(name);
         });
         this.lua.global.set('moveWindow', (name: string, x: unknown, y: unknown) => {
             const xn = Number(x), yn = Number(y);
             if (this.api.labels.has(name)) this.api.labels.move(name, xn, yn);
             else if (this.api.cmdLines.has(name)) this.api.cmdLines.move(name, xn, yn);
+            else if (this.api.scrollBoxes.has(name)) this.api.scrollBoxes.move(name, xn, yn);
             else if (this.api.windows.has(name)) this.api.windows.move(name, xn, yn);
         });
         this.lua.global.set('resizeWindow', (name: string, w: unknown, h: unknown) => {
             const wn = Number(w), hn = Number(h);
             if (this.api.labels.has(name)) this.api.labels.resize(name, wn, hn);
             else if (this.api.cmdLines.has(name)) this.api.cmdLines.resize(name, wn, hn);
+            else if (this.api.scrollBoxes.has(name)) this.api.scrollBoxes.resize(name, wn, hn);
             else if (this.api.windows.has(name)) this.api.windows.resize(name, wn, hn);
         });
         // Mudlet setUserWindowTitle(name, [title]) → bool. Empty/missing title
@@ -839,6 +871,7 @@ export class LuaRuntime implements IScriptingRuntime {
             if (typeof name !== 'string') return false;
             if (this.api.labels.has(name)) { this.api.labels.raise(name); return true; }
             if (this.api.cmdLines.has(name)) { this.api.cmdLines.raise(name); return true; }
+            if (this.api.scrollBoxes.has(name)) { this.api.scrollBoxes.raise(name); return true; }
             if (this.api.windows.has(name)) { this.api.windows.bringToFront(name); return true; }
             return false;
         };
@@ -846,6 +879,7 @@ export class LuaRuntime implements IScriptingRuntime {
             if (typeof name !== 'string') return false;
             if (this.api.labels.has(name)) { this.api.labels.lower(name); return true; }
             if (this.api.cmdLines.has(name)) { this.api.cmdLines.lower(name); return true; }
+            if (this.api.scrollBoxes.has(name)) { this.api.scrollBoxes.lower(name); return true; }
             if (this.api.windows.has(name)) { this.api.windows.sendToBack(name); return true; }
             return false;
         };
@@ -914,6 +948,25 @@ export class LuaRuntime implements IScriptingRuntime {
         // explicitly for rules that wouldn't be a plain QWidget block.
         this.lua.global.set('setUserWindowStyleSheet', (name: unknown, css: unknown) => {
             return this.api.setUserWindowStyleSheet(String(name ?? ''), String(css ?? ''));
+        });
+
+        // Mudlet setProfileStyleSheet(stylesheet) — install or replace a
+        // profile-wide CSS block (browser: a dedicated <style> tag in
+        // document.head, keyed apart from setAppStyleSheet).
+        this.lua.global.set('setProfileStyleSheet', (css: unknown) => {
+            return this.api.setProfileStyleSheet(String(css ?? ''));
+        });
+
+        // Mudlet setClipboardText(textContent) → bool. Updates the session text
+        // clipboard and best-effort syncs to navigator.clipboard.
+        this.lua.global.set('setClipboardText', (text: unknown) => {
+            return this.api.setClipboardText(String(text ?? ''));
+        });
+
+        // Mudlet getClipboardText() → string. Returns the session text
+        // clipboard (refreshing from the OS clipboard asynchronously).
+        this.lua.global.set('getClipboardText', () => {
+            return this.api.getClipboardText();
         });
 
         // No-op stubs for unimplemented label callbacks and the cmdline action

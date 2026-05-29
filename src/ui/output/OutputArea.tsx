@@ -6,6 +6,7 @@ import { useAppStore, useProfileField, useConnectionId } from '../../storage';
 import { StickyOutputPanel } from './StickyOutputPanel';
 import { LabelOverlay } from '../labels/LabelOverlay';
 import { CommandLineOverlay } from '../cmdline/CommandLineOverlay';
+import { ScrollBoxOverlay } from '../scrollbox/ScrollBoxOverlay';
 import { backgroundImageStyle } from './backgroundImageStyle';
 
 interface OutputAreaProps {
@@ -82,6 +83,7 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
             </div>
             <LabelOverlay manager={session.labels} parent="main" />
             <CommandLineOverlay manager={session.cmdLines} parent="main" />
+            <ScrollBoxOverlay manager={session.scrollBoxes} labels={session.labels} cmdLines={session.cmdLines} parent="main" />
         </>
     );
 }

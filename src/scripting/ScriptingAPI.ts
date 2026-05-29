@@ -6,6 +6,7 @@ import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
 import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
+import type { ScrollBoxManager } from '../ui/scrollbox/ScrollBoxManager';
 import { userWindowQssToScopedCss, cssEscape } from '../ui/labels/qtCss';
 import { AnsiAwareBuffer, type FormatColor, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
 import { namedColorToState } from '../mud/text/colorParsers';
@@ -358,6 +359,7 @@ export class ScriptingAPI {
     readonly windows: ScriptingWindowsAPI;
     readonly labels: ScriptingLabelsAPI;
     readonly cmdLines: CommandLineManager;
+    readonly scrollBoxes: ScrollBoxManager;
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
     profileName = '';
@@ -476,6 +478,15 @@ export class ScriptingAPI {
     // preserved); `paste()`/`appendBuffer()` read from it.
     private clipboard: AnsiAwareBuffer | null = null;
 
+    // Session-local mirror of the OS *text* clipboard for getClipboardText /
+    // setClipboardText (distinct from the rich-text `clipboard` above that
+    // backs copy/paste). The browser's real clipboard is async and gated on a
+    // user gesture, whereas Mudlet's getClipboardText/setClipboardText are
+    // synchronous — so we keep an authoritative in-process value and sync it to
+    // navigator.clipboard best-effort. getClipboardText returns this mirror
+    // (kicking off an async refresh from the OS clipboard when available).
+    private clipboardText = '';
+
     // Names of off-screen text buffers created via `createBuffer`. Their
     // backing Console lives in `session.consoles` like any window console, but
     // has no panel — so output to them is never pushed to the WindowManager
@@ -493,6 +504,7 @@ export class ScriptingAPI {
         this.windows = new ScriptingWindowsAPI(session);
         this.labels = new ScriptingLabelsAPI(session.labels, () => this.cssRewriter);
         this.cmdLines = session.cmdLines;
+        this.scrollBoxes = session.scrollBoxes;
         this.aliases = aliasEngine;
         this.triggers = triggerEngine;
         this.timers = timerEngine;
@@ -2467,6 +2479,60 @@ export class ScriptingAPI {
         const scope = `[data-mudix-window="${cssEscape(name)}"]`;
         el.textContent = userWindowQssToScopedCss(css ?? '', scope);
         return true;
+    }
+
+    /**
+     * Mudlet `setProfileStyleSheet(stylesheet)`. Installs (or replaces) a
+     * profile-wide CSS block. In Mudlet this themes the whole profile's
+     * widgets; the browser analogue is a single `<style>` tag in document.head,
+     * keyed separately from setAppStyleSheet's blocks so the two don't clobber
+     * each other. Raises sysAppStyleSheetChange (tag "profile") for parity with
+     * the app-level setter. Always returns true.
+     */
+    setProfileStyleSheet(css: string): boolean {
+        const id = 'mudix-profile-stylesheet';
+        let el = document.getElementById(id) as HTMLStyleElement | null;
+        if (!el) {
+            el = document.createElement('style');
+            el.id = id;
+            el.dataset.mudixProfileStylesheet = 'true';
+            document.head.appendChild(el);
+        }
+        el.textContent = css ?? '';
+        this.eventRaiser?.('sysAppStyleSheetChange', [css ?? '', 'profile']);
+        return true;
+    }
+
+    /**
+     * Mudlet `setClipboardText(textContent)`. Updates the session text
+     * clipboard and best-effort writes it to the OS clipboard via
+     * navigator.clipboard (which may reject without a user gesture or in an
+     * insecure context — the in-process mirror is authoritative regardless).
+     * Always returns true.
+     */
+    setClipboardText(text: string): boolean {
+        this.clipboardText = String(text ?? '');
+        try {
+            const nav = (globalThis as { navigator?: Navigator }).navigator;
+            nav?.clipboard?.writeText?.(this.clipboardText)?.catch(() => { /* gesture/permission gated */ });
+        } catch { /* no clipboard API */ }
+        return true;
+    }
+
+    /**
+     * Mudlet `getClipboardText()`. Returns the session text clipboard. Because
+     * the OS clipboard can only be read asynchronously in the browser, we kick
+     * off a best-effort refresh (so a subsequent call reflects an external copy)
+     * and return the current mirror synchronously, matching Mudlet's signature.
+     */
+    getClipboardText(): string {
+        try {
+            const nav = (globalThis as { navigator?: Navigator }).navigator;
+            nav?.clipboard?.readText?.()
+                ?.then((t) => { if (typeof t === 'string') this.clipboardText = t; })
+                ?.catch(() => { /* gesture/permission gated */ });
+        } catch { /* no clipboard API */ }
+        return this.clipboardText;
     }
 
     centerView(roomId: number): boolean {

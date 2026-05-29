@@ -1100,3 +1100,97 @@ describe('misc forwarders — appendLog / getProfileTabNumber / getProfiles / io
     expect(env.run('return (loadVideoFile(""))')).toBe(false);
   });
 });
+
+// getClipboardText / setClipboardText — the session text clipboard (separate
+// from copy/paste's rich-text buffer). No DOM/navigator in this harness, so the
+// best-effort OS-clipboard sync is a no-op and the in-process mirror is the
+// authoritative value the round-trip asserts.
+describe('getClipboardText / setClipboardText — session text clipboard', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('round-trips text through the session mirror', () => {
+    expect(env.run('return getClipboardText()')).toBe('');
+    expect(env.run('return (setClipboardText("hello world"))')).toBe(true);
+    expect(env.run('return getClipboardText()')).toBe('hello world');
+    // Overwrites on a second set.
+    env.run('setClipboardText("second")');
+    expect(env.run('return getClipboardText()')).toBe('second');
+  });
+
+  it('coerces non-string args and never throws without a clipboard API', () => {
+    expect(() => env.run('setClipboardText(nil)')).not.toThrow();
+    expect(env.run('return getClipboardText()')).toBe('');
+    env.run('setClipboardText(42)');
+    expect(env.run('return getClipboardText()')).toBe('42');
+  });
+
+  it('is distinct from the rich-text copy/paste clipboard', () => {
+    // Setting the text clipboard must not populate the copy() buffer.
+    env.run('setClipboardText("text-only")');
+    // appendBuffer pulls from the rich-text clipboard (empty here) — a no-op,
+    // so the text clipboard value is unaffected.
+    env.run('appendBuffer()');
+    expect(env.run('return getClipboardText()')).toBe('text-only');
+  });
+});
+
+// createScrollBox / deleteScrollBox — overlay scrollable container (Geyser.ScrollBox).
+// Mirrors the createCommandLine coverage: asserts manager state via session.scrollBoxes.
+describe('createScrollBox / deleteScrollBox — overlay container + routing', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('creates a scroll box on main and rejects a duplicate name', () => {
+    expect(env.run('return (createScrollBox("sb1", 10, 20, 300, 200))')).toBe(true);
+    expect(env.session.scrollBoxes.has('sb1')).toBe(true);
+    const sb = env.session.scrollBoxes.get('sb1')!;
+    expect([sb.parent, sb.x, sb.y, sb.width, sb.height, sb.visible]).toEqual(['main', 10, 20, 300, 200, true]);
+    // Re-create with the same name returns false (Mudlet semantics).
+    expect(env.run('return (createScrollBox("sb1", 0, 0, 100, 100))')).toBe(false);
+  });
+
+  it('honours an explicit parent viewport argument', () => {
+    expect(env.run('return (createScrollBox("uw", "sb2", 5, 5, 120, 90))')).toBe(true);
+    expect(env.session.scrollBoxes.get('sb2')!.parent).toBe('uw');
+    // The 6-arg form lists under the named parent, not main.
+    expect(env.session.scrollBoxes.list('uw').map(s => s.name)).toEqual(['sb2']);
+    expect(env.session.scrollBoxes.list('main').some(s => s.name === 'sb2')).toBe(false);
+  });
+
+  it('moveWindow / resizeWindow / hideWindow / showWindow / raiseWindow / lowerWindow target scroll boxes', () => {
+    env.run('createScrollBox("sb3", 0, 0, 100, 100)');
+    env.run('moveWindow("sb3", 40, 60)');
+    env.run('resizeWindow("sb3", 250, 180)');
+    const sb = env.session.scrollBoxes.get('sb3')!;
+    expect([sb.x, sb.y, sb.width, sb.height]).toEqual([40, 60, 250, 180]);
+    expect(env.run('return (showWindow("sb3"))')).toBe(true);
+    env.run('hideWindow("sb3")');
+    expect(env.session.scrollBoxes.get('sb3')!.visible).toBe(false);
+    expect(env.run('return (raiseWindow("sb3"))')).toBe(true);
+    const raisedZ = env.session.scrollBoxes.get('sb3')!.zIndex;
+    expect(raisedZ).toBeGreaterThan(0);
+    expect(env.run('return (lowerWindow("sb3"))')).toBe(true);
+    expect(env.session.scrollBoxes.get('sb3')!.zIndex).toBeLessThan(0);
+  });
+
+  it('windowType reports "scrollbox"', () => {
+    env.run('createScrollBox("sb4", 0, 0, 100, 100)');
+    expect(env.run('return (windowType("sb4"))')).toBe('scrollbox');
+  });
+
+  it('deleteScrollBox destroys the box and fires sysScrollBoxDeleted', () => {
+    env.run('createScrollBox("sb5", 0, 0, 100, 100)');
+    env.run([
+      'sawDeletedName = nil',
+      'registerAnonymousEventHandler("sysScrollBoxDeleted", function(_, name) sawDeletedName = name end)',
+    ].join('\n'));
+    expect(env.run('return (deleteScrollBox("sb5"))')).toBe(true);
+    expect(env.session.scrollBoxes.has('sb5')).toBe(false);
+    expect(env.run('return sawDeletedName')).toBe('sb5');
+    // Re-deleting an already-removed name is false (and fires nothing).
+    expect(env.run('return (deleteScrollBox("sb5"))')).toBe(false);
+  });
+});

@@ -1,0 +1,26 @@
+/* Overlay scroll box — an absolutely-positioned scrollable container hosting
+   child overlays (labels, command lines, nested scroll boxes) scoped to its
+   name. overflow is set per-axis inline (auto only when children overflow that
+   axis, else hidden) so a box that fits shows no scrollbar. pointer-events:auto
+   so it captures wheel/scroll over its area (unlike the pass-through layers). */
+.scrollbox-overlay {
+    position: absolute;
+    box-sizing: border-box;
+    pointer-events: auto;
+    z-index: 32; /* above the label (30) and cmd-line (31) layers it may overlap */
+    /* Mudlet's ScrollBox is a bare QScrollArea, which paints the Qt palette
+       background — i.e. it's opaque, not see-through. Mirror that with a themed
+       token so an empty box is visible and obscures the content behind it
+       (overridable by a filled child label). A border is intentionally omitted:
+       with box-sizing:border-box it would shrink the content area and make a
+       child sized to the full box overflow by the border width. */
+    background: var(--bg-input, #141414);
+}
+
+/* Sized to the extent of the box's children (see ScrollBoxOverlay.tsx). It is
+   the positioning context for the inset:0 child overlay layers, so they fill
+   the scroll *content* (which can exceed the box) rather than just the visible
+   box — that's what lets off-box children scroll into view. */
+.scrollbox-content {
+    position: relative;
+}

@@ -3,8 +3,10 @@ import type React from 'react';
 import type { WindowManager } from '../WindowManager';
 import type { LabelManager } from '../../labels/LabelManager';
 import type { CommandLineManager } from '../../cmdline/CommandLineManager';
+import type { ScrollBoxManager } from '../../scrollbox/ScrollBoxManager';
 import { LabelOverlay } from '../../labels/LabelOverlay';
 import { CommandLineOverlay } from '../../cmdline/CommandLineOverlay';
+import { ScrollBoxOverlay } from '../../scrollbox/ScrollBoxOverlay';
 import { backgroundImageStyle } from '../../output/backgroundImageStyle';
 import { WindowCmdLine } from './WindowCmdLine';
 
@@ -13,6 +15,7 @@ interface HtmlPanelProps {
     manager: WindowManager;
     labels?: LabelManager;
     cmdLines?: CommandLineManager;
+    scrollBoxes?: ScrollBoxManager;
     backgroundColor?: { r: number; g: number; b: number; a: number };
     backgroundImage?: { url: string; mode: number };
     cmdLineEnabled?: boolean;
@@ -21,7 +24,7 @@ interface HtmlPanelProps {
     cmdLineValueSeq?: number;
 }
 
-export function HtmlPanel({ id, manager, labels, cmdLines, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: HtmlPanelProps) {
+export function HtmlPanel({ id, manager, labels, cmdLines, scrollBoxes, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: HtmlPanelProps) {
     const viewportRef = useRef<HTMLDivElement>(null);
     const ref = useRef<HTMLDivElement>(null);
 
@@ -64,6 +67,9 @@ export function HtmlPanel({ id, manager, labels, cmdLines, backgroundColor, back
             )}
             {labels && <LabelOverlay manager={labels} parent={id} />}
             {cmdLines && <CommandLineOverlay manager={cmdLines} parent={id} />}
+            {scrollBoxes && labels && cmdLines && (
+                <ScrollBoxOverlay manager={scrollBoxes} labels={labels} cmdLines={cmdLines} parent={id} />
+            )}
         </div>
     );
 }

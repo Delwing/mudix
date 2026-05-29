@@ -632,7 +632,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `createGauge(name, x, y, w, h, parent)` | ✅ | Pure Lua via GUIUtils.lua (3× `createLabel` + `setBackgroundColor`) |
 | `createLabel(name, x, y, w, h, passthrough)` | ✅ | JS-exposed |
 | `createMiniConsole(name, x, y, w, h)` | ✅ | JS-exposed |
-| `createScrollBox(name, x, y, w, h)` | 🚧 | No ScrollBox widget yet |
+| `createScrollBox([parent,] name, x, y, w, h)` | ✅ | Absolutely-positioned scrollable overlay container (`ScrollBoxManager` + `ScrollBoxOverlay`) on the named parent viewport (defaults to main). Other overlay widgets (labels, command lines, nested scroll boxes) nest inside it by passing the box name as their parent; backs `Geyser.ScrollBox`. Routed by the unified `moveWindow`/`resizeWindow`/`showWindow`/`hideWindow`/`raiseWindow`/`lowerWindow` lookups; `windowType` reports `"scrollbox"`. Opaque default background (themed `--bg-input`) mirroring Mudlet's bare `QScrollArea`, so an empty box is visible. Real overflow scrolling: each box wraps its children in a content div sized to their furthest edge (computed by subscribing to the label/cmdline/scrollbox managers for the box), and scrolls a given axis only when its children overflow it |
 | `creplace([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `creplaceLine([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `decho([window,] text)` | ✅ | `<r,g,b>text` syntax |
@@ -649,7 +649,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `deleteLine()` | ✅ | Removes last output element |
 | `deleteMiniConsole(name)` | ✅ | Rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
 | `deleteMultiline(text)` | ✅ | Multi-line deletion (GUIUtils.lua) |
-| `deleteScrollBox(name)` | 🚧 | |
+| `deleteScrollBox(name)` | ✅ | Destroys a scroll box created by `createScrollBox`; fires `sysScrollBoxDeleted(name)` on success |
 | `deselect([window])` | ✅ | JS-exposed |
 | `disableClickthrough(name)` | ✅ | JS-exposed |
 | `disableCommandLine(name)` | ✅ | Overlay cmd lines disable the input (greyed); per-userwindow cmd lines hide the docked input; main bar is a no-op |
@@ -672,7 +672,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `getBgColor([window])` | ✅ | Bridge.lua — color at selection start; distinct from window-background `getBackgroundColor` |
 | `getBorderBottom()` / `getBorderTop()` / `getBorderLeft()` / `getBorderRight()` | ✅ | JS-exposed |
 | `getBorderSizes()` | ✅ | JS-exposed |
-| `getClipboardText()` | 🚧 | Async clipboard read — needs user-gesture gating |
+| `getClipboardText()` | ✅ | Returns a session text-clipboard mirror synchronously (Mudlet's signature); the OS clipboard can only be read async in the browser, so it kicks off a best-effort `navigator.clipboard.readText` refresh for the next call. Distinct from `copy`/`paste`'s rich-text buffer |
 | `getColorWildcard()` | ✅ | Returns the captured colour wildcard from the current trigger |
 | `getColumnCount([window])` | ✅ | JS-exposed |
 | `getColumnNumber([window])` | ✅ | JS-exposed |
@@ -762,7 +762,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setBorderSizes(...)` | ✅ | Bulk setter via the four side-specific routines |
 | `setFgColor([window,] r, g, b)` | ✅ | JS-exposed |
 | `setButtonStyleSheet(name, css)` | ✅ | Raw QSS → inline React style. Pseudo-state selectors (`:hover`/`:pressed`) drop through |
-| `setClipboardText(text)` | 🚧 | Async write — needs user-gesture gating |
+| `setClipboardText(text)` | ✅ | Updates the session text-clipboard mirror (authoritative) and best-effort writes to `navigator.clipboard` (may be gesture/permission gated). Always true |
 | `setCmdLineAction([name,] fn)` | ✅ | Routes to overlay cmd lines, per-userwindow cmd lines, or the main bar. Prior callback freed on rebind |
 | `setCmdLineStyleSheet([name,] css)` | ✅ | Translates QSS through `cmdLineQssToScopedCss` for overlay and per-userwindow cmd lines; main bar has no QSS hook so returns true as a no-op |
 | `setFont([window,] font)` | ✅ | Bridge.lua → `__setFont` |
@@ -791,7 +791,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setMovie(name, path)` / `setMovieFrame(name, n)` / `setMovieSpeed(name, factor)` / `startMovie(name)` | 🚧 | No QMovie equivalent — could be replaced by `<img>` with animated GIFs |
 | `setOverline([window,] bool)` | ✅ | FormatState `overline` channel (ANSI SGR 53/55) → CSS `text-decoration: overline`; selection-aware like the other style setters. `setTextFormat`/`getTextFormat` carry it too |
 | `setPopup([window,] cmds, hints)` | ✅ | Right-click popup on the current selection (preserves formatting, like `setLink`) |
-| `setProfileStyleSheet(css)` | 🚧 | Per-profile theme override |
+| `setProfileStyleSheet(css)` | ✅ | Installs/replaces a profile-wide `<style>` block in `document.head` (keyed apart from `setAppStyleSheet`); raises `sysAppStyleSheetChange` with tag `"profile"` |
 | `setReverse([window,] bool)` | ✅ | Sets `FormatState.inverse` on pen + selection (renderer swaps fg/bg) |
 | `setStrikeOut([window,] bool)` | ✅ | JS-exposed |
 | `setTextFormat([window,] ...)` | ✅ | `r1,g1,b1,r2,g2,b2,bold,underline,italics[,strikeout,overline,reverse,blink]` |
@@ -913,7 +913,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysLabelDeleted` | ✅ | On successful `deleteLabel` — arg: name |
 | `sysMiniConsoleDeleted` | ✅ | On successful `deleteMiniConsole` — arg: name |
 | `sysCommandLineDeleted` | ✅ | On successful `deleteCommandLine` — arg: name |
-| `sysScrollBoxDeleted` | 🚧 | No ScrollBox widget yet — arg: name |
+| `sysScrollBoxDeleted` | ✅ | On successful `deleteScrollBox` — arg: name |
 
 **Protocol / telnet**
 
@@ -960,6 +960,7 @@ Pure Lua on top of the overlay primitive API. No additional JS required.
 | `Geyser.HBox` / `Geyser.VBox` | ✅ | Bundled |
 | `Geyser.CommandLine` | ✅ | Bundled; the underlying `createCommandLine` overlay primitive is now wired |
 | `Geyser.UserWindow` | ✅ | Bundled; uses `openUserWindow` |
+| `Geyser.ScrollBox` | ✅ | Bundled; the underlying `createScrollBox`/`deleteScrollBox` overlay primitives are now wired (see UI Functions) |
 | `Geyser.ReflowContainer` | 🚧 | Not bundled in `LuaGlobal.lua` load list |
 
 ---
