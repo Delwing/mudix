@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Clock, Filter, Folder, FolderOpen, FolderPlus, Keyboard, MousePointerClick, Package, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
 import { Button, Input, ContextMenu, useConfirm } from '../../components';
 import { useAppStore, useProfileField } from '../../../storage';
@@ -609,6 +609,15 @@ const KIND_TO_CATEGORY: Record<ScriptLogSourceKind, EditCategory> = {
     button:  'buttons',
 };
 
+const CATEGORY_TO_KIND: Record<EditCategory, ScriptLogSourceKind> = {
+    scripts:  'script',
+    aliases:  'alias',
+    triggers: 'trigger',
+    timers:   'timer',
+    keys:     'key',
+    buttons:  'button',
+};
+
 function formatTime(d: Date): string {
     return d.toTimeString().slice(0, 8);
 }
@@ -662,7 +671,14 @@ interface ScriptEditorPanelProps {
     onOpenVfsFile?: (path: string, line?: number) => void;
 }
 
-export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineRef, initialListWidth, initialMetaHeight, onSplitsChange, onOpenVfsFile }: ScriptEditorPanelProps) {
+/** Imperative API exposed to the title-bar search box. */
+export interface ScriptEditorPanelHandle {
+    /** Switch to the item's category, expand its ancestors, select it, and —
+     *  when a line is given — move the editor cursor there. */
+    navigateToItem: (category: EditCategory, id: string, line?: number) => void;
+}
+
+export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEditorPanelProps>(function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineRef, initialListWidth, initialMetaHeight, onSplitsChange, onOpenVfsFile }, ref) {
     const confirm = useConfirm();
     const [category, setCategory] = useState<Category>('scripts');
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -976,6 +992,20 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
 
     const treeEntries = flattenTree(items, null, expanded);
     const selected = items.find(i => i.id === selectedId) ?? null;
+
+    // Navigation driven by the title-bar search box: reuse the error-jump
+    // machinery to switch category, expand ancestors, select the item, and — for
+    // a code occurrence — move the cursor to its line.
+    useImperativeHandle(ref, () => ({
+        navigateToItem: (cat: EditCategory, id: string, line?: number) => {
+            jumpRevisionRef.current += 1;
+            setPendingJump({
+                kind: CATEGORY_TO_KIND[cat], id,
+                ...(line !== undefined ? { line } : {}),
+                revision: jumpRevisionRef.current,
+            });
+        },
+    }), []);
 
     // The inline log under the editor is scoped to the currently opened item:
     // only entries whose source.id matches the selection are shown. The Errors
@@ -1618,6 +1648,7 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
                     })}
                 </div>
             </div>}
+            {/* end item list */}
 
             {/* Packages view */}
             {category === 'packages' && (
@@ -2354,4 +2385,4 @@ export function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineR
             )}
         </div>
     );
-}
+});

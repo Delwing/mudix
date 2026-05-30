@@ -391,6 +391,13 @@ export class ScriptingAPI {
     private echoDeferred: AnsiAwareBuffer[] = [];
     private isDeferringEcho = false;
 
+    // True between beginLine/endLine until the trigger's first echoed `\n`.
+    // Mudlet's echo/cecho appends to the matched line at the output cursor (end
+    // of line); only a newline advances to a fresh line. While this is set, a
+    // main-window echo's pre-newline text is appended to the matched buffer
+    // rather than starting a new deferred line.
+    private echoOnMatchedLine = false;
+
     // Callback set by ScriptingEngine so link clicks can execute Lua code.
     private executeScript: ((code: string) => void) | null = null;
 
@@ -1204,6 +1211,25 @@ export class ScriptingAPI {
     // ── Echo / output ─────────────────────────────────────────────────────────
 
     echo(text: string): void {
+        // During trigger processing Mudlet's echo/cecho appends to the matched
+        // line at the output cursor (the line's end); only a `\n` advances to a
+        // fresh line. mudix seeds the matched line into mainConsole.history
+        // (beginLine) and defers script echoes, so without this every trigger
+        // echo opened a new line — breaking Arkadia's grade/value triggers,
+        // which `replace()`/`prefix()` then append text to the same line.
+        if (this.echoOnMatchedLine) {
+            const buf = this.mainConsole.getBuffer();
+            if (buf) {
+                const nl = text.indexOf('\n');
+                const head = nl < 0 ? text : text.slice(0, nl);
+                if (head) buf.insert(buf.text.length, head, this.mainConsole.format.toSnapshot());
+                if (nl < 0) return;          // stayed on the matched line
+                this.echoOnMatchedLine = false;
+                text = text.slice(nl);        // remainder leads with the advancing \n
+            } else {
+                this.echoOnMatchedLine = false;
+            }
+        }
         this.mainConsole.echo(text);
         this.drainMain();
     }
@@ -1749,6 +1775,7 @@ export class ScriptingAPI {
         this.inTriggerProcessing = true;
         this.selection = null;
         this.isDeferringEcho = true;
+        this.echoOnMatchedLine = true;
         // The trigger cursor sits at the end of the matched line (Mudlet fires
         // before the line's terminator), so a trigger's `cecho("\n text")`
         // should advance to a fresh line rather than emit a leading blank row.
@@ -1762,6 +1789,7 @@ export class ScriptingAPI {
      */
     endLine(): void {
         this.inTriggerProcessing = false;
+        this.echoOnMatchedLine = false;
         this.selection = null;
         // Clear the leading-newline latch so it can't leak onto a later echo
         // (timer/alias output) if this line's triggers never echoed.

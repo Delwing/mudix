@@ -1,5 +1,7 @@
 import { useRef } from 'react';
 import { ScriptEditorPanel } from './panels/ScriptEditorPanel';
+import type { ScriptEditorPanelHandle } from './panels/ScriptEditorPanel';
+import { ScriptSearch } from './panels/ScriptSearch';
 import { useAppStore } from '../../storage';
 import { ResizableModal } from '../ResizableModal';
 import type { MudSession } from '../../mud/MudSession';
@@ -25,6 +27,7 @@ export function ScriptEditorModal({ connectionId, session, vfs, scriptingEngineR
     const saveBounds  = useAppStore(s => s.saveScriptEditorBounds);
 
     const boundsRef = useRef(savedBounds ?? null);
+    const panelRef = useRef<ScriptEditorPanelHandle>(null);
 
     return (
         <ResizableModal
@@ -40,8 +43,15 @@ export function ScriptEditorModal({ connectionId, session, vfs, scriptingEngineR
             minH={MIN_H}
             defaultW={DEFAULT_W}
             defaultH={DEFAULT_H}
+            headerExtra={
+                <ScriptSearch
+                    connectionId={connectionId}
+                    onNavigate={(category, id, line) => panelRef.current?.navigateToItem(category, id, line)}
+                />
+            }
         >
             <ScriptEditorPanel
+                ref={panelRef}
                 connectionId={connectionId}
                 session={session}
                 vfs={vfs}

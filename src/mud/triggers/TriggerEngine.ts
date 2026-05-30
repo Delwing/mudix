@@ -101,6 +101,38 @@ type CompiledAndEntry = {
 
 type CompiledEntry = CompiledOrEntry | CompiledAndEntry;
 
+/** A session-scoped temporary trigger. `seq` is its registration order in the
+ *  unified list (see TriggerEngine's ordering notes). */
+type TempEntry =
+    | { kind: 'regex'; re: PcreInstance; fn: TempFn; seq: number }
+    | { kind: 'substring'; pattern: string; fn: TempFn; seq: number }
+    | { kind: 'startOfLine'; pattern: string; fn: TempFn; seq: number }
+    | { kind: 'exactMatch'; pattern: string; fn: TempFn; seq: number }
+    | { kind: 'prompt'; fn: TempFn; seq: number }
+    | { kind: 'line'; countdown: number; remaining: number; skipFirst: boolean; fn: TempFn; seq: number };
+
+/**
+ * One node in the unified processing list — either a permanent compiled entry
+ * or a temporary trigger (referenced by its `temp` map id). `path` is the chain
+ * of registration seqs from the root ancestor down to the node; sorting by it
+ * lexicographically yields Mudlet's pre-order forest walk (a root immediately
+ * followed by its descendants) with roots — including appended temps — ordered
+ * by creation. Leading with ancestor seqs keeps a parent before its children
+ * regardless of the child's own seq, so re-parenting can't break a chain.
+ */
+type UnifiedEntry =
+    | { kind: 'perm'; perm: CompiledEntry; path: number[] }
+    | { kind: 'temp'; id: number; path: number[] };
+
+/** Lexicographic compare of two seq paths; the shorter (ancestor) sorts first. */
+function comparePath(a: number[], b: number[]): number {
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+        if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return a.length - b.length;
+}
+
 /**
  * Cached compile result for a single trigger node, keyed by item.id in
  * TriggerEngine.cache. The `signature` captures the fields that determine the
@@ -260,15 +292,7 @@ function buildMatcher(p: TriggerPattern, register: (re: PcreInstance) => void): 
 }
 
 export class TriggerEngine {
-    private readonly temp = new Map<
-        number,
-        | { kind: 'regex'; re: PcreInstance; fn: TempFn }
-        | { kind: 'substring'; pattern: string; fn: TempFn }
-        | { kind: 'startOfLine'; pattern: string; fn: TempFn }
-        | { kind: 'exactMatch'; pattern: string; fn: TempFn }
-        | { kind: 'prompt'; fn: TempFn }
-        | { kind: 'line'; countdown: number; remaining: number; skipFirst: boolean; fn: TempFn }
-    >();
+    private readonly temp = new Map<number, TempEntry>();
     private nextId = 1;
     // True while processTemp is iterating. A `line` temp trigger created during
     // a handler (mid-pass) sets skipFirst so it doesn't tick on the line it was
@@ -277,6 +301,24 @@ export class TriggerEngine {
     private inProcessTemp = false;
     private permCompiled: CompiledEntry[] = [];
     private allById = new Map<string, TriggerNode>();
+
+    // ── Unified ordering (Mudlet `mTriggerRootNodeList`) ──────────────────────
+    // Mudlet keeps permanent and temporary triggers in ONE ordered list and
+    // fires them front-to-back; runtime-created temps land after the package's
+    // permanent triggers (which were registered earlier). mudix mirrors that
+    // with a single monotonic registration counter shared by both:
+    //   - permReg assigns a stable seq to each permanent node the first time it
+    //     is seen, persisted across loadPerm rebuilds (so edits/toggles don't
+    //     reshuffle order, and a perm added at runtime sorts AFTER existing
+    //     temps — exactly like Mudlet's appended root list).
+    //   - addTemp/addTempLine draw the next seq, so a temp sorts after every
+    //     perm that existed when it was created.
+    // `unified` is the merged, path-sorted processing list (see rebuildOrder);
+    // `process()` walks it in one interleaved pass.
+    private regCounter = 1;
+    private permReg = new Map<string, number>();
+    private unified: UnifiedEntry[] = [];
+    private orderDirty = true;
 
     // Per-item compile cache. Surviving items between loadPerm calls keep their
     // compiled state (and PCRE instances) here; only items whose signature
@@ -335,20 +377,23 @@ export class TriggerEngine {
         kind: 'regex' | 'substring' | 'startOfLine' | 'exactMatch' | 'prompt' = 'regex',
     ): () => void {
         const id = this.nextId++;
+        const seq = this.regCounter++;
         if (kind === 'prompt') {
-            this.temp.set(id, { kind, fn });
+            this.temp.set(id, { kind, fn, seq });
         } else if (kind === 'substring' || kind === 'startOfLine' || kind === 'exactMatch') {
-            this.temp.set(id, { kind, pattern, fn });
+            this.temp.set(id, { kind, pattern, fn, seq });
         } else {
             const re = compilePcre(pattern);
             if (!re) return () => {};
-            this.temp.set(id, { kind: 'regex', re, fn });
+            this.temp.set(id, { kind: 'regex', re, fn, seq });
         }
+        this.orderDirty = true;
         return () => {
             const entry = this.temp.get(id);
             if (!entry) return;
             if (entry.kind === 'regex') entry.re.destroy();
             this.temp.delete(id);
+            this.orderDirty = true;
         };
     }
 
@@ -369,13 +414,31 @@ export class TriggerEngine {
             remaining: Math.max(1, Math.trunc(howMany) || 1),
             skipFirst: this.inProcessTemp,
             fn,
+            seq: this.regCounter++,
         });
-        return () => { this.temp.delete(id); };
+        this.orderDirty = true;
+        return () => { this.temp.delete(id); this.orderDirty = true; };
     }
 
     loadPerm(items: TriggerNode[]): void {
         this.allById = new Map(items.map(i => [i.id, i]));
         const enabledIds = buildEffectivelyEnabledIds(items);
+
+        // Assign each permanent node a stable registration seq the first time we
+        // see it (in store/document order, where a parent always precedes its
+        // children). Reusing the seq across reloads keeps order stable through
+        // edits/toggles; a node added at runtime draws the current counter, so
+        // it sorts after temps created before it — matching Mudlet's appended
+        // root list. Prune seqs for nodes that were deleted.
+        const liveIds = new Set<string>();
+        for (const item of items) {
+            liveIds.add(item.id);
+            if (!this.permReg.has(item.id)) this.permReg.set(item.id, this.regCounter++);
+        }
+        for (const id of this.permReg.keys()) {
+            if (!liveIds.has(id)) this.permReg.delete(id);
+        }
+        this.orderDirty = true;
 
         const hasChildren = new Set<string>();
         for (const it of items) {
@@ -506,63 +569,60 @@ export class TriggerEngine {
     // ── Temp triggers (session-scoped, created by scripts) ────────────────────
 
     processTemp(line: string, isPrompt = false): void {
+        const prev = this.inProcessTemp;
         this.inProcessTemp = true;
         try {
-            this.processTempEntries(line, isPrompt);
+            for (const [id, entry] of this.temp) {
+                this.fireTempEntry(id, entry, line, isPrompt);
+            }
         } finally {
-            this.inProcessTemp = false;
+            this.inProcessTemp = prev;
         }
     }
 
-    private processTempEntries(line: string, isPrompt: boolean): void {
-        for (const [id, entry] of this.temp) {
-            if (entry.kind === 'line') {
-                // Position-based: skip the creation-line tick, count down `from`,
-                // then fire on each of the next `remaining` lines, self-expiring.
-                if (entry.skipFirst) { entry.skipFirst = false; continue; }
-                if (entry.countdown > 1) { entry.countdown--; continue; }
-                entry.fn([line]);
-                entry.remaining--;
-                if (entry.remaining <= 0) this.temp.delete(id);
-                continue;
-            }
-            if (entry.kind === 'prompt') {
-                if (isPrompt) entry.fn([line]);
-                continue;
-            }
-            if (entry.kind === 'substring') {
-                if (line.includes(entry.pattern)) {
-                    entry.fn([entry.pattern]);
-                }
-                continue;
-            }
-            if (entry.kind === 'startOfLine') {
-                if (line.startsWith(entry.pattern)) {
-                    entry.fn([entry.pattern]);
-                }
-                continue;
-            }
-            if (entry.kind === 'exactMatch') {
-                if (line === entry.pattern) {
-                    entry.fn([line]);
-                }
-                continue;
-            }
-            const m = entry.re.match(line) as PcreMatch | null;
-            if (!m) continue;
-            const result = pcreToMatchResult(m);
-            entry.fn(
-                [result.matchedText, ...result.captures],
-                {
-                    captureSpans: result.captureSpans ?? [],
-                    namedSpans: result.namedSpans,
-                    matchSpan: result.matchStart !== undefined
-                        ? { start: result.matchStart, length: result.matchedText.length }
-                        : undefined,
-                },
-                result.namedGroups,
-            );
+    /** Match + fire a single temp trigger against `line`. Self-expiring `line`
+     *  triggers delete themselves (and dirty the unified order) when spent. */
+    private fireTempEntry(id: number, entry: TempEntry, line: string, isPrompt: boolean): void {
+        if (entry.kind === 'line') {
+            // Position-based: skip the creation-line tick, count down `from`,
+            // then fire on each of the next `remaining` lines, self-expiring.
+            if (entry.skipFirst) { entry.skipFirst = false; return; }
+            if (entry.countdown > 1) { entry.countdown--; return; }
+            entry.fn([line]);
+            entry.remaining--;
+            if (entry.remaining <= 0) { this.temp.delete(id); this.orderDirty = true; }
+            return;
         }
+        if (entry.kind === 'prompt') {
+            if (isPrompt) entry.fn([line]);
+            return;
+        }
+        if (entry.kind === 'substring') {
+            if (line.includes(entry.pattern)) entry.fn([entry.pattern]);
+            return;
+        }
+        if (entry.kind === 'startOfLine') {
+            if (line.startsWith(entry.pattern)) entry.fn([entry.pattern]);
+            return;
+        }
+        if (entry.kind === 'exactMatch') {
+            if (line === entry.pattern) entry.fn([line]);
+            return;
+        }
+        const m = entry.re.match(line) as PcreMatch | null;
+        if (!m) return;
+        const result = pcreToMatchResult(m);
+        entry.fn(
+            [result.matchedText, ...result.captures],
+            {
+                captureSpans: result.captureSpans ?? [],
+                namedSpans: result.namedSpans,
+                matchSpan: result.matchStart !== undefined
+                    ? { start: result.matchStart, length: result.matchedText.length }
+                    : undefined,
+            },
+            result.namedGroups,
+        );
     }
 
     // ── Perm triggers (persisted, visible in UI) ──────────────────────────────
@@ -571,70 +631,156 @@ export class TriggerEngine {
         const currentLine = this.lineCounter++;
         const seen = new Set<string>();
         const results: TriggerMatch[] = [];
-
         for (const entry of this.permCompiled) {
-            const { item } = entry;
-            if (!this.isChainAccessible(item, currentLine)) continue;
+            this.matchPermEntry(entry, line, isPrompt, currentLine, seen, results);
+        }
+        return results;
+    }
 
-            const effectiveLine = this.getEffectiveLine(item, line);
-            const isChainHead = item.isGroup || this.hasChildren.has(item.id);
+    /**
+     * Match one permanent compiled entry against `line`, appending any matches
+     * to `out`. Updates chain/AND/filter state exactly as the old inline loop
+     * did. `seen` dedupes a single OR/group item within one line pass; it is
+     * shared across all entries processed for that line.
+     */
+    private matchPermEntry(
+        entry: CompiledEntry,
+        line: string,
+        isPrompt: boolean,
+        currentLine: number,
+        seen: Set<string>,
+        out: TriggerMatch[],
+    ): void {
+        const { item } = entry;
+        if (!this.isChainAccessible(item, currentLine)) return;
 
-            if (item.isGroup) {
-                // Chain head: match opens the chain for children.
-                if (seen.has(item.id)) continue;
-                // Groups are always OR-compiled
-                const orEntry = entry as CompiledOrEntry;
+        const effectiveLine = this.getEffectiveLine(item, line);
+        const isChainHead = item.isGroup || this.hasChildren.has(item.id);
+
+        if (item.isGroup) {
+            // Chain head: match opens the chain for children.
+            if (seen.has(item.id)) return;
+            // Groups are always OR-compiled
+            const orEntry = entry as CompiledOrEntry;
+            let result: MatchResult | null = null;
+            for (const test of orEntry.tests) {
+                result = test(effectiveLine, isPrompt);
+                if (result !== null) break;
+            }
+            if (result !== null) {
+                seen.add(item.id);
+                this.openChain(item, currentLine, result);
+                if (item.code) {
+                    out.push(matchResultToTriggerMatch(item, result));
+                }
+            }
+        } else if (entry.kind === 'and') {
+            const r = this.processAndTrigger(entry, effectiveLine, isPrompt, currentLine);
+            if (r) {
+                if (isChainHead) {
+                    this.openChain(item, currentLine, {
+                        captures: r.captures,
+                        matchedText: r.matchedText,
+                    });
+                }
+                out.push(r);
+            }
+        } else {
+            // OR entry (non-group)
+            if (entry.testAll) {
+                let firstResult: MatchResult | null = null;
+                for (const r of entry.testAll(effectiveLine)) {
+                    if (firstResult === null) firstResult = r;
+                    out.push(matchResultToTriggerMatch(item, r));
+                }
+                if (firstResult !== null && isChainHead) {
+                    this.openChain(item, currentLine, firstResult);
+                }
+            } else {
+                if (seen.has(item.id)) return;
                 let result: MatchResult | null = null;
-                for (const test of orEntry.tests) {
+                for (const test of entry.tests) {
                     result = test(effectiveLine, isPrompt);
                     if (result !== null) break;
                 }
                 if (result !== null) {
                     seen.add(item.id);
-                    this.openChain(item, currentLine, result);
-                    if (item.code) {
-                        results.push(matchResultToTriggerMatch(item, result));
-                    }
-                }
-            } else if (entry.kind === 'and') {
-                const r = this.processAndTrigger(entry, effectiveLine, isPrompt, currentLine);
-                if (r) {
-                    if (isChainHead) {
-                        this.openChain(item, currentLine, {
-                            captures: r.captures,
-                            matchedText: r.matchedText,
-                        });
-                    }
-                    results.push(r);
-                }
-            } else {
-                // OR entry (non-group)
-                if (entry.testAll) {
-                    let firstResult: MatchResult | null = null;
-                    for (const r of entry.testAll(effectiveLine)) {
-                        if (firstResult === null) firstResult = r;
-                        results.push(matchResultToTriggerMatch(item, r));
-                    }
-                    if (firstResult !== null && isChainHead) {
-                        this.openChain(item, currentLine, firstResult);
-                    }
-                } else {
-                    if (seen.has(item.id)) continue;
-                    let result: MatchResult | null = null;
-                    for (const test of entry.tests) {
-                        result = test(effectiveLine, isPrompt);
-                        if (result !== null) break;
-                    }
-                    if (result !== null) {
-                        seen.add(item.id);
-                        if (isChainHead) this.openChain(item, currentLine, result);
-                        results.push(matchResultToTriggerMatch(item, result));
-                    }
+                    if (isChainHead) this.openChain(item, currentLine, result);
+                    out.push(matchResultToTriggerMatch(item, result));
                 }
             }
         }
+    }
 
-        return results;
+    // ── Unified pass (permanent + temporary, in registration order) ───────────
+
+    /**
+     * Mudlet-faithful single pass: walk the one ordered list of permanent and
+     * temporary triggers (see the ordering notes on the fields) and, for each
+     * node in turn, match + act on it before moving to the next. Permanent
+     * matches are handed to `exec` inline (the caller runs the trigger's
+     * command/code); temporary triggers fire their own callback. Because a
+     * runtime temp sorts after the permanent triggers that existed when it was
+     * created, a permanent trigger on a line runs before a temp that also
+     * matches it — which is exactly the order Mudlet produces.
+     *
+     * The processing list is snapshotted up front (like Mudlet's
+     * `copyOfNodeList`), so triggers created mid-pass don't fire on the current
+     * line, and `inProcessTemp` is saved/restored to stay correct under the
+     * re-entrancy a handler can cause via `feedTriggers`.
+     */
+    process(line: string, isPrompt: boolean, exec: (match: TriggerMatch) => void): void {
+        if (this.orderDirty) this.rebuildOrder();
+        const snapshot = this.unified;
+        const currentLine = this.lineCounter++;
+        const seen = new Set<string>();
+        const matches: TriggerMatch[] = [];
+        const prev = this.inProcessTemp;
+        this.inProcessTemp = true;
+        try {
+            for (const u of snapshot) {
+                if (u.kind === 'temp') {
+                    // Re-fetch: an earlier handler this pass may have disposed it.
+                    const cur = this.temp.get(u.id);
+                    if (cur) this.fireTempEntry(u.id, cur, line, isPrompt);
+                } else {
+                    matches.length = 0;
+                    this.matchPermEntry(u.perm, line, isPrompt, currentLine, seen, matches);
+                    for (const m of matches) exec(m);
+                }
+            }
+        } finally {
+            this.inProcessTemp = prev;
+        }
+    }
+
+    /** Rebuild the merged, path-sorted processing list from the current
+     *  permanent entries and temporary triggers. Called lazily from process()
+     *  when either source changed. */
+    private rebuildOrder(): void {
+        const entries: UnifiedEntry[] = [];
+        for (const perm of this.permCompiled) {
+            entries.push({ kind: 'perm', perm, path: this.permPath(perm.item) });
+        }
+        for (const [id, t] of this.temp) {
+            entries.push({ kind: 'temp', id, path: [t.seq] });
+        }
+        entries.sort((a, b) => comparePath(a.path, b.path));
+        this.unified = entries;
+        this.orderDirty = false;
+    }
+
+    /** The registration-seq path from the root ancestor down to `item`. */
+    private permPath(item: TriggerNode): number[] {
+        const chain: number[] = [];
+        let cur: TriggerNode | undefined = item;
+        const guard = new Set<string>();
+        while (cur && !guard.has(cur.id)) {
+            guard.add(cur.id);
+            chain.push(this.permReg.get(cur.id) ?? 0);
+            cur = cur.parentId ? this.allById.get(cur.parentId) : undefined;
+        }
+        return chain.reverse();
     }
 
     setLuaEval(fn: ((code: string, line: string) => boolean) | null): void {
@@ -669,6 +815,10 @@ export class TriggerEngine {
         this.andStates.clear();
         this.filterActiveText.clear();
         this.hasChildren.clear();
+        this.permReg.clear();
+        this.unified = [];
+        this.regCounter = 1;
+        this.orderDirty = true;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

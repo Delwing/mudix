@@ -2419,9 +2419,12 @@ export class ScriptingEngine {
         this.api.beginLine(buffer, isPrompt);
         try {
             this.runtimes.lua?.setCurrentLine(plain, isPrompt);
-            this.triggerEngine.processTemp(plain, isPrompt);
-            const matches = this.triggerEngine.matchPerm(plain, isPrompt);
-            for (const m of matches) {
+            // Single Mudlet-style pass over permanent + temporary triggers in one
+            // ordered list: each node is matched and acted on in registration
+            // order, so a permanent trigger fires before a temp created later
+            // that also matches the line (and vice-versa for the rare runtime
+            // permanent). Replaces the old temp-then-perm two-phase split.
+            this.triggerEngine.process(plain, isPrompt, (m) => {
                 this.executePermTrigger(
                     m.trigger,
                     [plain, ...m.captures],
@@ -2432,7 +2435,7 @@ export class ScriptingEngine {
                     m.namedSpans,
                     m.matchStart,
                 );
-            }
+            });
         } finally {
             this.api.endLine();
         }
@@ -2495,6 +2498,14 @@ export class ScriptingEngine {
                 this.raiseEvent('sysEchoAnomalyDetected', []);
             }),
             session.events.on('flushLines', (groups) => {
+                // TEMP DIAGNOSTIC: set window.__MUDIX_DEBUG_FLUSH = true in the
+                // devtools console to log each network flush batch's raw line
+                // groups (newlines escaped) so we can see the exact order lines
+                // arrive relative to trigger echoes. Remove once diagnosed.
+                if ((globalThis as { __MUDIX_DEBUG_FLUSH?: boolean }).__MUDIX_DEBUG_FLUSH) {
+                    // eslint-disable-next-line no-console
+                    console.log('[FLUSH BATCH]', groups.map(g => ({ type: g.type, text: g.text })));
+                }
                 try {
                     this.processFlushBatch(groups);
                 } catch (err) {

@@ -71,4 +71,37 @@ describe('trigger echo placement within a flush batch', () => {
 
     expect(env.mainOutput).toEqual(['A', 'afterA', 'B', 'C', 'afterC']);
   });
+
+  // Mudlet's echo/cecho WITHOUT a leading newline appends to the matched line at
+  // the output cursor (end of line), not a fresh line. The Arkadia `value.lua`
+  // grade trigger does `replace(""); cecho("390 miedziakow, czyli ...")` — the
+  // appended money string was landing on the next row in mudix.
+  it('appends a leading-newline-less trigger cecho to the matched line', () => {
+    feedLine(
+      env,
+      'Wydaje ci sie, ze sa warte okolo 390 miedziakow.',
+      'selectString("390 miedziakow.", 1); replace(""); ' +
+        'cecho("390 miedziakow, czyli 1 zl, 12 sr, 6 mdz.")',
+    );
+    expect(env.mainOutput).toEqual([
+      'Wydaje ci sie, ze sa warte okolo 390 miedziakow, czyli 1 zl, 12 sr, 6 mdz.',
+    ]);
+  });
+
+  it('appends across multiple no-newline echoes onto the same matched line', () => {
+    feedLine(env, 'base', 'echo(" foo"); echo(" bar")');
+    expect(env.mainOutput).toEqual(['base foo bar']);
+  });
+
+  // suffix() is exactly this pattern: append decoration to the end of the line.
+  it('keeps a prefix + trailing echo on the matched line (Arkadia grade trigger)', () => {
+    feedLine(
+      env,
+      'Oceniasz starannie ciemnoblekitne lniane spodnie.',
+      'prefix("======= "); echo(" ========")',
+    );
+    expect(env.mainOutput).toEqual([
+      '======= Oceniasz starannie ciemnoblekitne lniane spodnie. ========',
+    ]);
+  });
 });
