@@ -24,6 +24,7 @@
 import { FormatState } from "../text/FormatState";
 import type { BufferSegment, FormatColor, FormatStateSnapshot } from "../text/FormatState";
 import { mxpColor } from "../text/colorParsers";
+import { scanEscape } from "../text/ansiEscapes";
 
 /** A clickable region the parser found, expressed as offsets into `plain`. The
  *  engine builds the actual `FormatHyperlink` (with session/URL behaviour). */
@@ -235,29 +236,23 @@ export class MxpParser {
             const ch = text[i];
 
             if (ch === "\x1b") {
-                if (text[i + 1] === "[") {
-                    let j = i + 2;
-                    while (j < n && !isCsiFinal(text[j])) j++;
-                    if (j >= n) {
-                        // Incomplete CSI at end of input — hold for the next line.
-                        if (depth === 0 && n - i <= MAX_PENDING) this.pendingTag = text.slice(i);
-                        return;
-                    }
-                    const final = text[j];
-                    const params = text.slice(i + 2, j);
-                    if (final === "m") {
-                        this.flushRun();
-                        this.fmt.applySgr(parseSgrParams(params));
-                    } else if (final === "z") {
-                        this.flushRun();
-                        this.applyLineMode(parseInt(params, 10) || 0);
-                    }
-                    // Any other CSI final (cursor moves, erase, …) is consumed.
-                    i = j + 1;
-                    continue;
+                const esc = scanEscape(text, i);
+                if (esc.kind === "incomplete") {
+                    // Sequence cut off at end of input — hold for the next line.
+                    if (depth === 0 && n - i <= MAX_PENDING) this.pendingTag = text.slice(i);
+                    return;
                 }
-                // Lone ESC — drop it.
-                i++;
+                if (esc.kind === "csi" && esc.finalByte === "m") {
+                    this.flushRun();
+                    this.fmt.applySgr(parseSgrParams(esc.params ?? ""));
+                } else if (esc.kind === "csi" && esc.finalByte === "z") {
+                    this.flushRun();
+                    this.applyLineMode(parseInt(esc.params ?? "", 10) || 0);
+                }
+                // Every other recognized sequence (OSC links, cursor moves,
+                // erase, charset designation, DCS strings, …) is consumed and
+                // never rendered as literal text.
+                i = esc.end;
                 continue;
             }
 
@@ -659,12 +654,6 @@ function findTagEnd(text: string, start: number): number {
         }
     }
     return -1;
-}
-
-/** CSI final bytes are 0x40–0x7E (`@`…`~`). */
-function isCsiFinal(c: string): boolean {
-    const code = c.charCodeAt(0);
-    return code >= 0x40 && code <= 0x7e;
 }
 
 function parseSgrParams(s: string): number[] {

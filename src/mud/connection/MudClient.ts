@@ -198,6 +198,11 @@ export class MudClient {
      *  duplicates within a single frame to avoid event storms. */
     private telnetEventSeen = new Set<number>();
 
+    /** True once we've sent the GMCP `Core.Hello` / `Core.Supports.Set`
+     *  handshake this session, so a server that re-offers GMCP doesn't make us
+     *  announce ourselves twice. Reset on each connect(). */
+    private gmcpHelloSent = false;
+
     commandEcho: boolean;
     private gmcpEnabled: boolean;
     private mttsEnabled: boolean;
@@ -361,6 +366,7 @@ export class MudClient {
         this.textDecoder = new TextDecoder('utf-8', { fatal: false });
         this.pendingLineTail = "";
         this.gaDriver = false;
+        this.gmcpHelloSent = false;
         this.ttypeStep = 0;
         this.mxpStarted = false;
         this.nawsWillSent = false;
@@ -387,12 +393,14 @@ export class MudClient {
                     if (this.gmcpEnabled && data.includes(GMCP_WILL)) {
                         // Server offers GMCP (IAC WILL GMCP) → we accept (IAC DO GMCP).
                         this.sendRaw(GMCP_DO);
+                        this.sendGmcpHandshake();
                         this.eventBus.emit('gmcp.negotiated');
                     } else if (this.gmcpEnabled && data.includes(GMCP_DO)) {
                         // Server requests we enable GMCP (IAC DO GMCP) → we accept
                         // (IAC WILL GMCP). Mirrors the MSDP handling below: telnet
                         // negotiation is symmetric, so handle both directions.
                         this.sendRaw(GMCP_WILL);
+                        this.sendGmcpHandshake();
                         this.eventBus.emit('gmcp.negotiated');
                     }
                     if (this.msdpEnabled && data.includes(MSDP_WILL)) {
@@ -670,6 +678,42 @@ export class MudClient {
             this.sendBytes(encodeGmcp(path, payload));
         } catch (error) {
             console.error('Error sending GMCP message:', error);
+            this.eventBus.emit('error', error);
+        }
+    }
+
+    /** Announce ourselves to the server right after GMCP is negotiated, the way
+     *  Mudlet does: `Core.Hello` identifies the client (name + version) and
+     *  `Core.Supports.Set` lists the GMCP modules we understand. Many servers
+     *  won't push any GMCP data (room, char, vitals, …) until they've received
+     *  this hello, so without it GMCP effectively does nothing. Latched so a
+     *  repeated WILL/DO GMCP doesn't re-announce. Reports the client name as
+     *  "Mudlet" for the same reason the TTYPE/MNES handshake does — so servers
+     *  recognize us and offer their Mudlet-targeted GMCP packages. */
+    private sendGmcpHandshake(): void {
+        if (this.gmcpHelloSent) return;
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+        this.gmcpHelloSent = true;
+        try {
+            this.sendBytes(encodeGmcp('Core.Hello', {
+                client: 'Mudlet',
+                version: MNES_CLIENT_VERSION,
+            }));
+            // Mudlet's default Core.Supports.Set, minus "External.Discord 1"
+            // (Mudlet only sends that when its Discord integration is active —
+            // we have none) and minus the modules gated on Discord.
+            this.sendBytes(encodeGmcp('Core.Supports.Set', [
+                'Char 1',
+                'Char.Skills 1',
+                'Char.Items 1',
+                'Room 1',
+                'IRE.Rift 1',
+                'IRE.Composer 1',
+                'Client.Media 1',
+                'Char.Login 1',
+            ]));
+        } catch (error) {
+            console.error('Error sending GMCP handshake:', error);
             this.eventBus.emit('error', error);
         }
     }

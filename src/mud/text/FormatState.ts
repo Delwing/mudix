@@ -1,5 +1,6 @@
 import { colorCodes } from "./colors";
 import mudletColorsJson from "./mudletColors.json";
+import { scanEscape } from "./ansiEscapes";
 
 const ESC = "";
 
@@ -383,16 +384,20 @@ function parseAnsiSegments(text: string, baseState?: FormatStateSnapshot): Buffe
     };
     for (let i = 0; i < text.length;) {
         const char = text[i];
-        if (char === ESC && text[i + 1] === "[") {
-            const endIndex = text.indexOf("m", i + 2);
-            if (endIndex === -1) {
-                buffer += text.slice(i);
-                break;
+        if (char === ESC) {
+            const esc = scanEscape(text, i);
+            // An escape cut off by end-of-line is dropped (the line is already
+            // fully assembled by the time we parse it; a truncated tail is junk).
+            if (esc.kind === "incomplete") break;
+            if (esc.kind === "csi" && esc.finalByte === "m") {
+                flush();
+                state.applySgr(parseSgrCodes(esc.params ?? ""));
             }
-            flush();
-            const sequence = text.slice(i + 2, endIndex);
-            state.applySgr(parseSgrCodes(sequence));
-            i = endIndex + 1;
+            // Every other recognized sequence (OSC links, cursor moves, charset
+            // designation, DCS strings, …) is consumed and ignored — never
+            // rendered. OSC 8 hyperlinks aren't supported yet; for now they're
+            // simply skipped rather than printed as literal text.
+            i = esc.end;
             continue;
         }
         buffer += char;
@@ -1299,11 +1304,14 @@ export function computeTrailingState(
     const state = new FormatState(baseState);
     let i = 0;
     while (i < text.length) {
-        if (text[i] === ESC && text[i + 1] === "[") {
-            const endIndex = text.indexOf("m", i + 2);
-            if (endIndex === -1) break;
-            state.applySgr(parseSgrCodes(text.slice(i + 2, endIndex)));
-            i = endIndex + 1;
+        if (text[i] === ESC) {
+            const esc = scanEscape(text, i);
+            if (esc.kind === "incomplete") break;
+            if (esc.kind === "csi" && esc.finalByte === "m") {
+                state.applySgr(parseSgrCodes(esc.params ?? ""));
+            }
+            // All other sequences are consumed without affecting carry state.
+            i = esc.end;
             continue;
         }
         i += 1;

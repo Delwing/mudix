@@ -55,8 +55,6 @@ function debugMspEnabled(): boolean {
     }
 }
 
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
-
 // Lua chunks loaded with `loadstring(code, "@" .. name)` produce errors as
 // `<name>:LINE: msg` (the `@` tells Lua to treat the name as a source file —
 // no `[string "..."]` wrapping). Without `@` the format is `[string "<name>"]:LINE: msg`.
@@ -2404,8 +2402,12 @@ export class ScriptingEngine {
                         carryState = r.trailingSnapshot;
                         this.wireMxpLinks(buffer, r.links);
                     } else {
-                        plain = line.replace(ANSI_RE, '');
                         buffer = new AnsiAwareBuffer(line, carryState);
+                        // The buffer's text is the line with every escape
+                        // sequence (SGR, OSC 8 links, cursor moves, …) already
+                        // consumed — exactly what's rendered — so trigger
+                        // matching sees the same plain text the user sees.
+                        plain = buffer.text;
                         // computeTrailingState reflects the *actual* end-of-line
                         // SGR — including trailing resets, and unchanged across
                         // blank lines — unlike buffer.trailingState() which only
