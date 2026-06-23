@@ -1,8 +1,32 @@
-export const TELNET_OPTION_REGEX = /ÿú[\s\S]*?ÿð|ÿ.[^ÿ]/g;
+// Match telnet sequences by their real command lengths so we don't over-consume
+// the byte that follows a 2-byte command. Alternatives, in priority order:
+//   1. IAC SB … IAC SE        — subnegotiation (variable length)
+//   2. IAC {WILL|WONT|DO|DONT} <option>  — 3-byte option negotiation
+//   3. IAC <command>          — 2-byte command (GA, EOR, NOP, …)
+// The old pattern (`ÿ.[^ÿ]`) treated *every* command as 3 bytes, so a 2-byte
+// IAC EOR/GA immediately followed by data (e.g. `IAC EOR \x1b[K`) ate the next
+// byte — orphaning the `\x1b` and leaking `[K` as literal text.
+export const TELNET_OPTION_REGEX = /\xFF\xFA[\s\S]*?\xFF\xF0|\xFF[\xFB-\xFE][\s\S]|\xFF[\s\S]/g;
 
 // Telnet Go Ahead / End-of-Record — used by MUDs to signal a prompt line
 export const TELNET_GA  = "\xFF\xF9"; // IAC GA  (249)
 export const TELNET_EOR = "\xFF\xEF"; // IAC EOR (239)
+
+// Telnet EOR *option* (RFC 885, option 25) — distinct from the IAC EOR command
+// byte above. The server negotiates `IAC WILL EOR` to announce it will mark
+// prompts with `IAC EOR`; the client confirms with `IAC DO EOR`. Without that
+// confirmation some servers stall before showing the login prompt. Once active,
+// the IAC EOR markers feed the same prompt detection as IAC GA.
+export const TELOPT_EOR  = "\x19";          // 25
+export const EOR_WILL = "\xFF\xFB\x19";     // IAC WILL EOR - server will send EOR prompt markers
+export const EOR_DO   = "\xFF\xFD\x19";     // IAC DO EOR   - client accepts EOR prompt markers
+
+// Telnet SGA (Suppress Go Ahead, RFC 858, option 3). Standard for character-at-
+// a-time / full-duplex sessions; MUDs offer `IAC WILL SGA` and expect a
+// `IAC DO SGA` confirmation. Silently ignoring it leaves strict servers waiting.
+export const TELOPT_SGA  = "\x03";          // 3
+export const SGA_WILL = "\xFF\xFB\x03";     // IAC WILL SGA - server suppresses go-ahead
+export const SGA_DO   = "\xFF\xFD\x03";     // IAC DO SGA   - client accepts
 export const GMCP_COMMAND_CODE = 201;
 export const GMCP_IAC = "\xFF";
 export const GMCP_SB = "\xFA";
@@ -119,6 +143,7 @@ export const NEW_ENVIRON_ESC     = "\x02";    // 2 — escape next byte (RFC 157
 export const NEW_ENVIRON_USERVAR = "\x03";    // 3 — user-defined variable marker
 export const NEW_ENVIRON_DO   = "\xFF\xFD\x27"; // IAC DO NEW-ENVIRON  - server asks us to report
 export const NEW_ENVIRON_WILL = "\xFF\xFB\x27"; // IAC WILL NEW-ENVIRON - we agree to report
+export const NEW_ENVIRON_WONT = "\xFF\xFC\x27"; // IAC WONT NEW-ENVIRON - we decline to report (MNES off)
 
 // MTTS (Mud Terminal Type Standard) capability bitvector advertised by both the
 // TTYPE cycle (as `MTTS <n>`) and MNES (as the MTTS variable): ANSI(1) +

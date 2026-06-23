@@ -9,16 +9,24 @@ export type TelnetOptionHandler = (data: string) => string;
 
 export const createTelnetOptionParser = (onSubnegotiation: (data: string) => void): TelnetOptionHandler => {
     return (optionData: string) => {
-        if (optionData.length === 3) {
-            return "";
+        // Only IAC SB … IAC SE carries a payload to extract; every other matched
+        // sequence (2-byte commands like GA/EOR/NOP, 3-byte WILL/WONT/DO/DONT)
+        // is pure control with nothing to process — strip it. Keyed on the byte
+        // after IAC being SB rather than on length, since commands are now
+        // matched at their true 2- or 3-byte width.
+        if (optionData.charCodeAt(1) === GMCP_SB.charCodeAt(0)) {
+            onSubnegotiation(optionData.substring(2, optionData.length - 2));
         }
-        onSubnegotiation(optionData.substring(2, optionData.length - 2));
         return "";
     };
 };
 
 export const stripTelnetSequences = (data: string, handler: TelnetOptionHandler): string => {
-    return data.replace(TELNET_OPTION_REGEX, handler).replace(/[ÿù]/g, "");
+    // After the regex consumes every complete telnet sequence, the only stray
+    // IAC (\xFF) left is a lone trailing one — an option/command split across
+    // frames — so drop it. (We no longer blanket-strip \xF9, which the old
+    // regex mis-handled for GA and which is a legitimate text byte otherwise.)
+    return data.replace(TELNET_OPTION_REGEX, handler).replace(/\xFF/g, "");
 };
 
 const parseGmcpPayload = (

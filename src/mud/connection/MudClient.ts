@@ -1,5 +1,6 @@
 import { EventBus } from "../../core/EventBus";
 import { AnsiAwareBuffer } from "../text/FormatState";
+import { scanEscape } from "../text/ansiEscapes";
 import { createPassthroughProcessor, type ChunkProcessor } from "../triggers/ChunkProcessor";
 import {
     createGmcpStream,
@@ -51,6 +52,11 @@ import {
     NEW_ENVIRON_COMMAND_CODE,
     NEW_ENVIRON_DO,
     NEW_ENVIRON_WILL,
+    NEW_ENVIRON_WONT,
+    EOR_WILL,
+    EOR_DO,
+    SGA_WILL,
+    SGA_DO,
     MTTS_BITVECTOR,
     parseMnesRequest,
     encodeMnesIs,
@@ -272,6 +278,7 @@ export class MudClient {
 
         this.gmcpStream = createGmcpStream({
             onEnvelope: ({ path, value }) => {
+                this.maybeAnswerCharLogin(path);
                 (this.eventBus.emit as (event: string, ...args: unknown[]) => void)(`gmcp.${path}`, value);
                 this.eventBus.emit('gmcp', { path, value });
             },
@@ -474,16 +481,42 @@ export class MudClient {
                         // the server's inbound MXP channel isn't confirmed.
                         this.startMxp(false);
                     }
-                    if (this.mnesEnabled && data.includes(NEW_ENVIRON_DO)) {
-                        // Server asks us to report environment variables (IAC DO
-                        // NEW-ENVIRON) → we agree (IAC WILL NEW-ENVIRON). The
-                        // server then sends SB NEW-ENVIRON SEND … which
-                        // handleMnesSubneg answers. NEW-ENVIRON is asymmetric —
-                        // the client owns the variables — so we only handle the
-                        // DO direction (a WILL would mean the server has env vars,
-                        // which MNES doesn't use).
-                        this.sendRaw(NEW_ENVIRON_WILL);
-                        this.eventBus.emit('mnes.negotiated');
+                    if (data.includes(EOR_WILL)) {
+                        // Server announces it will mark prompts with IAC EOR
+                        // (telnet option 25, IAC WILL EOR) → we accept (IAC DO
+                        // EOR). The EOR markers then drive prompt detection the
+                        // same way IAC GA does (see TELNET_EOR handling in
+                        // processIncomingData). Many Diku/Circle-derived servers
+                        // (e.g. The Last Outpost) won't send the login prompt
+                        // until this option is acknowledged.
+                        this.sendRaw(EOR_DO);
+                    }
+                    if (data.includes(SGA_WILL)) {
+                        // Server offers Suppress-Go-Ahead (IAC WILL SGA, option 3)
+                        // → we accept (IAC DO SGA). Standard for full-duplex MUD
+                        // sessions; leaving it unanswered stalls strict servers
+                        // that wait for negotiation to settle before prompting.
+                        this.sendRaw(SGA_DO);
+                    }
+                    if (data.includes(NEW_ENVIRON_DO)) {
+                        if (this.mnesEnabled) {
+                            // Server asks us to report environment variables (IAC
+                            // DO NEW-ENVIRON) → we agree (IAC WILL NEW-ENVIRON).
+                            // The server then sends SB NEW-ENVIRON SEND … which
+                            // handleMnesSubneg answers. NEW-ENVIRON is asymmetric —
+                            // the client owns the variables — so we only handle the
+                            // DO direction (a WILL would mean the server has env
+                            // vars, which MNES doesn't use).
+                            this.sendRaw(NEW_ENVIRON_WILL);
+                            this.eventBus.emit('mnes.negotiated');
+                        } else {
+                            // MNES disabled → explicitly decline (IAC WONT
+                            // NEW-ENVIRON). A bare DO with no WILL/WONT answer
+                            // leaves strict servers waiting on the option before
+                            // they continue (e.g. before sending the login prompt),
+                            // so silence is not an option here.
+                            this.sendRaw(NEW_ENVIRON_WONT);
+                        }
                     }
                     if (this.nawsEnabled && data.includes(NAWS_DO)) {
                         // Server accepted our WILL NAWS (or requested it outright)
@@ -535,7 +568,7 @@ export class MudClient {
             };
 
             this.socket.onclose = (event: CloseEvent) => {
-                this.flushPendingLineTail(Date.now());
+                this.flushPendingLineTail(Date.now(), true);
                 this.eventBus.emit('close', event);
                 if (isAbnormalClose(event)) {
                     this.eventBus.emit('client.error', formatCloseError(event, this.opened));
@@ -590,7 +623,7 @@ export class MudClient {
         socket.onerror = null;
         socket.onopen = null;
         socket.close();
-        this.flushPendingLineTail(Date.now());
+        this.flushPendingLineTail(Date.now(), true);
         this.eventBus.emit('client.disconnect');
         this.opened = false;
         this.mccpHandler.reset();
@@ -718,6 +751,22 @@ export class MudClient {
         }
     }
 
+    /** GMCP `Char.Login` fallback. Because our `Core.Supports.Set` lists
+     *  `Char.Login` (Mudlet parity), servers that support GMCP login send
+     *  `Char.Login.Default { "type": [...] }` and then *wait* for the client to
+     *  supply credentials — withholding the normal text "By what name…" prompt
+     *  until it hears back. mudix has no stored-credential UI, so we must answer
+     *  with an empty `Char.Login.Credentials {}` to signal "no credentials here,
+     *  proceed to your next auth method" (i.e. fall back to text login).
+     *  Without this reply the server stalls forever after the MOTD. This mirrors
+     *  Mudlet's own behaviour — its omission of this empty reply was the
+     *  regression in Mudlet/Mudlet#7377. Path match is case-insensitive because
+     *  GMCP module casing varies between servers. */
+    private maybeAnswerCharLogin(path: string): void {
+        if (path.toLowerCase() !== 'char.login.default') return;
+        this.sendGmcp('Char.Login.Credentials', {});
+    }
+
     sendGmcpRaw(message: string): void {
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
             return;
@@ -793,7 +842,7 @@ export class MudClient {
         const SB = 0xFA, WILL = 0xFB, WONT = 0xFC, DO = 0xFD, DONT = 0xFE;
         // Options the client negotiates inline elsewhere — exclude from
         // sysTelnetEvent so handlers see only "everything else".
-        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 31 /* NAWS */, 39 /* NEW-ENVIRON/MNES */, 42 /* CHARSET */, 69 /* MSDP */, 70 /* MSSP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 90 /* MSP */, 91 /* MXP */, 201 /* GMCP */]);
+        const HARDCODED = new Set<number>([1 /* ECHO */, 3 /* SGA */, 24 /* TTYPE */, 25 /* EOR */, 31 /* NAWS */, 39 /* NEW-ENVIRON/MNES */, 42 /* CHARSET */, 69 /* MSDP */, 70 /* MSSP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 90 /* MSP */, 91 /* MXP */, 201 /* GMCP */]);
         for (let i = 0; i < data.length - 2; i++) {
             if (data.charCodeAt(i) !== IAC) continue;
             const cmd = data.charCodeAt(i + 1);
@@ -827,10 +876,6 @@ export class MudClient {
         if (!this.mttsEnabled) return;
         if (subneg.charCodeAt(1) !== TTYPE_SEND.charCodeAt(0)) return; // only handle SEND
         // MTTS bits we advertise: ANSI(1) + UTF-8(4) + 256 COLORS(8) + TRUECOLOR(256) = 269.
-        // First response is the client name (MTTS step 0). We report "MUDLET" so servers
-        // recognize us and offer Mudlet-targeted GMCP/GUI packages this client consumes —
-        // and so MUDs that key off known client names (e.g. Discworld's `term network`,
-        // which otherwise prints `Unknown terminal type ...`) negotiate cleanly.
         const cycle = ['MUDIX', 'XTERM-256COLOR', `MTTS ${MTTS_BITVECTOR}`];
         const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
         if (this.ttypeStep < cycle.length - 1) this.ttypeStep++;
@@ -1132,11 +1177,31 @@ export class MudClient {
      *  Triggered by prompt markers (IAC GA/EOR), the idle-flush timer, or
      *  socket close. Pushes the tail through the normal chunk path so triggers
      *  and rendering treat it as a complete line. */
-    private flushPendingLineTail(ts: number): void {
+    private flushPendingLineTail(ts: number, final = false): void {
         this.clearTailTimer();
         if (this.pendingLineTail.length === 0) return;
-        const tail = this.pendingLineTail;
-        this.pendingLineTail = "";
+        let tail = this.pendingLineTail;
+        // A prompt tail can end mid-ANSI-escape when the server splits e.g.
+        // `…known? \x1b[K` across frames so the bare `\x1b` lands at the end of
+        // one chunk. Flushing it now would drop the lone ESC (parseAnsiSegments
+        // discards a truncated trailing escape) and then render the `[K` that
+        // follows as literal text. So hold the incomplete escape back — like a
+        // partial UTF-8 sequence — and let the next frame complete it. On a
+        // genuine end-of-stream (`final`, i.e. socket close) there is no "next
+        // frame", so flush everything verbatim.
+        let held = "";
+        if (!final) {
+            const cut = incompleteEscapeTailStart(tail);
+            if (cut !== -1) {
+                held = tail.slice(cut);
+                tail = tail.slice(0, cut);
+            }
+        }
+        this.pendingLineTail = held;
+        // Nothing renderable before the held escape — keep holding it (don't
+        // reschedule: a never-completing escape would spin the timer forever;
+        // the next inbound frame recombines it).
+        if (tail.length === 0) return;
         this.chunkProcessor.processChunk(tail, ts, this);
     }
 
@@ -1407,6 +1472,21 @@ function pickCharsetFromRequest(subneg: string): { original: string; normalized:
         if (original) return { original, normalized: preferred };
     }
     return null;
+}
+
+/**
+ * If `s` ends with an ANSI/ECMA-48 escape sequence that runs off the end of the
+ * string (a bare trailing `\x1b`, or `\x1b[` / `\x1b]…` with no final byte yet),
+ * return the index where that incomplete escape begins; otherwise -1. Used to
+ * keep a partial escape attached to the start of the next frame instead of
+ * flushing it split — which would drop the lone ESC and leak the completion
+ * (e.g. `[K`) as literal text. A complete trailing escape returns -1 (nothing to
+ * hold). Only the *last* escape can be incomplete, so checking it suffices.
+ */
+function incompleteEscapeTailStart(s: string): number {
+    const esc = s.lastIndexOf("\x1b");
+    if (esc === -1) return -1;
+    return scanEscape(s, esc).kind === "incomplete" ? esc : -1;
 }
 
 /**
