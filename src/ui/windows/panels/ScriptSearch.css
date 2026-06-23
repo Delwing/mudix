@@ -118,6 +118,21 @@
     padding: 4px 0;
 }
 
+/* Virtualised rows are absolutely positioned within this full-height spacer. */
+.script-search__spacer {
+    position: relative;
+    width: 100%;
+}
+
+.script-search__spacer > .script-search__group-head,
+.script-search__spacer > .script-search__occ {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 24px;
+    box-sizing: border-box;
+}
+
 .script-search__group-head {
     display: flex;
     align-items: center;

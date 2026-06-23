@@ -150,6 +150,26 @@ function ItemIcon({ category, isGroup }: { category: EditCategory; isGroup: bool
     return <Icon size={13} strokeWidth={1.6} className="script-search__icon-type" />;
 }
 
+/** Return `value` delayed by `delay` ms — collapses bursts of keystrokes so the
+ *  expensive scan over every node's code body runs at most once per pause. */
+function useDebounced<T>(value: T, delay: number): T {
+    const [debounced, setDebounced] = useState(value);
+    useEffect(() => {
+        const id = setTimeout(() => setDebounced(value), delay);
+        return () => clearTimeout(id);
+    }, [value, delay]);
+    return debounced;
+}
+
+// Virtualised results list: every row (group head or occurrence) is laid out at
+// this fixed height so only the rows in view need to be rendered.
+const ROW_H = 24;
+const OVERSCAN = 8;
+
+type FlatRow =
+    | { type: 'head'; key: string; category: EditCategory; item: AnyNode; count: number; collapsed: boolean }
+    | { type: 'occ'; key: string; category: EditCategory; item: AnyNode; occ: SearchOccurrence };
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface ScriptSearchProps {
@@ -169,9 +189,19 @@ export function ScriptSearch({ connectionId, onNavigate }: ScriptSearchProps) {
     const [open, setOpen] = useState(false);
     const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
 
+    // The heavy scan runs off the debounced query so typing stays responsive;
+    // the input itself still reflects `search` immediately.
+    const query = useDebounced(search, 140);
+    const pending = query !== search;
+
     const wrapRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const resultsRef = useRef<HTMLDivElement>(null);
+
+    // Virtualisation viewport state.
+    const [scrollTop, setScrollTop] = useState(0);
+    const [viewportH, setViewportH] = useState(420);
 
     const scripts     = useAppStore(s => s.connectionScripts[connectionId] ?? EMPTY);
     const aliases     = useAppStore(s => s.connectionAliases[connectionId] ?? EMPTY);
@@ -180,8 +210,8 @@ export function ScriptSearch({ connectionId, onNavigate }: ScriptSearchProps) {
     const keybindings = useAppStore(s => s.connectionKeybindings[connectionId] ?? EMPTY);
     const buttons     = useAppStore(s => s.connectionButtons[connectionId] ?? EMPTY);
 
-    const searchActive = search.length > 0;
-    const matcher = useMemo(() => buildMatcher(search, matchCase, useRegex), [search, matchCase, useRegex]);
+    const searchActive = query.length > 0;
+    const matcher = useMemo(() => buildMatcher(query, matchCase, useRegex), [query, matchCase, useRegex]);
 
     const results = useMemo(() => {
         if (!searchActive || !matcher.valid) return [];
@@ -201,7 +231,29 @@ export function ScriptSearch({ connectionId, onNavigate }: ScriptSearchProps) {
 
     const totalMatches = useMemo(() => results.reduce((n, r) => n + r.occurrences.length, 0), [results]);
 
-    const dropdownOpen = open && searchActive;
+    // Flatten the group/occurrence tree into a single row list (respecting
+    // collapse state) so the dropdown can window it.
+    const flatRows = useMemo(() => {
+        const rows: FlatRow[] = [];
+        for (const { category, item, occurrences } of results) {
+            const key = `${category}:${item.id}`;
+            const isCollapsed = collapsed.has(key);
+            rows.push({ type: 'head', key, category, item, count: occurrences.length, collapsed: isCollapsed });
+            if (!isCollapsed) {
+                for (let i = 0; i < occurrences.length; i++) {
+                    rows.push({ type: 'occ', key: `${key}:${i}`, category, item, occ: occurrences[i] });
+                }
+            }
+        }
+        return rows;
+    }, [results, collapsed]);
+
+    const totalRows = flatRows.length;
+    const startRow = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
+    const endRow = Math.min(totalRows, Math.ceil((scrollTop + viewportH) / ROW_H) + OVERSCAN);
+    const visibleRows = flatRows.slice(startRow, endRow);
+
+    const dropdownOpen = open && search.length > 0;
 
     // Anchor the portal dropdown under the input. Recomputed whenever it opens or
     // the layout might shift (results changing height, window resize/scroll).
@@ -214,6 +266,7 @@ export function ScriptSearch({ connectionId, onNavigate }: ScriptSearchProps) {
             const width = Math.min(480, Math.max(300, window.innerWidth - 16));
             const left = Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8));
             setRect({ left, top: r.bottom + 6, width });
+            if (resultsRef.current) setViewportH(resultsRef.current.clientHeight);
         };
         measure();
         window.addEventListener('resize', measure);
@@ -240,6 +293,12 @@ export function ScriptSearch({ connectionId, onNavigate }: ScriptSearchProps) {
             document.removeEventListener('keydown', onKey);
         };
     }, [dropdownOpen]);
+
+    // A new query produces a fresh result set — jump back to the top.
+    useEffect(() => {
+        setScrollTop(0);
+        if (resultsRef.current) resultsRef.current.scrollTop = 0;
+    }, [query, matchCase, useRegex]);
 
     const toggleCollapsed = useCallback((key: string) => {
         setCollapsed(prev => {
@@ -296,41 +355,55 @@ export function ScriptSearch({ connectionId, onNavigate }: ScriptSearchProps) {
                     <div className="script-search__summary">
                         {!matcher.valid
                             ? 'Invalid regular expression'
-                            : totalMatches === 0
-                                ? 'No results'
-                                : `${totalMatches} result${totalMatches === 1 ? '' : 's'} in ${results.length} item${results.length === 1 ? '' : 's'}`}
+                            : pending
+                                ? 'Searching…'
+                                : totalMatches === 0
+                                    ? 'No results'
+                                    : `${totalMatches} result${totalMatches === 1 ? '' : 's'} in ${results.length} item${results.length === 1 ? '' : 's'}`}
                     </div>
-                    <div className="script-search__results">
-                        {results.map(({ category: cat, item, occurrences }) => {
-                            const key = `${cat}:${item.id}`;
-                            const isCollapsed = collapsed.has(key);
-                            return (
-                                <div key={key} className="script-search__group">
-                                    <div className="script-search__group-head" onClick={() => toggleCollapsed(key)} title={item.name}>
-                                        {isCollapsed
-                                            ? <ChevronRight size={14} strokeWidth={1.8} className="script-search__chevron" />
-                                            : <ChevronDown size={14} strokeWidth={1.8} className="script-search__chevron" />}
-                                        <ItemIcon category={cat} isGroup={item.isGroup} />
-                                        <span className="script-search__group-name">{item.name}</span>
-                                        <span className="script-search__group-cat">{CATEGORY_SINGULAR[cat]}</span>
-                                        <span className="script-search__count">{occurrences.length}</span>
-                                    </div>
-                                    {!isCollapsed && occurrences.map((o, idx) => (
+                    <div
+                        className="script-search__results"
+                        ref={resultsRef}
+                        onScroll={e => setScrollTop(e.currentTarget.scrollTop)}
+                    >
+                        <div className="script-search__spacer" style={{ height: totalRows * ROW_H }}>
+                            {visibleRows.map((row, i) => {
+                                const top = (startRow + i) * ROW_H;
+                                if (row.type === 'head') {
+                                    return (
                                         <div
-                                            key={idx}
-                                            className="script-search__occ"
-                                            onClick={() => navigate(cat, item.id, o.line)}
-                                            title={o.what}
+                                            key={row.key}
+                                            className="script-search__group-head"
+                                            style={{ top }}
+                                            onClick={() => toggleCollapsed(row.key)}
+                                            title={row.item.name}
                                         >
-                                            <span className="script-search__occ-what">
-                                                <HighlightedText text={o.what} ranges={o.ranges} />
-                                            </span>
-                                            <span className="script-search__occ-meta">{o.meta}</span>
+                                            {row.collapsed
+                                                ? <ChevronRight size={14} strokeWidth={1.8} className="script-search__chevron" />
+                                                : <ChevronDown size={14} strokeWidth={1.8} className="script-search__chevron" />}
+                                            <ItemIcon category={row.category} isGroup={row.item.isGroup} />
+                                            <span className="script-search__group-name">{row.item.name}</span>
+                                            <span className="script-search__group-cat">{CATEGORY_SINGULAR[row.category]}</span>
+                                            <span className="script-search__count">{row.count}</span>
                                         </div>
-                                    ))}
-                                </div>
-                            );
-                        })}
+                                    );
+                                }
+                                return (
+                                    <div
+                                        key={row.key}
+                                        className="script-search__occ"
+                                        style={{ top }}
+                                        onClick={() => navigate(row.category, row.item.id, row.occ.line)}
+                                        title={row.occ.what}
+                                    >
+                                        <span className="script-search__occ-what">
+                                            <HighlightedText text={row.occ.what} ranges={row.occ.ranges} />
+                                        </span>
+                                        <span className="script-search__occ-meta">{row.occ.meta}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>,
                 document.body,
