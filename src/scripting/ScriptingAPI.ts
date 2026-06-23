@@ -15,7 +15,7 @@ import { Console } from '../mud/text/Console';
 import { MspParser } from '../mud/protocol';
 import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
 import { getHeldModifiers } from './heldModifiers';
-import { useAppStore, selectProfileField, connectionUrl } from '../storage';
+import { useAppStore, selectProfileField, connectionUrl, PROTOCOL_DEFAULTS, MAPPER_DEFAULTS, type ProtocolSettings, type MapperSettings } from '../storage';
 import {
     getUniversalDefaultFonts,
     getRegisteredFontFamilies,
@@ -64,6 +64,57 @@ function rgbaCss(r: number, g: number, b: number, a = 255): string {
 function clamp255(n: number): number {
     return Math.max(0, Math.min(255, Math.round(Number(n) || 0)));
 }
+
+// ── setConfig / getConfig support ───────────────────────────────────────────
+// Coerce a Lua-passed value to a boolean the way Mudlet's setConfig does:
+// real booleans pass through; the strings "false"/"0"/"no"/"off" (any case)
+// read as false; everything else non-nil is truthy.
+function configBool(v: unknown): boolean {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'string') return !/^(false|0|no|off)$/i.test(v.trim());
+    return !!v;
+}
+
+/** Mudlet config keys that mudix persists for round-trip fidelity but does not
+ *  yet act on. Each entry gives the value type and the default `getConfig`
+ *  returns before the key has been set, so first reads match Mudlet-ish values.
+ *  `enum` constrains string writes (an out-of-range value is rejected). These
+ *  live in the {@link ProfileSettings.config} bag, not in dedicated fields. */
+const CONFIG_PERSIST_ONLY: Record<string, {
+    type: 'bool' | 'num' | 'str';
+    default: boolean | number | string;
+    enum?: readonly string[];
+}> = {
+    advertiseScreenReader:          { type: 'bool', default: false },
+    ambiguousEAsianWidthCharacters: { type: 'str',  default: 'auto', enum: ['auto', 'wide', 'narrow'] },
+    announceIncomingText:           { type: 'bool', default: false },
+    askTlsAvailable:                { type: 'bool', default: true },
+    blankLinesBehaviour:            { type: 'str',  default: 'show', enum: ['show', 'hide'] },
+    caretShortcut:                  { type: 'str',  default: 'none', enum: ['none', 'tab', 'ctrltab', 'f6'] },
+    commandLineHistorySaveSize:     { type: 'num',  default: 100 },
+    compactInputLine:               { type: 'bool', default: false },
+    controlCharacterHandling:       { type: 'str',  default: 'asis', enum: ['asis', 'oem', 'picture'] },
+    editorAutoComplete:             { type: 'bool', default: true },
+    enableBlinkText:                { type: 'bool', default: false },
+    enableClosedCaption:            { type: 'bool', default: false },
+    f3SearchEnabled:                { type: 'bool', default: false },
+    fixUnnecessaryLinebreaks:       { type: 'bool', default: false },
+    inputLineStrictUnixEndings:     { type: 'bool', default: false },
+    logInHTML:                      { type: 'bool', default: false },
+    mapInfoColor:                   { type: 'str',  default: '' },
+    mapperPanelVisible:             { type: 'bool', default: false },
+    muteMediaAPI:                   { type: 'bool', default: false },
+    muteMediaGame:                  { type: 'bool', default: false },
+    promptForMXPProcessorOn:        { type: 'bool', default: false },
+    promptForVersionInTTYPE:        { type: 'bool', default: false },
+    show3dMapView:                  { type: 'bool', default: false },
+    showRoomIdsOnMap:               { type: 'bool', default: false },
+    showTabConnectionIndicators:    { type: 'bool', default: true },
+    showUpperLowerLevels:           { type: 'bool', default: true },
+    specialForceCompressionOff:     { type: 'bool', default: false },
+    specialForceGAOff:              { type: 'bool', default: false },
+    versionInTTYPE:                 { type: 'bool', default: true },
+};
 
 /** Format an epoch-ms timestamp as Mudlet's "hh:mm:ss.zzz" (local time). */
 function formatLineTimestamp(ms: number): string {
@@ -534,6 +585,10 @@ export class ScriptingAPI {
         // Mudlet `sysBufferShrinkEvent("main", linesRemoved)` — named user
         // windows have the same hook wired in WindowManager.registerConsole.
         this.mainConsole.onBufferShrink = (n) => this.eventRaiser?.('sysBufferShrinkEvent', ['main', n]);
+        // Re-apply the one persisted config key that drives a live session
+        // side-effect (suppressing local command echo) so it survives reloads.
+        const persistedShowSentText = this.configBag().showSentText;
+        if (persistedShowSentText !== undefined) session.echoSentText = configBool(persistedShowSentText);
     }
 
     // ── Connection ────────────────────────────────────────────────────────────
@@ -651,6 +706,148 @@ export class ScriptingAPI {
     getCommandSeparator(): string {
         const sep = selectProfileField(useAppStore.getState(), this.connectionId, 'commandSeparator');
         return sep ?? ';;';
+    }
+
+    // ── setConfig / getConfig ───────────────────────────────────────────────
+    // A flat key→value registry mirroring Mudlet's TLuaInterpreter config bag.
+    // Keys fall into three groups:
+    //   • structured  — routed to a real ProfileSettings field (protocol
+    //     toggles, mapper settings, autoClearInput) so the Settings UI stays in
+    //     sync. Protocol changes take effect on the next connect, like Mudlet.
+    //   • live        — showSentText, applied immediately to the session and
+    //     persisted so it survives a reload.
+    //   • persist-only (CONFIG_PERSIST_ONLY) — stored for round-trip fidelity
+    //     but not yet acted on; getConfig returns the stored value or a default.
+    // Read-only keys (logDirectory, specialForceMXPProcessorOn) reject writes.
+
+    /** The persisted catch-all config bag for the active profile (never null). */
+    private configBag(): Record<string, unknown> {
+        return useAppStore.getState().connectionProfile[this.connectionId]?.config ?? {};
+    }
+
+    /** Shallow-merge a single key into the persisted config bag. */
+    private patchConfigBag(key: string, value: unknown): void {
+        const prev = this.configBag();
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { config: { ...prev, [key]: value } });
+    }
+
+    private getProtocol(key: keyof ProtocolSettings): boolean {
+        const p = useAppStore.getState().connectionProfile[this.connectionId]?.protocols;
+        return p?.[key] ?? PROTOCOL_DEFAULTS[key];
+    }
+
+    private setProtocol(key: keyof ProtocolSettings, value: boolean): void {
+        const prev = useAppStore.getState().connectionProfile[this.connectionId]?.protocols ?? {};
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { protocols: { ...prev, [key]: value } });
+    }
+
+    private getMapperField<K extends keyof MapperSettings>(key: K): MapperSettings[K] {
+        const m = useAppStore.getState().connectionProfile[this.connectionId]?.mapper;
+        return m?.[key] ?? MAPPER_DEFAULTS[key];
+    }
+
+    private setMapperField<K extends keyof MapperSettings>(key: K, value: MapperSettings[K]): void {
+        const prev = useAppStore.getState().connectionProfile[this.connectionId]?.mapper ?? {};
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { mapper: { ...prev, [key]: value } });
+    }
+
+    /** Mudlet `getConfig(key)`. Returns the option's value, or `undefined`
+     *  (→ Lua nil) for an unknown key. The no-arg / table forms are handled by
+     *  the Lua wrapper in Other.lua, which calls this once per key. */
+    getConfig(key: string): unknown {
+        switch (key) {
+            // structured — protocol toggles
+            case 'enableGMCP': return this.getProtocol('gmcp');
+            case 'enableMSDP': return this.getProtocol('msdp');
+            case 'enableMSP':  return this.getProtocol('msp');
+            case 'enableMSSP': return this.getProtocol('mssp');
+            case 'enableMTTS': return this.getProtocol('mtts');
+            case 'enableMXP':  return this.getProtocol('mxp');
+            case 'enableMNES': return this.getProtocol('mnes');
+            // structured — inverse "force negotiation off" toggles
+            case 'specialForceMxpNegotiationOff':     return !this.getProtocol('mxp');
+            case 'specialForceCharsetNegotiationOff': return !this.getProtocol('charset');
+            case 'forceNewEnvironNegotiationOff':     return !this.getProtocol('mnes');
+            // structured — input line
+            case 'autoClearInputLine':
+                return selectProfileField(useAppStore.getState(), this.connectionId, 'autoClearInput') ?? false;
+            // structured — mapper
+            case 'mapRoomSize':        return this.getMapperField('roomSize');
+            case 'mapExitSize':        return this.getMapperField('lineWidth');
+            case 'mapRoundRooms':      return this.getMapperField('roomShape') === 'roundedRectangle';
+            case 'mapShowRoomBorders': return this.getMapperField('borders');
+            case 'mapShowGrid':        return this.getMapperField('gridEnabled');
+            // live
+            case 'showSentText':       return this.session.echoSentText;
+            // read-only
+            case 'logDirectory':       return '/profiles/' + this.connectionId + '/log';
+            case 'specialForceMXPProcessorOn':
+                return configBool(this.configBag().specialForceMXPProcessorOn ?? false);
+        }
+        const spec = CONFIG_PERSIST_ONLY[key];
+        if (spec) {
+            const stored = this.configBag()[key];
+            return stored !== undefined ? stored : spec.default;
+        }
+        return undefined;
+    }
+
+    /** Mudlet `setConfig(key, value)`. Returns true when the key is known and
+     *  writable, false for unknown or read-only keys. */
+    setConfig(key: string, value: unknown): boolean {
+        switch (key) {
+            case 'enableGMCP': this.setProtocol('gmcp', configBool(value)); return true;
+            case 'enableMSDP': this.setProtocol('msdp', configBool(value)); return true;
+            case 'enableMSP':  this.setProtocol('msp',  configBool(value)); return true;
+            case 'enableMSSP': this.setProtocol('mssp', configBool(value)); return true;
+            case 'enableMTTS': this.setProtocol('mtts', configBool(value)); return true;
+            case 'enableMXP':  this.setProtocol('mxp',  configBool(value)); return true;
+            case 'enableMNES': this.setProtocol('mnes', configBool(value)); return true;
+            case 'specialForceMxpNegotiationOff':     this.setProtocol('mxp',     !configBool(value)); return true;
+            case 'specialForceCharsetNegotiationOff': this.setProtocol('charset', !configBool(value)); return true;
+            case 'forceNewEnvironNegotiationOff':     this.setProtocol('mnes',    !configBool(value)); return true;
+            case 'autoClearInputLine':
+                useAppStore.getState().patchConnectionProfile(this.connectionId, { autoClearInput: configBool(value) });
+                return true;
+            case 'mapRoomSize': {
+                const n = Number(value);
+                if (Number.isFinite(n) && n > 0) this.setMapperField('roomSize', n);
+                return true;
+            }
+            case 'mapExitSize': {
+                const n = Number(value);
+                if (Number.isFinite(n) && n > 0) this.setMapperField('lineWidth', n);
+                return true;
+            }
+            case 'mapRoundRooms':
+                this.setMapperField('roomShape', configBool(value) ? 'roundedRectangle' : 'rectangle');
+                return true;
+            case 'mapShowRoomBorders': this.setMapperField('borders', configBool(value)); return true;
+            case 'mapShowGrid':        this.setMapperField('gridEnabled', configBool(value)); return true;
+            case 'showSentText': {
+                const on = configBool(value);
+                this.session.echoSentText = on;
+                this.patchConfigBag('showSentText', on);
+                return true;
+            }
+            // read-only keys — present in the catalogue but not writable
+            case 'logDirectory':
+            case 'specialForceMXPProcessorOn':
+                return false;
+        }
+        const spec = CONFIG_PERSIST_ONLY[key];
+        if (spec) {
+            let v: unknown;
+            if (spec.type === 'bool') v = configBool(value);
+            else if (spec.type === 'num') v = Number(value);
+            else {
+                v = String(value);
+                if (spec.enum && !spec.enum.includes(v as string)) return false;
+            }
+            this.patchConfigBag(key, v);
+            return true;
+        }
+        return false;
     }
 
     /** Mudlet `getProfileInformation()`. Returns the profile's free-text

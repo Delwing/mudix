@@ -273,6 +273,16 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet getCommandSeparator() — the profile's multi-command separator.
         this.lua.global.set('getCommandSeparator', () => this.api.getCommandSeparator());
 
+        // Mudlet setConfig/getConfig. These are the *base* C++-equivalent
+        // bindings; Other.lua wraps them to add the table-form and no-arg "dump
+        // all" variants, capturing these as oldsetConfig/oldgetConfig — so they
+        // MUST be bound before LuaGlobal.lua/Other.lua run (they are: this whole
+        // block precedes the bundle doString calls). getConfig returns nil for
+        // unknown keys; setConfig returns false for unknown/read-only keys.
+        this.lua.global.set('getConfig', (key: unknown) => this.api.getConfig(String(key ?? '')));
+        this.lua.global.set('setConfig', (key: unknown, value: unknown) =>
+            this.api.setConfig(String(key ?? ''), value));
+
         // Mudlet profile description (single free-text slot). The optional
         // profile-name argument of the Mudlet overloads is ignored — mudix is
         // single-profile.

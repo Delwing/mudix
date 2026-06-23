@@ -65,6 +65,12 @@ export class MudSession {
      *  no background. Consumed by echoCommand() to wrap the echo in ANSI. */
     commandEchoColor: { fg: string; bg: string } = { fg: '#717100', bg: '' };
 
+    /** Mudlet `setConfig("showSentText", ...)`. When false, sent commands are
+     *  not echoed into the main window (the server-side ECHO suppression in
+     *  `shouldEchoCommand` still applies independently). Toggled live by the
+     *  config registry in ScriptingAPI. */
+    echoSentText = true;
+
     /** Bounded script.log buffer so the editor panel can backfill entries that
      *  arrived before it was first opened (e.g. errors during initial load). */
     private static readonly SCRIPT_LOG_LIMIT = 500;
@@ -139,6 +145,7 @@ export class MudSession {
     }
 
     echoCommand(text: string): void {
+        if (!this.echoSentText) return;
         if (!this.client || this.client.shouldEchoCommand()) {
             // No "> " prefix: Mudlet echoes the bare command, and OutputRenderer
             // appends it inline to the open server prompt line (e.g. "- look").

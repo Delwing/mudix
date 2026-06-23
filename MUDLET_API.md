@@ -292,7 +292,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `expandAlias(text [, echo])` | ✅ | `ScriptingAPI.expandAlias` |
 | `feedTriggers(text)` | ✅ | Feeds text through trigger pipeline + shows in output |
 | `getCharacterName()` | ✅ | mudix maps character→profile (one character per profile); returns the profile name (same as `getProfileName`), "" when unset |
-| `getConfig(key)` | ✅ | Bound on profile config slice |
+| `getConfig(key)` | ✅ | Config registry in `ScriptingAPI`. Structured keys (protocol toggles, mapper, `autoClearInputLine`, `showSentText`) read their real ProfileSettings field; other catalogued keys round-trip via the `config` bag (persisted, not yet enforced). Unknown key → nil. Full key table + enforced/persist-only breakdown: [`docs/config-api.md`](docs/config-api.md) |
 | `getCommandSeparator()` | ✅ | Reads the profile's `commandSeparator` (default `;;`) |
 | `getModuleInfo(name, key)` | ✅ | Bridge.lua |
 | `getModulePath(name)` | ✅ | Absolute VFS path of a module's XML — `xmlVfsPath` verbatim, else `<profilePath>/<name>/<xmlPath>`; nil when not an installed module |
@@ -341,7 +341,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `resetProfile()` | ✅ | Reloads the profile as if just reopened: clears every UI surface (windows, labels, gauges, command lines, scroll boxes; stops sound/video), recreates the Lua runtime (fresh globals + event handlers), and re-runs all scripts/aliases/triggers/timers/keys from current profile state, re-firing `sysLoadEvent`. Deferred to a fresh task (it closes the running `lua_State`), so call it from an alias / command line, not a script-item — matching Mudlet's own guidance. mudix reloads from the live store, not a re-read of disk |
 | `resumeNamedEventHandler(name)` | ✅ | IDManager.lua |
 | `saveProfile([name])` | ✅ | Bridge.lua → `__mudix_saveProfile` forces the debounced VFS flush through to IndexedDB; `(nil, errMsg)` when no VFS, else `true, path`. `name` ignored (single-profile) |
-| `setConfig(key, value)` | ✅ | JS-exposed |
+| `setConfig(key, value)` | ✅ | Config registry in `ScriptingAPI` (base global; Other.lua adds the table-form/no-arg wrappers). Enforced: protocol enables + `specialForce*Off`/`forceNewEnvironNegotiationOff` (next connect), `mapRoomSize`/`mapExitSize`/`mapRoundRooms`/`mapShowRoomBorders`/`mapShowGrid`, `autoClearInputLine`, `showSentText` (live). Other keys persist only. Read-only/unknown → false. Details: [`docs/config-api.md`](docs/config-api.md) |
 | `setMergeTables(...)` | ✅ | Pure Lua (Bridge.lua), mirroring `Host::mGMCP_merge_table_keys`. Accumulates GMCP keys (dotted, e.g. `"Char.Status"`) into `mudlet.mergeTables`; `__mudix_set_gmcp` merges those keys' incoming payloads into the existing `gmcp` sub-table instead of replacing it |
 | `setModuleInfo(name, key, value)` | ✅ | Stores a custom info field (in-memory override map) surfaced by `getModuleInfo`; always true |
 | `setModulePriority(name, n)` | ✅ | JS-exposed |

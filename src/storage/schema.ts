@@ -140,6 +140,14 @@ export interface ProfileSettings {
      *  field doesn't wipe siblings. Missing fields fall through to
      *  PROTOCOL_DEFAULTS. Takes effect on the next connect. */
     protocols?: ProtocolSettings;
+    /** Catch-all bag for Mudlet `setConfig`/`getConfig` option keys that have no
+     *  dedicated structured home above (accessibility, input-line, and other
+     *  preferences mudix persists for round-trip fidelity but does not yet act
+     *  on). Keys with a structured home — protocol toggles, mapper settings,
+     *  autoClearInput — are NOT stored here; the registry in ScriptingAPI reads
+     *  and writes their real fields so the Settings UI stays in sync. Merged
+     *  shallowly on patch like {@link mapper}/{@link protocols}. */
+    config?: Record<string, unknown>;
 }
 
 /** Per-profile telnet protocol toggles. Each field gates the client's
