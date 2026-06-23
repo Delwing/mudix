@@ -1,4 +1,32 @@
 import { defineConfig } from 'vitest/config';
+import type { Plugin } from 'vite';
+import { resolve } from 'path';
+
+// LuaRuntime imports `wasmoon-lua5.1/dist/liblua5.1.wasm?url` and passes the
+// result to Lua.create({customWasmUri}). In the app build that `?url` is a
+// same-origin web URL Vite emits as an asset — correct. Under vitest it instead
+// resolves to the root-relative web path `/node_modules/.../liblua5.1.wasm`,
+// which wasmoon then hands to emscripten's node loader (fs.readFileSync). On
+// Windows a leading-slash path reads from the drive root (`E:\node_modules\...`),
+// so the WASM isn't found. Rewrite that one import to the file's absolute fs
+// path — what wasmoon resolved to itself before customWasmUri was introduced.
+function wasmoonWasmFsUrl(): Plugin {
+  const abs = resolve('node_modules/wasmoon-lua5.1/dist/liblua5.1.wasm');
+  return {
+    name: 'wasmoon-wasm-fs-url',
+    enforce: 'pre',
+    resolveId(id) {
+      if (id.includes('wasmoon-lua5.1/dist/liblua5.1.wasm') && id.includes('?url')) {
+        return '\0wasmoon-wasm-fs-url';
+      }
+    },
+    load(id) {
+      if (id === '\0wasmoon-wasm-fs-url') {
+        return `export default ${JSON.stringify(abs)};`;
+      }
+    },
+  };
+}
 
 // Tests run through Vite, so the bundled Lua (`?raw` imports + the
 // `import.meta.glob('./mudlet-lua/**/*.lua')`), JSON imports, and extensionless
@@ -6,6 +34,7 @@ import { defineConfig } from 'vitest/config';
 // document / window / localStorage that ScriptingAPI touches; wasmoon's WASM is
 // loaded from node's filesystem.
 export default defineConfig({
+  plugins: [wasmoonWasmFsUrl()],
   test: {
     // Default DOM env for future component tests; runtime/Lua suites opt into
     // the node environment per-file (`// @vitest-environment node`) so the WASM
