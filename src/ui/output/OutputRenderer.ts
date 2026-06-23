@@ -6,7 +6,7 @@ import { AnsiAwareBuffer } from "../../mud/text/FormatState";
 // (WindowManager text panels) can attach buffers to their own line elements.
 export const elementBuffers = new WeakMap<Element, AnsiAwareBuffer>();
 
-type MessageListener = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number) => void;
+type MessageListener = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number, isPrompt?: boolean) => void;
 export type MessageSource = {
     on(event: 'message', listener: MessageListener): () => void;
     on(event: 'script.deleteline', listener: () => void): () => void;
@@ -277,6 +277,7 @@ export function setupOutputRenderer(
         deleteLine(): void {
             const el = resolveElement();
             if (!el || el === sentinel) return;
+            if (el === promptLineEl) promptLineEl = null;
             deletedPrev = el.previousElementSibling === sentinel ? null : el.previousElementSibling;
             outputWrapper.removeChild(el);
             cursorEl = null;
@@ -349,6 +350,15 @@ export function setupOutputRenderer(
     let partialLineEl: HTMLDivElement | null = null;
     let partialStickyEl: HTMLDivElement | null = null;
 
+    // The open server prompt line (a line the server flagged as a prompt via
+    // IAC GA/EOR — no trailing newline). Mudlet keeps the cursor at its end so
+    // the next command echo lands inline ("- look"). We mirror that: when a
+    // command echo arrives while this is set, we append it to the prompt
+    // element instead of opening a new line. Any other output finalizes the
+    // prompt as its own row and clears these.
+    let promptLineEl: HTMLDivElement | null = null;
+    let promptStickyEl: HTMLDivElement | null = null;
+
     function updateElementContent(el: HTMLDivElement, message: string | AnsiAwareBuffer): void {
         const buffer = typeof message === 'string' ? new AnsiAwareBuffer(message) : message;
         elementBuffers.set(el, buffer);
@@ -371,12 +381,52 @@ export function setupOutputRenderer(
         // Eviction is handled by Console.evict() via removeFromDom() — no DOM trimming here.
     }
 
-    const handleMessage = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number) => {
+    /** Append a command echo inline to the open prompt line ("- " + "look"). */
+    function appendEchoToPrompt(message: string | AnsiAwareBuffer, target: HTMLDivElement, sticky: HTMLDivElement | null): void {
+        const promptBuf = elementBuffers.get(target) as AnsiAwareBuffer | undefined;
+        if (promptBuf) {
+            const echoBuf = typeof message === 'string' ? new AnsiAwareBuffer(message) : message;
+            promptBuf.appendBuffer(echoBuf.clone());
+            updateElementContent(target, promptBuf);
+            const stickyBuf = sticky ? (elementBuffers.get(sticky) as AnsiAwareBuffer | undefined) : undefined;
+            if (sticky && stickyBuf) {
+                stickyBuf.appendBuffer(echoBuf.clone());
+                updateElementContent(sticky, stickyBuf);
+            }
+            cursorEl = target;
+            deletedPrev = null;
+        }
+        if (!isSplitView()) {
+            requestAnimationFrame(() => { outputWrapper.scrollTop = outputWrapper.scrollHeight; });
+        }
+    }
+
+    const handleMessage = (message?: string | AnsiAwareBuffer, type?: string, timestamp?: number, isPrompt?: boolean) => {
         if (message === undefined || message === null) {
             return;
         }
 
         const timestampValue = typeof timestamp === 'number' ? timestamp : Date.now();
+
+        // ── Command echo: append inline to the open server prompt line ────────
+        // Mudlet renders your sent command on the prompt line itself. If a prompt
+        // is open, merge the echo into it; otherwise fall through and render it
+        // as its own line below.
+        if (type === 'echo' && promptLineEl) {
+            const target = promptLineEl;
+            const sticky = promptStickyEl;
+            promptLineEl = null;
+            promptStickyEl = null;
+            appendEchoToPrompt(message, target, sticky);
+            return;
+        }
+
+        // Any non-echo output closes the open prompt line: it stays as its own
+        // finalized row and new content is rendered below it.
+        if (type !== 'echo') {
+            promptLineEl = null;
+            promptStickyEl = null;
+        }
 
         // 'trigger-echo' = trigger-mode cecho output (from flushDeferredEcho). Styled
         // as 'script' but always creates a fresh element — never updates the timer
@@ -453,14 +503,23 @@ export function setupOutputRenderer(
         cursorEl = wrapper;
         deletedPrev = null;
 
+        // Remember a server prompt line so the next command echo appends to it.
+        if (isPrompt && type === 'mud') {
+            promptLineEl = wrapper;
+        }
+
         maybeTrim();
 
         if (isSplitView()) {
             const stickyWrapper = createMessageWrapper(message, effectiveType, timestampValue);
             stickyArea.appendChild(stickyWrapper);
+            if (isPrompt && type === 'mud') {
+                promptStickyEl = stickyWrapper;
+            }
             while (stickyArea.childElementCount > stickyLines) {
                 const firstSticky = stickyArea.firstElementChild;
                 if (firstSticky) {
+                    if (firstSticky === promptStickyEl) promptStickyEl = null;
                     stickyArea.removeChild(firstSticky);
                 } else {
                     break;
@@ -502,6 +561,7 @@ export function setupOutputRenderer(
         const unsubscribeDeleteLine = source.on('script.deleteline', () => {
             const el = resolveElement();
             if (!el || el === sentinel) return;
+            if (el === promptLineEl) promptLineEl = null;
             deletedPrev = el.previousElementSibling === sentinel ? null : el.previousElementSibling;
             outputWrapper.removeChild(el);
             cursorEl = null;
@@ -524,6 +584,8 @@ export function setupOutputRenderer(
         clearStickyArea();
         partialLineEl = null;
         partialStickyEl = null;
+        promptLineEl = null;
+        promptStickyEl = null;
         while (outputWrapper.firstElementChild !== sentinel) {
             if (outputWrapper.firstElementChild) {
                 outputWrapper.removeChild(outputWrapper.firstElementChild);

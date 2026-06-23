@@ -14,6 +14,7 @@ const DEFAULT_BG_FALLBACK = '#090909';
 const DEFAULT_FG_FALLBACK = '#d4d4d4';
 const DEFAULT_INPUT_BG_FALLBACK = '#141414';
 const DEFAULT_INPUT_FG_FALLBACK = '#d4d4d4';
+const DEFAULT_CMD_ECHO_FG_FALLBACK = '#717100';
 const DEFAULT_PROMPT_TIMEOUT_MS = 300;
 const DEFAULT_FONT_SIZE = 13;
 const MIN_FONT_SIZE = 6;
@@ -88,6 +89,8 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const outputForeground = useAppStore(s => selectProfileField(s, connectionId, 'outputForeground'));
     const inputBackground = useAppStore(s => selectProfileField(s, connectionId, 'inputBackground'));
     const inputForeground = useAppStore(s => selectProfileField(s, connectionId, 'inputForeground'));
+    const commandEchoForeground = useAppStore(s => selectProfileField(s, connectionId, 'commandEchoForeground'));
+    const commandEchoBackground = useAppStore(s => selectProfileField(s, connectionId, 'commandEchoBackground'));
     const ansiPalette = useAppStore(s => selectProfileField(s, connectionId, 'ansiPalette'));
     const outputFont = useAppStore(s => selectProfileField(s, connectionId, 'outputFont'));
     const fontSize = useAppStore(s => selectProfileField(s, connectionId, 'fontSize'));
@@ -105,6 +108,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const msspEnabled = protocols?.mssp ?? PROTOCOL_DEFAULTS.mssp;
     const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
     const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
+    const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
     const mapperRoomSize = mapper?.roomSize ?? MAPPER_DEFAULTS.roomSize;
     const mapperRoomShape = mapper?.roomShape ?? MAPPER_DEFAULTS.roomShape;
@@ -358,6 +362,24 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     onChange={next => patchProtocols({ msp: next })}
                                 />
                             </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-mxp-label">
+                                    MXP
+                                    <HelpTip label="About MXP">
+                                        Telnet option 91. MUD eXtension Protocol — parses in-band
+                                        HTML-like markup from the server: text formatting, clickable
+                                        <code>&lt;SEND&gt;</code>/<code>&lt;A&gt;</code> links, entities, and
+                                        custom element definitions. On by default; disable for MUDs
+                                        where literal angle-bracket text is being eaten.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-mxp"
+                                    aria-labelledby="protocol-mxp-label"
+                                    checked={mxpEnabled}
+                                    onChange={next => patchProtocols({ mxp: next })}
+                                />
+                            </div>
                             <p className="settings-hint">
                                 Protocol changes take effect the next time you connect.
                             </p>
@@ -552,6 +574,19 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     fallback={DEFAULT_INPUT_FG_FALLBACK}
                                     onChange={v => patchProfile({ inputForeground: v })}
                                 />
+                                <ColorCell
+                                    label="Command echo foreground"
+                                    value={commandEchoForeground}
+                                    fallback={DEFAULT_CMD_ECHO_FG_FALLBACK}
+                                    onChange={v => patchProfile({ commandEchoForeground: v })}
+                                />
+                                <ColorCell
+                                    label="Command echo background"
+                                    value={commandEchoBackground}
+                                    fallback={DEFAULT_BG_FALLBACK}
+                                    onChange={v => patchProfile({ commandEchoBackground: v })}
+                                    onClear={() => patchProfile({ commandEchoBackground: '' })}
+                                />
                             </div>
                             <div className="settings-ansi-header">
                                 <span className="settings-label">
@@ -731,21 +766,37 @@ interface ColorCellProps {
     value: string | undefined;
     fallback: string;
     onChange: (next: string) => void;
+    /** When provided, shows a clear button (only while a value is set) to unset the color. */
+    onClear?: () => void;
 }
 
-function ColorCell({ label, value, fallback, onChange }: ColorCellProps) {
+function ColorCell({ label, value, fallback, onChange, onClear }: ColorCellProps) {
     const picked = isHexColor(value) ? value : fallback;
+    const isSet = isHexColor(value);
     return (
-        <label className="settings-color-cell">
-            <span className="settings-label">{label}</span>
-            <input
-                type="color"
-                className="color-picker"
-                value={picked}
-                onChange={e => onChange(e.target.value)}
-                aria-label={label}
-            />
-        </label>
+        <Fragment>
+            <span className="settings-ansi-swatch__label">{label}</span>
+            <label className="settings-ansi-swatch__bar" title={label} aria-label={label}>
+                <input
+                    type="color"
+                    value={picked}
+                    onChange={e => onChange(e.target.value)}
+                    aria-label={label}
+                />
+                <span className="settings-ansi-swatch__fill" style={{ background: picked }} />
+                {onClear && isSet && (
+                    <button
+                        type="button"
+                        className="settings-ansi-swatch__reset"
+                        onClick={(e) => { e.preventDefault(); onClear(); }}
+                        aria-label={`Clear ${label}`}
+                        title="Clear (use none)"
+                    >
+                        ↺
+                    </button>
+                )}
+            </label>
+        </Fragment>
     );
 }
 

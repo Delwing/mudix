@@ -11,6 +11,7 @@ import { MudClient, type MudClientOptions, SUPPORTED_SERVER_ENCODINGS } from './
 import { PingTracker } from './connection/PingTracker';
 import { type MudClientEvents, type MudEvents, type SessionStatus } from './events';
 import type { Console } from './text/Console';
+import { mxpColor } from './text/colorParsers';
 
 export type { SessionStatus, MudEvents } from './events';
 
@@ -53,6 +54,11 @@ export class MudSession {
     private _ping: number | null = null;
     private _outputReady = false;
     private _destroyed = false;
+
+    /** Colors for the local echo of sent commands. Re-applied from the active
+     *  profile by ProfileSession. `fg` defaults to Mudlet's olive; `bg` empty =
+     *  no background. Consumed by echoCommand() to wrap the echo in ANSI. */
+    commandEchoColor: { fg: string; bg: string } = { fg: '#717100', bg: '' };
 
     /** Bounded script.log buffer so the editor panel can backfill entries that
      *  arrived before it was first opened (e.g. errors during initial load). */
@@ -123,8 +129,21 @@ export class MudSession {
 
     echoCommand(text: string): void {
         if (!this.client || this.client.shouldEchoCommand()) {
-            this.events.emit('message', `> ${text}`, 'echo', Date.now());
+            // No "> " prefix: Mudlet echoes the bare command, and OutputRenderer
+            // appends it inline to the open server prompt line (e.g. "- look").
+            this.events.emit('message', this.styleEchoCommand(text), 'echo', Date.now());
         }
+    }
+
+    /** Wrap the echoed command in ANSI truecolor escapes from commandEchoColor
+     *  so it renders in the configured foreground (and optional background). */
+    private styleEchoCommand(text: string): string {
+        const fg = mxpColor(this.commandEchoColor.fg);
+        const bg = this.commandEchoColor.bg ? mxpColor(this.commandEchoColor.bg) : null;
+        let prefix = '';
+        if (fg && fg.space === 'rgb') prefix += `\x1b[38;2;${fg.r};${fg.g};${fg.b}m`;
+        if (bg && bg.space === 'rgb') prefix += `\x1b[48;2;${bg.r};${bg.g};${bg.b}m`;
+        return prefix ? `${prefix}${text}\x1b[0m` : text;
     }
 
     send(text: string, echo = true): void {
@@ -206,13 +225,14 @@ export class MudSession {
     /** Update the telnet protocol toggles applied on the next connect.
      *  Mid-session changes do not retroactively renegotiate — the values are
      *  read by MudClient's constructor, so the next dial sees them. */
-    setProtocolOptions(opts: { gmcpEnabled?: boolean; mttsEnabled?: boolean; msdpEnabled?: boolean; msspEnabled?: boolean; charsetEnabled?: boolean; mspEnabled?: boolean }): void {
+    setProtocolOptions(opts: { gmcpEnabled?: boolean; mttsEnabled?: boolean; msdpEnabled?: boolean; msspEnabled?: boolean; charsetEnabled?: boolean; mspEnabled?: boolean; mxpEnabled?: boolean }): void {
         if (opts.gmcpEnabled !== undefined) this.options.gmcpEnabled = opts.gmcpEnabled;
         if (opts.mttsEnabled !== undefined) this.options.mttsEnabled = opts.mttsEnabled;
         if (opts.msdpEnabled !== undefined) this.options.msdpEnabled = opts.msdpEnabled;
         if (opts.msspEnabled !== undefined) this.options.msspEnabled = opts.msspEnabled;
         if (opts.charsetEnabled !== undefined) this.options.charsetEnabled = opts.charsetEnabled;
         if (opts.mspEnabled !== undefined) this.options.mspEnabled = opts.mspEnabled;
+        if (opts.mxpEnabled !== undefined) this.options.mxpEnabled = opts.mxpEnabled;
     }
 
     private teardownClient(): void {

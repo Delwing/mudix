@@ -608,8 +608,10 @@ describe('gotoRoom', () => {
     expect(env.run('return (gotoRoom(2))')).toBe(true);
     expect(env.run('return #speedWalkDir')).toBe(1);
     // the move command ("n" for a north exit) was echoed to the main window
+    // (Mudlet-style: bare command, no "> " prefix, wrapped in the echo color)
     expect(env.mainOutput.length).toBeGreaterThan(before);
-    expect(env.mainOutput.join('')).toContain('> n');
+    const echoed = env.mainOutput.slice(before).join('').replace(/\[[0-9;]*m/g, '');
+    expect(echoed).toContain('n');
   });
 
   it('fails when the current room is unknown', () => {

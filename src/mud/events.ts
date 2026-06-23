@@ -15,6 +15,16 @@ export type MudClientEvents = {
     'msdp.negotiated': void;
     'mssp.negotiated': void;
     'msp.negotiated': void;
+    /** Fires when MXP (telnet option 91) starts for the session. The scripting
+     *  engine flips its `mxpActive` flag on this so in-band MXP markup starts
+     *  being parsed, and mirrors Mudlet's `sysProtocolEnabled('MXP')`.
+     *  `viaTelnet` is true when started by a real option-91 handshake (server
+     *  WILL/DO MXP) and false when inferred from in-band `ESC[<n>z` line modes
+     *  on a server that skipped negotiation. Only telnet-negotiated MXP gets the
+     *  `<SUPPORTS>`/`<VERSION>` handshake replies — an in-band-only server's
+     *  inbound MXP channel isn't confirmed, so replying would spam it with
+     *  invalid commands. */
+    'mxp.negotiated': [viaTelnet: boolean];
     /** Fired for every `!!SOUND` / `!!MUSIC` tag parsed from the in-band text
      *  stream (or an `IAC SB MSP ... IAC SE` subnegotiation body). The
      *  scripting engine wires this to the SoundManager. */
@@ -26,7 +36,7 @@ export type MudClientEvents = {
     'charset.negotiated': [encoding: string];
     'socket.incoming': [data: string];
     'socket.outgoing': [data: string];
-    'message': [text?: string | AnsiAwareBuffer, type?: string, timestamp?: number];
+    'message': [text?: string | AnsiAwareBuffer, type?: string, timestamp?: number, isPrompt?: boolean];
     'flushLines': [groups: { text: string; type: string }[]];
     'gmcp': [payload: { path: string; value: unknown }];
     'msdp': [payload: { path: string; value: unknown }];

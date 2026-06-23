@@ -1282,7 +1282,11 @@ export class ScriptingAPI {
      * only in whether the styled span is appended, inserted at the cursor, or
      * applied to the current selection.
      */
-    private buildPopupHyperlink(cmds: string[], hints: string[]): FormatHyperlink {
+    private buildPopupHyperlink(
+        cmds: string[],
+        hints: string[],
+        action: (cmd: string) => void = (cmd) => { this.executeScript?.(cmd); },
+    ): FormatHyperlink {
         const onContextMenu = (ev: MouseEvent) => {
             ev.preventDefault();
             document.getElementById('mudix-popup-menu')?.remove();
@@ -1302,7 +1306,7 @@ export class ScriptingAPI {
                 item.addEventListener('mousedown', (e) => {
                     e.stopPropagation();
                     menu.remove();
-                    this.executeScript?.(cmd);
+                    action(cmd);
                 });
                 menu.appendChild(item);
             });
@@ -1319,6 +1323,43 @@ export class ScriptingAPI {
         };
 
         return { onContextMenu, title: hints[0] ?? '' };
+    }
+
+    /**
+     * Build a {@link FormatHyperlink} for an MXP `<SEND>`/`<A>` link. Unlike the
+     * popup/link APIs above (whose actions run Lua via `executeScript`), MXP link
+     * targets are MUD commands or URLs:
+     *  - `kind === 'url'` → left-click opens the URL in a new browser tab.
+     *  - `kind === 'command'` → left-click sends the command to the MUD (echoed
+     *    like a typed command).
+     *  - `promptCmds` (a `cmd1|cmd2|…` list) → right-click shows a popup menu of
+     *    the commands, each sending to the MUD.
+     * Used by ScriptingEngine when rendering MXP-parsed lines.
+     */
+    createMxpHyperlink(
+        kind: 'command' | 'url',
+        payload: string,
+        hint?: string,
+        promptCmds?: string[],
+        promptHints?: string[],
+    ): FormatHyperlink {
+        if (kind === 'url') {
+            return {
+                onClick: () => { window.open(payload, '_blank', 'noopener'); },
+                title: hint || undefined,
+            };
+        }
+        const sendCmd = (cmd: string) => { this.send(cmd); };
+        if (promptCmds && promptCmds.length > 1) {
+            const hl = this.buildPopupHyperlink(promptCmds, promptHints ?? [], sendCmd);
+            hl.onClick = () => sendCmd(payload);
+            hl.title = hint || hl.title;
+            return hl;
+        }
+        return {
+            onClick: () => sendCmd(payload),
+            title: hint || undefined,
+        };
     }
 
     echoPopup(text: string, cmds: string[], hints: string[], win?: string): void {

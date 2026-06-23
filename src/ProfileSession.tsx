@@ -56,6 +56,8 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const ansiPalette = useAppStore(s => selectProfileField(s, connection.id, 'ansiPalette'));
     const autoClearInput = useAppStore(s => selectProfileField(s, connection.id, 'autoClearInput')) === true;
     const commandSeparator = useAppStore(s => selectProfileField(s, connection.id, 'commandSeparator')) ?? '';
+    const commandEchoForeground = useAppStore(s => selectProfileField(s, connection.id, 'commandEchoForeground'));
+    const commandEchoBackground = useAppStore(s => selectProfileField(s, connection.id, 'commandEchoBackground'));
     const protocols = useAppStore(s => selectProfileField(s, connection.id, 'protocols'));
     const gmcpEnabled = protocols?.gmcp ?? PROTOCOL_DEFAULTS.gmcp;
     const mttsEnabled = protocols?.mtts ?? PROTOCOL_DEFAULTS.mtts;
@@ -63,6 +65,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const msspEnabled = protocols?.mssp ?? PROTOCOL_DEFAULTS.mssp;
     const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
     const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
+    const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
     const loggingEnabled = useAppStore(s => selectProfileField(s, connection.id, 'loggingEnabled')) !== false;
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
@@ -87,7 +90,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // autoConnect effect dials — the MudClient reads them at construction. Set
     // synchronously during render (matching the seededFor pattern); user-driven
     // toggles after the first connect take effect on the next reconnect.
-    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled });
+    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mxpEnabled });
 
     const { engineRef } = useEngines(session, true, connection);
 
@@ -106,6 +109,15 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             session.setPromptTimeoutMs(promptTimeoutMs);
         }
     }, [promptTimeoutMs, session]);
+
+    // Color for the local echo of sent commands (Settings → Colors). Empty
+    // foreground falls back to Mudlet's olive; empty background = none.
+    useEffect(() => {
+        session.commandEchoColor = {
+            fg: commandEchoForeground || '#717100',
+            bg: commandEchoBackground || '',
+        };
+    }, [commandEchoForeground, commandEchoBackground, session]);
 
     // Per-profile ANSI palette override (Mudlet's Settings → Color). Mutates
     // the global colorCodes table so FormatState picks it up on the next parse;

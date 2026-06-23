@@ -3034,32 +3034,11 @@ html, body, #root {
     transform: translateX(-50%);
 }
 
-.color-picker {
-    width: 56px;
-    height: 28px;
-    padding: 2px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    background: var(--bg-input);
-    cursor: pointer;
-    flex-shrink: 0;
-}
-
 .settings-colors-grid {
     display: grid;
-    grid-template-columns: max-content max-content;
+    grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
     align-items: center;
-    gap: 10px 24px;
-}
-
-.settings-color-cell {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.settings-color-cell .settings-label {
-    min-width: 130px;
+    gap: 8px 12px;
 }
 
 .settings-ansi-header {

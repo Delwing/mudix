@@ -63,6 +63,10 @@ export interface ProfileSettings {
     inputBackground?: string;
     /** Text color of the command-line input. Empty/undefined = theme default. */
     inputForeground?: string;
+    /** Foreground color for the local echo of commands you send. Empty/undefined = #717100. */
+    commandEchoForeground?: string;
+    /** Background color for the local echo of commands you send. Empty/undefined = none. */
+    commandEchoBackground?: string;
     outputFont?: OutputFontSource;
     /** Mudlet setWindowWrap("main", N). 0/undefined disables character-based wrap. */
     outputWrapAt?: number;
@@ -160,6 +164,11 @@ export interface ProtocolSettings {
      *  `!!SOUND(...)` and `!!MUSIC(...)` tags are stripped from text and
      *  routed to the sound manager. */
     msp?: boolean;
+    /** Telnet MXP / MUD eXtension Protocol (option 91). When enabled, the
+     *  client negotiates MXP and parses in-band HTML-like markup — formatting
+     *  tags, clickable `<SEND>`/`<A>` links, entities, and custom element
+     *  definitions — from the text stream. On by default. */
+    mxp?: boolean;
 }
 
 /** Defaults used when a protocol field is undefined. Off-by-default for MSDP
@@ -176,6 +185,7 @@ export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
     mssp: true,
     charset: true,
     msp: true,
+    mxp: true,
 };
 
 /** User-tunable subset of the map renderer's Settings. Add new entries here

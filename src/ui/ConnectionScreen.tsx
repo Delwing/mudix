@@ -14,6 +14,18 @@ function modeOf(c: MudConnection): ConnectionMode {
     return c.mode ?? 'websocket';
 }
 
+/** Split a host string that may carry a trailing port (`host:port` or
+ *  `host port`) into its parts, so pasting a full address moves the port into
+ *  the Port field. Returns `port: undefined` when no trailing numeric port is
+ *  present, leaving the Port field untouched. */
+function splitHostPort(value: string): { host: string; port?: string } {
+    const match = value.trim().match(/^(.*?)[\s:]+(\d+)$/);
+    if (match && match[1].trim() !== '') {
+        return { host: match[1].trim(), port: match[2] };
+    }
+    return { host: value };
+}
+
 /** Deterministic background color for a profile's name tile — same name always
  *  yields the same hue, so each profile gets a stable, distinct color. */
 function avatarColor(name: string): string {
@@ -268,7 +280,11 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                 <Input
                                     id="cs-host"
                                     value={host}
-                                    onChange={e => setHost(e.target.value)}
+                                    onChange={e => {
+                                        const { host: h, port: p } = splitHostPort(e.target.value);
+                                        setHost(h);
+                                        if (p !== undefined) setPort(p);
+                                    }}
                                     placeholder="mud.example.com"
                                     spellCheck={false}
                                     noAutofill

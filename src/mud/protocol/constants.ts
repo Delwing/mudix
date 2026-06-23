@@ -85,6 +85,18 @@ export const OPT_MSP = "\x5A";             // 90
 export const MSP_WILL = "\xFF\xFB\x5A";    // IAC WILL MSP - client offers MSP
 export const MSP_DO   = "\xFF\xFD\x5A";    // IAC DO MSP   - client/server requests MSP
 
+// MXP (MUD eXtension Protocol) — telnet option 91. Negotiation just gates the
+// in-band markup stream: once the option is on, the server may embed HTML-like
+// tags (`<B>`, `<COLOR>`, `<SEND>`, `<A>`, `<!ELEMENT>`, entities) and line-mode
+// switches (`ESC[#z`) directly in the regular text, which the MxpParser turns
+// into styled segments and clickable links. The `IAC SB MXP IAC SE`
+// subnegotiation (option 91) carries no payload — it just confirms MXP is on;
+// the real protocol is entirely in-band. Reference: https://www.zuggsoft.com/zmud/mxp.htm
+export const MXP_COMMAND_CODE = 91;
+export const OPT_MXP = "\x5B";             // 91
+export const MXP_WILL = "\xFF\xFB\x5B";    // IAC WILL MXP - server offers MXP
+export const MXP_DO   = "\xFF\xFD\x5B";    // IAC DO MXP   - client/server requests MXP
+
 // CHARSET (RFC 2066) — telnet option 42. Either side advertises CHARSET, the
 // other side accepts, then either side may send REQUEST listing IANA charset
 // names; the receiver replies ACCEPTED <name> or REJECTED. The chosen encoding

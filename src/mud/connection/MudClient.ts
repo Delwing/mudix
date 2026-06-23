@@ -45,6 +45,9 @@ import {
     MSP_WILL,
     MSP_DO,
     MspParser,
+    MXP_COMMAND_CODE,
+    MXP_WILL,
+    MXP_DO,
 } from "../protocol";
 import type { MudClientEvents } from "../events";
 
@@ -58,8 +61,10 @@ export interface MudClientOptions {
     /** Milliseconds to hold a partial trailing line (text after the last `\n`)
      *  before flushing it as a prompt. Mirrors Mudlet's "Network packet timeout"
      *  preference; defaults to 300ms. Once a server has sent IAC GA or IAC EOR
-     *  at least once, the client latches into "GA-driver" mode and bypasses
-     *  buffering entirely, making this value moot. */
+     *  at least once, the client latches into "GA-driver" mode and the partial
+     *  tail is flushed by the prompt marker instead of this timer — so the value
+     *  only matters as an idle safety net (e.g. a line split across frames whose
+     *  remainder never arrives). */
     promptTimeoutMs?: number;
     /** Whether to accept GMCP (telnet option 201) negotiation. Default true.
      *  When false, the client silently ignores IAC WILL/DO GMCP so the server
@@ -88,9 +93,20 @@ export interface MudClientOptions {
      *  once negotiated, but in-band parsing is gated to avoid eating literal
      *  text on MUDs that don't speak MSP. */
     mspEnabled?: boolean;
+    /** Whether to accept MXP (telnet option 91) negotiation. Default true.
+     *  When false, IAC WILL/DO MXP is ignored so the server never sees a
+     *  positive ack and no in-band MXP markup is parsed (tags pass through as
+     *  literal text). The actual tag parsing lives downstream in the scripting
+     *  engine, gated on the `mxp.negotiated` event this client emits. */
+    mxpEnabled?: boolean;
 }
 
 const DEFAULT_PROMPT_TIMEOUT_MS = 300;
+
+/** In-band MXP line-mode sequence `ESC[<n>z` (n optional). Its presence means
+ *  the server is speaking MXP even if it skipped the telnet option-91 handshake.
+ *  Non-global so `.test()` stays stateless. */
+const MXP_LINE_MODE_RE = /\x1b\[[0-9]*z/;
 
 /** Converts raw bytes into a Latin-1 byte-string (charCode === byte for 0..255),
  *  exactly what atob() used to yield for the downstream telnet/MCCP pipeline.
@@ -130,9 +146,13 @@ export class MudClient {
     private pendingLineTail = "";
     private pendingTailTimer: number | null = null;
     private promptTimeoutMs: number;
-    /** Set true once the server has sent IAC GA / IAC EOR at least once. From
-     *  then on, partial-line buffering is bypassed — matches Mudlet's
-     *  `mGA_Driver` latch in `cTelnet::gotRest`. */
+    /** Set true once the server has sent IAC GA / IAC EOR at least once.
+     *  Mirrors Mudlet's `mGA_Driver` latch (`cTelnet::gotRest`). From then on
+     *  the held partial tail is flushed by the prompt marker (see the `hasPrompt`
+     *  block below) rather than the idle timer. Note: unlike Mudlet's cTelnet —
+     *  which posts GA-mode chunks verbatim and reassembles split lines in TBuffer
+     *  — we keep buffering partial lines here, because our render path finalizes
+     *  every emitted chunk and has no downstream open-line carry. */
     private gaDriver = false;
     /** True once the WebSocket handshake has completed; used to differentiate
      *  "failed to connect" from "connection lost mid-session" in close events. */
@@ -159,6 +179,13 @@ export class MudClient {
     private msspEnabled: boolean;
     private charsetEnabled: boolean;
     private mspEnabled: boolean;
+    private mxpEnabled: boolean;
+    /** Latches true once MXP has started for this session — via telnet option 91
+     *  negotiation OR by detecting an in-band MXP line-mode sequence (`ESC[<n>z`).
+     *  Many MUDs enable MXP server-side and just start streaming tags without the
+     *  telnet handshake, so the in-band signal is the reliable trigger. Reset on
+     *  each connect(). */
+    private mxpStarted = false;
     private readonly mspParser = new MspParser();
     /** Currently active byte→char codec label. Starts at UTF-8 (works for
      *  ASCII and modern MUDs); switches when a CHARSET REQUEST/ACCEPTED
@@ -179,6 +206,7 @@ export class MudClient {
             msspEnabled = true,
             charsetEnabled = true,
             mspEnabled = false,
+            mxpEnabled = true,
         }: MudClientOptions,
         eventBus: EventBus<MudClientEvents>,
     ) {
@@ -193,6 +221,7 @@ export class MudClient {
         this.msspEnabled = msspEnabled;
         this.charsetEnabled = charsetEnabled;
         this.mspEnabled = mspEnabled;
+        this.mxpEnabled = mxpEnabled;
 
         this.gmcpStream = createGmcpStream({
             onEnvelope: ({ path, value }) => {
@@ -228,6 +257,7 @@ export class MudClient {
             else if (code === TTYPE_COMMAND_CODE) this.respondTerminalType(subneg);
             else if (code === CHARSET_COMMAND_CODE) this.handleCharsetSubneg(subneg);
             else if (code === MSP_COMMAND_CODE) this.handleMspSubneg(subneg);
+            else if (code === MXP_COMMAND_CODE) this.handleMxpSubneg();
         });
         this.mccpHandler = new MccpHandler((data) => this.sendRaw(data));
         this.mccpHandler.enabled = mccpEnabled;
@@ -289,6 +319,7 @@ export class MudClient {
         this.pendingLineTail = "";
         this.gaDriver = false;
         this.ttypeStep = 0;
+        this.mxpStarted = false;
         this.mspParser.reset();
         this.clearTailTimer();
 
@@ -366,6 +397,29 @@ export class MudClient {
                         this.sendRaw(MSP_WILL);
                         this.eventBus.emit('msp.negotiated');
                         if (debugMspEnabled()) console.debug('[mudix.msp] negotiated: server DO → client WILL');
+                    }
+                    if (this.mxpEnabled && data.includes(MXP_WILL)) {
+                        // Server offers MXP (IAC WILL MXP) → we accept (IAC DO MXP).
+                        // From here the server embeds in-band MXP markup; the
+                        // scripting engine parses it once it sees mxp.negotiated.
+                        this.sendRaw(MXP_DO);
+                        this.startMxp(true);
+                    } else if (this.mxpEnabled && data.includes(MXP_DO)) {
+                        // Server requests we enable MXP (IAC DO MXP) → we accept
+                        // (IAC WILL MXP). Telnet negotiation is symmetric; many
+                        // servers (e.g. Aardwolf) start MXP this way.
+                        this.sendRaw(MXP_WILL);
+                        this.startMxp(true);
+                    }
+                    if (this.mxpEnabled && !this.mxpStarted && MXP_LINE_MODE_RE.test(data)) {
+                        // No telnet handshake, but the server is emitting MXP
+                        // line-mode sequences (ESC[<n>z) — it's speaking MXP. Turn
+                        // parsing on now, before this frame's text is rendered, so
+                        // the very lines carrying the markup get parsed. `z` is not
+                        // a standard ANSI CSI final, so this signal is MXP-specific.
+                        // viaTelnet=false: we don't send handshake replies because
+                        // the server's inbound MXP channel isn't confirmed.
+                        this.startMxp(false);
                     }
                     if (this.charsetEnabled && data.includes(CHARSET_WILL)) {
                         // Server offers CHARSET (IAC WILL CHARSET) → we accept
@@ -614,7 +668,7 @@ export class MudClient {
         const SB = 0xFA, WILL = 0xFB, WONT = 0xFC, DO = 0xFD, DONT = 0xFE;
         // Options the client negotiates inline elsewhere — exclude from
         // sysTelnetEvent so handlers see only "everything else".
-        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 42 /* CHARSET */, 69 /* MSDP */, 70 /* MSSP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 90 /* MSP */, 201 /* GMCP */]);
+        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 42 /* CHARSET */, 69 /* MSDP */, 70 /* MSSP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 90 /* MSP */, 91 /* MXP */, 201 /* GMCP */]);
         for (let i = 0; i < data.length - 2; i++) {
             if (data.charCodeAt(i) !== IAC) continue;
             const cmd = data.charCodeAt(i + 1);
@@ -648,7 +702,11 @@ export class MudClient {
         if (!this.mttsEnabled) return;
         if (subneg.charCodeAt(1) !== TTYPE_SEND.charCodeAt(0)) return; // only handle SEND
         // MTTS bits we advertise: ANSI(1) + UTF-8(4) + 256 COLORS(8) + TRUECOLOR(256) = 269.
-        const cycle = ['Mudix', 'XTERM-256COLOR', 'MTTS 269'];
+        // First response is the client name (MTTS step 0). We report "MUDLET" so servers
+        // recognize us and offer Mudlet-targeted GMCP/GUI packages this client consumes —
+        // and so MUDs that key off known client names (e.g. Discworld's `term network`,
+        // which otherwise prints `Unknown terminal type ...`) negotiate cleanly.
+        const cycle = ['MUDLET', 'XTERM-256COLOR', 'MTTS 269'];
         const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
         if (this.ttypeStep < cycle.length - 1) this.ttypeStep++;
         this.sendRaw(GMCP_IAC + GMCP_SB + OPT_TTYPE + TTYPE_IS + value + GMCP_IAC + GMCP_SE);
@@ -744,6 +802,25 @@ export class MudClient {
         for (const cmd of commands) this.eventBus.emit('msp', cmd);
     }
 
+    /** Handle an `IAC SB MXP IAC SE` subnegotiation. Per spec it carries no
+     *  payload — it merely confirms MXP is active — so we just start MXP. The
+     *  actual MXP markup arrives in-band and is parsed downstream by the
+     *  scripting engine. */
+    private handleMxpSubneg(): void {
+        if (!this.mxpEnabled) return;
+        this.startMxp(true);
+    }
+
+    /** Latch MXP on for this session and notify listeners. Idempotent — only the
+     *  first call emits `mxp.negotiated`; later calls (repeat WILL/DO, in-band
+     *  detection on subsequent frames) are no-ops. `viaTelnet` distinguishes a
+     *  real option-91 handshake from in-band-only detection (see the event doc). */
+    private startMxp(viaTelnet: boolean): void {
+        if (this.mxpStarted) return;
+        this.mxpStarted = true;
+        this.eventBus.emit('mxp.negotiated', viaTelnet);
+    }
+
     /** Mudlet `sendSocket(data)`. Sends literal bytes over the socket with no
      *  telnet/encoding processing (each char becomes one byte). Returns false
      *  when the socket isn't open. */
@@ -831,20 +908,28 @@ export class MudClient {
 
         if (decoded.length > 0) {
             this.clearTailTimer();
-            if (this.gaDriver) {
-                // Server reliably signals prompts via IAC GA/EOR — emit chunks
-                // verbatim, matching Mudlet's `mGA_Driver` fast path.
-                this.chunkProcessor.processChunk(decoded, ts, this);
+            // Emit only whole lines (text up to and including the last `\n`) and
+            // hold the trailing partial in `pendingLineTail` until the rest of
+            // the line arrives, a prompt marker (IAC GA/EOR) flushes it below, or
+            // the idle timer fires. This runs even in GA-driver mode: a long MUD
+            // line can be split across WebSocket frames at an arbitrary byte
+            // (mid-word), and emitting each frame verbatim would render the line
+            // broken in two. Mudlet posts verbatim here but reassembles the line
+            // downstream in TBuffer (it finalizes a line only at `\n`, appending
+            // one after a GA); our render path finalizes every emitted chunk, so
+            // we enforce the same "line ends only at \n or GA" invariant here.
+            // NB: this holds an incomplete line until it completes rather than
+            // rendering it live (Mudlet's TBuffer grows the open line in place).
+            // The live-partial parity work is deferred — see
+            // docs/line-assembly-tbuffer-port.md.
+            const combined = this.pendingLineTail + decoded;
+            const lastNl = combined.lastIndexOf('\n');
+            if (lastNl === -1) {
+                this.pendingLineTail = combined;
             } else {
-                const combined = this.pendingLineTail + decoded;
-                const lastNl = combined.lastIndexOf('\n');
-                if (lastNl === -1) {
-                    this.pendingLineTail = combined;
-                } else {
-                    const ready = combined.substring(0, lastNl + 1);
-                    this.pendingLineTail = combined.substring(lastNl + 1);
-                    this.chunkProcessor.processChunk(ready, ts, this);
-                }
+                const ready = combined.substring(0, lastNl + 1);
+                this.pendingLineTail = combined.substring(lastNl + 1);
+                this.chunkProcessor.processChunk(ready, ts, this);
             }
         }
 

@@ -7,9 +7,10 @@ import type {ButtonNode, ScriptNode} from '../storage/schema';
 import {buildEffectivelyEnabledIds, isEffectivelyEnabled} from '../storage/schema';
 import {useAppStore} from '../storage';
 import {loadProfileData, saveProfileData} from '../storage/profileVfsData';
-import type {FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
+import type {BufferSegment, FormatColor, FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer, computeTrailingState} from '../mud/text/FormatState';
-import type {MspCommand} from '../mud/protocol';
+import type {MspCommand, MxpLink} from '../mud/protocol';
+import {MxpParser} from '../mud/protocol';
 import {ScriptingAPI, type InstallOutcome} from './ScriptingAPI';
 
 /** The fields every tree node (alias/trigger/timer/key/button/script) shares —
@@ -176,6 +177,24 @@ export class ScriptingEngine {
     private gmcpNegotiated = false;
     private msdpNegotiated = false;
     private msspNegotiated = false;
+    private mxpNegotiated = false;
+    /** True once MXP (telnet option 91) has been negotiated on the live
+     *  connection. Gates in-band MXP markup parsing in processFlushBatch so
+     *  non-MXP MUDs (where `<grin>` is literal text) are untouched. Reset on
+     *  connect/disconnect. */
+    private mxpActive = false;
+    /** Whether MXP `<SUPPORTS>`/`<VERSION>` handshake replies may be sent. Only
+     *  true when MXP was started via the telnet option-91 handshake — an
+     *  in-band-detected server's inbound MXP isn't confirmed, so we'd otherwise
+     *  spam it with text it reads as invalid commands. */
+    private mxpHandshakeEnabled = false;
+    /** Per-session MXP parser. The send callback carries the in-band
+     *  `<SUPPORTS>`/`<VERSION>` handshake replies (gated on
+     *  `mxpHandshakeEnabled`); `api` is read lazily at call time so this
+     *  initializer is safe before the constructor body runs. */
+    private readonly mxp = new MxpParser({
+        send: (raw) => { if (this.mxpHandshakeEnabled) this.api.send(raw, false); },
+    });
     private vfs: ProfileVFS | null = null;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
     private readonly mapOpen = new MapOpenNotifier(() => this.raiseEvent('mapOpenEvent'));
@@ -2366,16 +2385,32 @@ export class ScriptingEngine {
 
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i];
-                    const plain = line.replace(ANSI_RE, '');
                     const isPrompt = this.promptPending && i === lines.length - 1;
                     if (isPrompt) this.promptPending = false;
 
-                    const buffer = new AnsiAwareBuffer(line, carryState);
-                    // computeTrailingState reflects the *actual* end-of-line
-                    // SGR — including trailing resets, and unchanged across
-                    // blank lines — unlike buffer.trailingState() which only
-                    // sees the last text segment's state.
-                    carryState = computeTrailingState(line, carryState);
+                    let plain: string;
+                    let buffer: AnsiAwareBuffer;
+                    if (this.mxpActive && type === 'mud') {
+                        // MXP is live: parse the in-band markup into styled
+                        // segments + clean (tag/entity-decoded) plain text, and
+                        // wire any <SEND>/<A> links into clickable hyperlinks.
+                        // The parser owns SGR carry on these lines (it walked
+                        // every byte), so computeTrailingState is bypassed.
+                        const r = this.mxp.parseLine(line, carryState);
+                        if (debugMxpEnabled()) logMxpLine(line, r.segments);
+                        plain = r.plain;
+                        buffer = new AnsiAwareBuffer(r.segments);
+                        carryState = r.trailingSnapshot;
+                        this.wireMxpLinks(buffer, r.links);
+                    } else {
+                        plain = line.replace(ANSI_RE, '');
+                        buffer = new AnsiAwareBuffer(line, carryState);
+                        // computeTrailingState reflects the *actual* end-of-line
+                        // SGR — including trailing resets, and unchanged across
+                        // blank lines — unlike buffer.trailingState() which only
+                        // sees the last text segment's state.
+                        carryState = computeTrailingState(line, carryState);
+                    }
 
                     if (plain.length > 0) {
                         this.processLineTriggers(plain, buffer, isPrompt);
@@ -2386,7 +2421,7 @@ export class ScriptingEngine {
                         !buffer.deleted &&
                         (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
                     if (shouldRender) {
-                        this.session.events.emit('message', buffer, type, Date.now());
+                        this.session.events.emit('message', buffer, type, Date.now(), isPrompt);
                     }
 
                     // Flush this line's trigger echoes right after it renders so
@@ -2403,6 +2438,22 @@ export class ScriptingEngine {
                 // left buffered by a mid-line throw is flushed.
                 this.api.flushDeferredEcho();
             }
+        }
+    }
+
+    /**
+     * Attach clickable hyperlinks for the MXP `<SEND>`/`<A>` ranges the parser
+     * found. `setHyperlink` overlays each range while preserving the segments'
+     * existing colours/attributes (including the underline the parser applied as
+     * a link cue). Link behaviour — send a MUD command, open a URL in a new tab,
+     * or pop up a multi-command menu — is built by ScriptingAPI.
+     */
+    private wireMxpLinks(buffer: AnsiAwareBuffer, links: MxpLink[]): void {
+        for (const link of links) {
+            const hl = this.api.createMxpHyperlink(
+                link.kind, link.payload, link.hint, link.prompts?.cmds, link.prompts?.hints,
+            );
+            buffer.setHyperlink([link.start, link.end], hl);
         }
     }
 
@@ -2516,6 +2567,11 @@ export class ScriptingEngine {
                 // Drop any colour carry from a prior session — the new server
                 // starts at default SGR.
                 this.mudCarryState = undefined;
+                // MXP renegotiates per connection; drop any leftover definitions/
+                // open tags/modes and wait for the new session's mxp.negotiated.
+                this.mxp.reset();
+                this.mxpActive = false;
+                this.mxpHandshakeEnabled = false;
                 // mudix's native `connect` plus the Mudlet-standard name — the
                 // bundled generic mapper and ported scripts register a
                 // sysConnectionEvent handler, so both must fire.
@@ -2539,6 +2595,11 @@ export class ScriptingEngine {
                 if (this.msspNegotiated) {
                     this.msspNegotiated = false;
                     this.emit('sysProtocolDisabled', ['MSSP']);
+                }
+                if (this.mxpNegotiated) {
+                    this.mxpNegotiated = false;
+                    this.mxpActive = false;
+                    this.emit('sysProtocolDisabled', ['MXP']);
                 }
             }),
             // GMCP finished negotiating (server WILL → client DO). Mudlet's
@@ -2592,6 +2653,19 @@ export class ScriptingEngine {
                 this.msspNegotiated = true;
                 this.emit('sysProtocolEnabled', ['MSSP']);
             }),
+            // MXP finished negotiating (telnet option 91). Flip on in-band markup
+            // parsing and mirror the GMCP/MSDP/MSSP pair so scripts can hook
+            // sysProtocolEnabled('MXP').
+            session.events.on('mxp.negotiated', (viaTelnet) => {
+                this.mxpActive = true;
+                // Only a real option-91 handshake authorizes sending the
+                // <SUPPORTS>/<VERSION> replies (see ScriptingAPI / event doc).
+                if (viaTelnet) this.mxpHandshakeEnabled = true;
+                if (!this.mxpNegotiated) {
+                    this.mxpNegotiated = true;
+                    this.emit('sysProtocolEnabled', ['MXP']);
+                }
+            }),
             session.events.on('mssp', ({ name, value }) => {
                 // Mirror Mudlet TLuaInterpreter::parseMSSP: write the value into
                 // the Lua `mssp` global, then raise a single `mssp.<VARNAME>`
@@ -2615,4 +2689,47 @@ export class ScriptingEngine {
             // sysInstallPackage fires. See those methods for rationale.
         );
     }
+}
+
+/**
+ * Diagnostic gate — enable via `localStorage.setItem('mudix.debugMxp', '1')` in
+ * the browser console to log every raw MXP line (escapes visible) alongside the
+ * colour the parser assigned to each rendered segment. Use this to tell whether
+ * a colour (e.g. the green object-id digits in a clickable item list) comes from
+ * the server's own ANSI/`<COLOR>` markup or from a client parsing artifact.
+ */
+function debugMxpEnabled(): boolean {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem('mudix.debugMxp') === '1';
+    } catch {
+        return false;
+    }
+}
+
+/** Render a FormatColor compactly for the MXP debug log (`#rrggbb`, `idx:N`). */
+function describeColor(c?: FormatColor): string {
+    if (!c) return '-';
+    if (c.space === 'rgb') {
+        const hex = (n: number) => n.toString(16).padStart(2, '0');
+        return `#${hex(c.r)}${hex(c.g)}${hex(c.b)}`;
+    }
+    if (c.space === 'hex') return c.color.startsWith('#') ? c.color : `#${c.color}`;
+    return `idx:${c.index}`;
+}
+
+/** Log one parsed MXP line: the raw input with escapes visible, then each
+ *  segment's text and its foreground/background/flags. The raw line reveals
+ *  whether the server itself emitted the colour codes the segments carry. */
+function logMxpLine(raw: string, segments: BufferSegment[]): void {
+    const segs = segments.map((s) => {
+        const st = s.state;
+        const flags = st
+            ? [st.bold && 'b', st.italic && 'i', st.underline && 'u', st.strikethrough && 's']
+                  .filter(Boolean).join('')
+            : '';
+        return `  ${JSON.stringify(s.text)} fg=${describeColor(st?.foreground)}`
+            + ` bg=${describeColor(st?.background)}${flags ? ` [${flags}]` : ''}`;
+    });
+    // eslint-disable-next-line no-console
+    console.debug(`[mudix.mxp] raw=${JSON.stringify(raw)}\n${segs.join('\n')}`);
 }
