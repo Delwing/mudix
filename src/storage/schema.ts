@@ -476,7 +476,6 @@ export interface WindowLayoutSnapshot {
 
 export interface ScriptEditorBounds extends ModalBounds {
     listWidth?: number;
-    metaHeight?: number;
 }
 
 export interface AppSchema {

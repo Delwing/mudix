@@ -666,8 +666,7 @@ interface ScriptEditorPanelProps {
     vfs: ProfileVFS | null;
     scriptingEngineRef?: React.RefObject<ScriptingEngine | null>;
     initialListWidth?: number;
-    initialMetaHeight?: number;
-    onSplitsChange?: (listWidth: number, metaHeight: number | null) => void;
+    onSplitsChange?: (listWidth: number) => void;
     onOpenVfsFile?: (path: string, line?: number) => void;
 }
 
@@ -678,7 +677,7 @@ export interface ScriptEditorPanelHandle {
     navigateToItem: (category: EditCategory, id: string, line?: number) => void;
 }
 
-export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEditorPanelProps>(function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineRef, initialListWidth, initialMetaHeight, onSplitsChange, onOpenVfsFile }, ref) {
+export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEditorPanelProps>(function ScriptEditorPanel({ connectionId, session, vfs, scriptingEngineRef, initialListWidth, onSplitsChange, onOpenVfsFile }, ref) {
     const confirm = useConfirm();
     const [category, setCategory] = useState<Category>('scripts');
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -936,8 +935,6 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
     } | null>(null);
 
     const [listWidth, setListWidth]     = useState(() => initialListWidth ?? 180);
-    const [metaHeight, setMetaHeight]   = useState<number | null>(() => initialMetaHeight ?? null);
-    const metaRef = useRef<HTMLDivElement>(null);
 
     // Click handler for the "→" button on error log rows. Switches category if
     // needed (the [category] effect will clear selection; our jump effect below
@@ -1281,8 +1278,6 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
         setDragOver(null);
     };
 
-    const metaHeightRef = useRef(metaHeight);
-    metaHeightRef.current = metaHeight;
     const listWidthRef = useRef(listWidth);
     listWidthRef.current = listWidth;
 
@@ -1296,46 +1291,11 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
         const onUp = () => {
             document.removeEventListener('mousemove', onMove);
             document.removeEventListener('mouseup', onUp);
-            onSplitsChange?.(listWidthRef.current, metaHeightRef.current);
+            onSplitsChange?.(listWidthRef.current);
         };
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
     }, [onSplitsChange]);
-
-    const handleMetaResizeStart = useCallback((e: React.MouseEvent) => {
-        e.preventDefault();
-        const startY = e.clientY;
-        const startHeight = metaRef.current?.getBoundingClientRect().height ?? 100;
-        // Cap the drag so the meta can't grow past the pane and bury the code
-        // editor (leave ≥200px for the editor/log/actions below it).
-        const paneHeight = metaRef.current?.parentElement?.getBoundingClientRect().height ?? 600;
-        const maxHeight = Math.max(60, paneHeight - 200);
-        const onMove = (ev: MouseEvent) => {
-            setMetaHeight(Math.min(maxHeight, Math.max(32, startHeight + ev.clientY - startY)));
-        };
-        const onUp = () => {
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-            onSplitsChange?.(listWidthRef.current, metaHeightRef.current);
-        };
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-    }, [onSplitsChange]);
-
-    // One-time repair on mount: an earlier build let the meta-resize drag
-    // persist an unbounded height. A stale oversized value buries the code
-    // editor (the meta eats the whole pane), so if we loaded one, drop back to
-    // content-sized (null) and clear it from storage.
-    useEffect(() => {
-        const pane = metaRef.current?.parentElement;
-        if (!pane || metaHeight === null) return;
-        const max = Math.max(60, pane.getBoundingClientRect().height - 200);
-        if (metaHeight > max) {
-            setMetaHeight(null);
-            onSplitsChange?.(listWidthRef.current, null);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
 
     const createItem = useCallback((asGroup: boolean, parentId: string | null) => {
         if (parentId) {
@@ -1886,11 +1846,7 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
             {/* Editor pane */}
             {isEditCategory && selected ? (
                 <div className="script-editor__pane">
-                    <div
-                        className="script-editor__meta"
-                        ref={metaRef}
-                        style={metaHeight !== null ? { height: metaHeight, overflowY: 'auto' } : {}}
-                    >
+                    <div className="script-editor__meta">
                         <div className="script-editor__meta-row">
                             {selected.isGroup && (
                                 <span className="script-editor__group-badge">{category === 'buttons' ? BUTTON_GROUP_SINGULAR : 'Group'}</span>
@@ -2327,8 +2283,6 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
                             </div>
                         )}
                     </div>
-
-                    <div className="script-editor__meta-resize" onMouseDown={handleMetaResizeStart} />
 
                     <LuaEditor
                         value={editCode}

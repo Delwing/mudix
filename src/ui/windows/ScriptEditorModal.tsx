@@ -57,9 +57,8 @@ export function ScriptEditorModal({ connectionId, session, vfs, scriptingEngineR
                 vfs={vfs}
                 scriptingEngineRef={scriptingEngineRef}
                 initialListWidth={savedBounds?.listWidth}
-                initialMetaHeight={savedBounds?.metaHeight}
-                onSplitsChange={(listWidth, metaHeight) => {
-                    boundsRef.current = { ...boundsRef.current, listWidth, metaHeight: metaHeight ?? undefined };
+                onSplitsChange={(listWidth) => {
+                    boundsRef.current = { ...boundsRef.current, listWidth };
                     saveBounds(connectionId, boundsRef.current!);
                 }}
                 onOpenVfsFile={onOpenVfsFile}

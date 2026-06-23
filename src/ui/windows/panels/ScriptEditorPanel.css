@@ -304,30 +304,12 @@
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
     box-sizing: border-box;
-    /* Safety net: the inline `height` comes from a user-dragged, persisted
-       value with no upper bound. Cap it so a stale/oversized metaHeight can
-       never eat the whole pane and hide the code editor below it. */
+    /* Static, content-sized header. Capped + scrollable so a tall form (e.g. a
+       trigger with many patterns) can never crowd out the code editor below. */
     max-height: calc(100% - 200px);
+    overflow-y: auto;
 }
 
-.script-editor__meta-resize {
-    height: 5px;
-    flex-shrink: 0;
-    cursor: row-resize;
-    background: var(--border);
-    transition: background 0.15s;
-    position: relative;
-}
-
-.script-editor__meta-resize::after {
-    content: '';
-    position: absolute;
-    inset: -3px 0;
-}
-
-.script-editor__meta-resize:hover {
-    background: var(--accent);
-}
 
 .script-editor__meta-row {
     display: flex;
