@@ -15,7 +15,7 @@ import { Console } from '../mud/text/Console';
 import { MspParser } from '../mud/protocol';
 import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
 import { getHeldModifiers } from './heldModifiers';
-import { useAppStore, selectProfileField, connectionUrl, PROTOCOL_DEFAULTS, MAPPER_DEFAULTS, type ProtocolSettings, type MapperSettings } from '../storage';
+import { useAppStore, selectProfileField, connectionUrl, PROTOCOL_DEFAULTS, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, type ProtocolSettings, type MapperSettings, type MapInfoBgColor } from '../storage';
 import {
     getUniversalDefaultFonts,
     getRegisteredFontFamilies,
@@ -65,6 +65,18 @@ function clamp255(n: number): number {
     return Math.max(0, Math.min(255, Math.round(Number(n) || 0)));
 }
 
+/** Parse the "r,g,b,a" string the Bridge hands `setConfig("mapInfoColor", …)`
+ *  (it flattens the Lua table before crossing into JS). Each channel must be a
+ *  whole number in 0..255, matching Mudlet's per-channel validation; anything
+ *  out of range yields null so setConfig reports failure rather than clamping. */
+function parseMapInfoColor(value: unknown): MapInfoBgColor | null {
+    const m = String(value ?? '').match(/^(\d+),(\d+),(\d+),(\d+)$/);
+    if (!m) return null;
+    const ch = m.slice(1, 5).map(Number);
+    if (ch.some(n => n < 0 || n > 255)) return null;
+    return { r: ch[0], g: ch[1], b: ch[2], a: ch[3] };
+}
+
 // ── setConfig / getConfig support ───────────────────────────────────────────
 // Coerce a Lua-passed value to a boolean the way Mudlet's setConfig does:
 // real booleans pass through; the strings "false"/"0"/"no"/"off" (any case)
@@ -101,7 +113,6 @@ const CONFIG_PERSIST_ONLY: Record<string, {
     fixUnnecessaryLinebreaks:       { type: 'bool', default: false },
     inputLineStrictUnixEndings:     { type: 'bool', default: false },
     logInHTML:                      { type: 'bool', default: false },
-    mapInfoColor:                   { type: 'str',  default: '' },
     mapperPanelVisible:             { type: 'bool', default: false },
     muteMediaAPI:                   { type: 'bool', default: false },
     muteMediaGame:                  { type: 'bool', default: false },
@@ -777,6 +788,11 @@ export class ScriptingAPI {
             case 'mapRoundRooms':      return this.getMapperField('roomShape') === 'roundedRectangle';
             case 'mapShowRoomBorders': return this.getMapperField('borders');
             case 'mapShowGrid':        return this.getMapperField('gridEnabled');
+            // structured — map-info widget background (Bridge rebuilds the table)
+            case 'mapInfoColor': {
+                const c = (this.configBag().mapInfoColor as MapInfoBgColor | undefined) ?? MAP_INFO_BG_DEFAULT;
+                return `${c.r},${c.g},${c.b},${c.a}`;
+            }
             // live
             case 'showSentText':       return this.session.echoSentText;
             // read-only
@@ -824,6 +840,12 @@ export class ScriptingAPI {
                 return true;
             case 'mapShowRoomBorders': this.setMapperField('borders', configBool(value)); return true;
             case 'mapShowGrid':        this.setMapperField('gridEnabled', configBool(value)); return true;
+            case 'mapInfoColor': {
+                const rgba = parseMapInfoColor(value);
+                if (!rgba) return false;
+                this.patchConfigBag('mapInfoColor', rgba);
+                return true;
+            }
             case 'showSentText': {
                 const on = configBool(value);
                 this.session.echoSentText = on;

@@ -252,6 +252,14 @@ export const MAPPER_DEFAULTS: Required<MapperSettings> = {
     gridEnabled: false,
 };
 
+/** RGBA channels (0..255) for the map-info widget background. Stored in the
+ *  profile `config` bag under `mapInfoColor` (Mudlet's `setConfig` key) and
+ *  painted by MapPanel behind the map-info lines. */
+export interface MapInfoBgColor { r: number; g: number; b: number; a: number; }
+
+/** Mudlet's default `mapInfoColor` (mMapInfoBg) — translucent grey. */
+export const MAP_INFO_BG_DEFAULT: MapInfoBgColor = { r: 150, g: 150, b: 150, a: 120 };
+
 /** Defaults for profile settings. Reads fall through to these whenever a
  *  profile hasn't set the field. */
 export const PROFILE_DEFAULTS: ProfileSettings = {

@@ -57,6 +57,7 @@ Mudlet); the rest are live.
 | `mapRoundRooms` | `mapper.roomShape` | `true`→`roundedRectangle`, else `rectangle` |
 | `mapShowRoomBorders` | `mapper.borders` | |
 | `mapShowGrid` | `mapper.gridEnabled` | |
+| `mapInfoColor` | `config.mapInfoColor` (`{r,g,b,a}`) | map-info widget **background** colour; `{r,g,b[,a]}` table, alpha defaults to 255. `MapPanel` paints `.map-info` with it; default is Mudlet's `{150,150,150,120}`. The Lua↔JS boundary marshals the table as an `"r,g,b,a"` string (Bridge.lua). |
 
 ### 2. Live — applied immediately to the session
 
@@ -79,7 +80,7 @@ returns `false`).
 `compactInputLine`, `controlCharacterHandling` (`asis`/`oem`/`picture`),
 `editorAutoComplete`, `enableBlinkText`, `enableClosedCaption`, `f3SearchEnabled`,
 `fixUnnecessaryLinebreaks`, `inputLineStrictUnixEndings`, `logInHTML`,
-`mapInfoColor`, `mapperPanelVisible`, `muteMediaAPI`, `muteMediaGame`,
+`mapperPanelVisible`, `muteMediaAPI`, `muteMediaGame`,
 `promptForMXPProcessorOn`, `promptForVersionInTTYPE`, `show3dMapView`,
 `showRoomIdsOnMap`, `showTabConnectionIndicators`, `showUpperLowerLevels`,
 `specialForceCompressionOff`, `specialForceGAOff`, `versionInTTYPE`.
@@ -119,7 +120,7 @@ group 3 to group 1/2 as the underlying feature lands:
   (MCCP kill-switch), `specialForceGAOff`, `versionInTTYPE`,
   `promptForVersionInTTYPE`, `promptForMXPProcessorOn`.
 - **Map:** `show3dMapView` (no 3D renderer), `showRoomIdsOnMap`,
-  `showUpperLowerLevels`, `mapInfoColor`, `mapperPanelVisible` (could be wired to
+  `showUpperLowerLevels`, `mapperPanelVisible` (could be wired to
   `WindowManager` to open/close `MapPanel`).
 - **Media:** `muteMediaAPI`, `muteMediaGame` (`SoundManager` has stop/pause but
   no persistent mute gate).

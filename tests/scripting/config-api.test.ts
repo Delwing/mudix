@@ -76,6 +76,26 @@ describe('setConfig / getConfig', () => {
         expect(h.run('return setConfig("totallyMadeUpKey", 1)')).toBe(false);
     });
 
+    it('round-trips mapInfoColor as an {r,g,b,a} table with default alpha', () => {
+        // Default before any set — Mudlet's mMapInfoBg {150,150,150,120}.
+        expect(h.run('local c = getConfig("mapInfoColor"); return c[1]..","..c[2]..","..c[3]..","..c[4]'))
+            .toBe('150,150,150,120');
+        // Set with explicit alpha.
+        expect(h.run('return setConfig("mapInfoColor", {10, 20, 30, 40})')).toBe(true);
+        expect(useAppStore.getState().connectionProfile[CONN]?.config?.mapInfoColor)
+            .toEqual({ r: 10, g: 20, b: 30, a: 40 });
+        expect(h.run('local c = getConfig("mapInfoColor"); return c[1]..","..c[2]..","..c[3]..","..c[4]'))
+            .toBe('10,20,30,40');
+        // Alpha omitted defaults to 255.
+        h.run('setConfig("mapInfoColor", {1, 2, 3})');
+        expect(useAppStore.getState().connectionProfile[CONN]?.config?.mapInfoColor)
+            .toEqual({ r: 1, g: 2, b: 3, a: 255 });
+        // Out-of-range channel is rejected (Mudlet validates 0..255).
+        expect(h.run('return setConfig("mapInfoColor", {300, 0, 0, 0})')).toBe(false);
+        // Non-table value is rejected.
+        expect(h.run('return setConfig("mapInfoColor", "nope")')).toBe(false);
+    });
+
     it('supports the Other.lua table form and no-arg dump', () => {
         h.run('setConfig({ enableGMCP = false, f3SearchEnabled = true })');
         expect(h.run('return getConfig("enableGMCP")')).toBe(false);

@@ -7,7 +7,7 @@ import type { MapEventEntry, MapInfoResult, MapInfoContributor, MapStore } from 
 import { MudixMapReader } from '../../../map/MudixMapReader';
 import { MudletHighlightOverlay } from '../../../map/MudletHighlightOverlay';
 import { MapSelectionOverlay } from '../../../map/MapSelectionOverlay';
-import { useAppStore, selectProfileField, type MapperSettings } from '../../../storage';
+import { useAppStore, selectProfileField, MAP_INFO_BG_DEFAULT, type MapperSettings, type MapInfoBgColor } from '../../../storage';
 import { MapEditorModal } from '../../MapEditorModal';
 
 /**
@@ -142,6 +142,13 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     // effect read the current value without taking `mapper` as a dependency
     // (which would tear down the renderer on every Mapper-tab edit).
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
+    // Resolved as a CSS string in the selector so Zustand's Object.is check
+    // compares by value (no spurious re-render when an unrelated config changes).
+    const mapInfoBg = useAppStore(s => {
+        const c = (s.connectionProfile[connectionId]?.config?.mapInfoColor as MapInfoBgColor | undefined)
+            ?? MAP_INFO_BG_DEFAULT;
+        return `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a / 255})`;
+    });
     const connectionName = useAppStore(s => s.connections.find(c => c.id === connectionId)?.name ?? 'map');
     const mapperRef = useRef(mapper);
     mapperRef.current = mapper;
@@ -1126,7 +1133,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         <div className="map-panel">
             <div ref={containerRef} className="map-canvas-container" />
             {mapInfos.length > 0 && (
-                <div className="map-info">
+                <div className="map-info" style={{ background: mapInfoBg }}>
                     {mapInfos.map(info => (
                         <div
                             key={info.label}

@@ -24,6 +24,11 @@
        on the main (vertical) axis; qproperty-alignment overrides this
        per-label via translated flex declarations from qtCss.ts. */
     color: #fff;
+    /* Match Qt's QFontMetrics line spacing (~1.2x) so multi-line label echo
+       (`<br/>`-separated lines, e.g. a stacked stats panel) is spaced like
+       Mudlet instead of inheriting the ambient page cascade, which can be
+       tighter and cramps the lines together. */
+    line-height: 1.2;
     display: flex;
     flex-direction: column;
     justify-content: center;

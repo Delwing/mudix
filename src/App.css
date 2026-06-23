@@ -3163,6 +3163,33 @@ html, body, #root {
     gap: 8px 12px;
 }
 
+/* Map-info background: color swatch + alpha slider + percent readout. */
+.settings-mapinfo-bg {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.settings-mapinfo-bg .settings-ansi-swatch__bar {
+    flex: 0 0 44px;
+}
+
+.settings-mapinfo-bg__alpha {
+    flex: 1 1 auto;
+    min-width: 0;
+    accent-color: var(--accent);
+}
+
+.settings-mapinfo-bg__alpha-readout {
+    flex: 0 0 auto;
+    min-width: 34px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
 .settings-ansi-header {
     display: flex;
     align-items: center;

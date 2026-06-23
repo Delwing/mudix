@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react';
-import { useAppStore, selectProfileField, MAPPER_DEFAULTS, PROTOCOL_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings, type ProtocolSettings } from '../storage';
+import { useAppStore, selectProfileField, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, PROTOCOL_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings, type MapInfoBgColor, type ProtocolSettings } from '../storage';
 import { Input, FontPicker, Toggle, HelpTip, Button } from './components';
 import { DEFAULT_ANSI_PALETTE } from '../mud/text/colors';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
@@ -25,6 +25,17 @@ type BorderSide = 'top' | 'right' | 'bottom' | 'left';
 
 function isHexColor(s: string | undefined): s is string {
     return typeof s === 'string' && /^#[0-9a-fA-F]{6}$/.test(s);
+}
+
+const hex2 = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+/** {r,g,b} → "#rrggbb" for the <input type="color"> swatch. */
+function rgbToHex({ r, g, b }: { r: number; g: number; b: number }): string {
+    return `#${hex2(r)}${hex2(g)}${hex2(b)}`;
+}
+/** "#rrggbb" → {r,g,b}; returns null for anything not a 6-digit hex color. */
+function hexToRgb(s: string): { r: number; g: number; b: number } | null {
+    if (!isHexColor(s)) return null;
+    return { r: parseInt(s.slice(1, 3), 16), g: parseInt(s.slice(3, 5), 16), b: parseInt(s.slice(5, 7), 16) };
 }
 
 const THEME_OPTIONS: { value: Theme; label: string }[] = [
@@ -119,6 +130,8 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const mapperBackgroundColor = mapper?.backgroundColor ?? MAPPER_DEFAULTS.backgroundColor;
     const mapperLineColor = mapper?.lineColor ?? MAPPER_DEFAULTS.lineColor;
     const mapperGridEnabled = mapper?.gridEnabled ?? MAPPER_DEFAULTS.gridEnabled;
+    const config = useAppStore(s => selectProfileField(s, connectionId, 'config'));
+    const mapInfoColor = (config?.mapInfoColor as MapInfoBgColor | undefined) ?? MAP_INFO_BG_DEFAULT;
     const patchConnectionProfile = useAppStore(s => s.patchConnectionProfile);
     // Profile-scoped fields are only writable when a profile is active. On the
     // connection screen the modal hides those rows entirely.
@@ -130,6 +143,11 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     // one field doesn't wipe siblings.
     const patchMapper = (patch: Partial<MapperSettings>) => {
         patchProfile({ mapper: { ...(mapper ?? {}), ...patch } });
+    };
+    // Merge into the Mudlet-compatible `config` bag (same slot ScriptingAPI's
+    // setConfig writes), so the Settings UI and Lua setConfig stay in sync.
+    const patchMapInfoColor = (patch: Partial<MapInfoBgColor>) => {
+        patchProfile({ config: { ...(config ?? {}), mapInfoColor: { ...mapInfoColor, ...patch } } });
     };
     // Same pattern as patchMapper — protocols share one slot so flipping one
     // toggle doesn't wipe the others.
@@ -777,6 +795,42 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     fallback={MAPPER_DEFAULTS.lineColor}
                                     onChange={v => patchMapper({ lineColor: v })}
                                 />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="mapper-info-bg-label">
+                                    Map info background
+                                    <HelpTip label="About map info background">
+                                        Background behind the info overlay shown on top of the
+                                        map (Mudlet's <code>mapInfoColor</code>). The opacity
+                                        slider sets its alpha channel.
+                                    </HelpTip>
+                                </span>
+                                <div className="settings-mapinfo-bg" aria-labelledby="mapper-info-bg-label">
+                                    <label className="settings-ansi-swatch__bar" title="Map info background color" aria-label="Map info background color">
+                                        <input
+                                            type="color"
+                                            value={rgbToHex(mapInfoColor)}
+                                            onChange={e => { const rgb = hexToRgb(e.target.value); if (rgb) patchMapInfoColor(rgb); }}
+                                            aria-label="Map info background color"
+                                        />
+                                        <span
+                                            className="settings-ansi-swatch__fill"
+                                            style={{ background: `rgba(${mapInfoColor.r}, ${mapInfoColor.g}, ${mapInfoColor.b}, ${mapInfoColor.a / 255})` }}
+                                        />
+                                    </label>
+                                    <input
+                                        type="range"
+                                        className="settings-mapinfo-bg__alpha"
+                                        min={0}
+                                        max={255}
+                                        step={1}
+                                        value={mapInfoColor.a}
+                                        onChange={e => patchMapInfoColor({ a: Number(e.target.value) })}
+                                        aria-label="Map info background opacity"
+                                        title="Opacity"
+                                    />
+                                    <span className="settings-mapinfo-bg__alpha-readout">{Math.round((mapInfoColor.a / 255) * 100)}%</span>
+                                </div>
                             </div>
                         </section>
                     )}

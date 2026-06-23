@@ -2371,3 +2371,35 @@ function ttsGetCurrentLine()
     end
     return line
 end
+
+-- Mudlet's `mapInfoColor` config key is the map-info widget *background* colour
+-- (an {r, g, b[, a]} table, alpha defaulting to 255). wasmoon can't reliably
+-- hand a Lua table proxy to JS, so marshal it across the boundary as a plain
+-- "r,g,b,a" string: flatten the table on the way in, rebuild it on the way out.
+-- These wrappers run before Other.lua re-wraps setConfig/getConfig (Bridge loads
+-- first), so its table-form / no-arg-dump paths funnel single keys through here.
+do
+    local _setConfig = setConfig
+    local _getConfig = getConfig
+    function setConfig(key, value)
+        if key == "mapInfoColor" then
+            if type(value) ~= "table" then return false end
+            local r = tonumber(value[1]) or 0
+            local g = tonumber(value[2]) or 0
+            local b = tonumber(value[3]) or 0
+            local a = tonumber(value[4]) or 255
+            return _setConfig(key, string.format("%d,%d,%d,%d", r, g, b, a))
+        end
+        return _setConfig(key, value)
+    end
+    function getConfig(key)
+        local v = _getConfig(key)
+        if key == "mapInfoColor" and type(v) == "string" then
+            local r, g, b, a = v:match("^(%d+),(%d+),(%d+),(%d+)$")
+            if r then
+                return { tonumber(r), tonumber(g), tonumber(b), tonumber(a) }
+            end
+        end
+        return v
+    end
+end

@@ -291,11 +291,34 @@ export function qtDeclarationsToCss(css: string): string {
 // handled at the call site so it can emit multiple declarations).
 function translateDeclaration(key: string, val: string): [string, string] {
     if (/QLinearGradient\s*\(/i.test(val)) val = translateLinearGradient(val);
+    val = normalizeRgbaAlpha(val);
     // Qt accepts a brush (incl. gradients) for `background-color`; CSS only
     // allows a solid <color> there. Rename to `background` so gradients paint.
     if (key === 'background-color' && /-gradient\s*\(/.test(val)) key = 'background';
     if (LENGTH_PROPS.has(key)) val = ensurePxUnits(val);
     return [key, val];
+}
+
+// Qt's `rgba()` takes an 8-bit alpha (0–255, matching QColor), but CSS's legacy
+// `rgba()` expects the 4th argument in 0–1 (a value outside that range is
+// clamped, so `rgba(0,0,0,200)` paints fully opaque instead of ~78%). Mudlet
+// QSS overwhelmingly uses the Qt convention, so any alpha > 1 is almost
+// certainly an 0–255 value that needs rescaling to 0–1. We leave a fractional
+// alpha (already CSS-style) and an alpha of exactly 0 or 1 untouched — those are
+// unambiguous and identical under both conventions. Applied to whole values so
+// `rgba()` stops inside a translated `linear-gradient(...)` are rescaled too.
+function normalizeRgbaAlpha(val: string): string {
+    if (val.indexOf('rgba') < 0) return val;
+    return val.replace(
+        /\brgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d*\.?\d+)\s*\)/gi,
+        (full, r, g, b, a) => {
+            const alpha = parseFloat(a);
+            if (alpha <= 1) return full;
+            const scaled = Math.min(1, alpha / 255);
+            // Trim to 4 decimals and drop trailing zeros for a tidy value.
+            return `rgba(${r}, ${g}, ${b}, ${parseFloat(scaled.toFixed(4))})`;
+        },
+    );
 }
 
 // Qt scripts often quote values that CSS expects bare — `background-color:
