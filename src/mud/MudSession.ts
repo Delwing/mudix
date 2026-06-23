@@ -124,7 +124,10 @@ export class MudSession {
         if (this.windowSize) client.setWindowSize(this.windowSize.cols, this.windowSize.rows);
 
         this.pingTracker = new PingTracker(
-            () => client.sendGmcp('core.ping'),
+            // Canonical GMCP: `Core.Ping` (PascalCase) with no body. sendGmcp
+            // would append a JSON body (`core.ping {}`), which is non-standard —
+            // the spec's request is a bare name (optionally a latency number).
+            () => client.sendGmcpRaw('Core.Ping'),
             (d) => this.setPing(d),
             this.events,
         );

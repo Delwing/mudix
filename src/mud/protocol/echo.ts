@@ -33,11 +33,28 @@ const LOGIN_PHASE_MS = 5 * 60 * 1000;
 const PASSWORD_TIMEOUT_MS = 60 * 1000;
 
 export class EchoHandler {
-    /** Committed (debounced) state exposed to UI / send-echo logic. */
+    /** Committed (debounced) state exposed to UI / send-echo logic. True
+     *  whenever the server is echoing for us, which means we must suppress our
+     *  own local command echo to avoid showing every line twice. This is *not*
+     *  the same as password masking — see `_passwordStyle` / `passwordMode`. */
     private _serverEchoing = false;
     /** Latest raw on-the-wire state. Used to gate ack dedup and decide whether
      *  to schedule a commit. */
     private _rawEchoing = false;
+    /** Whether the *current* ECHO engagement should mask the input line. A
+     *  server that enables ECHO during the opening negotiation burst — before
+     *  it has printed any output — is doing session-wide remote echo (it will
+     *  echo your name, commands, everything), not requesting a password. The
+     *  classic Diku/ROM password pattern instead toggles `IAC WILL ECHO` on
+     *  *after* the name prompt, right before "Password:". So we only treat an
+     *  ECHO that engages after the server has already sent output as a password
+     *  prompt. Captured at each OFF→ON transition. Mudlet masks on every ECHO;
+     *  doing so here would hide the name on full-server-echo MUDs, which is the
+     *  bug this distinction fixes. */
+    private _passwordStyle = false;
+    /** Set once the server has emitted any non-telnet output. Distinguishes a
+     *  connect-time (server-wide) ECHO from a later (password) ECHO. */
+    private sawAppData = false;
     private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
     private passwordSafetyTimer: ReturnType<typeof setTimeout> | null = null;
     private connectionStartAt = 0;
@@ -45,12 +62,12 @@ export class EchoHandler {
     private lastToggleAt = 0;
     private _anomalyDetected = false;
     private readonly sendRaw: (data: string) => void;
-    private readonly onEchoChange: (serverEchoing: boolean) => void;
+    private readonly onEchoChange: (maskInput: boolean) => void;
     private readonly onAnomalyDetected: (() => void) | undefined;
 
     constructor(
         sendRaw: (data: string) => void,
-        onEchoChange: (serverEchoing: boolean) => void,
+        onEchoChange: (maskInput: boolean) => void,
         onAnomalyDetected?: () => void,
     ) {
         this.sendRaw = sendRaw;
@@ -60,6 +77,14 @@ export class EchoHandler {
 
     get serverEchoing(): boolean {
         return this._serverEchoing;
+    }
+
+    /** Whether the command input should be masked (password mode). Only true
+     *  for an ECHO engagement that began after the server started sending
+     *  output — a genuine password prompt — never for connect-time server-wide
+     *  echo. */
+    get passwordMode(): boolean {
+        return this._serverEchoing && this._passwordStyle;
     }
 
     get anomalyDetected(): boolean {
@@ -76,7 +101,10 @@ export class EchoHandler {
     processData(data: string): void {
         let i = 0;
         while (i < data.length) {
-            if (data.charCodeAt(i) !== IAC) { i++; continue; }
+            // Any byte outside a telnet command is server output. Seeing it
+            // before an ECHO request is what tells a connect-time server-wide
+            // echo apart from a mid-session password prompt.
+            if (data.charCodeAt(i) !== IAC) { this.sawAppData = true; i++; continue; }
             const cmd = data.charCodeAt(i + 1);
             if (cmd === IAC) { i += 2; continue; }
             if (cmd === SB) {
@@ -102,6 +130,9 @@ export class EchoHandler {
         if (this._anomalyDetected) return;
         if (on === this._rawEchoing) return;
         this._rawEchoing = on;
+        // Latch whether this engagement masks: a password prompt only if the
+        // server had already printed output by the time it asked us to echo.
+        if (on) this._passwordStyle = this.sawAppData;
         if (this.trackToggleAndDetectAnomaly()) return;
         // Raw state matches committed state again. Two cases collapse here:
         //   (a) committed=OFF, raw was briefly ON, now OFF — transient flap
@@ -135,10 +166,13 @@ export class EchoHandler {
             if (this._rawEchoing === this._serverEchoing) return;
             this._serverEchoing = this._rawEchoing;
             this.sendRaw(this._serverEchoing ? ECHO_DO : ECHO_DONT);
-            this.onEchoChange(this._serverEchoing);
+            this.onEchoChange(this.passwordMode);
             this.updatePasswordSafetyTimer();
             if (debugEchoEnabled()) {
-                console.debug(`[mudix.echo] committed → ${this._serverEchoing ? 'ON (password mode)' : 'OFF (normal)'}`);
+                const mode = !this._serverEchoing ? 'OFF (normal)'
+                    : this.passwordMode ? 'ON (password mode)'
+                    : 'ON (server-wide echo, input not masked)';
+                console.debug(`[mudix.echo] committed → ${mode}`);
             }
         }, STABLE_MS);
     }
@@ -150,7 +184,11 @@ export class EchoHandler {
             clearTimeout(this.passwordSafetyTimer);
             this.passwordSafetyTimer = null;
         }
-        if (!this._serverEchoing) return;
+        // Only password masking needs the "server never sent WONT" safety net.
+        // Session-wide echo legitimately stays on for the whole connection, so
+        // forcing it off after a timeout would re-enable local echo and double
+        // every line.
+        if (!this.passwordMode) return;
         if (this.connectionStartAt === 0) return;
         if (Date.now() - this.connectionStartAt >= LOGIN_PHASE_MS) return;
         this.passwordSafetyTimer = setTimeout(() => {
@@ -217,6 +255,8 @@ export class EchoHandler {
             this.passwordSafetyTimer = null;
         }
         this._rawEchoing = false;
+        this._passwordStyle = false;
+        this.sawAppData = false;
         this.toggleCount = 0;
         this.lastToggleAt = 0;
         this._anomalyDetected = false;

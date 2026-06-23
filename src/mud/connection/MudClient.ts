@@ -280,6 +280,14 @@ export class MudClient {
             onEnvelope: ({ path, value }) => {
                 this.maybeAnswerCharLogin(path);
                 (this.eventBus.emit as (event: string, ...args: unknown[]) => void)(`gmcp.${path}`, value);
+                // GMCP module names are case-insensitive by convention, and the
+                // ping tracker listens on a fixed lowercase event. Route the
+                // server's Core.Ping reply regardless of spelling — the spec's
+                // canonical reply is PascalCase `Core.Ping` with no body, which
+                // `gmcp.${path}` alone would emit as `gmcp.Core.Ping`.
+                if (path !== 'core.ping' && path.toLowerCase() === 'core.ping') {
+                    this.eventBus.emit('gmcp.core.ping', value);
+                }
                 this.eventBus.emit('gmcp', { path, value });
             },
             onMessage: (text, type) => {
@@ -319,7 +327,7 @@ export class MudClient {
 
         this.echoHandler = new EchoHandler(
             (data) => this.sendRaw(data),
-            (serverEchoing) => this.eventBus.emit('telnet.echo', serverEchoing),
+            (maskInput) => this.eventBus.emit('telnet.echo', maskInput),
             () => this.eventBus.emit('telnet.echo.anomaly'),
         );
 
@@ -639,7 +647,7 @@ export class MudClient {
     }
 
     isPasswordMode(): boolean {
-        return this.isSocketOpen() && this.echoHandler.serverEchoing;
+        return this.isSocketOpen() && this.echoHandler.passwordMode;
     }
 
     shouldEchoCommand(): boolean {

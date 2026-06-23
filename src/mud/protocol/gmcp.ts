@@ -43,11 +43,18 @@ const parseGmcpPayload = (
     const gmcpData = data.substring(1);
     if (!gmcpData.length) return;
 
+    // The data part is optional per the GMCP spec — a message may be just a
+    // module name with no body (e.g. the server's `Core.Ping` reply, which is
+    // documented to carry no body). Treat a missing/blank body as an empty
+    // value rather than dropping the whole message.
     const spaceIndex = gmcpData.indexOf(" ");
-    if (spaceIndex === -1) return;
+    const type = (spaceIndex === -1 ? gmcpData : gmcpData.substring(0, spaceIndex)).trim();
+    let payload = spaceIndex === -1 ? "" : gmcpData.substring(spaceIndex + 1);
 
-    const type = gmcpData.substring(0, spaceIndex);
-    let payload = gmcpData.substring(spaceIndex + 1);
+    if (payload.trim() === "") {
+        onMessage(type, "");
+        return;
+    }
 
     // Replace literal ESC characters inside JSON strings so JSON.parse succeeds
     if (type.toLowerCase() === "gmcp_msgs") {

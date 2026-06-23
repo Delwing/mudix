@@ -1096,6 +1096,24 @@ html, body, #root {
     padding: 2px 0;
 }
 
+/* Monospace grid cells: each non-ASCII grapheme is boxed into a fixed Nch
+   advance (set inline) so wide/combining/font-fallback glyphs can't drift the
+   column alignment. See cellRender.ts / wcwidth.ts.
+
+   overflow MUST stay `visible`: an inline-block with any other overflow value
+   aligns by its bottom edge instead of the text baseline, which lifts boxed
+   glyphs (accented Latin, Cyrillic, runes) off the line. `visible` keeps the
+   baseline correct and the fixed width keeps the advance — an over-wide glyph
+   just paints past its box (typically into an adjacent space) without pushing
+   the next column. */
+.output-msg-content .ocell {
+    display: inline-block;
+    overflow: visible;
+    vertical-align: baseline;
+    text-align: left;
+    padding: 0;
+}
+
 /* Connection / proxy errors surfaced via session.events.emit('message', …, 'error'). */
 .output-msg.error .output-msg-content,
 .output-msg.error .output-msg-content span {

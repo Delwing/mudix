@@ -1,6 +1,7 @@
 import { colorCodes } from "./colors";
 import mudletColorsJson from "./mudletColors.json";
 import { scanEscape } from "./ansiEscapes";
+import { appendCells, cellsToHtml } from "./cellRender";
 
 const ESC = "";
 
@@ -819,8 +820,10 @@ export class AnsiAwareBuffer {
     toHtml(): string {
         let html = "";
 
+        const escape = (s: string) => this.escapeHtml(s);
+
         for (const segment of this.segments) {
-            const escapedText = this.escapeHtml(segment.text);
+            const escapedText = cellsToHtml(segment.text, escape);
 
             if (!segment.state || isDefaultState(segment.state)) {
                 html += escapedText;
@@ -872,12 +875,12 @@ export class AnsiAwareBuffer {
             const state = segment.state;
 
             if (!state || isDefaultState(state)) {
-                fragment.appendChild(document.createTextNode(segment.text));
+                appendCells(fragment, segment.text);
                 continue;
             }
 
             const element = document.createElement('span');
-            element.textContent = segment.text;
+            appendCells(element, segment.text);
 
             const styles: string[] = [];
 

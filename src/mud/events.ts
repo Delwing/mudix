@@ -52,7 +52,11 @@ export type MudClientEvents = {
     'msdp': [payload: { path: string; value: unknown }];
     'mssp': [payload: { name: string; value: string }];
     'gmcp.core.ping': [value: unknown];
-    'telnet.echo': [serverEchoing: boolean];
+    /** Fires when the command input should switch in/out of password masking.
+     *  True only for a genuine password prompt (server enabled ECHO *after* it
+     *  began sending output); a connect-time server-wide ECHO suppresses local
+     *  echo without masking, so it does not raise this with `true`. */
+    'telnet.echo': [maskInput: boolean];
     /** Mirror of Mudlet's `sysEchoAnomalyDetected`. Fires once per session when
      *  the server toggles `IAC WILL/WONT ECHO` ≥5 times within 5 s; at that
      *  point the client sends `IAC DONT ECHO` and refuses any further ECHO
