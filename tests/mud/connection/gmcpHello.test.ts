@@ -73,7 +73,7 @@ describe('GMCP Core.Hello handshake', () => {
     // Accept GMCP, then announce.
     expect(out).toContain(GMCP_DO);
     expect(out).toContain('Core.Hello');
-    expect(out).toContain('"client":"Mudlet"');
+    expect(out).toContain('"client":"MUDIX"');
     expect(out).toContain('Core.Supports.Set');
   });
 

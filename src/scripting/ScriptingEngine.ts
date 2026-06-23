@@ -10,7 +10,7 @@ import {loadProfileData, saveProfileData} from '../storage/profileVfsData';
 import type {BufferSegment, FormatColor, FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer, computeTrailingState} from '../mud/text/FormatState';
 import type {MspCommand, MxpLink} from '../mud/protocol';
-import {MxpParser} from '../mud/protocol';
+import {MxpParser, splitMxpResultLines} from '../mud/protocol';
 import {ScriptingAPI, type InstallOutcome} from './ScriptingAPI';
 
 /** The fields every tree node (alias/trigger/timer/key/button/script) shares —
@@ -2384,11 +2384,18 @@ export class ScriptingEngine {
 
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i];
-                    const isPrompt = this.promptPending && i === lines.length - 1;
-                    if (isPrompt) this.promptPending = false;
+                    const lineIsPrompt = this.promptPending && i === lines.length - 1;
+                    if (lineIsPrompt) this.promptPending = false;
 
-                    let plain: string;
-                    let buffer: AnsiAwareBuffer;
+                    // Build the render units for this network line. Normally one
+                    // unit per line, but when MXP is active a single line can carry
+                    // several visual lines via <BR> tags — splitMxpResultLines
+                    // breaks the parsed result on those newlines so each renders
+                    // (and fires triggers) on its own. `blankRenders` forces a
+                    // blank line to render (true for an intentional <BR>-split gap;
+                    // for a single line it mirrors the old `line === ''` rule so a
+                    // text-free MXP line — e.g. pure <!ENTITY> defs — stays hidden).
+                    const units: { plain: string; buffer: AnsiAwareBuffer; outputLine: string; blankRenders: boolean }[] = [];
                     if (this.mxpActive && type === 'mud') {
                         // MXP is live: parse the in-band markup into styled
                         // segments + clean (tag/entity-decoded) plain text, and
@@ -2397,42 +2404,59 @@ export class ScriptingEngine {
                         // every byte), so computeTrailingState is bypassed.
                         const r = this.mxp.parseLine(line, carryState);
                         if (debugMxpEnabled()) logMxpLine(line, r.segments);
-                        plain = r.plain;
-                        buffer = new AnsiAwareBuffer(r.segments);
                         carryState = r.trailingSnapshot;
-                        this.wireMxpLinks(buffer, r.links);
+                        const parts = splitMxpResultLines(r);
+                        const multiLine = parts.length > 1;
+                        for (const part of parts) {
+                            const buffer = new AnsiAwareBuffer(part.segments);
+                            this.wireMxpLinks(buffer, part.links);
+                            units.push({
+                                plain: part.plain,
+                                buffer,
+                                outputLine: multiLine ? part.plain : line,
+                                blankRenders: multiLine ? true : line === '',
+                            });
+                        }
                     } else {
-                        buffer = new AnsiAwareBuffer(line, carryState);
+                        const buffer = new AnsiAwareBuffer(line, carryState);
                         // The buffer's text is the line with every escape
                         // sequence (SGR, OSC 8 links, cursor moves, …) already
                         // consumed — exactly what's rendered — so trigger
                         // matching sees the same plain text the user sees.
-                        plain = buffer.text;
+                        const plain = buffer.text;
                         // computeTrailingState reflects the *actual* end-of-line
                         // SGR — including trailing resets, and unchanged across
                         // blank lines — unlike buffer.trailingState() which only
                         // sees the last text segment's state.
                         carryState = computeTrailingState(line, carryState);
+                        units.push({ plain, buffer, outputLine: line, blankRenders: line === '' });
                     }
 
-                    if (plain.length > 0) {
-                        this.processLineTriggers(plain, buffer, isPrompt);
-                        this.emit('output', [line, type]);
-                    }
+                    for (let u = 0; u < units.length; u++) {
+                        const { plain, buffer, outputLine, blankRenders } = units[u];
+                        // Only the final visual line of a prompt-bearing network
+                        // line is the prompt (e.g. just the "> ", not the room).
+                        const isPrompt = lineIsPrompt && u === units.length - 1;
 
-                    const shouldRender =
-                        !buffer.deleted &&
-                        (line === '' || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
-                    if (shouldRender) {
-                        this.session.events.emit('message', buffer, type, Date.now(), isPrompt);
-                    }
+                        if (plain.length > 0) {
+                            this.processLineTriggers(plain, buffer, isPrompt);
+                            this.emit('output', [outputLine, type]);
+                        }
 
-                    // Flush this line's trigger echoes right after it renders so
-                    // they land in Mudlet's position — directly after the line
-                    // they fired on — instead of being deferred to the end of
-                    // the whole batch (which dumped every line's echo below the
-                    // last rendered line).
-                    this.api.flushDeferredEcho();
+                        const shouldRender =
+                            !buffer.deleted &&
+                            (blankRenders || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
+                        if (shouldRender) {
+                            this.session.events.emit('message', buffer, type, Date.now(), isPrompt);
+                        }
+
+                        // Flush this line's trigger echoes right after it renders so
+                        // they land in Mudlet's position — directly after the line
+                        // they fired on — instead of being deferred to the end of
+                        // the whole batch (which dumped every line's echo below the
+                        // last rendered line).
+                        this.api.flushDeferredEcho();
+                    }
                 }
 
                 if (carryEnabled) this.mudCarryState = carryState;

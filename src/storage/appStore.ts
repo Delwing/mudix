@@ -39,7 +39,9 @@ function moveInList<T extends { id: string; parentId: string | null }>(
 }
 
 interface AppStore extends AppSchema {
-    addConnection: (data: Omit<MudConnection, 'id'>) => void;
+    /** Adds a connection and returns its newly generated id (so callers can
+     *  immediately attach per-profile data like saved login credentials). */
+    addConnection: (data: Omit<MudConnection, 'id'>) => string;
     updateConnection: (id: string, data: Omit<MudConnection, 'id'>) => void;
     removeConnection: (id: string) => void;
     patchClient: (patch: Partial<ClientSettings>) => void;
@@ -119,9 +121,11 @@ export const useAppStore = create<AppStore>()(
     persist(
         set => ({
             ...APP_DEFAULTS,
-            addConnection: data => set(s => ({
-                connections: [...s.connections, { ...data, id: crypto.randomUUID() }],
-            })),
+            addConnection: data => {
+                const id = crypto.randomUUID();
+                set(s => ({ connections: [...s.connections, { ...data, id }] }));
+                return id;
+            },
             updateConnection: (id, data) => set(s => ({
                 connections: s.connections.map(c => c.id === id ? { ...data, id } : c),
             })),

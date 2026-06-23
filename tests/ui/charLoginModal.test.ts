@@ -34,4 +34,23 @@ describe('CharLoginModal markup', () => {
         expect(withError).toContain('Invalid credentials');
         expect(withError).toContain('role="alert"');
     });
+
+    it('has a remember-on-this-device checkbox', () => {
+        expect(html).toMatch(/<input[^>]*type="checkbox"/i);
+        expect(html).toContain('Remember on this device');
+    });
+
+    it('prefills saved account + password', () => {
+        const prefilled = render({ initialAccount: 'rahjiii', initialPassword: 'hunter2' });
+        expect(prefilled).toMatch(/value="rahjiii"/);
+        expect(prefilled).toMatch(/value="hunter2"/);
+    });
+
+    it('shows the storage warning (script/XSS risk, not physical) when remember is on', () => {
+        // initialPassword defaults the checkbox to checked, so the warning shows.
+        const remembered = render({ initialAccount: 'a', initialPassword: 'b' });
+        expect(remembered).toMatch(/unencrypted/i);
+        expect(remembered).toMatch(/script running on this page|XSS/i);
+        expect(remembered).not.toMatch(/shared computer/i);
+    });
 });

@@ -7,8 +7,15 @@ interface CharLoginModalProps {
     connectionName?: string;
     /** Error from a previous failed attempt (Char.Login.Result success=false). */
     error?: string;
-    /** Send `account` + `password` to the server (Char.Login.Credentials). */
-    onSubmit: (account: string, password: string) => void;
+    /** Account/username to prefill (saved per-profile credential). */
+    initialAccount?: string;
+    /** Password to prefill (saved per-profile credential — plaintext). */
+    initialPassword?: string;
+    /** Initial state of the "remember on this device" checkbox. */
+    initialRemember?: boolean;
+    /** Send `account` + `password` to the server (Char.Login.Credentials).
+     *  `remember` tells the caller whether to persist them for next time. */
+    onSubmit: (account: string, password: string, remember: boolean) => void;
     /** Decline GMCP login — sends the empty reply so the server falls back to
      *  its text login prompt. */
     onCancel: () => void;
@@ -17,17 +24,30 @@ interface CharLoginModalProps {
 /**
  * Credentials popup for GMCP `Char.Login` authentication. Rendered as a real
  * `<form>` with `autocomplete="username"` / `autocomplete="current-password"`
- * inputs so browser password managers offer to fill and save. mudix never
- * stores the password — it's handed straight to `onSubmit` and relayed to the
- * server. Cancelling falls back to the server's text login.
+ * inputs so browser password managers offer to fill and save. Optionally
+ * remembers the account + password per profile (plaintext localStorage — see
+ * the inline warning); the password is otherwise handed straight to `onSubmit`
+ * and relayed to the server, never stored. Cancelling falls back to text login.
  */
-export function CharLoginModal({ connectionName, error, onSubmit, onCancel }: CharLoginModalProps) {
-    const [account, setAccount] = useState('');
-    const [password, setPassword] = useState('');
+export function CharLoginModal({
+    connectionName,
+    error,
+    initialAccount,
+    initialPassword,
+    initialRemember,
+    onSubmit,
+    onCancel,
+}: CharLoginModalProps) {
+    const [account, setAccount] = useState(initialAccount ?? '');
+    const [password, setPassword] = useState(initialPassword ?? '');
+    const [remember, setRemember] = useState(initialRemember ?? !!initialPassword);
     const accountRef = useRef<HTMLInputElement>(null);
+    const passwordRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        accountRef.current?.focus();
+        // Focus the first empty field so a fully-prefilled form is one Enter away.
+        (account ? passwordRef : accountRef).current?.focus();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
@@ -45,7 +65,7 @@ export function CharLoginModal({ connectionName, error, onSubmit, onCancel }: Ch
             accountRef.current?.focus();
             return;
         }
-        onSubmit(trimmed, password);
+        onSubmit(trimmed, password, remember);
     };
 
     return (
@@ -89,6 +109,7 @@ export function CharLoginModal({ connectionName, error, onSubmit, onCancel }: Ch
                         <label className="char-login-field">
                             <span>Password</span>
                             <Input
+                                ref={passwordRef}
                                 name="password"
                                 type="password"
                                 autoComplete="current-password"
@@ -97,6 +118,20 @@ export function CharLoginModal({ connectionName, error, onSubmit, onCancel }: Ch
                                 placeholder="password"
                             />
                         </label>
+                        <label className="char-login-remember">
+                            <input
+                                type="checkbox"
+                                checked={remember}
+                                onChange={e => setRemember(e.target.checked)}
+                            />
+                            <span>Remember on this device</span>
+                        </label>
+                        {remember && (
+                            <p className="cred-warning" role="note">
+                                ⚠ Saves unencrypted in your browser's storage. Any script running on
+                                this page — an installed package, or an XSS bug — could read it.
+                            </p>
+                        )}
                         <div className="char-login-actions">
                             <Button type="button" variant="ghost" onClick={onCancel}>
                                 Use text login

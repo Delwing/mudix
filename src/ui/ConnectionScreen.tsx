@@ -80,7 +80,7 @@ interface Props {
     connectingId: string | null;
     onConnect: (connection: MudConnection) => void;
     onOpen: (connection: MudConnection) => void;
-    onAdd: (data: Omit<MudConnection, 'id'>) => void;
+    onAdd: (data: Omit<MudConnection, 'id'>) => string;
     onUpdate: (id: string, data: Omit<MudConnection, 'id'>) => void;
     onDelete: (id: string) => void;
     onOpenSettings: () => void;
@@ -92,6 +92,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     // precedence over DEFAULT_PROXY_URL as the suggested default for new connections.
     const userProxyUrl = useAppStore(s => s.client.userProxyUrl);
     const profiles = useAppStore(s => s.connectionProfile);
+    const patchConnectionProfile = useAppStore(s => s.patchConnectionProfile);
     const effectiveDefaultProxy = userProxyUrl || DEFAULT_PROXY_URL;
     const [editingId, setEditingId] = useState<string | null>(null);
     const [mode, setMode] = useState<ConnectionMode>('mud');
@@ -102,6 +103,10 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     const [proxyModalOpen, setProxyModalOpen] = useState(false);
     const [proxyWhyOpen, setProxyWhyOpen] = useState(false);
     const [url, setUrl] = useState('');
+    // Optional GMCP Char.Login credentials, saved to the profile (password is
+    // plaintext localStorage — see the inline warning).
+    const [account, setAccount] = useState('');
+    const [password, setPassword] = useState('');
 
     const isEditing = editingId !== null;
 
@@ -113,6 +118,8 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         setPort('23');
         setProxyUrl('');
         setUrl('');
+        setAccount('');
+        setPassword('');
     };
 
     const startEdit = (c: MudConnection) => {
@@ -123,6 +130,8 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         setPort(String(c.port ?? 23));
         setProxyUrl(c.proxyUrl ?? '');
         setUrl(c.url ?? '');
+        setAccount(profiles[c.id]?.charLoginAccount ?? '');
+        setPassword(profiles[c.id]?.charLoginPassword ?? '');
     };
 
     const canSubmit = mode === 'mud'
@@ -151,11 +160,14 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!canSubmit) return;
-        if (isEditing) {
-            onUpdate(editingId, buildData());
-        } else {
-            onAdd(buildData());
-        }
+        const id = isEditing ? (onUpdate(editingId, buildData()), editingId) : onAdd(buildData());
+        // Persist the optional login credentials onto the profile (or clear them
+        // when the fields are emptied). Password is stored in plaintext.
+        const acct = account.trim();
+        patchConnectionProfile(id, {
+            charLoginAccount: acct || undefined,
+            charLoginPassword: acct && password ? password : undefined,
+        });
         resetForm();
     };
 
@@ -358,6 +370,44 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                             <code className="proxy-url-preview-url">{buildPreviewUrl(host, port, proxyUrl, effectiveDefaultProxy)}</code>
                         </div>
                     )}
+
+                    <div className="connection-creds">
+                        <div className="form-section-title form-section-title--sub">Login (optional)</div>
+                        <div className="connection-creds-row">
+                            <FormField label="Account" htmlFor="cs-account">
+                                <Input
+                                    id="cs-account"
+                                    name="username"
+                                    autoComplete="username"
+                                    value={account}
+                                    onChange={e => setAccount(e.target.value)}
+                                    placeholder="account name"
+                                    spellCheck={false}
+                                />
+                            </FormField>
+                            <FormField label="Password" htmlFor="cs-password">
+                                <Input
+                                    id="cs-password"
+                                    name="password"
+                                    type="password"
+                                    autoComplete="current-password"
+                                    value={password}
+                                    onChange={e => setPassword(e.target.value)}
+                                    placeholder="password"
+                                />
+                            </FormField>
+                        </div>
+                        <span className="connection-creds-hint">
+                            Auto-login: sent to GMCP login, or typed at the name/password prompts on
+                            text-login MUDs.
+                        </span>
+                        {(account.trim() || password) && (
+                            <p className="cred-warning" role="note">
+                                ⚠ Saves unencrypted in your browser's storage. Any script running on
+                                this page — an installed package, or an XSS bug — could read it.
+                            </p>
+                        )}
+                    </div>
 
                     <div className="connection-form-actions">
                         <Button

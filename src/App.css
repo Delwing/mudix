@@ -592,6 +592,32 @@ html, body, #root {
     gap: 8px;
 }
 
+.connection-creds {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+}
+
+.form-section-title--sub {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 12px;
+}
+
+.connection-creds-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.connection-creds-hint {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 10px;
+    color: var(--text-dim);
+}
+
 .connection-mode-toggle {
     display: flex;
     gap: 2px;
@@ -1777,6 +1803,30 @@ html, body, #root {
 
 .char-login-field .input {
     width: 100%;
+}
+
+.char-login-remember {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+}
+
+.char-login-remember input {
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.cred-warning {
+    margin: -4px 0 0;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--danger);
 }
 
 .char-login-actions {

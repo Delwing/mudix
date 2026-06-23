@@ -140,6 +140,14 @@ export interface ProfileSettings {
      *  field doesn't wipe siblings. Missing fields fall through to
      *  PROTOCOL_DEFAULTS. Takes effect on the next connect. */
     protocols?: ProtocolSettings;
+    /** GMCP `Char.Login` account/username. Prefills the login popup and the
+     *  connection editor's credential fields. Non-sensitive on its own. */
+    charLoginAccount?: string;
+    /** GMCP `Char.Login` password. ⚠ SECURITY: persisted in **plaintext** in
+     *  localStorage (the app store is not encrypted) — only ever written when the
+     *  user explicitly opts in. Convenient for auto-login but not secure on a
+     *  shared machine. Never logged; relayed straight to the server on login. */
+    charLoginPassword?: string;
     /** Catch-all bag for Mudlet `setConfig`/`getConfig` option keys that have no
      *  dedicated structured home above (accessibility, input-line, and other
      *  preferences mudix persists for round-trip fidelity but does not yet act

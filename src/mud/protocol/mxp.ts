@@ -635,6 +635,64 @@ export class MxpParser {
     }
 }
 
+/** Split a parsed MXP line into one entry per *visual* line. MXP `<BR>` tags
+ *  become embedded `\n`s in the parser's plain text and segments — Discworld
+ *  sends a whole room (description, exits, contents, prompt) as a single network
+ *  line delimited by `<BR>` — but a render path that emits one line per result
+ *  would collapse them all together. So we split the segments at every `\n`,
+ *  re-slicing each segment's text and remapping each link's `plain`-offset range
+ *  into the subline it falls on. The `\n` separators are dropped (each subline
+ *  renders on its own). The fast path (no embedded newline) returns the result
+ *  untouched, sharing the original arrays. */
+export function splitMxpResultLines(
+    r: MxpLineResult,
+): { plain: string; segments: BufferSegment[]; links: MxpLink[] }[] {
+    if (r.plain.indexOf("\n") === -1) {
+        return [{ plain: r.plain, segments: r.segments, links: r.links }];
+    }
+
+    const out: { plain: string; segments: BufferSegment[]; links: MxpLink[] }[] = [];
+    // Plain-text range [start, end) each subline occupies in the full r.plain,
+    // used to remap link offsets afterwards.
+    const ranges: { start: number; end: number }[] = [];
+    let segs: BufferSegment[] = [];
+    let plain = "";
+    let base = 0;
+
+    const closeLine = () => {
+        ranges.push({ start: base, end: base + plain.length });
+        out.push({ plain, segments: segs, links: [] });
+        base += plain.length + 1; // +1 for the dropped '\n' separator
+        segs = [];
+        plain = "";
+    };
+
+    for (const seg of r.segments) {
+        const pieces = seg.text.split("\n");
+        for (let p = 0; p < pieces.length; p++) {
+            if (p > 0) closeLine();
+            if (pieces[p].length > 0) {
+                segs.push({ text: pieces[p], state: seg.state });
+                plain += pieces[p];
+            }
+        }
+    }
+    closeLine();
+
+    for (const link of r.links) {
+        for (let k = 0; k < ranges.length; k++) {
+            const { start, end } = ranges[k];
+            if (link.start >= start && link.start < end) {
+                const remStart = link.start - start;
+                const remEnd = Math.min(link.end, end) - start;
+                if (remEnd > remStart) out[k].links.push({ ...link, start: remStart, end: remEnd });
+                break;
+            }
+        }
+    }
+    return out;
+}
+
 // ---- module-local helpers ----
 
 /** Find the `>` that closes the tag starting at `start` (the `<`), skipping any

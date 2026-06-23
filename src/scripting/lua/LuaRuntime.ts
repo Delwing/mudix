@@ -1,4 +1,10 @@
 import {Lua} from 'wasmoon-lua5.1';
+// Self-host the Lua interpreter WASM as a build asset. Without this, wasmoon
+// fetches liblua5.1.wasm from unpkg.com at runtime (its hardcoded default) —
+// a third-party supply-chain + availability risk for the executable that runs
+// all Lua scripting. The `?url` import makes Vite copy it into the bundle and
+// hand back a base-aware same-origin URL we pass as `customWasmUri` below.
+import luaWasmUrl from 'wasmoon-lua5.1/dist/liblua5.1.wasm?url';
 import {unzip, strFromU8} from 'fflate';
 import type {IScriptingRuntime, CaptureSpan} from '../IScriptingRuntime';
 import type {ScriptingAPI} from '../ScriptingAPI';
@@ -156,7 +162,7 @@ export class LuaRuntime implements IScriptingRuntime {
         vfs: ProfileVFS | null = null,
         proxyUrlGetter: () => string | undefined = () => undefined,
     ): Promise<LuaRuntime> {
-        const lua = await Lua.create();
+        const lua = await Lua.create({ customWasmUri: luaWasmUrl });
         const rt = new LuaRuntime(lua, api, vfs, proxyUrlGetter);
         await rt.setup();
         return rt;

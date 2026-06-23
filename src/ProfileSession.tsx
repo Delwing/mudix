@@ -54,6 +54,12 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // the leftover character-name case ("MyChar" still showing when the server
     // toggles ECHO) apart from a freshly-typed partial password.
     const lastSentRef = useRef('');
+    // Auto-login state. `autoLoginStage` drives the text-login state machine
+    // (send account at the first prompt, password when the server enters
+    // password mode). `gmcpAutoTried` guards against re-sending stored GMCP
+    // credentials in a loop when they're wrong. Both reset on each connect.
+    const autoLoginStage = useRef<'idle' | 'name' | 'password'>('idle');
+    const gmcpAutoTried = useRef(false);
 
     const outputFont = useAppStore(s => selectProfileField(s, connection.id, 'outputFont'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connection.id, 'promptTimeoutMs'));
@@ -62,6 +68,10 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const commandSeparator = useAppStore(s => selectProfileField(s, connection.id, 'commandSeparator')) ?? '';
     const commandEchoForeground = useAppStore(s => selectProfileField(s, connection.id, 'commandEchoForeground'));
     const commandEchoBackground = useAppStore(s => selectProfileField(s, connection.id, 'commandEchoBackground'));
+    // Saved GMCP Char.Login credentials (password is plaintext — opt-in only).
+    const charLoginAccount = useAppStore(s => selectProfileField(s, connection.id, 'charLoginAccount'));
+    const charLoginPassword = useAppStore(s => selectProfileField(s, connection.id, 'charLoginPassword'));
+    const patchProfile = useAppStore(s => s.patchConnectionProfile);
     const protocols = useAppStore(s => selectProfileField(s, connection.id, 'protocols'));
     const gmcpEnabled = protocols?.gmcp ?? PROTOCOL_DEFAULTS.gmcp;
     const mttsEnabled = protocols?.mtts ?? PROTOCOL_DEFAULTS.mtts;
@@ -254,13 +264,26 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                 el.select();
             });
         });
-        // GMCP Char.Login: the server asks for credentials → open the popup.
-        // We only implement the password-credentials method; if the server
-        // offers only other methods (e.g. OAuth), decline so it falls back to
-        // its text login rather than showing a form we can't fulfil.
+        // GMCP Char.Login: the server asks for credentials.
         const unsub7 = session.events.on('charLogin.request', (methods) => {
+            // GMCP login takes over — disarm the text-login state machine.
+            autoLoginStage.current = 'idle';
+            // We only implement the password-credentials method; if the server
+            // offers only other methods (e.g. OAuth), decline so it falls back to
+            // its text login rather than showing a form we can't fulfil.
             if (methods.length > 0 && !methods.includes('password-credentials')) {
                 session.sendCharLoginCredentials();
+                return;
+            }
+            // If credentials are saved, send them straight away — no popup. The
+            // guard stops wrong saved credentials from looping; a failure
+            // (charLogin.result below) re-opens the popup prefilled for a retry.
+            const st = useAppStore.getState();
+            const account = selectProfileField(st, connection.id, 'charLoginAccount');
+            const password = selectProfileField(st, connection.id, 'charLoginPassword');
+            if (account && password && !gmcpAutoTried.current) {
+                gmcpAutoTried.current = true;
+                session.sendCharLoginCredentials(account, password);
                 return;
             }
             setCharLogin({});
@@ -274,6 +297,49 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         const unsub9 = session.events.on('client.disconnect', () => setCharLogin(null));
         return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
     }, [session]);
+
+    // Text-login auto-fill for MUDs without GMCP login. When the profile has
+    // saved credentials, send the account at the first server prompt and the
+    // password when the server switches to password mode (IAC ECHO off) —
+    // mirroring Mudlet's saved-login. Armed on connect; disarmed after use, on
+    // disconnect, or when GMCP Char.Login takes over (see charLogin.request).
+    useEffect(() => {
+        const readCreds = () => {
+            const st = useAppStore.getState();
+            return {
+                account: selectProfileField(st, connection.id, 'charLoginAccount') ?? '',
+                password: selectProfileField(st, connection.id, 'charLoginPassword') ?? '',
+            };
+        };
+        const onConnect = () => {
+            gmcpAutoTried.current = false;
+            const { account, password } = readCreds();
+            autoLoginStage.current = account && password ? 'name' : 'idle';
+        };
+        // First prompt ≈ the "By what name?" prompt: send the account (echoed,
+        // since the server echoes it back off here just like a typed name).
+        const onPrompt = () => {
+            if (autoLoginStage.current !== 'name') return;
+            const { account } = readCreds();
+            if (!account) { autoLoginStage.current = 'idle'; return; }
+            autoLoginStage.current = 'password';
+            send(account, true);
+        };
+        // Server enters password mode (ECHO off) → send the password unechoed so
+        // it never surfaces as plaintext in the output.
+        const onEcho = (mask: boolean) => {
+            if (!mask || autoLoginStage.current !== 'password') return;
+            const { password } = readCreds();
+            autoLoginStage.current = 'idle';
+            if (password) send(password, false);
+        };
+        const onDisconnect = () => { autoLoginStage.current = 'idle'; };
+        const u1 = session.events.on('client.connect', onConnect);
+        const u2 = session.events.on('prompt', onPrompt);
+        const u3 = session.events.on('telnet.echo', onEcho);
+        const u4 = session.events.on('client.disconnect', onDisconnect);
+        return () => { u1(); u2(); u3(); u4(); };
+    }, [session, connection.id, send]);
 
     // Register the getCmdLine provider on the engine. Effect re-runs when the
     // engine instance changes (connection swap). Suggestions state is reset
@@ -479,11 +545,18 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                 <CharLoginModal
                     connectionName={connection.name}
                     error={charLogin.error}
-                    onSubmit={(account, password) => {
+                    initialAccount={charLoginAccount}
+                    initialPassword={charLoginPassword}
+                    onSubmit={(account, password, remember) => {
                         // Optimistic close: most servers proceed on success. A
                         // failure re-opens the popup via the charLogin.result
                         // handler with the server's message.
                         setCharLogin(null);
+                        // Persist (plaintext) or clear the saved credentials.
+                        patchProfile(connection.id, {
+                            charLoginAccount: remember ? account : undefined,
+                            charLoginPassword: remember ? password : undefined,
+                        });
                         session.sendCharLoginCredentials(account, password);
                     }}
                     onCancel={() => {

@@ -132,7 +132,8 @@ export interface MudClientOptions {
 
 const DEFAULT_PROMPT_TIMEOUT_MS = 300;
 
-/** Version string reported as the MNES CLIENT_VERSION variable. */
+/** Version string reported as our client version — GMCP `Core.Hello` and the
+ *  MNES CLIENT_VERSION variable. */
 const MNES_CLIENT_VERSION = "0.1.0";
 
 /** In-band MXP line-mode sequence `ESC[<n>z` (n optional). Its presence means
@@ -729,15 +730,14 @@ export class MudClient {
      *  won't push any GMCP data (room, char, vitals, …) until they've received
      *  this hello, so without it GMCP effectively does nothing. Latched so a
      *  repeated WILL/DO GMCP doesn't re-announce. Reports the client name as
-     *  "Mudlet" for the same reason the TTYPE/MNES handshake does — so servers
-     *  recognize us and offer their Mudlet-targeted GMCP packages. */
+     *  "MUDIX" — our own identity — matching the TTYPE/MNES handshake. */
     private sendGmcpHandshake(): void {
         if (this.gmcpHelloSent) return;
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
         this.gmcpHelloSent = true;
         try {
             this.sendBytes(encodeGmcp('Core.Hello', {
-                client: 'Mudlet',
+                client: 'MUDIX',
                 version: MNES_CLIENT_VERSION,
             }));
             // Mudlet's default Core.Supports.Set, minus "External.Discord 1"
@@ -1032,15 +1032,14 @@ export class MudClient {
 
     /** Build the MNES variable set the client reports. CHARSET tracks the live
      *  negotiated encoding; the rest mirror the TTYPE/MTTS handshake. CLIENT_NAME
-     *  is "MUDLET" for the same reason respondTerminalType reports it — so
-     *  servers recognise the client and offer Mudlet-targeted content. */
+     *  is "MUDIX" — our own identity, matching respondTerminalType. */
     private collectMnesVars(): MnesVar[] {
         const charset = this.currentEncoding === 'utf-8'
             ? 'UTF-8'
             : this.currentEncoding.toUpperCase();
         return [
             { name: 'CHARSET', value: charset },
-            { name: 'CLIENT_NAME', value: 'MUDLET' },
+            { name: 'CLIENT_NAME', value: 'MUDIX' },
             { name: 'CLIENT_VERSION', value: MNES_CLIENT_VERSION },
             { name: 'MTTS', value: String(MTTS_BITVECTOR) },
             { name: 'TERMINAL_TYPE', value: 'XTERM-256COLOR' },
