@@ -52,6 +52,16 @@ export type MudClientEvents = {
     'msdp': [payload: { path: string; value: unknown }];
     'mssp': [payload: { name: string; value: string }];
     'gmcp.core.ping': [value: unknown];
+    /** Fires when the server requests GMCP login (Char.Login.Default). The
+     *  argument is the list of supported authentication methods it advertised
+     *  (e.g. `["password-credentials"]`). The UI shows a credentials popup and
+     *  replies via `sendCharLoginCredentials` — or an empty reply (cancel) to
+     *  fall back to the server's text login prompt. */
+    'charLogin.request': [methods: string[]];
+    /** Fires when the server reports a GMCP login outcome (Char.Login.Result).
+     *  `success` is true on a successful authentication; on failure `message`
+     *  carries the server's human-readable reason (e.g. "Invalid credentials"). */
+    'charLogin.result': [result: { success: boolean; message?: string }];
     /** Fires when the command input should switch in/out of password masking.
      *  True only for a genuine password prompt (server enabled ECHO *after* it
      *  began sending output); a connect-time server-wide ECHO suppresses local

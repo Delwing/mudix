@@ -61,8 +61,11 @@ describe('login-time telnet negotiation replies', () => {
     const sock = MockWebSocket.instances[0];
     sock.onopen?.({});
     sock.sent.length = 0; // discard the proactive NAWS WILL
-    return { client, sock };
+    return { client, sock, bus };
   }
+
+  const GMCP = String.fromCharCode(201);
+  const gmcpFrame = (body: string) => '\xFF\xFA' + GMCP + body + '\xFF\xF0';
 
   it('accepts WILL EOR with DO EOR (enables prompt markers)', () => {
     const { sock } = connected();
@@ -92,14 +95,38 @@ describe('login-time telnet negotiation replies', () => {
     expect(out).not.toContain(NEW_ENVIRON_WONT);
   });
 
-  it('answers Char.Login.Default with empty Char.Login.Credentials (text-login fallback)', () => {
-    const { sock } = connected();
-    // IAC SB GMCP "Char.Login.Default {...}" IAC SE
-    const GMCP = String.fromCharCode(201);
-    const frame = '\xFF\xFA' + GMCP +
-      'Char.Login.Default {"type":["password-credentials"]}' + '\xFF\xF0';
-    sock.deliver(frame);
+  it('emits charLogin.request on Char.Login.Default (no auto-reply)', () => {
+    const { sock, bus } = connected();
+    let methods: string[] | undefined;
+    bus.on('charLogin.request', (m) => { methods = m; });
+    sock.deliver(gmcpFrame('Char.Login.Default {"type":["password-credentials"]}'));
+    expect(methods).toEqual(['password-credentials']);
+    // The client no longer auto-answers — the UI drives the reply now.
+    expect(sentText(sock)).not.toContain('Char.Login.Credentials');
+  });
+
+  it('sendCharLoginCredentials sends account + password', () => {
+    const { client, sock } = connected();
+    client.sendCharLoginCredentials('myaccount', 'secret');
+    expect(sentText(sock)).toContain('Char.Login.Credentials {"account":"myaccount","password":"secret"}');
+  });
+
+  it('sendCharLoginCredentials with no account sends the empty fallback', () => {
+    const { client, sock } = connected();
+    client.sendCharLoginCredentials();
     expect(sentText(sock)).toContain('Char.Login.Credentials {}');
+  });
+
+  it('emits charLogin.result on Char.Login.Result', () => {
+    const { sock, bus } = connected();
+    const results: { success: boolean; message?: string }[] = [];
+    bus.on('charLogin.result', (r) => { results.push(r); });
+    sock.deliver(gmcpFrame('Char.Login.Result {"success":false,"message":"Invalid credentials"}'));
+    sock.deliver(gmcpFrame('Char.Login.Result {"success":true}'));
+    expect(results).toEqual([
+      { success: false, message: 'Invalid credentials' },
+      { success: true, message: undefined },
+    ]);
   });
 
   it('answers all three in a single combined negotiation frame', () => {

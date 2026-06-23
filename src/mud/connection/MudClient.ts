@@ -278,7 +278,7 @@ export class MudClient {
 
         this.gmcpStream = createGmcpStream({
             onEnvelope: ({ path, value }) => {
-                this.maybeAnswerCharLogin(path);
+                this.handleCharLogin(path, value);
                 (this.eventBus.emit as (event: string, ...args: unknown[]) => void)(`gmcp.${path}`, value);
                 // GMCP module names are case-insensitive by convention, and the
                 // ping tracker listens on a fixed lowercase event. Route the
@@ -759,20 +759,39 @@ export class MudClient {
         }
     }
 
-    /** GMCP `Char.Login` fallback. Because our `Core.Supports.Set` lists
-     *  `Char.Login` (Mudlet parity), servers that support GMCP login send
-     *  `Char.Login.Default { "type": [...] }` and then *wait* for the client to
+    /** Route GMCP `Char.Login.*` messages. The server sends `Char.Login.Default
+     *  { "type": [...] }` to request login and then *waits* for the client to
      *  supply credentials — withholding the normal text "By what name…" prompt
-     *  until it hears back. mudix has no stored-credential UI, so we must answer
-     *  with an empty `Char.Login.Credentials {}` to signal "no credentials here,
-     *  proceed to your next auth method" (i.e. fall back to text login).
-     *  Without this reply the server stalls forever after the MOTD. This mirrors
-     *  Mudlet's own behaviour — its omission of this empty reply was the
-     *  regression in Mudlet/Mudlet#7377. Path match is case-insensitive because
-     *  GMCP module casing varies between servers. */
-    private maybeAnswerCharLogin(path: string): void {
-        if (path.toLowerCase() !== 'char.login.default') return;
-        this.sendGmcp('Char.Login.Credentials', {});
+     *  until it hears back (servers that do this gate on the `Char.Login` module
+     *  we advertise in `Core.Supports.Set`). We surface it as `charLogin.request`
+     *  so the UI can pop a credentials form; the UI replies via
+     *  `sendCharLoginCredentials`, or an empty reply (cancel) to fall back to the
+     *  text login (the behaviour Mudlet/Mudlet#7377 is about). `Char.Login.Result`
+     *  carries the outcome. Path match is case-insensitive — GMCP module casing
+     *  varies between servers. */
+    private handleCharLogin(path: string, value: unknown): void {
+        const p = path.toLowerCase();
+        if (p === 'char.login.default') {
+            const type = (value as { type?: unknown } | null)?.type;
+            const methods = Array.isArray(type) ? type.map(String) : [];
+            this.eventBus.emit('charLogin.request', methods);
+        } else if (p === 'char.login.result') {
+            const v = (value ?? {}) as { success?: unknown; message?: unknown };
+            this.eventBus.emit('charLogin.result', {
+                success: v.success === true,
+                message: typeof v.message === 'string' ? v.message : undefined,
+            });
+        }
+    }
+
+    /** Send the GMCP `Char.Login.Credentials` reply. With an account, sends
+     *  `{ account, password }` (account may be `"account:character"` for games
+     *  with both); with no account it sends the empty `{}` form — the spec's
+     *  "no credentials, fall back to your next auth method" signal, used when the
+     *  user cancels the popup. mudix never stores the password; it only relays it. */
+    sendCharLoginCredentials(account?: string, password?: string): void {
+        const payload = account ? { account, password: password ?? '' } : {};
+        this.sendGmcp('Char.Login.Credentials', payload);
     }
 
     sendGmcpRaw(message: string): void {

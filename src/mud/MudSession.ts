@@ -177,6 +177,14 @@ export class MudSession {
         this.client?.sendGmcpRaw(message);
     }
 
+    /** Reply to a GMCP `Char.Login.Default` request. Pass an account + password
+     *  to authenticate, or no arguments to send the empty "fall back to text
+     *  login" reply (the credentials popup's Cancel). The password is relayed
+     *  straight to the wire and never persisted. */
+    sendCharLoginCredentials(account?: string, password?: string): void {
+        this.client?.sendCharLoginCredentials(account, password);
+    }
+
     sendMSDP(variable: string, values: string[]): boolean {
         return this.client?.sendMSDP(variable, values) ?? false;
     }

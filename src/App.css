@@ -1738,6 +1738,54 @@ html, body, #root {
     max-height: 80vh;
 }
 
+.char-login-modal {
+    width: min(380px, 92vw);
+}
+
+.char-login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.char-login-hint {
+    margin: 0;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-dim);
+}
+
+.char-login-error {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: 4px;
+    padding: 6px 10px;
+    background: rgba(241, 76, 76, 0.08);
+}
+
+.char-login-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.char-login-field .input {
+    width: 100%;
+}
+
+.char-login-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 2px;
+}
+
 .file-browser-modal {
     width: 320px;
     max-height: 75vh;

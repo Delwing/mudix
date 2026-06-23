@@ -10,6 +10,7 @@ import { SettingsModal } from './ui/SettingsModal';
 import { FileBrowserModal } from './ui/FileBrowserModal';
 import { LogBrowserModal } from './ui/LogBrowserModal';
 import { ScriptingDocsModal } from './ui/ScriptingDocsModal';
+import { CharLoginModal } from './ui/CharLoginModal';
 import { QuickOpenPalette } from './ui/QuickOpenPalette';
 import { SessionLogger } from './logging/SessionLogger';
 import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, PROTOCOL_DEFAULTS, type MudConnection } from './storage';
@@ -36,6 +37,9 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const [logsOpen, setLogsOpen] = useState(false);
     const [docsOpen, setDocsOpen] = useState(false);
     const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+    // GMCP Char.Login credentials popup. Non-null while the server is waiting on
+    // a Char.Login.Default reply; `error` carries a previous attempt's failure.
+    const [charLogin, setCharLogin] = useState<{ error?: string } | null>(null);
     const [cmdLineSuggestions, setCmdLineSuggestions] = useState<string[]>([]);
     const [bufferWords, setBufferWords] = useState<BufferWordIndex | null>(null);
     const commandInputRef = useRef<HTMLInputElement>(null);
@@ -250,7 +254,25 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                 el.select();
             });
         });
-        return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); };
+        // GMCP Char.Login: the server asks for credentials → open the popup.
+        // We only implement the password-credentials method; if the server
+        // offers only other methods (e.g. OAuth), decline so it falls back to
+        // its text login rather than showing a form we can't fulfil.
+        const unsub7 = session.events.on('charLogin.request', (methods) => {
+            if (methods.length > 0 && !methods.includes('password-credentials')) {
+                session.sendCharLoginCredentials();
+                return;
+            }
+            setCharLogin({});
+        });
+        // Char.Login.Result: on failure re-open the popup with the server's
+        // message; on success the popup was already dismissed on submit.
+        const unsub8 = session.events.on('charLogin.result', (result) => {
+            setCharLogin(result.success ? null : { error: result.message || 'Login failed.' });
+        });
+        // A reconnect/disconnect invalidates any pending login prompt.
+        const unsub9 = session.events.on('client.disconnect', () => setCharLogin(null));
+        return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
     }, [session]);
 
     // Register the getCmdLine provider on the engine. Effect re-runs when the
@@ -451,6 +473,24 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                     vfs={engineRef.current.currentVFS}
                     onPick={path => handleOpenVfsFile(path)}
                     onClose={() => setQuickOpenOpen(false)}
+                />
+            )}
+            {charLogin && (
+                <CharLoginModal
+                    connectionName={connection.name}
+                    error={charLogin.error}
+                    onSubmit={(account, password) => {
+                        // Optimistic close: most servers proceed on success. A
+                        // failure re-opens the popup via the charLogin.result
+                        // handler with the server's message.
+                        setCharLogin(null);
+                        session.sendCharLoginCredentials(account, password);
+                    }}
+                    onCancel={() => {
+                        // Empty reply → server falls back to its text login.
+                        setCharLogin(null);
+                        session.sendCharLoginCredentials();
+                    }}
                 />
             )}
         </div>
