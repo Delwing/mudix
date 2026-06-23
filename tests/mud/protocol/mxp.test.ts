@@ -156,17 +156,20 @@ describe('MxpParser — custom definitions', () => {
 });
 
 describe('MxpParser — handshake', () => {
-  it('replies to <SUPPORT> with a <SUPPORTS> list', () => {
+  it('replies to <SUPPORT> with a secure-prefixed <SUPPORTS> list', () => {
     const { parser, sent } = makeParser();
     parser.parseLine('<support>');
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatch(/^<SUPPORTS .*\+send/);
+    // The ESC[1z secure-line marker must lead the reply so the server parses it
+    // as MXP input rather than a command (Discworld login otherwise reads it as
+    // a character name).
+    expect(sent[0]).toMatch(/^\x1b\[1z<SUPPORTS .*\+send/);
   });
 
-  it('replies to <VERSION>', () => {
+  it('replies to <VERSION> with a secure-prefixed reply', () => {
     const { parser, sent } = makeParser();
     parser.parseLine('<version>');
-    expect(sent[0]).toMatch(/^<VERSION .*CLIENT="mudix"/);
+    expect(sent[0]).toMatch(/^\x1b\[1z<VERSION .*CLIENT="mudix"/);
   });
 });
 

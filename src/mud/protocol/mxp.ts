@@ -90,6 +90,15 @@ interface OpenTag {
 
 const CLIENT_VERSION = "1.0";
 
+/** Prefix for the client→server `<SUPPORTS>`/`<VERSION>` handshake replies. The
+ *  `ESC[1z` secure-line-mode marker tells the server's MXP parser this inbound
+ *  line is an MXP response, not a user command. Without it, servers that gate
+ *  MXP input on the secure marker (e.g. Discworld) treat the reply as ordinary
+ *  text — so `<SUPPORTS …>` lands in the login prompt as a bogus character name.
+ *  Matches Mudlet, which sends `\n\x1b[1z<SUPPORTS …>\n` (TMxpSupportTagHandler).
+ *  The terminating newline is appended by the transport (`MudClient.send`). */
+const MXP_SECURE_REPLY_PREFIX = "\x1b[1z";
+
 /** Tags honored in OPEN line mode (safe formatting + structure). Everything else
  *  — SEND/A, definitions, V — requires SECURE mode, which is MXP's whole point:
  *  it stops server-echoed user text containing `<send>` from forging clickable
@@ -421,9 +430,9 @@ export class MxpParser {
             case "sbr":
                 this.appendText(" "); break;
             case "support":
-                this.opts.send(`<SUPPORTS ${SUPPORTED_TAGS.join(" ")}>`); break;
+                this.opts.send(`${MXP_SECURE_REPLY_PREFIX}<SUPPORTS ${SUPPORTED_TAGS.join(" ")}>`); break;
             case "version":
-                this.opts.send(`<VERSION MXP="1.0" CLIENT="mudix" VERSION="${CLIENT_VERSION}">`); break;
+                this.opts.send(`${MXP_SECURE_REPLY_PREFIX}<VERSION MXP="1.0" CLIENT="mudix" VERSION="${CLIENT_VERSION}">`); break;
             default:
                 // Structural no-ops (p, nobr, hr) and discarded heavy tags (image,
                 // frame, gauge, dest, …): consume the tag, render nothing for it.
