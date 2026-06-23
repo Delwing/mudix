@@ -66,6 +66,8 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
     const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
     const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
+    const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
+    const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
     const loggingEnabled = useAppStore(s => selectProfileField(s, connection.id, 'loggingEnabled')) !== false;
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
@@ -90,7 +92,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // autoConnect effect dials — the MudClient reads them at construction. Set
     // synchronously during render (matching the seededFor pattern); user-driven
     // toggles after the first connect take effect on the next reconnect.
-    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mxpEnabled });
+    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mxpEnabled, mnesEnabled, nawsEnabled });
 
     const { engineRef } = useEngines(session, true, connection);
 

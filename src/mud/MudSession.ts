@@ -54,6 +54,11 @@ export class MudSession {
     private _ping: number | null = null;
     private _outputReady = false;
     private _destroyed = false;
+    /** Latest main output area character grid (columns × rows), tracked here so
+     *  it survives client teardown and seeds a freshly-created client on the
+     *  next connect(). Fed by the WindowManager's main-console resize callback
+     *  and forwarded to the live client for NAWS (telnet option 31). */
+    private windowSize: { cols: number; rows: number } | null = null;
 
     /** Colors for the local echo of sent commands. Re-applied from the active
      *  profile by ProfileSession. `fg` defaults to Mudlet's olive; `bg` empty =
@@ -70,6 +75,9 @@ export class MudSession {
     constructor(options: MudSessionOptions = {}) {
         this.options = { ...options };
         this.windows.setConsoleRegistry(this.consoles);
+        // The main output area reports its character grid here on every resize;
+        // forward it to the client so NAWS (window size) stays in sync.
+        this.windows.onMainConsoleResize = (cols, rows) => this.setWindowSize(cols, rows);
         this.events.on('script.log', (text, level, source) => {
             this._scriptLog.push({
                 text: text ?? '',
@@ -105,6 +113,9 @@ export class MudSession {
         this.teardownClient();
         const client = new MudClient({ url, ...this.options }, this.events as EventBus<MudClientEvents>);
         this.client = client;
+        // Seed the fresh client with the last known window size so NAWS reports
+        // the right grid as soon as the server negotiates it.
+        if (this.windowSize) client.setWindowSize(this.windowSize.cols, this.windowSize.rows);
 
         this.pingTracker = new PingTracker(
             () => client.sendGmcp('core.ping'),
@@ -225,7 +236,7 @@ export class MudSession {
     /** Update the telnet protocol toggles applied on the next connect.
      *  Mid-session changes do not retroactively renegotiate — the values are
      *  read by MudClient's constructor, so the next dial sees them. */
-    setProtocolOptions(opts: { gmcpEnabled?: boolean; mttsEnabled?: boolean; msdpEnabled?: boolean; msspEnabled?: boolean; charsetEnabled?: boolean; mspEnabled?: boolean; mxpEnabled?: boolean }): void {
+    setProtocolOptions(opts: { gmcpEnabled?: boolean; mttsEnabled?: boolean; msdpEnabled?: boolean; msspEnabled?: boolean; charsetEnabled?: boolean; mspEnabled?: boolean; mxpEnabled?: boolean; mnesEnabled?: boolean; nawsEnabled?: boolean }): void {
         if (opts.gmcpEnabled !== undefined) this.options.gmcpEnabled = opts.gmcpEnabled;
         if (opts.mttsEnabled !== undefined) this.options.mttsEnabled = opts.mttsEnabled;
         if (opts.msdpEnabled !== undefined) this.options.msdpEnabled = opts.msdpEnabled;
@@ -233,6 +244,17 @@ export class MudSession {
         if (opts.charsetEnabled !== undefined) this.options.charsetEnabled = opts.charsetEnabled;
         if (opts.mspEnabled !== undefined) this.options.mspEnabled = opts.mspEnabled;
         if (opts.mxpEnabled !== undefined) this.options.mxpEnabled = opts.mxpEnabled;
+        if (opts.mnesEnabled !== undefined) this.options.mnesEnabled = opts.mnesEnabled;
+        if (opts.nawsEnabled !== undefined) this.options.nawsEnabled = opts.nawsEnabled;
+    }
+
+    /** Record the main output area's character grid (columns × rows) and forward
+     *  it to the live client for NAWS. Stored on the session so a client created
+     *  on a later connect() is seeded with the current size. Called by the
+     *  WindowManager whenever the main console's grid changes. */
+    setWindowSize(cols: number, rows: number): void {
+        this.windowSize = { cols, rows };
+        this.client?.setWindowSize(cols, rows);
     }
 
     private teardownClient(): void {

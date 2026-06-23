@@ -109,6 +109,8 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
     const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
     const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
+    const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
+    const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
     const mapperRoomSize = mapper?.roomSize ?? MAPPER_DEFAULTS.roomSize;
     const mapperRoomShape = mapper?.roomShape ?? MAPPER_DEFAULTS.roomShape;
@@ -378,6 +380,43 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     aria-labelledby="protocol-mxp-label"
                                     checked={mxpEnabled}
                                     onChange={next => patchProtocols({ mxp: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-mnes-label">
+                                    MNES
+                                    <HelpTip label="About MNES">
+                                        Telnet option 39 (NEW-ENVIRON). Mud New-Environ Standard —
+                                        when a server requests it, the client reports its
+                                        <code>CHARSET</code>, <code>CLIENT_NAME</code>,
+                                        <code>CLIENT_VERSION</code>, <code>MTTS</code>, and
+                                        <code>TERMINAL_TYPE</code>. Off by default; enable for MUDs
+                                        that use it for client detection.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-mnes"
+                                    aria-labelledby="protocol-mnes-label"
+                                    checked={mnesEnabled}
+                                    onChange={next => patchProtocols({ mnes: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-naws-label">
+                                    NAWS
+                                    <HelpTip label="About NAWS">
+                                        Telnet option 31 (Negotiate About Window Size). Reports the
+                                        main output area's size in characters (columns × rows) to the
+                                        server and updates it whenever the window is resized. Servers
+                                        use it for word-wrap, pagination, and full-screen layouts. On
+                                        by default.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-naws"
+                                    aria-labelledby="protocol-naws-label"
+                                    checked={nawsEnabled}
+                                    onChange={next => patchProtocols({ naws: next })}
                                 />
                             </div>
                             <p className="settings-hint">

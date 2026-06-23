@@ -169,6 +169,15 @@ export interface ProtocolSettings {
      *  tags, clickable `<SEND>`/`<A>` links, entities, and custom element
      *  definitions — from the text stream. On by default. */
     mxp?: boolean;
+    /** Telnet MNES / NEW-ENVIRON (option 39). When enabled, the client reports
+     *  its CHARSET / CLIENT_NAME / CLIENT_VERSION / MTTS / TERMINAL_TYPE
+     *  environment variables to servers that request them. Off by default. */
+    mnes?: boolean;
+    /** Telnet NAWS / Negotiate About Window Size (option 31). When enabled, the
+     *  client offers NAWS and reports the main output area's character grid
+     *  (columns × rows) to the server, re-sending it on every resize. On by
+     *  default — servers use it for word-wrap and pagination. */
+    naws?: boolean;
 }
 
 /** Defaults used when a protocol field is undefined. Off-by-default for MSDP
@@ -186,6 +195,8 @@ export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
     charset: true,
     msp: true,
     mxp: true,
+    mnes: false,
+    naws: true,
 };
 
 /** User-tunable subset of the map renderer's Settings. Add new entries here

@@ -919,8 +919,8 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 
 | Event | Status | Notes |
 |---|---|---|
-| `sysProtocolEnabled` | ✅ | Fired `"GMCP"` on GMCP negotiation; bundled `GMCP.lua` re-subscribes its modules here. Also fires `"MSDP"` |
-| `sysProtocolDisabled` | ✅ | On disconnect when GMCP was active |
+| `sysProtocolEnabled` | ✅ | Fired `"GMCP"` on GMCP negotiation; bundled `GMCP.lua` re-subscribes its modules here. Also fires `"MSDP"`, `"MSSP"`, `"MXP"`, `"MNES"` |
+| `sysProtocolDisabled` | ✅ | On disconnect for each protocol that was active (GMCP/MSDP/MSSP/MXP/MNES) |
 | `sysTelnetEvent` | ✅ | For any IAC WILL/WONT/DO/DONT/SB whose option byte isn't natively handled. `type` mirrors Mudlet's int mapping (1=WILL, 2=WONT, 3=DO, 4=DONT, 5=SB) — args: type, option, message |
 
 **Drag & drop**

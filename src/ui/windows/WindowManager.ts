@@ -151,6 +151,12 @@ export class WindowManager {
     /** Bridge to ScriptingEngine.raiseEvent — used to fire system events
      *  (e.g. sysUserWindowResizeEvent) from window-lifecycle code. */
     onRaiseEvent?:        (event: string, args: unknown[]) => void;
+    /** Called whenever the *main* console's character grid changes (columns ×
+     *  rows). MudSession wires this to the client so NAWS (telnet window size)
+     *  tracks the output area. Distinct from onRaiseEvent (which drives Lua
+     *  sysConsoleSizeChanged) so window-size reporting doesn't depend on the
+     *  scripting layer being attached. */
+    onMainConsoleResize?: (cols: number, rows: number) => void;
 
     setConsoleRegistry(registry: Map<string, Console>): void {
         this.consoleRegistry = registry;
@@ -553,6 +559,8 @@ export class WindowManager {
         if (last && last.cols === cols && last.rows === rows) return;
         this.lastEmittedGrid.set(id, { cols, rows });
         this.onRaiseEvent?.('sysConsoleSizeChanged', [id, cols, rows]);
+        // Keep NAWS in sync with the main output area's character grid.
+        if (id === 'main') this.onMainConsoleResize?.(cols, rows);
     }
 
     /** Mudlet sysWindowOverflowEvent(name, overflowLines). Fires when a console

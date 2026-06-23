@@ -15,6 +15,16 @@ export type MudClientEvents = {
     'msdp.negotiated': void;
     'mssp.negotiated': void;
     'msp.negotiated': void;
+    /** Fires when MNES / NEW-ENVIRON (telnet option 39) negotiation starts —
+     *  the server sent IAC DO NEW-ENVIRON and the client agreed (IAC WILL). The
+     *  client then answers the server's SEND request with its CHARSET /
+     *  CLIENT_NAME / CLIENT_VERSION / MTTS / TERMINAL_TYPE variables. */
+    'mnes.negotiated': void;
+    /** Fires when NAWS (telnet option 31) negotiation completes — the client
+     *  offered IAC WILL NAWS and the server replied IAC DO NAWS. From then on
+     *  the client reports the main output area's character grid (columns × rows)
+     *  and re-sends it whenever the window resizes. */
+    'naws.negotiated': void;
     /** Fires when MXP (telnet option 91) starts for the session. The scripting
      *  engine flips its `mxpActive` flag on this so in-band MXP markup starts
      *  being parsed, and mirrors Mudlet's `sysProtocolEnabled('MXP')`.

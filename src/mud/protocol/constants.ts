@@ -97,6 +97,48 @@ export const OPT_MXP = "\x5B";             // 91
 export const MXP_WILL = "\xFF\xFB\x5B";    // IAC WILL MXP - server offers MXP
 export const MXP_DO   = "\xFF\xFD\x5B";    // IAC DO MXP   - client/server requests MXP
 
+// NEW-ENVIRON (RFC 1572) / MNES (Mud New-Environ Standard) — telnet option 39.
+// The client owns environment variables, so negotiation is asymmetric: the
+// server sends IAC DO NEW-ENVIRON, the client replies IAC WILL NEW-ENVIRON,
+// then the server requests variables with `IAC SB NEW-ENVIRON SEND [VAR <name>…]
+// IAC SE` and the client answers `IAC SB NEW-ENVIRON IS VAR <name> VALUE <value>
+// … IAC SE`. MNES (https://tintin.mudhalla.net/protocols/mnes/) standardises the
+// variable set a MUD client reports: CHARSET, CLIENT_NAME, CLIENT_VERSION, MTTS,
+// TERMINAL_TYPE. Note the control-byte values overlap by position — the byte
+// right after the option code is the command (IS/SEND/INFO), every later marker
+// is structural (VAR/VALUE/ESC/USERVAR) — so IS and VAR are both 0, SEND and
+// VALUE both 1, INFO and ESC both 2.
+export const NEW_ENVIRON_COMMAND_CODE = 39;
+export const OPT_NEW_ENVIRON = "\x27";        // 39
+export const NEW_ENVIRON_IS   = "\x00";       // 0 — "here ARE my variables"
+export const NEW_ENVIRON_SEND = "\x01";       // 1 — "SEND me these variables"
+export const NEW_ENVIRON_INFO = "\x02";       // 2 — unsolicited update push
+export const NEW_ENVIRON_VAR     = "\x00";    // 0 — standard variable marker
+export const NEW_ENVIRON_VALUE   = "\x01";    // 1 — value marker
+export const NEW_ENVIRON_ESC     = "\x02";    // 2 — escape next byte (RFC 1572)
+export const NEW_ENVIRON_USERVAR = "\x03";    // 3 — user-defined variable marker
+export const NEW_ENVIRON_DO   = "\xFF\xFD\x27"; // IAC DO NEW-ENVIRON  - server asks us to report
+export const NEW_ENVIRON_WILL = "\xFF\xFB\x27"; // IAC WILL NEW-ENVIRON - we agree to report
+
+// MTTS (Mud Terminal Type Standard) capability bitvector advertised by both the
+// TTYPE cycle (as `MTTS <n>`) and MNES (as the MTTS variable): ANSI(1) +
+// UTF-8(4) + 256 COLORS(8) + TRUECOLOR(256) = 269.
+export const MTTS_BITVECTOR = 269;
+
+// NAWS (Negotiate About Window Size, RFC 1073) — telnet option 31. The client
+// owns the window, so negotiation is client-driven: the client sends IAC WILL
+// NAWS, the server replies IAC DO NAWS, then the client sends
+// `IAC SB NAWS <w-hi> <w-lo> <h-hi> <h-lo> IAC SE` (16-bit big-endian columns
+// then rows, IAC bytes doubled) and re-sends it whenever the output window
+// resizes. We report the main output area's character grid — how many monospace
+// columns/rows fit — matching what a terminal would report and what Mudlet
+// sends. Servers use it for word-wrap, pagination, and full-screen UIs.
+export const NAWS_COMMAND_CODE = 31;
+export const OPT_NAWS  = "\x1F";          // 31
+export const NAWS_WILL = "\xFF\xFB\x1F";  // IAC WILL NAWS - client offers window size
+export const NAWS_DO   = "\xFF\xFD\x1F";  // IAC DO NAWS   - server accepts / requests it
+export const NAWS_DONT = "\xFF\xFE\x1F";  // IAC DONT NAWS - server declines it
+
 // CHARSET (RFC 2066) — telnet option 42. Either side advertises CHARSET, the
 // other side accepts, then either side may send REQUEST listing IANA charset
 // names; the receiver replies ACCEPTED <name> or REJECTED. The chosen encoding

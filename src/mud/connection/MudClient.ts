@@ -48,6 +48,18 @@ import {
     MXP_COMMAND_CODE,
     MXP_WILL,
     MXP_DO,
+    NEW_ENVIRON_COMMAND_CODE,
+    NEW_ENVIRON_DO,
+    NEW_ENVIRON_WILL,
+    MTTS_BITVECTOR,
+    parseMnesRequest,
+    encodeMnesIs,
+    selectMnesVars,
+    type MnesVar,
+    NAWS_WILL,
+    NAWS_DO,
+    NAWS_DONT,
+    encodeNaws,
 } from "../protocol";
 import type { MudClientEvents } from "../events";
 
@@ -99,9 +111,23 @@ export interface MudClientOptions {
      *  literal text). The actual tag parsing lives downstream in the scripting
      *  engine, gated on the `mxp.negotiated` event this client emits. */
     mxpEnabled?: boolean;
+    /** Whether to accept MNES / NEW-ENVIRON (telnet option 39) negotiation.
+     *  Default false. When false, IAC DO NEW-ENVIRON is ignored so the client
+     *  never reports its CHARSET / CLIENT_NAME / CLIENT_VERSION / MTTS /
+     *  TERMINAL_TYPE environment variables to the server. */
+    mnesEnabled?: boolean;
+    /** Whether to negotiate NAWS / window size (telnet option 31). Default true
+     *  (matching Mudlet). When true the client offers IAC WILL NAWS on connect
+     *  and, once the server accepts (IAC DO NAWS), reports the main output
+     *  area's character grid (columns × rows) and re-sends it on every resize.
+     *  When false the client never offers NAWS and ignores IAC DO NAWS. */
+    nawsEnabled?: boolean;
 }
 
 const DEFAULT_PROMPT_TIMEOUT_MS = 300;
+
+/** Version string reported as the MNES CLIENT_VERSION variable. */
+const MNES_CLIENT_VERSION = "0.1.0";
 
 /** In-band MXP line-mode sequence `ESC[<n>z` (n optional). Its presence means
  *  the server is speaking MXP even if it skipped the telnet option-91 handshake.
@@ -180,6 +206,18 @@ export class MudClient {
     private charsetEnabled: boolean;
     private mspEnabled: boolean;
     private mxpEnabled: boolean;
+    private mnesEnabled: boolean;
+    private nawsEnabled: boolean;
+    /** True once we've sent IAC WILL NAWS this session (proactively on connect,
+     *  or in response to a server-initiated IAC DO NAWS), so we don't re-offer. */
+    private nawsWillSent = false;
+    /** True once the server has accepted NAWS (IAC DO NAWS). Gates whether a
+     *  window-size change is pushed to the server. */
+    private nawsNegotiated = false;
+    /** Latest known main output window size in character columns × rows, fed in
+     *  by the session's resize observer via setWindowSize(). Null until the UI
+     *  has measured the grid at least once. */
+    private windowSize: { cols: number; rows: number } | null = null;
     /** Latches true once MXP has started for this session — via telnet option 91
      *  negotiation OR by detecting an in-band MXP line-mode sequence (`ESC[<n>z`).
      *  Many MUDs enable MXP server-side and just start streaming tags without the
@@ -207,6 +245,8 @@ export class MudClient {
             charsetEnabled = true,
             mspEnabled = false,
             mxpEnabled = true,
+            mnesEnabled = false,
+            nawsEnabled = true,
         }: MudClientOptions,
         eventBus: EventBus<MudClientEvents>,
     ) {
@@ -222,6 +262,8 @@ export class MudClient {
         this.charsetEnabled = charsetEnabled;
         this.mspEnabled = mspEnabled;
         this.mxpEnabled = mxpEnabled;
+        this.mnesEnabled = mnesEnabled;
+        this.nawsEnabled = nawsEnabled;
 
         this.gmcpStream = createGmcpStream({
             onEnvelope: ({ path, value }) => {
@@ -258,6 +300,7 @@ export class MudClient {
             else if (code === CHARSET_COMMAND_CODE) this.handleCharsetSubneg(subneg);
             else if (code === MSP_COMMAND_CODE) this.handleMspSubneg(subneg);
             else if (code === MXP_COMMAND_CODE) this.handleMxpSubneg();
+            else if (code === NEW_ENVIRON_COMMAND_CODE) this.handleMnesSubneg(subneg);
         });
         this.mccpHandler = new MccpHandler((data) => this.sendRaw(data));
         this.mccpHandler.enabled = mccpEnabled;
@@ -320,6 +363,8 @@ export class MudClient {
         this.gaDriver = false;
         this.ttypeStep = 0;
         this.mxpStarted = false;
+        this.nawsWillSent = false;
+        this.nawsNegotiated = false;
         this.mspParser.reset();
         this.clearTailTimer();
 
@@ -421,6 +466,34 @@ export class MudClient {
                         // the server's inbound MXP channel isn't confirmed.
                         this.startMxp(false);
                     }
+                    if (this.mnesEnabled && data.includes(NEW_ENVIRON_DO)) {
+                        // Server asks us to report environment variables (IAC DO
+                        // NEW-ENVIRON) → we agree (IAC WILL NEW-ENVIRON). The
+                        // server then sends SB NEW-ENVIRON SEND … which
+                        // handleMnesSubneg answers. NEW-ENVIRON is asymmetric —
+                        // the client owns the variables — so we only handle the
+                        // DO direction (a WILL would mean the server has env vars,
+                        // which MNES doesn't use).
+                        this.sendRaw(NEW_ENVIRON_WILL);
+                        this.eventBus.emit('mnes.negotiated');
+                    }
+                    if (this.nawsEnabled && data.includes(NAWS_DO)) {
+                        // Server accepted our WILL NAWS (or requested it outright)
+                        // → start reporting window size. If the server initiated
+                        // without seeing our WILL (rare), send WILL first. Then
+                        // push the current dimensions and re-send on every resize.
+                        if (!this.nawsWillSent) {
+                            this.sendRaw(NAWS_WILL);
+                            this.nawsWillSent = true;
+                        }
+                        const firstAccept = !this.nawsNegotiated;
+                        this.nawsNegotiated = true;
+                        this.sendNawsSize();
+                        if (firstAccept) this.eventBus.emit('naws.negotiated');
+                    } else if (this.nawsEnabled && data.includes(NAWS_DONT)) {
+                        // Server declined window-size reporting — stop pushing it.
+                        this.nawsNegotiated = false;
+                    }
                     if (this.charsetEnabled && data.includes(CHARSET_WILL)) {
                         // Server offers CHARSET (IAC WILL CHARSET) → we accept
                         // (IAC DO CHARSET) and proactively send our REQUEST
@@ -471,6 +544,14 @@ export class MudClient {
 
             this.socket.onopen = (event: Event) => {
                 this.opened = true;
+                // Proactively offer NAWS (RFC 1073 has the window-owning side
+                // send WILL). The server replies IAC DO NAWS — handled below —
+                // at which point we send the actual dimensions. Harmless if the
+                // server doesn't support it (it answers DONT or ignores us).
+                if (this.nawsEnabled && !this.nawsWillSent) {
+                    this.sendRaw(NAWS_WILL);
+                    this.nawsWillSent = true;
+                }
                 this.eventBus.emit('open', event);
                 this.eventBus.emit('client.connect');
             };
@@ -668,7 +749,7 @@ export class MudClient {
         const SB = 0xFA, WILL = 0xFB, WONT = 0xFC, DO = 0xFD, DONT = 0xFE;
         // Options the client negotiates inline elsewhere — exclude from
         // sysTelnetEvent so handlers see only "everything else".
-        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 42 /* CHARSET */, 69 /* MSDP */, 70 /* MSSP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 90 /* MSP */, 91 /* MXP */, 201 /* GMCP */]);
+        const HARDCODED = new Set<number>([1 /* ECHO */, 24 /* TTYPE */, 31 /* NAWS */, 39 /* NEW-ENVIRON/MNES */, 42 /* CHARSET */, 69 /* MSDP */, 70 /* MSSP */, 85 /* MCCP1 */, 86 /* MCCP2 */, 90 /* MSP */, 91 /* MXP */, 201 /* GMCP */]);
         for (let i = 0; i < data.length - 2; i++) {
             if (data.charCodeAt(i) !== IAC) continue;
             const cmd = data.charCodeAt(i + 1);
@@ -706,7 +787,7 @@ export class MudClient {
         // recognize us and offer Mudlet-targeted GMCP/GUI packages this client consumes —
         // and so MUDs that key off known client names (e.g. Discworld's `term network`,
         // which otherwise prints `Unknown terminal type ...`) negotiate cleanly.
-        const cycle = ['MUDLET', 'XTERM-256COLOR', 'MTTS 269'];
+        const cycle = ['MUDLET', 'XTERM-256COLOR', `MTTS ${MTTS_BITVECTOR}`];
         const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
         if (this.ttypeStep < cycle.length - 1) this.ttypeStep++;
         this.sendRaw(GMCP_IAC + GMCP_SB + OPT_TTYPE + TTYPE_IS + value + GMCP_IAC + GMCP_SE);
@@ -819,6 +900,57 @@ export class MudClient {
         if (this.mxpStarted) return;
         this.mxpStarted = true;
         this.eventBus.emit('mxp.negotiated', viaTelnet);
+    }
+
+    /** Answer an `IAC SB NEW-ENVIRON SEND … IAC SE` request with our MNES
+     *  variables, framed as `IAC SB NEW-ENVIRON IS VAR … VALUE … IAC SE`. The
+     *  server may request specific variables or send a bare SEND for all;
+     *  selectMnesVars handles both. No-op on a malformed/non-SEND body. */
+    private handleMnesSubneg(subneg: string): void {
+        if (!this.mnesEnabled) return;
+        const request = parseMnesRequest(subneg);
+        if (!request.isSend) return;
+        const vars = selectMnesVars(request, this.collectMnesVars());
+        this.sendRaw(encodeMnesIs(vars));
+    }
+
+    /** Build the MNES variable set the client reports. CHARSET tracks the live
+     *  negotiated encoding; the rest mirror the TTYPE/MTTS handshake. CLIENT_NAME
+     *  is "MUDLET" for the same reason respondTerminalType reports it — so
+     *  servers recognise the client and offer Mudlet-targeted content. */
+    private collectMnesVars(): MnesVar[] {
+        const charset = this.currentEncoding === 'utf-8'
+            ? 'UTF-8'
+            : this.currentEncoding.toUpperCase();
+        return [
+            { name: 'CHARSET', value: charset },
+            { name: 'CLIENT_NAME', value: 'MUDLET' },
+            { name: 'CLIENT_VERSION', value: MNES_CLIENT_VERSION },
+            { name: 'MTTS', value: String(MTTS_BITVECTOR) },
+            { name: 'TERMINAL_TYPE', value: 'XTERM-256COLOR' },
+        ];
+    }
+
+    /** Report the main output window's character grid (columns × rows) for NAWS.
+     *  The session calls this on every output-area resize. The value is stored
+     *  regardless of negotiation state (so a client created on a later connect
+     *  can be seeded with the current size); it's only sent to the server once
+     *  NAWS has been negotiated, and only when it actually changed. */
+    setWindowSize(cols: number, rows: number): void {
+        const c = Math.max(0, Math.trunc(cols));
+        const r = Math.max(0, Math.trunc(rows));
+        if (this.windowSize && this.windowSize.cols === c && this.windowSize.rows === r) return;
+        this.windowSize = { cols: c, rows: r };
+        if (this.nawsNegotiated) this.sendNawsSize();
+    }
+
+    /** Send the current window size as an `IAC SB NAWS … IAC SE` subnegotiation.
+     *  Falls back to a conventional 80×24 terminal default when the UI hasn't
+     *  reported a real size yet — better than the NAWS 0×0 "no preference"
+     *  sentinel, which some servers treat as "disable wrapping". */
+    private sendNawsSize(): void {
+        const { cols, rows } = this.windowSize ?? { cols: 80, rows: 24 };
+        this.sendRaw(encodeNaws(cols, rows));
     }
 
     /** Mudlet `sendSocket(data)`. Sends literal bytes over the socket with no

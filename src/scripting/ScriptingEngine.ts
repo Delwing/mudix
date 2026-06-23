@@ -177,6 +177,7 @@ export class ScriptingEngine {
     private gmcpNegotiated = false;
     private msdpNegotiated = false;
     private msspNegotiated = false;
+    private mnesNegotiated = false;
     private mxpNegotiated = false;
     /** True once MXP (telnet option 91) has been negotiated on the live
      *  connection. Gates in-band MXP markup parsing in processFlushBatch so
@@ -2601,6 +2602,10 @@ export class ScriptingEngine {
                     this.mxpActive = false;
                     this.emit('sysProtocolDisabled', ['MXP']);
                 }
+                if (this.mnesNegotiated) {
+                    this.mnesNegotiated = false;
+                    this.emit('sysProtocolDisabled', ['MNES']);
+                }
             }),
             // GMCP finished negotiating (server WILL → client DO). Mudlet's
             // bundled GMCP.lua re-subscribes its registered modules on this
@@ -2652,6 +2657,13 @@ export class ScriptingEngine {
             session.events.on('mssp.negotiated', () => {
                 this.msspNegotiated = true;
                 this.emit('sysProtocolEnabled', ['MSSP']);
+            }),
+            // MNES / NEW-ENVIRON finished negotiating (server DO → client WILL).
+            // Mirror the GMCP/MSDP/MSSP pair so scripts can hook
+            // sysProtocolEnabled('MNES').
+            session.events.on('mnes.negotiated', () => {
+                this.mnesNegotiated = true;
+                this.emit('sysProtocolEnabled', ['MNES']);
             }),
             // MXP finished negotiating (telnet option 91). Flip on in-band markup
             // parsing and mirror the GMCP/MSDP/MSSP pair so scripts can hook
