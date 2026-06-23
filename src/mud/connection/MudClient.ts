@@ -787,7 +787,7 @@ export class MudClient {
         // recognize us and offer Mudlet-targeted GMCP/GUI packages this client consumes —
         // and so MUDs that key off known client names (e.g. Discworld's `term network`,
         // which otherwise prints `Unknown terminal type ...`) negotiate cleanly.
-        const cycle = ['MUDLET', 'XTERM-256COLOR', `MTTS ${MTTS_BITVECTOR}`];
+        const cycle = ['MUDIX', 'XTERM-256COLOR', `MTTS ${MTTS_BITVECTOR}`];
         const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
         if (this.ttypeStep < cycle.length - 1) this.ttypeStep++;
         this.sendRaw(GMCP_IAC + GMCP_SB + OPT_TTYPE + TTYPE_IS + value + GMCP_IAC + GMCP_SE);
