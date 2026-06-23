@@ -304,6 +304,10 @@
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
     box-sizing: border-box;
+    /* Safety net: the inline `height` comes from a user-dragged, persisted
+       value with no upper bound. Cap it so a stale/oversized metaHeight can
+       never eat the whole pane and hide the code editor below it. */
+    max-height: calc(100% - 200px);
 }
 
 .script-editor__meta-resize {
@@ -1091,6 +1095,19 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
+}
+
+/* Cap the visible pattern rows (~4) and scroll the rest so a trigger with
+   many patterns can't push the form bottom out of the (overflow:hidden) pane.
+   The "+ Add pattern" button lives outside this and stays visible. */
+.script-editor__pattern-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 116px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
 }
 
 .script-editor__pattern-row {

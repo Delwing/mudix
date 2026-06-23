@@ -1405,6 +1405,12 @@ html, body, #root {
     user-select: none;
 }
 
+/* The z-level dropdown reuses the area-dropdown styling but its labels are
+   short ("Z 0"), so override the area list's wide min-width. */
+.map-level-dropdown .map-area-dropdown-list {
+    min-width: 60px;
+}
+
 .map-canvas-container {
     flex: 1;
     min-height: 0;

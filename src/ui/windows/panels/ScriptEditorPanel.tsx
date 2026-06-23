@@ -1306,8 +1306,12 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
         e.preventDefault();
         const startY = e.clientY;
         const startHeight = metaRef.current?.getBoundingClientRect().height ?? 100;
+        // Cap the drag so the meta can't grow past the pane and bury the code
+        // editor (leave ≥200px for the editor/log/actions below it).
+        const paneHeight = metaRef.current?.parentElement?.getBoundingClientRect().height ?? 600;
+        const maxHeight = Math.max(60, paneHeight - 200);
         const onMove = (ev: MouseEvent) => {
-            setMetaHeight(Math.max(32, startHeight + ev.clientY - startY));
+            setMetaHeight(Math.min(maxHeight, Math.max(32, startHeight + ev.clientY - startY)));
         };
         const onUp = () => {
             document.removeEventListener('mousemove', onMove);
@@ -1317,6 +1321,21 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
     }, [onSplitsChange]);
+
+    // One-time repair on mount: an earlier build let the meta-resize drag
+    // persist an unbounded height. A stale oversized value buries the code
+    // editor (the meta eats the whole pane), so if we loaded one, drop back to
+    // content-sized (null) and clear it from storage.
+    useEffect(() => {
+        const pane = metaRef.current?.parentElement;
+        if (!pane || metaHeight === null) return;
+        const max = Math.max(60, pane.getBoundingClientRect().height - 200);
+        if (metaHeight > max) {
+            setMetaHeight(null);
+            onSplitsChange?.(listWidthRef.current, null);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const createItem = useCallback((asGroup: boolean, parentId: string | null) => {
         if (parentId) {
@@ -1909,6 +1928,7 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
                                 <div className="script-editor__meta-row script-editor__meta-row--col">
                                     <span className="script-editor__field-label">Patterns</span>
                                     <div className="script-editor__pattern-list">
+                                        <div className="script-editor__pattern-rows">
                                         {editPatterns.map((p, i) => {
                                             const [colorFg, colorBg] = p.type === 'colorTrigger' ? parseColorPattern(p.text) : [-1, -1];
                                             const setColor = (fg: number, bg: number) => {
@@ -1973,6 +1993,7 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
                                             </div>
                                             );
                                         })}
+                                        </div>
                                         <button
                                             type="button"
                                             className="script-editor__pattern-add"

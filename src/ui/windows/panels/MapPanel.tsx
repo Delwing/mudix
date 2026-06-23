@@ -91,6 +91,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     // sceneUnchanged guard would otherwise skip the redraw.
     const lastHiddenVersionRef = useRef<number>(0);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const levelDropdownRef = useRef<HTMLDivElement>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [status, setStatus] = useState<MapStatus>('loading');
@@ -100,6 +101,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const [levels, setLevels] = useState<number[]>([]);
     const [currentLevel, setCurrentLevel] = useState<number>(0);
     const [dropdownOpen, setDropdownOpen] = useState(false);
+    const [levelDropdownOpen, setLevelDropdownOpen] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [contextMenu, setContextMenu] = useState<{
         x: number;
@@ -650,6 +652,16 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         return () => document.removeEventListener('mousedown', onDown);
     }, [dropdownOpen]);
 
+    // Close z-level dropdown on outside click
+    useEffect(() => {
+        if (!levelDropdownOpen) return;
+        const onDown = (e: MouseEvent) => {
+            if (!levelDropdownRef.current?.contains(e.target as Node)) setLevelDropdownOpen(false);
+        };
+        document.addEventListener('mousedown', onDown);
+        return () => document.removeEventListener('mousedown', onDown);
+    }, [levelDropdownOpen]);
+
     // Close hamburger menu on outside click
     useEffect(() => {
         if (!menuOpen) return;
@@ -1080,8 +1092,24 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         recomputeMapInfos();
     }, [getSavedView, connectionId, manager, syncPositionMarker, recomputeMapInfos]);
 
+    // Switch to a specific z-level in the current area (direct selection from
+    // the level dropdown). Mirrors the level-stepper path but jumps to an
+    // absolute level rather than stepping. Uses the area ref + an explicit
+    // null check so area id 0 isn't treated as "no area".
+    const selectLevel = useCallback((level: number) => {
+        const renderer = rendererRef.current;
+        const area = currentAreaRef.current;
+        if (!renderer || area == null) return;
+        setCurrentLevel(level);
+        currentLevelRef.current = level;
+        setLevelDropdownOpen(false);
+        renderer.drawArea(area, level);
+        syncPositionMarker(area, level);
+        recomputeMapInfos();
+    }, [syncPositionMarker, recomputeMapInfos]);
+
     const handleLevelChange = useCallback((delta: number) => {
-        if (!rendererRef.current || !currentArea) return;
+        if (!rendererRef.current || currentArea == null) return;
         const idx = levels.indexOf(currentLevel);
         const nextIdx = idx + delta;
         if (nextIdx < 0 || nextIdx >= levels.length) return;
@@ -1150,7 +1178,31 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                             disabled={levels.indexOf(currentLevel) >= levels.length - 1}
                             title="Level up"
                         >▲</button>
-                        <span className="map-level-display">{currentLevel}</span>
+                        <div className="map-area-dropdown map-level-dropdown" ref={levelDropdownRef}>
+                            <button
+                                className="map-area-dropdown-btn"
+                                onClick={() => setLevelDropdownOpen(v => !v)}
+                                title="Z-level"
+                            >
+                                <span className="map-area-dropdown-label">{`Z ${currentLevel}`}</span>
+                                <svg width="8" height="5" viewBox="0 0 8 5" fill="none">
+                                    <path d="M0 0l4 5 4-5z" fill="currentColor" />
+                                </svg>
+                            </button>
+                            {levelDropdownOpen && (
+                                <div className="map-area-dropdown-list">
+                                    {[...levels].sort((a, b) => b - a).map(l => (
+                                        <div
+                                            key={l}
+                                            className={`map-area-dropdown-item${l === currentLevel ? ' map-area-dropdown-item--active' : ''}`}
+                                            onMouseDown={() => selectLevel(l)}
+                                        >
+                                            {`Z ${l}`}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                         <button
                             className="btn btn--secondary btn--sm"
                             onClick={() => handleLevelChange(-1)}
