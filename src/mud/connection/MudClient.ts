@@ -1003,7 +1003,7 @@ export class MudClient {
             utf8: this.currentEncoding === 'utf-8',
             tls: this.secureTransport,
         });
-        const cycle = ['MUDIX', 'XTERM-256COLOR', `MTTS ${mtts}`];
+        const cycle = ['MUDIX', 'ANSI-TRUECOLOR', `MTTS ${mtts}`];
         const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
         if (this.ttypeStep < cycle.length - 1) this.ttypeStep++;
         this.sendRaw(GMCP_IAC + GMCP_SB + OPT_TTYPE + TTYPE_IS + value + GMCP_IAC + GMCP_SE);

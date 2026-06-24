@@ -9,6 +9,8 @@ import {useAppStore} from '../storage';
 import {loadProfileData, saveProfileData} from '../storage/profileVfsData';
 import type {BufferSegment, FormatColor, FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer, computeTrailingState} from '../mud/text/FormatState';
+import {HyperlinkPresetRegistry} from '../mud/text/hyperlinkConfig';
+import {HyperlinkVisibilityController} from '../mud/text/hyperlinkVisibility';
 import type {MspCommand, MxpLink} from '../mud/protocol';
 import {MxpParser, splitMxpResultLines} from '../mud/protocol';
 import {ScriptingAPI, type InstallOutcome} from './ScriptingAPI';
@@ -187,12 +189,22 @@ export class ScriptingEngine {
      *  in-band-detected server's inbound MXP isn't confirmed, so we'd otherwise
      *  spam it with text it reads as invalid commands. */
     private mxpHandshakeEnabled = false;
+    /** Per-session OSC 8 preset registry (`preset:NAME` definitions). Shared
+     *  between the MXP parser and the plain-ANSI render path so a preset defined
+     *  in either mode resolves in both. */
+    private readonly osc8Presets = new HyperlinkPresetRegistry();
+    /** Drives expire-on-event OSC 8 visibility links (conceal on the next user
+     *  input / prompt / output after they're clicked). Scans the live output. */
+    private readonly visibility = new HyperlinkVisibilityController(
+        () => (typeof document !== 'undefined' ? document : null),
+    );
     /** Per-session MXP parser. The send callback carries the in-band
      *  `<SUPPORTS>`/`<VERSION>` handshake replies (gated on
      *  `mxpHandshakeEnabled`); `api` is read lazily at call time so this
      *  initializer is safe before the constructor body runs. */
     private readonly mxp = new MxpParser({
         send: (raw) => { if (this.mxpHandshakeEnabled) this.api.send(raw, false); },
+        presets: this.osc8Presets,
     });
     private vfs: ProfileVFS | null = null;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
@@ -2420,7 +2432,7 @@ export class ScriptingEngine {
                             });
                         }
                     } else {
-                        const buffer = new AnsiAwareBuffer(line, carryState);
+                        const buffer = new AnsiAwareBuffer(line, carryState, this.osc8Presets);
                         this.wireOsc8Links(buffer);
                         // The buffer's text is the line with every escape
                         // sequence (SGR, OSC 8 links, cursor moves, …) already
@@ -2495,7 +2507,7 @@ export class ScriptingEngine {
      * `wireMxpLinks` so an MXP `<SEND>` overlaid on the same text wins.
      */
     private wireOsc8Links(buffer: AnsiAwareBuffer): void {
-        buffer.bindUrlHyperlinks((url) => this.api.createOsc8Hyperlink(url));
+        buffer.bindUrlHyperlinks((url, link) => this.api.createOsc8Hyperlink(url, link));
     }
 
     /**
@@ -2577,6 +2589,14 @@ export class ScriptingEngine {
         this.unsubs.push(
             session.events.on('prompt', () => {
                 this.promptPending = true;
+                this.visibility.onPrompt();
+            }),
+            // OSC 8 visibility expiry: a user command (echo) is "input", any
+            // other non-error line is "output". Concealment of armed links is
+            // handled by the controller scanning the live output.
+            session.events.on('message', (_text, type) => {
+                if (type === 'echo') this.visibility.onInput();
+                else if (type !== 'error') this.visibility.onOutput();
             }),
             // Mudlet `sysTelnetEvent(type, option, message)` — fired by
             // MudClient for any unsupported telnet IAC sequence.

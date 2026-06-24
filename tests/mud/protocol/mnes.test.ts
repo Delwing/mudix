@@ -155,11 +155,18 @@ describe('buildNewEnvironVars', () => {
     // MTTS drops the UTF-8 and SSL bits when neither is active: ANSI(1) +
     // 256(8) + OSC_COLOR_PALETTE(32) + TRUECOLOR(256) = 297.
     expect(byName.get('MTTS')).toBe('297');
-    // OSC 8 sub-features not yet implemented are still reported honestly as "0".
-    expect(byName.get('OSC_HYPERLINKS_MENU')).toBe('0');
-    expect(byName.get('OSC_HYPERLINKS_SPOILER')).toBe('0');
-    // Sub-features that already work read "1".
+    // Implemented sub-features (Phases A–D) read "1".
+    expect(byName.get('OSC_HYPERLINKS_VISIBILITY')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS_SELECTION')).toBe('1');
     expect(byName.get('OSC_HYPERLINKS_SEND')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS_STYLE_BASIC')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS_STYLE_STATES')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS_TOOLTIP')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS_DISABLED')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS_COMPACT')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS_PRESETS')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS_MENU')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS_SPOILER')).toBe('1');
   });
 });
 

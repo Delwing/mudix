@@ -1,4 +1,5 @@
 import { AnsiAwareBuffer } from "../../mud/text/FormatState";
+import { installLinkNavigation } from "./linkNavigation";
 
 // Buffers are stored keyed by their wrapper element. The WeakMap means the
 // AnsiAwareBuffer is garbage-collected automatically when its element is removed
@@ -594,6 +595,12 @@ export function setupOutputRenderer(
         cursorEl = null;
         deletedPrev = null;
     }
+
+    // Ctrl+]/Ctrl+[ to jump between OSC 8 links in this output. Compose its
+    // removal into teardown alongside the source subscriptions.
+    const removeLinkNav = installLinkNavigation(outputWrapper);
+    const subscriptionsTeardown = teardownSubscriptions;
+    teardownSubscriptions = () => { subscriptionsTeardown(); removeLinkNav(); };
 
     return {
         teardown: teardownSubscriptions,

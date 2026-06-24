@@ -135,7 +135,11 @@ export interface NewEnvironState {
 /** The five core variables MNES standardises (https://tintin.mudhalla.net/protocols/mnes/).
  *  Plain NEW-ENVIRON reports these too, plus the extended capability set below. */
 const CLIENT_NAME = "MUDIX";
-const TERMINAL_TYPE = "XTERM-256COLOR";
+// Reported terminal type. "ANSI-TRUECOLOR" (matching Mudlet) describes mudix's
+// real capability — ANSI with 24-bit colour — better than an xterm emulation
+// claim; 256-colour/truecolour support is also signalled via MTTS + the
+// 256_COLORS/TRUECOLOR vars, so capability detection doesn't rely on this name.
+const TERMINAL_TYPE = "ANSI-TRUECOLOR";
 /** Client version reported as the CLIENT_VERSION variable. Exported because the
  *  GMCP `Core.Hello` handshake reports the same version — one source of truth. */
 export const CLIENT_VERSION = "0.1.0";
@@ -190,19 +194,16 @@ const OSC_HYPERLINK_CAPS: ReadonlyArray<readonly [string, string]> = [
     ["OSC_HYPERLINKS", "1"],            // base parsing + clickable links
     ["OSC_HYPERLINKS_SEND", "1"],       // send: scheme
     ["OSC_HYPERLINKS_PROMPT", "1"],     // prompt: scheme
-    // STYLE_BASIC stays "0" until Phase C actually applies config.style — a
-    // server reads "1" as "send me config={style:…}", which we'd otherwise
-    // leak into the command. Don't advertise what we don't yet render.
-    ["OSC_HYPERLINKS_STYLE_BASIC", "0"],
-    ["OSC_HYPERLINKS_STYLE_STATES", "0"],
-    ["OSC_HYPERLINKS_TOOLTIP", "0"],
-    ["OSC_HYPERLINKS_MENU", "0"],
-    ["OSC_HYPERLINKS_COMPACT", "0"],
-    ["OSC_HYPERLINKS_PRESETS", "0"],
-    ["OSC_HYPERLINKS_VISIBILITY", "0"],
-    ["OSC_HYPERLINKS_SELECTION", "0"],
-    ["OSC_HYPERLINKS_SPOILER", "0"],
-    ["OSC_HYPERLINKS_DISABLED", "0"],
+    ["OSC_HYPERLINKS_STYLE_BASIC", "1"],// config.style base attributes
+    ["OSC_HYPERLINKS_STYLE_STATES", "1"],// :hover/:active/:focus state styling
+    ["OSC_HYPERLINKS_TOOLTIP", "1"],    // config.tooltip
+    ["OSC_HYPERLINKS_COMPACT", "1"],    // compact shorthand keys
+    ["OSC_HYPERLINKS_PRESETS", "1"],    // preset:NAME definitions + ?preset=
+    ["OSC_HYPERLINKS_DISABLED", "1"],   // config.disabled (non-clickable)
+    ["OSC_HYPERLINKS_MENU", "1"],       // right-click menu
+    ["OSC_HYPERLINKS_SPOILER", "1"],    // click-to-reveal
+    ["OSC_HYPERLINKS_SELECTION", "1"],  // selection groups (radio/checkbox) + visited
+    ["OSC_HYPERLINKS_VISIBILITY", "1"], // timed conceal/reveal + expire on input/prompt/output
 ];
 
 /**

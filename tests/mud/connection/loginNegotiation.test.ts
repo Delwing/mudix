@@ -118,7 +118,10 @@ describe('login-time telnet negotiation replies', () => {
     expect(out).toContain(NEW_ENVIRON_IS + NEW_ENVIRON_VAR + 'CHARSET');
     expect(out).toContain(NEW_ENVIRON_VAR + 'CLIENT_NAME' + '\x01' + 'MUDIX');
     // MNES restricts to the five core vars — no extended capabilities, no USERVAR.
-    expect(out).not.toContain('ANSI');
+    // (Check unambiguous extended-only vars; "ANSI" now appears inside the
+    // TERMINAL_TYPE value "ANSI-TRUECOLOR".)
+    expect(out).not.toContain('256_COLORS');
+    expect(out).not.toContain('OSC_HYPERLINKS');
     expect(out).not.toContain(NEW_ENVIRON_USERVAR);
   });
 
@@ -143,7 +146,8 @@ describe('login-time telnet negotiation replies', () => {
     sock.deliver(sendRequest);
     const out = sentText(sock);
     expect(out).toContain(NEW_ENVIRON_VAR + 'CHARSET');
-    expect(out).not.toContain('ANSI'); // restricted to the MNES core set
+    expect(out).not.toContain('256_COLORS'); // restricted to the MNES core set
+    expect(out).not.toContain('OSC_HYPERLINKS');
   });
 
   it('reports TLS=1 in NEW-ENVIRON mode over a direct wss:// connection', () => {

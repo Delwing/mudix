@@ -11,6 +11,8 @@ import { userWindowQssToScopedCss, cssEscape } from '../ui/labels/qtCss';
 import { AnsiAwareBuffer, type FormatColor, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
 import { classifyHyperlinkUri } from '../mud/text/ansiEscapes';
 import { extractQuery } from '../mud/text/hyperlinkConfig';
+import { OscLinkManager } from '../mud/text/oscLinkManager';
+import { openOsc8Menu } from '../ui/output/osc8Menu';
 import { namedColorToState } from '../mud/text/colorParsers';
 import { colorCodes } from '../mud/text/colors';
 import { Console } from '../mud/text/Console';
@@ -446,6 +448,8 @@ export interface InstallOutcome {
 }
 
 export class ScriptingAPI {
+    /** OSC 8 selection-group + visited-link state for this connection. */
+    private readonly oscLinks = new OscLinkManager();
     readonly windows: ScriptingWindowsAPI;
     readonly labels: ScriptingLabelsAPI;
     readonly cmdLines: CommandLineManager;
@@ -1653,6 +1657,17 @@ export class ScriptingAPI {
         };
     }
 
+    /** Execute an OSC 8 link URI — a primary action or a menu item. The scheme
+     *  decides the behaviour (send / prompt / open URL); anything else is a
+     *  no-op (it was already rejected at parse time). */
+    private runHyperlinkUri(uri: string): void {
+        const action = classifyHyperlinkUri(uri);
+        if (!action) return;
+        if (action.kind === 'send') this.send(action.command);
+        else if (action.kind === 'prompt') this.printCmdLine(action.command);
+        else this.openUrl(action.url);
+    }
+
     /**
      * Build a {@link FormatHyperlink} for an OSC 8 link URI. The scheme decides
      * the behaviour, mirroring Mudlet: `send:` fires the command immediately,
@@ -1660,24 +1675,62 @@ export class ScriptingAPI {
      * open externally. Returns `undefined` for a disallowed scheme so the link
      * is dropped (the text renders without a click handler).
      */
-    createOsc8Hyperlink(uri: string): FormatHyperlink | undefined {
+    createOsc8Hyperlink(uri: string, link?: FormatHyperlink): FormatHyperlink | undefined {
         // Strip the OSC 8 extension query (config=/preset=) before deriving the
         // command, so a `send:cmd?config={…}` link never leaks JSON into the MUD
         // command. send:/prompt: drop their whole query; web links keep their
-        // user params. (Rendering the config is Phase C; this only cleans the
-        // command so bare links stay safe meanwhile.)
+        // user params. (Links resolved at parse time arrive already-clean; this
+        // also defends against any raw URI reaching here.)
         const { base, userPairs } = extractQuery(uri);
         const isWeb = /^(https?|ftp):/i.test(base);
         const command = isWeb && userPairs.length > 0 ? `${base}?${userPairs.join('&')}` : base;
         const action = classifyHyperlinkUri(command);
         if (!action) return undefined;
-        if (action.kind === 'send') {
-            return { onClick: () => { this.send(action.command); }, title: action.command, url: uri };
-        }
-        if (action.kind === 'prompt') {
-            return { onClick: () => { this.printCmdLine(action.command); }, title: action.command, url: uri };
-        }
-        return { onClick: () => { this.openUrl(action.url); }, title: action.url, url: uri };
+
+        const config = link?.config;
+        const disabled = config?.disabled === true;
+        const tooltip = config?.tooltip;
+        // A non-empty menu opens on right-click; a disabled link still shows it.
+        const menu = config?.menu;
+        const menuHandler = menu && menu.length > 0
+            ? (ev: MouseEvent) => openOsc8Menu(ev, menu, config?.title, (uri) => this.runHyperlinkUri(uri))
+            : undefined;
+        // Carry the parsed config + id onto the produced link so the renderer can
+        // apply styling/states/tooltip; a disabled link has no click handler
+        // (its activation is blocked) but still shows its tooltip and styling.
+        const withConfig = (hl: FormatHyperlink): FormatHyperlink => {
+            hl.osc8 = true; // OSC 8 links default to no underline (Mudlet convention)
+            if (config) hl.config = config;
+            if (link?.linkId) hl.linkId = link.linkId;
+            if (menuHandler) hl.onContextMenu = menuHandler;
+            return hl;
+        };
+
+        const sel = config?.selection;
+        const defaultTitle = action.kind === 'url' ? action.url : action.command;
+        // The primary activation: toggle selection (radio/checkbox), record the
+        // visit, run the scheme action (a selection send carries &selected=<bool>
+        // so the server learns the new state), then restyle the live links so
+        // every run of the group reflects the change.
+        const activate = (ev?: MouseEvent): void => {
+            let selectedSuffix = '';
+            if (sel?.group !== undefined && sel.value !== undefined) {
+                const now = this.oscLinks.toggleSelection(sel.group, sel.value, sel.exclusive ?? true);
+                if (action.kind === 'send') selectedSuffix = `&selected=${now}`;
+            }
+            this.oscLinks.markVisited(command);
+            if (action.kind === 'send') this.send(action.command + selectedSuffix);
+            else if (action.kind === 'prompt') this.printCmdLine(action.command);
+            else this.openUrl(action.url);
+            const doc = (ev?.currentTarget as HTMLElement | undefined)?.ownerDocument
+                ?? (typeof document !== 'undefined' ? document : null);
+            this.oscLinks.restyle(doc);
+        };
+        return withConfig({
+            onClick: disabled ? undefined : activate,
+            title: tooltip ?? defaultTitle,
+            url: command,
+        });
     }
 
     echoPopup(text: string, cmds: string[], hints: string[], win?: string): void {

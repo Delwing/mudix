@@ -22,9 +22,10 @@
 //    while any enclosed text still renders inline.
 
 import { FormatState, applyOscPaletteOps } from "../text/FormatState";
-import type { BufferSegment, FormatColor, FormatStateSnapshot } from "../text/FormatState";
+import type { BufferSegment, FormatColor, FormatStateSnapshot, FormatHyperlink } from "../text/FormatState";
 import { mxpColor } from "../text/colorParsers";
 import { scanEscape, parseOsc8Payload, classifyHyperlinkUri, parseOscColorPalette } from "../text/ansiEscapes";
+import { parseOsc8Uri, HyperlinkPresetRegistry } from "../text/hyperlinkConfig";
 
 /** A clickable region the parser found, expressed as offsets into `plain`. The
  *  engine builds the actual `FormatHyperlink` (with session/URL behaviour). */
@@ -149,6 +150,9 @@ export class MxpParser {
     private mxpColorStack: { fg: FormatColor | null; bg: FormatColor | null }[] = [];
     /** Partial tag/entity held from the end of the previous line. */
     private pendingTag = "";
+    /** OSC 8 preset definitions seen this session (shared with the ANSI path
+     *  when the engine supplies a registry). */
+    private presets: HyperlinkPresetRegistry;
 
     // --- per-line scratch (reset at the start of parseLine) ---
     private fmt: FormatState = new FormatState();
@@ -157,8 +161,9 @@ export class MxpParser {
     private plain = "";
     private links: MxpLink[] = [];
 
-    constructor(opts: { send: (raw: string) => void }) {
+    constructor(opts: { send: (raw: string) => void; presets?: HyperlinkPresetRegistry }) {
         this.opts = opts;
+        this.presets = opts.presets ?? new HyperlinkPresetRegistry();
     }
 
     /** Clear all cross-line state. Called on (re)connect so a new session starts
@@ -177,6 +182,7 @@ export class MxpParser {
         this.run = "";
         this.plain = "";
         this.links = [];
+        this.presets.clear();
     }
 
     /** Parse one raw line (post telnet-strip, post UTF-8 decode), which may carry
@@ -267,8 +273,15 @@ export class MxpParser {
                         this.flushRun();
                         if (link.uri === "") {
                             this.fmt.hyperlink = undefined;
-                        } else if (classifyHyperlinkUri(link.uri)) {
-                            this.fmt.hyperlink = { url: link.uri };
+                        } else {
+                            const result = parseOsc8Uri(link.uri, this.presets);
+                            if (result?.kind === "link" && classifyHyperlinkUri(result.command)) {
+                                const hl: FormatHyperlink = { url: result.command, osc8: true };
+                                if (Object.keys(result.config).length > 0) hl.config = result.config;
+                                if (link.id) hl.linkId = link.id;
+                                this.fmt.hyperlink = hl;
+                            }
+                            // preset definition / disallowed scheme: leave as-is.
                         }
                     } else {
                         // OSC 4/104 colour palette redefinition (no text/state

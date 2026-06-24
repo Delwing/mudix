@@ -202,7 +202,9 @@ export interface ProtocolSettings {
     /** Telnet NEW-ENVIRON — Client Variables Standard (option 39, RFC 1572). When
      *  enabled (and MNES off), the client reports the five core variables plus an
      *  extended capability set (ANSI, 256_COLORS, TRUECOLOR, UTF-8, TLS,
-     *  WORD_WRAP, …) framed as USERVAR. Off by default. */
+     *  WORD_WRAP, OSC_COLOR_PALETTE, OSC_HYPERLINKS_*, …) framed as USERVAR.
+     *  On by default — this is the block servers' baudtests show, and it's how
+     *  Mudlet reports itself. */
     newEnviron?: boolean;
     /** Telnet NAWS / Negotiate About Window Size (option 31). When enabled, the
      *  client offers NAWS and reports the main output area's character grid
@@ -236,7 +238,7 @@ export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
     mccp: true,
     mxp: true,
     mnes: false,
-    newEnviron: false,
+    newEnviron: true,
     naws: true,
     wsTelnetSubprotocol: false,
 };

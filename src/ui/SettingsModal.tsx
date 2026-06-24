@@ -492,8 +492,10 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         MNES but reports an extended capability set in addition to the
                                         five core variables — <code>ANSI</code>, <code>256_COLORS</code>,
                                         <code>TRUECOLOR</code>, <code>UTF-8</code>, <code>TLS</code>,
-                                        <code>WORD_WRAP</code> and more — so servers can tailor output
-                                        to the client. Off by default. When MNES is also on, MNES wins.
+                                        <code>WORD_WRAP</code>, <code>OSC_COLOR_PALETTE</code>,
+                                        the <code>OSC_HYPERLINKS_*</code> set and more — so servers can
+                                        tailor output to the client. On by default. When MNES is also
+                                        on, MNES wins.
                                     </HelpTip>
                                 </span>
                                 <Toggle

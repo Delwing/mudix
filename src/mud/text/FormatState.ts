@@ -7,6 +7,13 @@ import {
     parseOscColorPalette,
     type OscPaletteOp,
 } from "./ansiEscapes";
+import {
+    parseOsc8Uri,
+    HyperlinkPresetRegistry,
+    type HyperlinkConfig,
+    type LinkStateStyle,
+} from "./hyperlinkConfig";
+import { applyVisibility } from "./hyperlinkVisibility";
 import { appendCells, cellsToHtml } from "./cellRender";
 
 /** Apply OSC 4/104 palette operations to the global colour tables. Palette
@@ -32,8 +39,18 @@ export interface FormatHyperlink {
      * Raw link target recorded by the low-level ANSI parser for OSC 8 links.
      * The parser has no access to the scripting API, so it stores the URI here
      * and the engine later wires the click behaviour via `bindUrlHyperlinks`.
+     * For OSC 8 links this is the *cleaned* command (extension query stripped).
      */
     url?: string;
+    /** Parsed Mudlet OSC 8 extension config (styling, states, tooltip, menu,
+     *  spoiler, disabled, visibility, selection), resolved at parse time. */
+    config?: HyperlinkConfig;
+    /** OSC 8 `id=` parameter — groups split runs of one logical link so hover
+     *  can highlight them together. */
+    linkId?: string;
+    /** True for OSC 8 links. They default to *no* underline (Mudlet's OSC 8
+     *  convention); MXP/scripted links default to underlined. */
+    osc8?: boolean;
 }
 
 export interface IndexedColor {
@@ -395,9 +412,31 @@ function parseSgrCodes(sequence: string): number[] {
         .map(num => (Number.isNaN(num) ? 0 : num));
 }
 
-function parseAnsiSegments(text: string, baseState?: FormatStateSnapshot): BufferSegment[] {
+/** True when a parsed OSC 8 config carries any field worth keeping (so a bare
+ *  `send:look` link doesn't lug an empty object around). */
+function hasConfig(config: HyperlinkConfig): boolean {
+    return Object.keys(config).length > 0;
+}
+
+/** Merge a per-state link style over the link's base style (state fields win).
+ *  Returns undefined when neither is present so callers fall back to plain SGR. */
+function mergeLinkStyle(base?: LinkStateStyle, overlay?: LinkStateStyle): LinkStateStyle | undefined {
+    if (!overlay) return base;
+    if (!base) return overlay;
+    return { ...base, ...overlay };
+}
+
+function parseAnsiSegments(
+    text: string,
+    baseState?: FormatStateSnapshot,
+    presets?: HyperlinkPresetRegistry,
+): BufferSegment[] {
     const segments: BufferSegment[] = [];
     const state = new FormatState(baseState);
+    // A bare parse (e.g. script-echoed text) still resolves config and presets
+    // within this one string via an ephemeral registry; cross-line presets need
+    // the session registry passed in.
+    const registry = presets ?? new HyperlinkPresetRegistry();
     let buffer = "";
     const flush = (): void => {
         if (!buffer) return;
@@ -420,15 +459,24 @@ function parseAnsiSegments(text: string, baseState?: FormatStateSnapshot): Buffe
                 const link = parseOsc8Payload(esc.oscPayload);
                 if (link) {
                     // OSC 8: a non-empty URI opens a hyperlink over the text
-                    // that follows; an empty URI closes it. The raw URI is kept
-                    // on the snapshot (the engine wires the click behaviour
-                    // later — see bindUrlHyperlinks); a disallowed scheme is
-                    // ignored so the text stays plain rather than clickable.
+                    // that follows; an empty URI closes it. The URI is resolved
+                    // through the Mudlet extension parser — preset definitions
+                    // register (and render nothing), normal links keep their
+                    // cleaned command + parsed config on the snapshot (the engine
+                    // wires click behaviour later via bindUrlHyperlinks).
                     flush();
                     if (link.uri === "") {
                         state.hyperlink = undefined;
-                    } else if (classifyHyperlinkUri(link.uri)) {
-                        state.hyperlink = { url: link.uri };
+                    } else {
+                        const result = parseOsc8Uri(link.uri, registry);
+                        if (result?.kind === "link" && classifyHyperlinkUri(result.command)) {
+                            const hl: FormatHyperlink = { url: result.command, osc8: true };
+                            if (hasConfig(result.config)) hl.config = result.config;
+                            if (link.id) hl.linkId = link.id;
+                            state.hyperlink = hl;
+                        }
+                        // preset definition / disallowed scheme: leave the
+                        // current hyperlink state untouched (text stays plain).
                     }
                 } else {
                     // OSC 4/104: server-driven colour palette redefinition. No
@@ -461,9 +509,13 @@ export class AnsiAwareBuffer {
     private _textCache: string | null = null;
     private _renderContainer: HTMLElement | null = null;
 
-    constructor(initial?: string | BufferSegment[], state?: FormatStateSnapshot) {
+    constructor(
+        initial?: string | BufferSegment[],
+        state?: FormatStateSnapshot,
+        presets?: HyperlinkPresetRegistry,
+    ) {
         if (typeof initial === "string") {
-            this.segments = parseAnsiSegments(initial, state);
+            this.segments = parseAnsiSegments(initial, state, presets);
             this.normalizeSegments();
         } else if (Array.isArray(initial)) {
             this.segments = initial.map(segment => ({
@@ -792,11 +844,11 @@ export class AnsiAwareBuffer {
      * (or `undefined` to drop the link). Segments that already have a handler —
      * e.g. an MXP `<SEND>` link overlaid on the same range — are left alone.
      */
-    bindUrlHyperlinks(factory: (url: string) => FormatHyperlink | undefined): this {
+    bindUrlHyperlinks(factory: (url: string, link: FormatHyperlink) => FormatHyperlink | undefined): this {
         for (const seg of this.segments) {
             const link = seg.state?.hyperlink;
             if (!link?.url || link.onClick) continue;
-            const hl = factory(link.url);
+            const hl = factory(link.url, link);
             const base = cloneState(seg.state) ?? {};
             base.hyperlink = hl ? { ...hl } : undefined;
             seg.state = base;
@@ -879,6 +931,50 @@ export class AnsiAwareBuffer {
         return cloneState(this.segments[this.segments.length - 1].state);
     }
 
+    /**
+     * Build the CSS visual declarations (colour, weight, decorations) for a
+     * segment. When `overlay` is given (an OSC 8 link style for a state), its set
+     * fields win over the segment's own SGR attributes — that's how a link's
+     * configured colour/decoration paints over the underlying run. With no
+     * overlay this reproduces the plain SGR rendering exactly.
+     */
+    private visualDecls(state: FormatStateSnapshot, overlay?: LinkStateStyle): string[] {
+        const styles: string[] = [];
+        const fgSrc = state.inverse ? state.background : state.foreground;
+        const bgSrc = state.inverse ? state.foreground : state.background;
+        const fg = overlay?.foreground ?? fgSrc;
+        const bg = overlay?.background ?? bgSrc;
+        if (fg) styles.push(`color: ${this.colorToHex(fg)}`);
+        // Reverse video with a default-coloured source: the swap yields no
+        // explicit colour, so paint the console default of the opposite role
+        // (text→bg, bg→text) — otherwise \e[7m on default colours is invisible.
+        else if (state.inverse && overlay?.foreground === undefined) styles.push("color: var(--console-bg)");
+        if (bg) styles.push(`background-color: ${this.colorToHex(bg)}`);
+        else if (state.inverse && overlay?.background === undefined) styles.push("background-color: var(--console-text)");
+        if (overlay?.bold ?? state.bold) styles.push("font-weight: bold");
+        if (overlay?.italic ?? state.italic) styles.push("font-style: italic");
+
+        const decorations: string[] = [];
+        const underline = overlay?.underline ?? state.underline;
+        if (underline) decorations.push("underline");
+        if (overlay?.strikethrough ?? state.strikethrough) decorations.push("line-through");
+        if (overlay?.overline ?? state.overline) decorations.push("overline");
+        // Non-OSC-8 hyperlinks (MXP, scripted links) default to an underline cue
+        // unless already underlined. OSC 8 links follow their style config —
+        // Mudlet's OSC 8 default is *no* underline (unlike its other links).
+        if (state.hyperlink && !state.hyperlink.osc8 && !underline) decorations.push("underline");
+        if (decorations.length > 0) {
+            styles.push(`text-decoration: ${decorations.join(" ")}`);
+            if (overlay?.underlineStyle && overlay.underlineStyle !== "solid") {
+                styles.push(`text-decoration-style: ${overlay.underlineStyle}`);
+            }
+            if (overlay?.decorationColor) {
+                styles.push(`text-decoration-color: ${this.colorToHex(overlay.decorationColor)}`);
+            }
+        }
+        return styles;
+    }
+
     toHtml(): string {
         let html = "";
 
@@ -892,37 +988,18 @@ export class AnsiAwareBuffer {
                 continue;
             }
 
-            const styles: string[] = [];
             const state = segment.state;
+            const link = state.hyperlink;
+            const styles = this.visualDecls(state, link?.config?.style);
 
-            const fg = state.inverse ? state.background : state.foreground;
-            const bg = state.inverse ? state.foreground : state.background;
-
-            if (fg) styles.push(`color: ${this.colorToHex(fg)}`);
-            if (bg) styles.push(`background-color: ${this.colorToHex(bg)}`);
-            if (state.bold) styles.push("font-weight: bold");
-            if (state.italic) styles.push("font-style: italic");
-
-            const decorations: string[] = [];
-            if (state.underline) decorations.push("underline");
-            if (state.strikethrough) decorations.push("line-through");
-            if (state.overline) decorations.push("overline");
-            // Hyperlinks get an underline cue (matching MXP links and terminal
-            // convention) unless the run already carries an explicit underline.
-            if (state.hyperlink && !state.underline) decorations.push("underline");
-            if (decorations.length > 0) styles.push(`text-decoration: ${decorations.join(" ")}`);
-
-            if (state.hyperlink) {
-                styles.push("cursor: pointer");
-                const dataAttr = ' data-output-clickable="true"';
-                if (state.hyperlink.title) {
-                    const titleAttr = ` title="${this.escapeHtml(state.hyperlink.title)}"`;
-                    const styleAttr = styles.length > 0 ? ` style="${styles.join("; ")}"` : "";
-                    html += `<span${styleAttr}${titleAttr}${dataAttr}>${escapedText}</span>`;
-                    continue;
-                }
+            if (link) {
+                const disabled = link.config?.disabled === true;
+                styles.push(`cursor: ${disabled ? "default" : "pointer"}`);
+                let attrs = ' data-output-clickable="true"';
+                if (link.linkId) attrs += ` data-link-id="${this.escapeHtml(link.linkId)}"`;
+                if (link.title) attrs += ` title="${this.escapeHtml(link.title)}"`;
                 const styleAttr = styles.length > 0 ? ` style="${styles.join("; ")}"` : "";
-                html += `<span${styleAttr}${dataAttr}>${escapedText}</span>`;
+                html += `<span${styleAttr}${attrs}>${escapedText}</span>`;
                 continue;
             }
 
@@ -935,6 +1012,11 @@ export class AnsiAwareBuffer {
 
     toDom(): DocumentFragment {
         const fragment = document.createDocumentFragment();
+        // OSC 8 links sharing an `id=` highlight together on hover. Scoped to one
+        // rendered buffer (one logical line) — the common case for split links.
+        const linkGroups = new Map<string, HTMLElement[]>();
+        const baseCssByEl = new WeakMap<HTMLElement, string>();
+        const hoverCssByEl = new WeakMap<HTMLElement, string>();
 
         for (const segment of this.segments) {
             const state = segment.state;
@@ -947,73 +1029,150 @@ export class AnsiAwareBuffer {
             const element = document.createElement('span');
             appendCells(element, segment.text);
 
-            const styles: string[] = [];
+            const link = state.hyperlink;
+            const linkStyle = link?.config?.style;
+            const states = linkStyle?.states;
+            const disabled = link?.config?.disabled === true;
 
-            const fg = state.inverse ? state.background : state.foreground;
-            const bg = state.inverse ? state.foreground : state.background;
+            // Trailing decls common to every state (cursor for links, dim vars),
+            // appended after the visual decls so a cssText swap preserves them.
+            const trailing: string[] = [];
+            if (link) trailing.push(`cursor: ${disabled ? 'default' : 'pointer'}`);
+            if (state.dim) {
+                trailing.push(`--dim-start: ${state.dim.startOpacity}`);
+                trailing.push(`--dim-end: ${state.dim.endOpacity}`);
+                trailing.push(`--dim-duration: ${state.dim.duration}ms`);
+                trailing.push(`--dim-easing: ${state.dim.easing || 'ease-in-out'}`);
+            }
+            const cssFor = (overlay?: LinkStateStyle): string =>
+                [...this.visualDecls(state, mergeLinkStyle(linkStyle, overlay)), ...trailing].join('; ');
 
-            if (fg) styles.push(`color: ${this.colorToHex(fg)}`);
-            if (bg) styles.push(`background-color: ${this.colorToHex(bg)}`);
-            if (state.bold) styles.push("font-weight: bold");
-            if (state.italic) styles.push("font-style: italic");
+            // A disabled link renders with its :disabled style applied up front.
+            const baseCss = cssFor(disabled ? states?.disabled : undefined);
+            // What actually gets applied — a spoiler starts concealed.
+            let initialCss = baseCss;
 
-            const decorations: string[] = [];
-            if (state.underline) decorations.push("underline");
-            if (state.strikethrough) decorations.push("line-through");
-            if (state.overline) decorations.push("overline");
-            // Hyperlinks get an underline cue (matching MXP links and terminal
-            // convention) unless the run already carries an explicit underline.
-            if (state.hyperlink && !state.underline) decorations.push("underline");
-            if (decorations.length > 0) styles.push(`text-decoration: ${decorations.join(" ")}`);
-
-            if (state.hyperlink) {
-                styles.push("cursor: pointer");
-
-                element.dataset.outputClickable = "true";
-
-                if (state.hyperlink.title) {
-                    element.title = state.hyperlink.title;
+            if (link) {
+                element.dataset.outputClickable = 'true';
+                // Focusable for Ctrl+]/Ctrl+[ link navigation, but out of the Tab
+                // order (-1); the focus/spoiler paths below may promote it to 0.
+                element.tabIndex = -1;
+                if (link.title) element.title = link.title;
+                if (link.linkId) {
+                    element.dataset.linkId = link.linkId;
+                    const group = linkGroups.get(link.linkId) ?? [];
+                    group.push(element);
+                    linkGroups.set(link.linkId, group);
                 }
 
-                if (state.hyperlink.onClick) {
+                if (link.onClick) {
                     element.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        state.hyperlink!.onClick!(e);
+                        link.onClick!(e);
                     });
                 }
-
-                if (state.hyperlink.onContextMenu) {
+                if (link.onContextMenu) {
                     element.addEventListener('contextmenu', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        state.hyperlink!.onContextMenu!(e);
+                        link.onContextMenu!(e);
                     });
                 }
-
-                if (state.hyperlink.onMouseEnter) {
-                    element.addEventListener('mouseenter', (e) => {
-                        state.hyperlink!.onMouseEnter!(e);
-                    });
+                if (link.onMouseEnter) {
+                    element.addEventListener('mouseenter', (e) => { link.onMouseEnter!(e); });
+                }
+                if (link.onMouseLeave) {
+                    element.addEventListener('mouseleave', (e) => { link.onMouseLeave!(e); });
                 }
 
-                if (state.hyperlink.onMouseLeave) {
-                    element.addEventListener('mouseleave', (e) => {
-                        state.hyperlink!.onMouseLeave!(e);
+                // Pseudo-class state styling (hover/active/focus). A disabled link
+                // is inert; a spoiler owns the interaction (state swaps would
+                // reveal its text early). Hover propagates across same-id runs.
+                if (!disabled && states && !link.config?.spoiler) {
+                    baseCssByEl.set(element, baseCss);
+                    if (states.hover) hoverCssByEl.set(element, cssFor(states.hover));
+                    if (states.hover || link.linkId) {
+                        const peers = (): HTMLElement[] =>
+                            link.linkId ? (linkGroups.get(link.linkId) ?? [element]) : [element];
+                        element.addEventListener('mouseenter', () => {
+                            for (const el of peers()) {
+                                const h = hoverCssByEl.get(el);
+                                if (h) el.style.cssText = h;
+                            }
+                        });
+                        element.addEventListener('mouseleave', () => {
+                            for (const el of peers()) {
+                                const b = baseCssByEl.get(el);
+                                if (b !== undefined) el.style.cssText = b;
+                            }
+                        });
+                    }
+                    if (states.active) {
+                        const activeCss = cssFor(states.active);
+                        element.addEventListener('mousedown', () => { element.style.cssText = activeCss; });
+                        element.addEventListener('mouseup', () => { element.style.cssText = baseCss; });
+                    }
+                    if (states.focus) {
+                        const focusCss = cssFor(states.focus);
+                        element.tabIndex = 0;
+                        element.addEventListener('focus', () => { element.style.cssText = focusCss; });
+                        element.addEventListener('blur', () => { element.style.cssText = baseCss; });
+                    }
+                }
+
+                // Selection / visited: stash the current style + its state
+                // variants on the element so the link manager can restyle every
+                // run of a group across the buffer when state changes (it reads
+                // these data-* attributes; it doesn't recompute styling).
+                const visitKey = link.url;
+                if (visitKey && states?.visited) {
+                    element.dataset.oscVisit = visitKey;
+                    element.dataset.cssVisited = cssFor(states.visited);
+                    element.dataset.cssBase = baseCss;
+                }
+                const sel = link.config?.selection;
+                if (sel?.group !== undefined && sel.value !== undefined) {
+                    element.dataset.oscGroup = sel.group;
+                    element.dataset.oscValue = sel.value;
+                    if (sel.exclusive) element.dataset.oscExclusive = 'true';
+                    element.dataset.cssSelected = cssFor(states?.selected);
+                    element.dataset.cssBase = baseCss;
+                    if (sel.selected) initialCss = cssFor(states?.selected);
+                }
+
+                // Spoiler: conceal the text behind a block until the first
+                // interaction reveals it. The reveal click is swallowed (capture
+                // phase, before the activate handler); once revealed, clicks fall
+                // through to the link's primary action. Keyboard-safe via Enter/Space.
+                if (link.config?.spoiler) {
+                    const fgSrc = linkStyle?.foreground ?? (state.inverse ? state.background : state.foreground);
+                    const block = fgSrc ? this.colorToHex(fgSrc) : "#888888";
+                    initialCss = `${baseCss}; color: transparent; background-color: ${block}`;
+                    element.dataset.spoiler = "hidden";
+                    let revealed = false;
+                    const reveal = (): void => {
+                        revealed = true;
+                        element.style.cssText = baseCss;
+                        element.dataset.spoiler = "shown";
+                    };
+                    element.addEventListener("click", (e) => {
+                        if (!revealed) { e.preventDefault(); e.stopImmediatePropagation(); reveal(); }
+                    }, true);
+                    element.tabIndex = 0;
+                    element.addEventListener("keydown", (e) => {
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        if (!revealed) { e.preventDefault(); reveal(); }
+                        else if (link.onClick) link.onClick(e as unknown as MouseEvent);
                     });
                 }
             }
 
-            if (state.dim) {
-                styles.push(`--dim-start: ${state.dim.startOpacity}`);
-                styles.push(`--dim-end: ${state.dim.endOpacity}`);
-                styles.push(`--dim-duration: ${state.dim.duration}ms`);
-                styles.push(`--dim-easing: ${state.dim.easing || 'ease-in-out'}`);
-            }
+            if (initialCss) element.style.cssText = initialCss;
 
-            if (styles.length > 0) {
-                element.style.cssText = styles.join("; ");
-            }
+            // Visibility wiring runs *after* cssText is set — a reveal action
+            // sets `visibility: hidden`, which a later cssText assignment wipes.
+            if (link?.config?.visibility) applyVisibility(element, link.config.visibility);
 
             const classes: string[] = [];
             if (state.cssClass) classes.push(state.cssClass);

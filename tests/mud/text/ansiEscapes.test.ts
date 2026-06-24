@@ -74,11 +74,19 @@ describe('AnsiAwareBuffer escape handling', () => {
     expect(tail.getStateAt('linkafter'.indexOf('after'))?.hyperlink).toBeUndefined();
   });
 
-  it('renders OSC 8 link text as clickable + underlined in toHtml', () => {
+  it('renders an OSC 8 link clickable, with NO default underline (OSC 8 convention)', () => {
     const buf = new AnsiAwareBuffer(`${ESC}]8;;https://example.com${ST}go${ESC}]8;;${ST}`);
     const html = buf.toHtml();
     expect(html).toContain('data-output-clickable="true"');
-    expect(html).toContain('text-decoration: underline');
+    // Unlike MXP/scripted links, OSC 8 links are not underlined unless their
+    // style config asks for it (matches Mudlet).
+    expect(html).not.toContain('text-decoration: underline');
+  });
+
+  it('underlines a non-OSC-8 (MXP/scripted) hyperlink by default', () => {
+    const buf = new AnsiAwareBuffer('link');
+    buf.setHyperlink([0, 4], { onClick: () => {} }); // no osc8 flag
+    expect(buf.toHtml()).toContain('text-decoration: underline');
   });
 
   it('drops OSC 8 links with a disallowed scheme (no link span)', () => {
@@ -110,6 +118,24 @@ describe('AnsiAwareBuffer escape handling', () => {
   it('drops a truncated escape at end of line rather than rendering it', () => {
     const buf = new AnsiAwareBuffer(`text${ESC}[1;3`);
     expect(buf.text).toBe('text');
+  });
+
+  it('renders reverse video on default colours by swapping to console defaults', () => {
+    // \e[7m with no explicit fg/bg used to render nothing — the colour swap
+    // produced two undefined sources. Now it falls back to the console defaults.
+    const buf = new AnsiAwareBuffer(`${ESC}[7mrev${ESC}[0m`);
+    const html = buf.toHtml();
+    expect(html).toContain('color: var(--console-bg)');
+    expect(html).toContain('background-color: var(--console-text)');
+  });
+
+  it('swaps explicit fg/bg under reverse video', () => {
+    // \e[31m sets red fg; reverse paints red as the background and the text
+    // colour falls back to the console default (the swapped-in bg was unset).
+    const buf = new AnsiAwareBuffer(`${ESC}[31;7mx${ESC}[0m`);
+    const html = buf.toHtml();
+    expect(html).toContain('background-color: #');
+    expect(html).toContain('color: var(--console-bg)');
   });
 });
 
@@ -155,6 +181,13 @@ describe('classifyHyperlinkUri', () => {
   it('maps send:/prompt: to game actions', () => {
     expect(classifyHyperlinkUri('send:look')).toEqual({ kind: 'send', command: 'look' });
     expect(classifyHyperlinkUri('prompt:cast fireball')).toEqual({ kind: 'prompt', command: 'cast fireball' });
+  });
+
+  it('percent-decodes send/prompt commands (%20 → space)', () => {
+    expect(classifyHyperlinkUri('send:cast%20fireball')).toEqual({ kind: 'send', command: 'cast fireball' });
+    expect(classifyHyperlinkUri('prompt:say%20hi%20there')).toEqual({ kind: 'prompt', command: 'say hi there' });
+    // malformed escape is left intact rather than throwing
+    expect(classifyHyperlinkUri('send:50%off')).toEqual({ kind: 'send', command: '50%off' });
   });
 
   it('maps http/https/ftp to external URLs (scheme case-insensitive)', () => {

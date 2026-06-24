@@ -144,13 +144,27 @@ export type HyperlinkAction =
 /** URI schemes mudix is willing to make clickable from server output. */
 export const ALLOWED_HYPERLINK_SCHEMES = ["send", "prompt", "http", "https", "ftp"] as const;
 
+/** Percent-decode a send/prompt command, like Mudlet's `QUrl::fromPercentEncoding`,
+ *  so `cast%20fireball` reaches the MUD as `cast fireball`. Malformed escapes are
+ *  left as-is rather than throwing. */
+function decodePercent(s: string): string {
+    try {
+        return decodeURIComponent(s);
+    } catch {
+        return s;
+    }
+}
+
 export function classifyHyperlinkUri(uri: string): HyperlinkAction | null {
     const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):(.*)$/s.exec(uri);
     if (!m) return null;
     const scheme = m[1].toLowerCase();
     switch (scheme) {
-        case "send": return { kind: "send", command: m[2] };
-        case "prompt": return { kind: "prompt", command: m[2] };
+        // send/prompt carry MUD commands — percent-decoded so a `%20` (or other
+        // escaped byte) the server used to keep the URI well-formed becomes the
+        // literal command text. Web URLs stay encoded (the browser wants them so).
+        case "send": return { kind: "send", command: decodePercent(m[2]) };
+        case "prompt": return { kind: "prompt", command: decodePercent(m[2]) };
         case "http":
         case "https":
         case "ftp": return { kind: "url", url: uri };

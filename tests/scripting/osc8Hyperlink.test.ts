@@ -54,4 +54,57 @@ describe('createOsc8Hyperlink — OSC 8 extension query never leaks into command
   it('still drops disallowed schemes', () => {
     expect(api.createOsc8Hyperlink('javascript:alert(1)?config={}')).toBeUndefined();
   });
+
+  it('uses config.tooltip as the title and carries config/id forward', () => {
+    const hl = api.createOsc8Hyperlink('send:look', {
+      url: 'send:look',
+      config: { tooltip: 'Look around', style: { bold: true } },
+      linkId: 'g7',
+    });
+    expect(hl?.title).toBe('Look around'); // tooltip overrides default "look"
+    expect(hl?.config?.style?.bold).toBe(true);
+    expect(hl?.linkId).toBe('g7');
+    expect(hl?.onClick).toBeTypeOf('function');
+  });
+
+  it('makes a disabled link non-clickable but keeps its tooltip', () => {
+    const hl = api.createOsc8Hyperlink('send:locked', {
+      url: 'send:locked',
+      config: { disabled: true, tooltip: 'Requires level 10' },
+    });
+    expect(hl?.onClick).toBeUndefined();
+    expect(hl?.title).toBe('Requires level 10');
+  });
+
+  it('attaches a right-click handler only when config.menu is present', () => {
+    const plain = api.createOsc8Hyperlink('send:x', { url: 'send:x', config: {} });
+    expect(plain?.onContextMenu).toBeUndefined();
+    const withMenu = api.createOsc8Hyperlink('send:attack', {
+      url: 'send:attack',
+      config: { menu: [{ label: 'Strike', action: 'send:strike' }] },
+    });
+    expect(withMenu?.onContextMenu).toBeTypeOf('function');
+    expect(withMenu?.onClick).toBeTypeOf('function'); // primary still fires
+  });
+
+  it('a disabled link still opens its menu', () => {
+    const hl = api.createOsc8Hyperlink('send:attack', {
+      url: 'send:attack',
+      config: { disabled: true, menu: [{ label: 'Strike', action: 'send:strike' }] },
+    });
+    expect(hl?.onClick).toBeUndefined();
+    expect(hl?.onContextMenu).toBeTypeOf('function');
+  });
+
+  it('a selection send appends &selected and toggles (checkbox)', () => {
+    const hl = api.createOsc8Hyperlink('send:equip sword', {
+      url: 'send:equip sword',
+      config: { selection: { group: 'buffs', value: 'sword', exclusive: false } },
+    });
+    sent.length = 0;
+    hl?.onClick?.(undefined as unknown as MouseEvent); // no event → restyle no-ops in node
+    expect(sent).toEqual(['equip sword&selected=true']);
+    hl?.onClick?.(undefined as unknown as MouseEvent);
+    expect(sent).toEqual(['equip sword&selected=true', 'equip sword&selected=false']);
+  });
 });
