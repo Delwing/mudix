@@ -1642,6 +1642,7 @@ export class ScriptingAPI {
             return {
                 onClick: () => { window.open(payload, '_blank', 'noopener'); },
                 title: hint || undefined,
+                autoUnderline: true,
             };
         }
         const sendCmd = (cmd: string) => { this.send(cmd); };
@@ -1649,11 +1650,13 @@ export class ScriptingAPI {
             const hl = this.buildPopupHyperlink(promptCmds, promptHints ?? [], sendCmd);
             hl.onClick = () => sendCmd(payload);
             hl.title = hint || hl.title;
+            hl.autoUnderline = true;
             return hl;
         }
         return {
             onClick: () => sendCmd(payload),
             title: hint || undefined,
+            autoUnderline: true,
         };
     }
 
@@ -1729,13 +1732,25 @@ export class ScriptingAPI {
             onClick: disabled ? undefined : activate,
             title: tooltip ?? defaultTitle,
             url: command,
+            autoUnderline: true,
         });
     }
 
-    echoPopup(text: string, cmds: string[], hints: string[], win?: string): void {
+    echoPopup(text: string, cmds: string[], hints: string[], win?: string, useCurrentFormat = false): void {
         const con = this.outputConsole(win);
         con.format.hyperlink = this.buildPopupHyperlink(cmds, hints);
-        con.echo(text);
+        if (!useCurrentFormat) {
+            // Same default as echoLink: Mudlet renders popup links blue + underline.
+            const prevFg = con.format.foreground;
+            const prevUnderline = con.format.underline;
+            con.format.foreground = { space: 'rgb', r: 0, g: 0, b: 255 };
+            con.format.underline = true;
+            con.echo(text);
+            con.format.foreground = prevFg;
+            con.format.underline = prevUnderline;
+        } else {
+            con.echo(text);
+        }
         con.format.hyperlink = undefined;
         if (!win || win === 'main') {
             this.drainMain();
@@ -1751,19 +1766,24 @@ export class ScriptingAPI {
      * preserves the surrounding pen state; degrades to `echoPopup` when no
      * backing buffer is available (empty console / sub-window without a buffer).
      */
-    insertPopup(text: string, cmds: string[], hints: string[], win?: string): void {
+    insertPopup(text: string, cmds: string[], hints: string[], win?: string, useCurrentFormat = false): void {
         if (!text) return;
         const con = this.getConsole(win);
         const buf = con?.getBuffer();
         if (con && buf) {
             const state: FormatStateSnapshot = con.format.toSnapshot();
             state.hyperlink = this.buildPopupHyperlink(cmds, hints);
+            if (!useCurrentFormat) {
+                // Same default as insertLink: blue foreground + underline.
+                state.foreground = { space: 'rgb', r: 0, g: 0, b: 255 };
+                state.underline = true;
+            }
             const at = Math.max(0, Math.min(con.getCursorColumn(), buf.text.length));
             buf.insert(at, text, state);
             if (!this.inTriggerProcessing) buf.rerender();
             return;
         }
-        this.echoPopup(text, cmds, hints, win);
+        this.echoPopup(text, cmds, hints, win, useCurrentFormat);
     }
 
     /**

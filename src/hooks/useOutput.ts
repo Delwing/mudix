@@ -39,14 +39,32 @@ export function useStickyOutput(
     const [isSplitView, setIsSplitView] = useState(false);
     const [controls, setControls] = useState<OutputRendererControls | null>(null);
 
+    // Toggle the sticky panel in one synchronous tick: populate/clear its
+    // content AND flip its visibility class together, so they paint in the same
+    // frame as the scroll. Relying on React state alone for visibility lags the
+    // synchronous content change by a frame, which shows as a blink — an empty
+    // panel flashing on the way down, or the latest lines vanishing on the way
+    // up. React state is still updated for the resize handle / scroll-to-bottom
+    // button, where a one-frame lag is harmless.
+    const applySplitView = useCallback((next: boolean) => {
+        isSplitViewRef.current = next;
+        setIsSplitView(next);
+        const outer = stickyAreaRef.current?.parentElement;
+        if (next) {
+            rendererRef.current?.populateStickyArea();
+            outer?.classList.add('output-sticky--active');
+        } else {
+            outer?.classList.remove('output-sticky--active');
+            rendererRef.current?.clearStickyArea();
+        }
+    }, []);
+
     const scrollToBottom = useCallback(() => {
         const el = outputRef.current;
         if (!el) return;
         el.scrollTop = el.scrollHeight;
-        isSplitViewRef.current = false;
-        setIsSplitView(false);
-        rendererRef.current?.clearStickyArea();
-    }, []);
+        applySplitView(false);
+    }, [applySplitView]);
 
     const handleScroll = useCallback(() => {
         const el = outputRef.current;
@@ -54,15 +72,9 @@ export function useStickyOutput(
         const distFromBottom = Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
         const next = distFromBottom > splitViewThreshold;
         if (next !== isSplitViewRef.current) {
-            isSplitViewRef.current = next;
-            setIsSplitView(next);
-            if (next) {
-                rendererRef.current?.populateStickyArea();
-            } else {
-                rendererRef.current?.clearStickyArea();
-            }
+            applySplitView(next);
         }
-    }, [splitViewThreshold]);
+    }, [splitViewThreshold, applySplitView]);
 
     // Fires before the browser scrolls — lets us show the sticky with zero visual delay.
     const handleWheel = useCallback((e: WheelEvent) => {
@@ -71,12 +83,10 @@ export function useStickyOutput(
         if (e.deltaY < 0) {
             const distFromBottom = Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
             if (distFromBottom <= splitViewThreshold) {
-                isSplitViewRef.current = true;
-                setIsSplitView(true);
-                rendererRef.current?.populateStickyArea();
+                applySplitView(true);
             }
         }
-    }, [splitViewThreshold]);
+    }, [splitViewThreshold, applySplitView]);
 
     useEffect(() => {
         const outputEl = outputRef.current;

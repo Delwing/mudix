@@ -48,6 +48,15 @@ export interface FormatHyperlink {
     /** OSC 8 `id=` parameter — groups split runs of one logical link so hover
      *  can highlight them together. */
     linkId?: string;
+    /**
+     * Document-style link that should render with an underline cue by default,
+     * the way a web browser underlines anchors. Set on MXP `<send>`/`<a>` links
+     * and OSC 8 hyperlinks. Scripted Mudlet-API links (`echoLink`, `echoPopup`,
+     * `setLink`) leave this unset — they underline only when the script sets the
+     * real `underline` attribute (Mudlet's `useCurrentFormat=false` default), so
+     * a `useCurrentFormat=true` link keeps the current pen with no underline.
+     */
+    autoUnderline?: boolean;
 }
 
 export interface IndexedColor {
@@ -473,7 +482,7 @@ function parseAnsiSegments(
                     } else {
                         const result = parseOsc8Uri(link.uri, registry);
                         if (result?.kind === "link" && classifyHyperlinkUri(result.command)) {
-                            const hl: FormatHyperlink = { url: result.command };
+                            const hl: FormatHyperlink = { url: result.command, autoUnderline: true };
                             if (hasConfig(result.config)) hl.config = result.config;
                             if (link.id) hl.linkId = link.id;
                             state.hyperlink = hl;
@@ -962,8 +971,10 @@ export class AnsiAwareBuffer {
         if (underline) decorations.push("underline");
         if (overlay?.strikethrough ?? state.strikethrough) decorations.push("line-through");
         if (overlay?.overline ?? state.overline) decorations.push("overline");
-        // Hyperlinks get an underline cue unless the run is already underlined.
-        if (state.hyperlink && !underline) decorations.push("underline");
+        // Document-style links (MXP/OSC 8) get an underline cue unless the run is
+        // already underlined. Scripted links (echoLink/echoPopup/setLink) do not —
+        // they carry a real `underline` attribute when Mudlet would underline them.
+        if (state.hyperlink?.autoUnderline && !underline) decorations.push("underline");
         if (decorations.length > 0) {
             styles.push(`text-decoration: ${decorations.join(" ")}`);
             if (overlay?.underlineStyle && overlay.underlineStyle !== "solid") {
