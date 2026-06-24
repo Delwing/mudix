@@ -587,7 +587,12 @@ export class MapStore {
             }
         }
         return {
-            version: 1, envColors, areaNames, mCustomEnvColors,
+            // Mudlet binary map *format* version — the leading int that selects
+            // the reader/writer model. Must be 20: it's the only version the
+            // bundled mudlet-map-binary-reader registers a model for, and its
+            // writer now rejects anything else (older versions silently ignored
+            // this field, which is how `1` survived undetected).
+            version: 20, envColors, areaNames, mCustomEnvColors,
             mpRoomDbHashToRoomId: hashes, mUserData: { ...this.mapUserData },
             mapSymbolFont: DEFAULT_FONT, mapFontFudgeFactor: 1, useOnlyMapFont: false,
             areas, mRoomIdHash, labels, rooms,

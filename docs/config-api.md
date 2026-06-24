@@ -15,7 +15,8 @@ Lua: setConfig("enableMSDP", true) / getConfig("enableMSDP")
       → ScriptingAPI.setConfig / .getConfig (registry)      src/scripting/ScriptingAPI.ts
         → ProfileSettings field  (protocols / mapper / autoClearInput)
         → MudSession.echoSentText (live)
-        → ProfileSettings.config bag  (persist-only keys)
+        → WindowManager.open/hide('map')  (mapperPanelVisible, live)
+        → ProfileSettings.config bag  (persist-only + UI-consumed keys)
 ```
 
 - **Base globals must be bound before the bundles load.** `Other.lua` captures
@@ -63,7 +64,19 @@ Mudlet); the rest are live.
 
 | Config key | Effect |
 |---|---|
-| `showSentText` | Sets `MudSession.echoSentText`; when `false`, `echoCommand` suppresses the local echo of sent commands. Persisted to the `config` bag and re-applied on profile load (constructor of `ScriptingAPI`). |
+| `showSentText` | Three-state echo mode stored in `MudSession.showSentText` (`'never'` / `'script'` / `'always'`). `never` suppresses the local echo of sent commands entirely; `script` (default) echoes unless a script passes `send(cmd, false)`; `always` echoes even then. Booleans / boolean-ish strings are accepted for back-compat (`true`→`script`, `false`→`never`); an unknown mode string is rejected (`setConfig`→`false`). Persisted to the `config` bag and re-applied on profile load (constructor of `ScriptingAPI`). **Credentials are exempt:** the auto-login password goes through `MudSession.sendSecret()`, which never echoes regardless of mode; user-typed passwords are also safe because `echoCommand` is gated on `shouldEchoCommand()` (false while the server is in password/echo-off mode). |
+| `mapperPanelVisible` | Opens (`true`) or hides (`false`) the docked `MapPanel` via `WindowManager` — the same action as the toolbar's map button. `getConfig` reports the live `isVisible('map')`. Not persisted (window visibility is ephemeral window state, restored from the layout snapshot). |
+
+### 2a. Config-bag keys consumed by the UI
+
+Stored in the `ProfileSettings.config` bag (so `get`/`set` round-trip and the
+Settings UI writes the same slot), but read back out by the React layer to drive
+real behaviour:
+
+| Config key | Effect | Read by |
+|---|---|---|
+| `commandLineHistorySaveSize` | Caps how many sent commands are persisted to `localStorage` for recall/Tab-completion. Default 500 (= in-memory `MAX_HISTORY`); history is shared across profiles. | `CommandBar` → `useCommandHistory` |
+| `showTabConnectionIndicators` | When `true` (default), prefixes the window/tab title with a connection-status dot (🟢/🟡/🔴). The profile name is always shown. mudix has no tab strip, so this lives in the title. | `ProfileSession` |
 
 ### 3. Persist-only — round-trips but **not yet enforced**
 
@@ -76,14 +89,17 @@ returns `false`).
 
 `advertiseScreenReader`, `ambiguousEAsianWidthCharacters` (`auto`/`wide`/`narrow`),
 `announceIncomingText`, `askTlsAvailable`, `blankLinesBehaviour` (`show`/`hide`),
-`caretShortcut` (`none`/`tab`/`ctrltab`/`f6`), `commandLineHistorySaveSize`,
+`caretShortcut` (`none`/`tab`/`ctrltab`/`f6`),
 `compactInputLine`, `controlCharacterHandling` (`asis`/`oem`/`picture`),
 `editorAutoComplete`, `enableBlinkText`, `enableClosedCaption`, `f3SearchEnabled`,
 `fixUnnecessaryLinebreaks`, `inputLineStrictUnixEndings`, `logInHTML`,
-`mapperPanelVisible`, `muteMediaAPI`, `muteMediaGame`,
+`muteMediaAPI`, `muteMediaGame`,
 `promptForMXPProcessorOn`, `promptForVersionInTTYPE`, `show3dMapView`,
-`showRoomIdsOnMap`, `showTabConnectionIndicators`, `showUpperLowerLevels`,
+`showRoomIdsOnMap`, `showUpperLowerLevels`,
 `specialForceCompressionOff`, `specialForceGAOff`, `versionInTTYPE`.
+
+(`commandLineHistorySaveSize` and `showTabConnectionIndicators` also live in the
+`config` bag but are now consumed by the UI — see group 2a.)
 
 ### 4. Read-only
 
@@ -114,17 +130,15 @@ group 3 to group 1/2 as the underlying feature lands:
   `controlCharacterHandling`, `ambiguousEAsianWidthCharacters`,
   `blankLinesBehaviour` (no blank-line suppression).
 - **Input line / editor:** `compactInputLine`, `inputLineStrictUnixEndings`,
-  `commandLineHistorySaveSize`, `editorAutoComplete`, `f3SearchEnabled`,
-  `fixUnnecessaryLinebreaks`.
+  `editorAutoComplete`, `f3SearchEnabled`, `fixUnnecessaryLinebreaks`.
 - **Telnet edge switches:** `askTlsAvailable`, `specialForceCompressionOff`
   (MCCP kill-switch), `specialForceGAOff`, `versionInTTYPE`,
   `promptForVersionInTTYPE`, `promptForMXPProcessorOn`.
 - **Map:** `show3dMapView` (no 3D renderer), `showRoomIdsOnMap`,
-  `showUpperLowerLevels`, `mapperPanelVisible` (could be wired to
-  `WindowManager` to open/close `MapPanel`).
+  `showUpperLowerLevels`.
 - **Media:** `muteMediaAPI`, `muteMediaGame` (`SoundManager` has stop/pause but
   no persistent mute gate).
-- **Misc UI / logging:** `showTabConnectionIndicators`, `logInHTML`.
+- **Misc UI / logging:** `logInHTML`.
 
 ## Tests
 

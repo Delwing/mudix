@@ -2,6 +2,14 @@ import { Fragment, useState } from 'react';
 import { useAppStore, selectProfileField, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, PROTOCOL_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings, type MapInfoBgColor, type ProtocolSettings } from '../storage';
 import { Input, FontPicker, Toggle, HelpTip, Button } from './components';
 import { DEFAULT_ANSI_PALETTE } from '../mud/text/colors';
+import { DEFAULT_HISTORY_SAVE_SIZE, MAX_HISTORY } from './commandHistory';
+import type { ShowSentTextMode } from '../mud/MudSession';
+
+const SHOW_SENT_TEXT_OPTIONS: { value: ShowSentTextMode; label: string }[] = [
+    { value: 'script', label: 'Let scripts decide' },
+    { value: 'always', label: 'Always echo' },
+    { value: 'never',  label: 'Never echo' },
+];
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
 const ANSI_LABELS = [
@@ -132,6 +140,18 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const mapperGridEnabled = mapper?.gridEnabled ?? MAPPER_DEFAULTS.gridEnabled;
     const config = useAppStore(s => selectProfileField(s, connectionId, 'config'));
     const mapInfoColor = (config?.mapInfoColor as MapInfoBgColor | undefined) ?? MAP_INFO_BG_DEFAULT;
+    const rawHistorySaveSize = config?.commandLineHistorySaveSize;
+    const historySaveSize = typeof rawHistorySaveSize === 'number' && Number.isFinite(rawHistorySaveSize)
+        ? rawHistorySaveSize
+        : DEFAULT_HISTORY_SAVE_SIZE;
+    const showTabConnectionIndicators = (config?.showTabConnectionIndicators as boolean | undefined) ?? true;
+    // showSentText is stored as a mode string; legacy profiles may hold a boolean
+    // (false ≙ never, true/unset ≙ script).
+    const rawShowSentText = config?.showSentText;
+    const showSentText: ShowSentTextMode =
+        rawShowSentText === 'never' || rawShowSentText === 'always' ? rawShowSentText
+        : rawShowSentText === false ? 'never'
+        : 'script';
     const patchConnectionProfile = useAppStore(s => s.patchConnectionProfile);
     // Profile-scoped fields are only writable when a profile is active. On the
     // connection screen the modal hides those rows entirely.
@@ -148,6 +168,11 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     // setConfig writes), so the Settings UI and Lua setConfig stay in sync.
     const patchMapInfoColor = (patch: Partial<MapInfoBgColor>) => {
         patchProfile({ config: { ...(config ?? {}), mapInfoColor: { ...mapInfoColor, ...patch } } });
+    };
+    // Merge plain Mudlet `setConfig` keys into the same `config` bag the
+    // scripting registry reads/writes, so Lua and the Settings UI stay in sync.
+    const patchConfig = (patch: Record<string, unknown>) => {
+        patchProfile({ config: { ...(config ?? {}), ...patch } });
     };
     // Same pattern as patchMapper — protocols share one slot so flipping one
     // toggle doesn't wipe the others.
@@ -193,6 +218,19 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, parsed));
         setFontSizeText(String(clamped));
         patchProfile({ fontSize: clamped });
+    };
+
+    const [historySaveSizeText, setHistorySaveSizeText] = useState(String(historySaveSize));
+
+    const handleHistorySaveSizeBlur = () => {
+        const parsed = parseInt(historySaveSizeText.trim(), 10);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            setHistorySaveSizeText(String(historySaveSize));
+            return;
+        }
+        const clamped = Math.min(parsed, MAX_HISTORY);
+        setHistorySaveSizeText(String(clamped));
+        patchConfig({ commandLineHistorySaveSize: clamped });
     };
 
     const [roomSizeText, setRoomSizeText] = useState(String(mapperRoomSize));
@@ -542,6 +580,23 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         onChange={next => patchProfile({ loggingEnabled: next })}
                                     />
                                 </div>
+                                <div className="settings-row">
+                                    <span className="settings-label" id="show-tab-connection-indicators-label">
+                                        Connection indicator in title
+                                        <HelpTip label="About the connection indicator">
+                                            Show a connection-status dot in front of the profile name in
+                                            the browser tab/window title (Mudlet's
+                                            <code> showTabConnectionIndicators</code>). The profile name
+                                            is shown either way.
+                                        </HelpTip>
+                                    </span>
+                                    <Toggle
+                                        id="show-tab-connection-indicators"
+                                        aria-labelledby="show-tab-connection-indicators-label"
+                                        checked={showTabConnectionIndicators}
+                                        onChange={next => patchConfig({ showTabConnectionIndicators: next })}
+                                    />
+                                </div>
                                 <div className="settings-row settings-row--top">
                                     <label className="settings-label">Borders</label>
                                     <div className="settings-borders">
@@ -601,6 +656,50 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     spellCheck={false}
                                     onChange={e => patchProfile({ commandSeparator: e.target.value })}
                                 />
+                            </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="command-history-save-size">
+                                    Command history size
+                                    <HelpTip label="About command history size">
+                                        How many recently sent commands to keep for recall and
+                                        Tab-completion (Mudlet's <code>commandLineHistorySaveSize</code>).
+                                        History is shared across profiles. Max {MAX_HISTORY}.
+                                    </HelpTip>
+                                </label>
+                                <Input
+                                    id="command-history-save-size"
+                                    type="number"
+                                    min={0}
+                                    max={MAX_HISTORY}
+                                    step={10}
+                                    value={historySaveSizeText}
+                                    placeholder={String(DEFAULT_HISTORY_SAVE_SIZE)}
+                                    onChange={e => setHistorySaveSizeText(e.target.value)}
+                                    onBlur={handleHistorySaveSizeBlur}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="show-sent-text">
+                                    Echo sent commands
+                                    <HelpTip label="About echoing sent commands">
+                                        Whether commands you send are echoed into the output
+                                        (Mudlet's <code>showSentText</code>). <strong>Let scripts
+                                        decide</strong> echoes unless a script suppresses it with
+                                        <code> send(cmd, false)</code> (e.g. passwords);
+                                        <strong> Always</strong> echoes even then;
+                                        <strong> Never</strong> never echoes.
+                                    </HelpTip>
+                                </label>
+                                <select
+                                    id="show-sent-text"
+                                    className="settings-select"
+                                    value={showSentText}
+                                    onChange={e => patchConfig({ showSentText: e.target.value as ShowSentTextMode })}
+                                >
+                                    {SHOW_SENT_TEXT_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </select>
                             </div>
                         </section>
                     )}

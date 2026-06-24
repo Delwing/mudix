@@ -1,4 +1,4 @@
-import type { MudSession, ScriptLogSource } from '../mud/MudSession';
+import type { MudSession, ScriptLogSource, ShowSentTextMode } from '../mud/MudSession';
 import type { AliasEngine } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine } from '../mud/timers/TimerEngine';
@@ -87,11 +87,34 @@ function configBool(v: unknown): boolean {
     return !!v;
 }
 
-/** Mudlet config keys that mudix persists for round-trip fidelity but does not
- *  yet act on. Each entry gives the value type and the default `getConfig`
- *  returns before the key has been set, so first reads match Mudlet-ish values.
- *  `enum` constrains string writes (an out-of-range value is rejected). These
- *  live in the {@link ProfileSettings.config} bag, not in dedicated fields. */
+/** Coerce a `setConfig("showSentText", …)` value into a {@link ShowSentTextMode}.
+ *  Accepts the three mode strings directly; maps booleans / boolean-ish strings
+ *  / numbers to `script` (on) or `never` (off) for backward compatibility with
+ *  the original boolean key (Mudlet's "show sent text" toggle ≙ `script`).
+ *  Returns null for anything else so `setConfig` reports failure. */
+function parseShowSentText(value: unknown): ShowSentTextMode | null {
+    if (typeof value === 'string') {
+        const s = value.trim().toLowerCase();
+        if (s === 'never' || s === 'script' || s === 'always') return s;
+        if (/^(true|1|yes|on)$/.test(s)) return 'script';
+        if (/^(false|0|no|off)$/.test(s)) return 'never';
+        return null;
+    }
+    if (typeof value === 'boolean' || typeof value === 'number') {
+        return value ? 'script' : 'never';
+    }
+    return null;
+}
+
+/** Mudlet config keys persisted in the {@link ProfileSettings.config} bag rather
+ *  than a dedicated structured field. Each entry gives the value type and the
+ *  default `getConfig` returns before the key has been set, so first reads match
+ *  Mudlet-ish values. `enum` constrains string writes (an out-of-range value is
+ *  rejected). Most are stored only for round-trip fidelity, but a few drive real
+ *  behaviour by being read back out of the bag in the React layer (e.g.
+ *  `commandLineHistorySaveSize` in CommandBar, `showTabConnectionIndicators` in
+ *  the window title). Keys with live, non-bag side-effects (showSentText,
+ *  mapperPanelVisible) are handled explicitly in get/setConfig instead. */
 const CONFIG_PERSIST_ONLY: Record<string, {
     type: 'bool' | 'num' | 'str';
     default: boolean | number | string;
@@ -103,7 +126,7 @@ const CONFIG_PERSIST_ONLY: Record<string, {
     askTlsAvailable:                { type: 'bool', default: true },
     blankLinesBehaviour:            { type: 'str',  default: 'show', enum: ['show', 'hide'] },
     caretShortcut:                  { type: 'str',  default: 'none', enum: ['none', 'tab', 'ctrltab', 'f6'] },
-    commandLineHistorySaveSize:     { type: 'num',  default: 100 },
+    commandLineHistorySaveSize:     { type: 'num',  default: 500 },
     compactInputLine:               { type: 'bool', default: false },
     controlCharacterHandling:       { type: 'str',  default: 'asis', enum: ['asis', 'oem', 'picture'] },
     editorAutoComplete:             { type: 'bool', default: true },
@@ -113,7 +136,6 @@ const CONFIG_PERSIST_ONLY: Record<string, {
     fixUnnecessaryLinebreaks:       { type: 'bool', default: false },
     inputLineStrictUnixEndings:     { type: 'bool', default: false },
     logInHTML:                      { type: 'bool', default: false },
-    mapperPanelVisible:             { type: 'bool', default: false },
     muteMediaAPI:                   { type: 'bool', default: false },
     muteMediaGame:                  { type: 'bool', default: false },
     promptForMXPProcessorOn:        { type: 'bool', default: false },
@@ -598,8 +620,10 @@ export class ScriptingAPI {
         this.mainConsole.onBufferShrink = (n) => this.eventRaiser?.('sysBufferShrinkEvent', ['main', n]);
         // Re-apply the one persisted config key that drives a live session
         // side-effect (suppressing local command echo) so it survives reloads.
-        const persistedShowSentText = this.configBag().showSentText;
-        if (persistedShowSentText !== undefined) session.echoSentText = configBool(persistedShowSentText);
+        // Older profiles persisted this as a boolean; parseShowSentText maps that
+        // (true→'script', false→'never') as well as the new mode strings.
+        const persistedMode = parseShowSentText(this.configBag().showSentText);
+        if (persistedMode) session.showSentText = persistedMode;
     }
 
     // ── Connection ────────────────────────────────────────────────────────────
@@ -794,7 +818,8 @@ export class ScriptingAPI {
                 return `${c.r},${c.g},${c.b},${c.a}`;
             }
             // live
-            case 'showSentText':       return this.session.echoSentText;
+            case 'showSentText':       return this.session.showSentText;
+            case 'mapperPanelVisible': return this.session.windows.isVisible('map');
             // read-only
             case 'logDirectory':       return '/profiles/' + this.connectionId + '/log';
             case 'specialForceMXPProcessorOn':
@@ -847,9 +872,22 @@ export class ScriptingAPI {
                 return true;
             }
             case 'showSentText': {
-                const on = configBool(value);
-                this.session.echoSentText = on;
-                this.patchConfigBag('showSentText', on);
+                const mode = parseShowSentText(value);
+                if (!mode) return false;
+                this.session.showSentText = mode;
+                this.patchConfigBag('showSentText', mode);
+                return true;
+            }
+            // Live window-visibility toggle (mirrors the toolbar's map button):
+            // opening (re)loads the map via the onMapOpen hook; hiding keeps it.
+            case 'mapperPanelVisible': {
+                if (configBool(value)) {
+                    if (!this.session.windows.isVisible('map')) {
+                        this.session.windows.open('map', { kind: 'map', title: 'Map', position: 'right', autoOpen: true });
+                    }
+                } else {
+                    this.session.windows.hide('map');
+                }
                 return true;
             }
             // read-only keys — present in the catalogue but not writable

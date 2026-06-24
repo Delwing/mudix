@@ -17,6 +17,11 @@ export type { SessionStatus, MudEvents } from './events';
 
 export type MudSessionOptions = Omit<MudClientOptions, 'url'>;
 
+/** Mudlet `showSentText` modes — controls local echo of commands you send.
+ *  `never`: never echo. `script`: echo unless a script passes `send(cmd, false)`
+ *  (the default). `always`: echo even when a script passes `send(cmd, false)`. */
+export type ShowSentTextMode = 'never' | 'script' | 'always';
+
 export type ScriptLogSourceKind = 'script' | 'alias' | 'trigger' | 'timer' | 'key' | 'button';
 
 export interface ScriptLogSource {
@@ -65,11 +70,13 @@ export class MudSession {
      *  no background. Consumed by echoCommand() to wrap the echo in ANSI. */
     commandEchoColor: { fg: string; bg: string } = { fg: '#717100', bg: '' };
 
-    /** Mudlet `setConfig("showSentText", ...)`. When false, sent commands are
-     *  not echoed into the main window (the server-side ECHO suppression in
-     *  `shouldEchoCommand` still applies independently). Toggled live by the
-     *  config registry in ScriptingAPI. */
-    echoSentText = true;
+    /** Mudlet `setConfig("showSentText", ...)`. Controls local echo of sent
+     *  commands (the server-side ECHO suppression in `shouldEchoCommand` still
+     *  applies independently). `script` (the default) echoes only when send()'s
+     *  `echo` flag is set, so scripts can suppress per command via
+     *  `send(cmd, false)`; `always` echoes even then; `never` never echoes.
+     *  Toggled live by the config registry in ScriptingAPI. */
+    showSentText: ShowSentTextMode = 'script';
 
     /** Bounded script.log buffer so the editor panel can backfill entries that
      *  arrived before it was first opened (e.g. errors during initial load). */
@@ -147,8 +154,17 @@ export class MudSession {
         this.client?.disconnect();
     }
 
+    /** Whether a send() carrying the given per-call `echo` flag should produce a
+     *  local echo, under the current showSentText mode. `script` defers to the
+     *  flag; `always`/`never` ignore it. */
+    private shouldEchoSentText(echo: boolean): boolean {
+        if (this.showSentText === 'never') return false;
+        if (this.showSentText === 'always') return true;
+        return echo; // 'script'
+    }
+
     echoCommand(text: string): void {
-        if (!this.echoSentText) return;
+        if (this.showSentText === 'never') return;
         if (!this.client || this.client.shouldEchoCommand()) {
             // No "> " prefix: Mudlet echoes the bare command, and OutputRenderer
             // appends it inline to the open server prompt line (e.g. "- look").
@@ -168,7 +184,17 @@ export class MudSession {
     }
 
     send(text: string, echo = true): void {
-        if (echo) this.echoCommand(text);
+        if (this.shouldEchoSentText(echo)) this.echoCommand(text);
+        if (!this.client) return;
+        this.client.send(text);
+    }
+
+    /** Send credentials/secrets that must NEVER be echoed locally — regardless of
+     *  the showSentText mode (including `always`) or the server-echo state. Used
+     *  for auto-login passwords. The normal `send(text, false)` only suppresses
+     *  the echo in `script` mode; `always` would override it, so a password must
+     *  take this path instead of relying on the per-call echo flag. */
+    sendSecret(text: string): void {
         if (!this.client) return;
         this.client.send(text);
     }

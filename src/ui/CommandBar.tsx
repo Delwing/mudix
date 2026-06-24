@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input } from './components';
-import { useProfileField } from '../storage';
+import { useConnectionId, useProfileField } from '../storage';
 import { useCommandHistory } from './useCommandHistory';
 import { matchHistory, type Match } from './commandHistory';
 import { hasPrecedingWord, matchWordCandidates, splitTrailingWord, type ActiveWord, type BufferWordIndex } from './bufferWords';
@@ -29,7 +29,15 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         ...(inputForeground ? { color: inputForeground } : {}),
     } : undefined;
 
-    const { history, add: pushHistory } = useCommandHistory();
+    // Mudlet's `commandLineHistorySaveSize` (per-profile config bag) caps how many
+    // entries are persisted. Unset / invalid → the default save size.
+    const config = useProfileField('config');
+    const rawSaveSize = config?.commandLineHistorySaveSize;
+    const historySaveSize = typeof rawSaveSize === 'number' && Number.isFinite(rawSaveSize) && rawSaveSize >= 0
+        ? rawSaveSize
+        : undefined;
+    const connectionId = useConnectionId();
+    const { history, add: pushHistory } = useCommandHistory(connectionId, historySaveSize);
 
     // -1 = "draft" slot (the user's pre-traversal text); otherwise an index
     // into the MRU `history` array.

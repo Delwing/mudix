@@ -1,12 +1,24 @@
 // MRU command-line history with prefix/subsequence matching and LCP-based
 // Tab-completion. Persisted in localStorage; case-insensitive de-duplication.
 
-const STORAGE_KEY = 'cmd.history';
-const MAX_HISTORY = 500;
+const STORAGE_PREFIX = 'cmd.history';
+export const MAX_HISTORY = 500;
 
-export function loadHistory(): string[] {
+/** Default number of entries persisted to localStorage when the profile hasn't
+ *  set Mudlet's `commandLineHistorySaveSize`. Matches MAX_HISTORY so existing
+ *  histories survive untouched until the user opts into a smaller save cap. */
+export const DEFAULT_HISTORY_SAVE_SIZE = MAX_HISTORY;
+
+/** localStorage key for a profile's command history. History is per-profile —
+ *  one MUD's commands shouldn't surface in another's. The bare prefix (no
+ *  connection) backs the connection screen before a profile is open. */
+export function historyStorageKey(connectionId: string | null): string {
+    return connectionId ? `${STORAGE_PREFIX}.${connectionId}` : STORAGE_PREFIX;
+}
+
+export function loadHistory(key: string): string[] {
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        const raw = localStorage.getItem(key);
         if (!raw) return [];
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
@@ -16,9 +28,13 @@ export function loadHistory(): string[] {
     }
 }
 
-export function saveHistory(items: string[]): void {
+/** Persist the MRU history, keeping at most `saveSize` entries (Mudlet's
+ *  `commandLineHistorySaveSize`). A negative size means "no cap"; the in-memory
+ *  list is still bounded by MAX_HISTORY via {@link addToHistory}. */
+export function saveHistory(items: string[], key: string, saveSize: number = DEFAULT_HISTORY_SAVE_SIZE): void {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+        const capped = saveSize >= 0 && items.length > saveSize ? items.slice(0, saveSize) : items;
+        localStorage.setItem(key, JSON.stringify(capped));
     } catch {
         // Storage may be full / disabled — non-fatal.
     }

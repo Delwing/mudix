@@ -84,6 +84,11 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
     const loggingEnabled = useAppStore(s => selectProfileField(s, connection.id, 'loggingEnabled')) !== false;
+    // Mudlet's `showTabConnectionIndicators` (config bag). Defaults to true; when
+    // on, the window title is prefixed with a connection-status dot. mudix has no
+    // tab strip, so the indicator (and always the profile name) live in the title.
+    const profileConfig = useAppStore(s => selectProfileField(s, connection.id, 'config'));
+    const showConnectionIndicator = (profileConfig?.showTabConnectionIndicators as boolean | undefined) ?? true;
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
     const connectionDockExtents = useAppStore(s => s.connectionDockExtents);
     const saveWindowHint = useAppStore(s => s.saveWindowHint);
@@ -125,6 +130,16 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             session.setPromptTimeoutMs(promptTimeoutMs);
         }
     }, [promptTimeoutMs, session]);
+
+    // Window title: always the profile name, prefixed with a connection-status
+    // dot when showTabConnectionIndicators is on. Restored to the bare app name
+    // when the profile is closed (back to the connection screen).
+    useEffect(() => {
+        const dot = status === 'connected' ? '🟢' : status === 'connecting' ? '🟡' : '🔴';
+        const prefix = showConnectionIndicator ? `${dot} ` : '';
+        document.title = `${prefix}${connection.name} — mudix`;
+        return () => { document.title = 'mudix'; };
+    }, [connection.name, status, showConnectionIndicator]);
 
     // Color for the local echo of sent commands (Settings → Colors). Empty
     // foreground falls back to Mudlet's olive; empty background = none.
@@ -325,13 +340,14 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             autoLoginStage.current = 'password';
             send(account, true);
         };
-        // Server enters password mode (ECHO off) → send the password unechoed so
-        // it never surfaces as plaintext in the output.
+        // Server enters password mode (ECHO off) → send the password via the
+        // secret path so it never surfaces as plaintext, even under the
+        // showSentText='always' echo mode.
         const onEcho = (mask: boolean) => {
             if (!mask || autoLoginStage.current !== 'password') return;
             const { password } = readCreds();
             autoLoginStage.current = 'idle';
-            if (password) send(password, false);
+            if (password) session.sendSecret(password);
         };
         const onDisconnect = () => { autoLoginStage.current = 'idle'; };
         const u1 = session.events.on('client.connect', onConnect);
@@ -440,8 +456,9 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             if (engineRef.current) {
                 engineRef.current.sendCommand(part);
             } else {
-                session.echoCommand(part);
-                send(part, false);
+                // echo=true lets session.send apply the showSentText mode itself
+                // (avoids a double echo under 'always', which would echo here too).
+                send(part, true);
             }
         }
         lastSentRef.current = command;
