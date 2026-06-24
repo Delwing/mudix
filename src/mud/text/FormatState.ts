@@ -1,7 +1,24 @@
-import { colorCodes } from "./colors";
+import { colorCodes, setPaletteColor, resetPaletteColor, resetAllPaletteColors } from "./colors";
 import mudletColorsJson from "./mudletColors.json";
-import { scanEscape } from "./ansiEscapes";
+import {
+    scanEscape,
+    parseOsc8Payload,
+    classifyHyperlinkUri,
+    parseOscColorPalette,
+    type OscPaletteOp,
+} from "./ansiEscapes";
 import { appendCells, cellsToHtml } from "./cellRender";
+
+/** Apply OSC 4/104 palette operations to the global colour tables. Palette
+ *  changes affect text parsed *after* this point — which is exactly document
+ *  order, since lines are fed to the parser in the order the server sent them. */
+export function applyOscPaletteOps(ops: ReadonlyArray<OscPaletteOp>): void {
+    for (const op of ops) {
+        if (op.kind === "set") setPaletteColor(op.index, op.color);
+        else if (op.kind === "reset") resetPaletteColor(op.index);
+        else resetAllPaletteColors();
+    }
+}
 
 const ESC = "";
 
@@ -11,6 +28,12 @@ export interface FormatHyperlink {
     onMouseEnter?: (ev: MouseEvent) => void;
     onMouseLeave?: (ev: MouseEvent) => void;
     title?: string;
+    /**
+     * Raw link target recorded by the low-level ANSI parser for OSC 8 links.
+     * The parser has no access to the scripting API, so it stores the URI here
+     * and the engine later wires the click behaviour via `bindUrlHyperlinks`.
+     */
+    url?: string;
 }
 
 export interface IndexedColor {
@@ -393,11 +416,31 @@ function parseAnsiSegments(text: string, baseState?: FormatStateSnapshot): Buffe
             if (esc.kind === "csi" && esc.finalByte === "m") {
                 flush();
                 state.applySgr(parseSgrCodes(esc.params ?? ""));
+            } else if (esc.kind === "osc" && esc.oscPayload !== undefined) {
+                const link = parseOsc8Payload(esc.oscPayload);
+                if (link) {
+                    // OSC 8: a non-empty URI opens a hyperlink over the text
+                    // that follows; an empty URI closes it. The raw URI is kept
+                    // on the snapshot (the engine wires the click behaviour
+                    // later — see bindUrlHyperlinks); a disallowed scheme is
+                    // ignored so the text stays plain rather than clickable.
+                    flush();
+                    if (link.uri === "") {
+                        state.hyperlink = undefined;
+                    } else if (classifyHyperlinkUri(link.uri)) {
+                        state.hyperlink = { url: link.uri };
+                    }
+                } else {
+                    // OSC 4/104: server-driven colour palette redefinition. No
+                    // text or state change — it retargets the colour tables for
+                    // the SGR runs that follow.
+                    const palette = parseOscColorPalette(esc.oscPayload);
+                    if (palette) applyOscPaletteOps(palette);
+                }
             }
-            // Every other recognized sequence (OSC links, cursor moves, charset
-            // designation, DCS strings, …) is consumed and ignored — never
-            // rendered. OSC 8 hyperlinks aren't supported yet; for now they're
-            // simply skipped rather than printed as literal text.
+            // Every other recognized sequence (non-OSC-8 OSC commands, cursor
+            // moves, charset designation, DCS strings, …) is consumed and
+            // ignored — never rendered as literal text.
             i = esc.end;
             continue;
         }
@@ -742,6 +785,25 @@ export class AnsiAwareBuffer {
         return this;
     }
 
+    /**
+     * Wire deferred URL hyperlinks (recorded by the ANSI parser for OSC 8 links
+     * as a bare `url` with no handlers) into live, clickable links. `factory`
+     * turns a URI into a {@link FormatHyperlink} with the right click behaviour
+     * (or `undefined` to drop the link). Segments that already have a handler —
+     * e.g. an MXP `<SEND>` link overlaid on the same range — are left alone.
+     */
+    bindUrlHyperlinks(factory: (url: string) => FormatHyperlink | undefined): this {
+        for (const seg of this.segments) {
+            const link = seg.state?.hyperlink;
+            if (!link?.url || link.onClick) continue;
+            const hl = factory(link.url);
+            const base = cloneState(seg.state) ?? {};
+            base.hyperlink = hl ? { ...hl } : undefined;
+            seg.state = base;
+        }
+        return this;
+    }
+
     colorWords(
         words: string | string[],
         color: number | FormatStateSnapshot,
@@ -845,6 +907,9 @@ export class AnsiAwareBuffer {
             if (state.underline) decorations.push("underline");
             if (state.strikethrough) decorations.push("line-through");
             if (state.overline) decorations.push("overline");
+            // Hyperlinks get an underline cue (matching MXP links and terminal
+            // convention) unless the run already carries an explicit underline.
+            if (state.hyperlink && !state.underline) decorations.push("underline");
             if (decorations.length > 0) styles.push(`text-decoration: ${decorations.join(" ")}`);
 
             if (state.hyperlink) {
@@ -896,6 +961,9 @@ export class AnsiAwareBuffer {
             if (state.underline) decorations.push("underline");
             if (state.strikethrough) decorations.push("line-through");
             if (state.overline) decorations.push("overline");
+            // Hyperlinks get an underline cue (matching MXP links and terminal
+            // convention) unless the run already carries an explicit underline.
+            if (state.hyperlink && !state.underline) decorations.push("underline");
             if (decorations.length > 0) styles.push(`text-decoration: ${decorations.join(" ")}`);
 
             if (state.hyperlink) {

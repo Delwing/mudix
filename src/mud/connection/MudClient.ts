@@ -53,14 +53,18 @@ import {
     NEW_ENVIRON_DO,
     NEW_ENVIRON_WILL,
     NEW_ENVIRON_WONT,
+    NEW_ENVIRON_USERVAR,
+    NEW_ENVIRON_VAR,
     EOR_WILL,
     EOR_DO,
     SGA_WILL,
     SGA_DO,
-    MTTS_BITVECTOR,
+    computeMtts,
     parseMnesRequest,
     encodeMnesIs,
     selectMnesVars,
+    buildNewEnvironVars,
+    CLIENT_VERSION,
     type MnesVar,
     NAWS_WILL,
     NAWS_DO,
@@ -117,11 +121,27 @@ export interface MudClientOptions {
      *  literal text). The actual tag parsing lives downstream in the scripting
      *  engine, gated on the `mxp.negotiated` event this client emits. */
     mxpEnabled?: boolean;
-    /** Whether to accept MNES / NEW-ENVIRON (telnet option 39) negotiation.
-     *  Default false. When false, IAC DO NEW-ENVIRON is ignored so the client
-     *  never reports its CHARSET / CLIENT_NAME / CLIENT_VERSION / MTTS /
-     *  TERMINAL_TYPE environment variables to the server. */
+    /** Whether to answer telnet option 39 in MNES mode (Mud New-Environ
+     *  Standard). Default false. When on, the client reports the five MNES core
+     *  variables (CHARSET / CLIENT_NAME / CLIENT_VERSION / MTTS / TERMINAL_TYPE),
+     *  framed as NEW_ENVIRON_VAR. MNES takes precedence over plain NEW-ENVIRON
+     *  when both are enabled — matching Mudlet, which restricts the reported set
+     *  to these five whenever MNES is active. */
     mnesEnabled?: boolean;
+    /** Whether to answer telnet option 39 in plain NEW-ENVIRON mode (RFC 1572,
+     *  "Client Variables Standard"). Default false. When on (and MNES off), the
+     *  client reports the five core variables plus an extended capability set
+     *  (ANSI, 256_COLORS, TRUECOLOR, UTF-8, TLS, WORD_WRAP, …), framed as
+     *  NEW_ENVIRON_USERVAR. Mudlet exposes MNES and NEW-ENVIRON as two separate
+     *  toggles over the same telnet option; mudix mirrors that. */
+    newEnvironEnabled?: boolean;
+    /** Whether the link to the *game server* is TLS-encrypted, reported as the
+     *  NEW-ENVIRON `TLS` capability. Defaults to whether `url` is `wss://` — the
+     *  correct answer for a direct websocket-mode connection. In proxy (`mud`)
+     *  mode the caller passes `false` explicitly, because a `wss://` proxy URL
+     *  only secures the browser↔proxy hop while the proxy↔MUD telnet socket is
+     *  plaintext (see connectionSecureTransport). */
+    secureTransport?: boolean;
     /** Whether to negotiate NAWS / window size (telnet option 31). Default true
      *  (matching Mudlet). When true the client offers IAC WILL NAWS on connect
      *  and, once the server accepts (IAC DO NAWS), reports the main output
@@ -155,9 +175,6 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 300;
  *  server confirm the dialect via the RFC 6455 handshake. */
 export const MUD_TELNET_SUBPROTOCOL = 'telnet.mudstandards.org';
 
-/** Version string reported as our client version — GMCP `Core.Hello` and the
- *  MNES CLIENT_VERSION variable. */
-const MNES_CLIENT_VERSION = "0.1.0";
 
 /** In-band MXP line-mode sequence `ESC[<n>z` (n optional). Its presence means
  *  the server is speaking MXP even if it skipped the telnet option-91 handshake.
@@ -252,6 +269,9 @@ export class MudClient {
     private mspEnabled: boolean;
     private mxpEnabled: boolean;
     private mnesEnabled: boolean;
+    private newEnvironEnabled: boolean;
+    /** Whether the game-facing transport is TLS (for the NEW-ENVIRON TLS var). */
+    private secureTransport: boolean;
     private nawsEnabled: boolean;
     /** True once we've sent IAC WILL NAWS this session (proactively on connect,
      *  or in response to a server-initiated IAC DO NAWS), so we don't re-offer. */
@@ -293,6 +313,8 @@ export class MudClient {
             mspEnabled = false,
             mxpEnabled = true,
             mnesEnabled = false,
+            newEnvironEnabled = false,
+            secureTransport,
             nawsEnabled = true,
             fixUnnecessaryLinebreaks = false,
             subprotocols = [],
@@ -312,6 +334,10 @@ export class MudClient {
         this.mspEnabled = mspEnabled;
         this.mxpEnabled = mxpEnabled;
         this.mnesEnabled = mnesEnabled;
+        this.newEnvironEnabled = newEnvironEnabled;
+        // Fall back to the URL scheme when the caller doesn't say — correct for a
+        // direct websocket connection; proxy mode passes false explicitly.
+        this.secureTransport = secureTransport ?? /^wss:/i.test(url);
         this.nawsEnabled = nawsEnabled;
         this.fixUnnecessaryLinebreaks = fixUnnecessaryLinebreaks;
         this.subprotocols = subprotocols;
@@ -360,7 +386,7 @@ export class MudClient {
             else if (code === CHARSET_COMMAND_CODE) this.handleCharsetSubneg(subneg);
             else if (code === MSP_COMMAND_CODE) this.handleMspSubneg(subneg);
             else if (code === MXP_COMMAND_CODE) this.handleMxpSubneg();
-            else if (code === NEW_ENVIRON_COMMAND_CODE) this.handleMnesSubneg(subneg);
+            else if (code === NEW_ENVIRON_COMMAND_CODE) this.handleNewEnvironSubneg(subneg);
         });
         this.mccpHandler = new MccpHandler((data) => this.sendRaw(data));
         this.mccpHandler.enabled = mccpEnabled;
@@ -559,18 +585,22 @@ export class MudClient {
                         this.sendRaw(SGA_DO);
                     }
                     if (data.includes(NEW_ENVIRON_DO)) {
-                        if (this.mnesEnabled) {
+                        // MNES and plain NEW-ENVIRON share telnet option 39 and
+                        // differ only in the variable set reported (handled in
+                        // handleNewEnvironSubneg); either toggle being on means we
+                        // answer the option. MNES takes precedence when both are on.
+                        if (this.mnesEnabled || this.newEnvironEnabled) {
                             // Server asks us to report environment variables (IAC
                             // DO NEW-ENVIRON) → we agree (IAC WILL NEW-ENVIRON).
                             // The server then sends SB NEW-ENVIRON SEND … which
-                            // handleMnesSubneg answers. NEW-ENVIRON is asymmetric —
-                            // the client owns the variables — so we only handle the
-                            // DO direction (a WILL would mean the server has env
-                            // vars, which MNES doesn't use).
+                            // handleNewEnvironSubneg answers. NEW-ENVIRON is
+                            // asymmetric — the client owns the variables — so we
+                            // only handle the DO direction (a WILL would mean the
+                            // server has env vars, which this protocol doesn't use).
                             this.sendRaw(NEW_ENVIRON_WILL);
-                            this.eventBus.emit('mnes.negotiated');
+                            this.eventBus.emit('mnes.negotiated', this.mnesEnabled ? 'MNES' : 'NEW-ENVIRON');
                         } else {
-                            // MNES disabled → explicitly decline (IAC WONT
+                            // Both disabled → explicitly decline (IAC WONT
                             // NEW-ENVIRON). A bare DO with no WILL/WONT answer
                             // leaves strict servers waiting on the option before
                             // they continue (e.g. before sending the login prompt),
@@ -802,7 +832,7 @@ export class MudClient {
         try {
             this.sendBytes(encodeGmcp('Core.Hello', {
                 client: 'MUDIX',
-                version: MNES_CLIENT_VERSION,
+                version: CLIENT_VERSION,
             }));
             // Mudlet's default Core.Supports.Set, minus "External.Discord 1"
             // (Mudlet only sends that when its Discord integration is active —
@@ -966,8 +996,14 @@ export class MudClient {
     private respondTerminalType(subneg: string): void {
         if (!this.mttsEnabled) return;
         if (subneg.charCodeAt(1) !== TTYPE_SEND.charCodeAt(0)) return; // only handle SEND
-        // MTTS bits we advertise: ANSI(1) + UTF-8(4) + 256 COLORS(8) + TRUECOLOR(256) = 269.
-        const cycle = ['MUDIX', 'XTERM-256COLOR', `MTTS ${MTTS_BITVECTOR}`];
+        // MTTS bitvector tracks live state (UTF-8 encoding, TLS transport); the
+        // static bits (ANSI, 256 colours, OSC colour palette, truecolour) are
+        // always on. See computeMtts.
+        const mtts = computeMtts({
+            utf8: this.currentEncoding === 'utf-8',
+            tls: this.secureTransport,
+        });
+        const cycle = ['MUDIX', 'XTERM-256COLOR', `MTTS ${mtts}`];
         const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
         if (this.ttypeStep < cycle.length - 1) this.ttypeStep++;
         this.sendRaw(GMCP_IAC + GMCP_SB + OPT_TTYPE + TTYPE_IS + value + GMCP_IAC + GMCP_SE);
@@ -1082,32 +1118,42 @@ export class MudClient {
         this.eventBus.emit('mxp.negotiated', viaTelnet);
     }
 
-    /** Answer an `IAC SB NEW-ENVIRON SEND … IAC SE` request with our MNES
-     *  variables, framed as `IAC SB NEW-ENVIRON IS VAR … VALUE … IAC SE`. The
-     *  server may request specific variables or send a bare SEND for all;
-     *  selectMnesVars handles both. No-op on a malformed/non-SEND body. */
-    private handleMnesSubneg(subneg: string): void {
-        if (!this.mnesEnabled) return;
+    /** Answer an `IAC SB NEW-ENVIRON SEND … IAC SE` request, framed as
+     *  `IAC SB NEW-ENVIRON IS <marker> … VALUE … IAC SE`. Telnet option 39 is
+     *  shared by two modes: MNES reports the five core variables framed as VAR;
+     *  plain NEW-ENVIRON reports the core set plus an extended capability set,
+     *  framed as USERVAR. MNES takes precedence when both toggles are on
+     *  (matching Mudlet). The server may request specific variables or send a
+     *  bare SEND for all; selectMnesVars handles both. No-op when the option is
+     *  off for this profile or on a malformed/non-SEND body. */
+    private handleNewEnvironSubneg(subneg: string): void {
+        // MNES precedence: when on, it restricts the reported set to the core
+        // five regardless of whether plain NEW-ENVIRON is also enabled.
+        const extended = !this.mnesEnabled && this.newEnvironEnabled;
+        if (!this.mnesEnabled && !this.newEnvironEnabled) return;
         const request = parseMnesRequest(subneg);
         if (!request.isSend) return;
-        const vars = selectMnesVars(request, this.collectMnesVars());
-        this.sendRaw(encodeMnesIs(vars));
+        const vars = selectMnesVars(request, this.collectNewEnvironVars(extended));
+        const marker = extended ? NEW_ENVIRON_USERVAR : NEW_ENVIRON_VAR;
+        this.sendRaw(encodeMnesIs(vars, marker));
     }
 
-    /** Build the MNES variable set the client reports. CHARSET tracks the live
-     *  negotiated encoding; the rest mirror the TTYPE/MTTS handshake. CLIENT_NAME
-     *  is "MUDIX" — our own identity, matching respondTerminalType. */
-    private collectMnesVars(): MnesVar[] {
+    /** Build the option-39 variable set from live client state. CHARSET tracks
+     *  the negotiated encoding; the extended NEW-ENVIRON capabilities derive from
+     *  the game-facing transport (TLS — false in proxy mode, see secureTransport)
+     *  and the measured output grid (WORD_WRAP). The static identity
+     *  (CLIENT_NAME/VERSION, MTTS, TERMINAL_TYPE) and the capability defaults live
+     *  in buildNewEnvironVars. */
+    private collectNewEnvironVars(extended: boolean): MnesVar[] {
         const charset = this.currentEncoding === 'utf-8'
             ? 'UTF-8'
             : this.currentEncoding.toUpperCase();
-        return [
-            { name: 'CHARSET', value: charset },
-            { name: 'CLIENT_NAME', value: 'MUDIX' },
-            { name: 'CLIENT_VERSION', value: MNES_CLIENT_VERSION },
-            { name: 'MTTS', value: String(MTTS_BITVECTOR) },
-            { name: 'TERMINAL_TYPE', value: 'XTERM-256COLOR' },
-        ];
+        return buildNewEnvironVars({
+            charset,
+            utf8: this.currentEncoding === 'utf-8',
+            tls: this.secureTransport,
+            wrapColumns: this.windowSize?.cols ?? 0,
+        }, extended);
     }
 
     /** Report the main output window's character grid (columns × rows) for NAWS.

@@ -48,11 +48,12 @@ Mudlet); the rest are live.
 | `enableMSSP` | `protocols.mssp` | next connect |
 | `enableMTTS` | `protocols.mtts` | next connect |
 | `enableMXP` | `protocols.mxp` | next connect |
-| `enableMNES` | `protocols.mnes` | next connect |
+| `enableMNES` | `protocols.mnes` | next connect — restricted core variable set (telnet option 39) |
+| `enableNewEnviron` | `protocols.newEnviron` | next connect — extended NEW-ENVIRON variable set (telnet option 39) |
 | `specialForceMxpNegotiationOff` | `!protocols.mxp` | inverse flag |
 | `specialForceCharsetNegotiationOff` | `!protocols.charset` | inverse flag |
 | `specialForceCompressionOff` | `!protocols.mccp` | inverse flag — forces MCCP (option 86) off |
-| `forceNewEnvironNegotiationOff` | `!protocols.mnes` | inverse flag |
+| `forceNewEnvironNegotiationOff` | `!(protocols.mnes \|\| protocols.newEnviron)` | inverse flag — disables both option-39 variants |
 | `autoClearInputLine` | `autoClearInput` | live |
 | `mapRoomSize` | `mapper.roomSize` | positive number only |
 | `mapExitSize` | `mapper.lineWidth` | positive number only |
@@ -67,6 +68,8 @@ Mudlet); the rest are live.
 |---|---|
 | `showSentText` | Three-state echo mode stored in `MudSession.showSentText` (`'never'` / `'script'` / `'always'`). `never` suppresses the local echo of sent commands entirely; `script` (default) echoes unless a script passes `send(cmd, false)`; `always` echoes even then. Booleans / boolean-ish strings are accepted for back-compat (`true`→`script`, `false`→`never`); an unknown mode string is rejected (`setConfig`→`false`). Persisted to the `config` bag and re-applied on profile load (constructor of `ScriptingAPI`). **Credentials are exempt:** the auto-login password goes through `MudSession.sendSecret()`, which never echoes regardless of mode; user-typed passwords are also safe because `echoCommand` is gated on `shouldEchoCommand()` (false while the server is in password/echo-off mode). |
 | `mapperPanelVisible` | Opens (`true`) or hides (`false`) the docked `MapPanel` via `WindowManager` — the same action as the toolbar's map button. `getConfig` reports the live `isVisible('map')`. Not persisted (window visibility is ephemeral window state, restored from the layout snapshot). |
+| `muteMediaAPI` | Mutes media triggered by the scripting API (`playSoundFile` / `playMusicFile`). Forwarded to `SoundManager.setOriginMuted('api', …)`: currently-playing API sources are silenced in place (gain → 0, position keeps advancing) and new API sources start silent; unmuting restores audibility mid-track — mirroring Mudlet toggling `QAudioOutput::setMuted` on the live `MediaProtocolAPI` players. Persisted to the `config` bag and re-applied on profile load (`ScriptingAPI` constructor). `getConfig` reports the live `SoundManager.isOriginMuted('api')`. |
+| `muteMediaGame` | Same as `muteMediaAPI` but for server-driven media — MSP `!!SOUND`/`!!MUSIC` and GMCP media (Mudlet's `MediaProtocolMSP`/`MediaProtocolGMCP`). Forwarded to `SoundManager.setOriginMuted('game', …)`; the MSP dispatch in `ScriptingEngine` tags its plays with `origin: 'game'`. |
 
 ### 2a. Config-bag keys consumed by the UI
 
@@ -96,7 +99,6 @@ returns `false`).
 `compactInputLine`, `controlCharacterHandling` (`asis`/`oem`/`picture`),
 `editorAutoComplete`, `enableClosedCaption`, `f3SearchEnabled`,
 `inputLineStrictUnixEndings`, `logInHTML`,
-`muteMediaAPI`, `muteMediaGame`,
 `promptForMXPProcessorOn`, `promptForVersionInTTYPE`, `show3dMapView`,
 `showRoomIdsOnMap`, `showUpperLowerLevels`,
 `specialForceGAOff`, `versionInTTYPE`.
@@ -138,8 +140,6 @@ group 3 to group 1/2 as the underlying feature lands:
   `versionInTTYPE`, `promptForVersionInTTYPE`, `promptForMXPProcessorOn`.
 - **Map:** `show3dMapView` (no 3D renderer), `showRoomIdsOnMap`,
   `showUpperLowerLevels`.
-- **Media:** `muteMediaAPI`, `muteMediaGame` (`SoundManager` has stop/pause but
-  no persistent mute gate).
 - **Misc UI / logging:** `logInHTML`.
 
 ## Tests

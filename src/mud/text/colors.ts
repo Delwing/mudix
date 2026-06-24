@@ -3,13 +3,25 @@ import xterm256 from "./xterm256";
 const DEFAULT_ANSI_DARK = ["#000000", "#bb0000", "#00bb00", "#bbbb00", "#0000bb", "#bb00bb", "#00bbbb", "#bbbbbb"];
 const DEFAULT_ANSI_BRIGHT = ["#555555", "#ff5555", "#55ff55", "#ffff55", "#5555ff", "#ff55ff", "#55ffff", "#ffffff"];
 
+// Pristine copy of the built-in 256-colour table. `colorCodes.xterm` below is a
+// *copy* so OSC 4 palette redefinition (which mutates it) never corrupts the
+// imported module array, and OSC 104 can restore exact defaults from here.
+const DEFAULT_XTERM: readonly string[] = [...(xterm256 as string[])];
+
 export const colorCodes = {
-    xterm: xterm256 as string[],
+    xterm: [...(xterm256 as string[])],
     ansi: {
         bright: [...DEFAULT_ANSI_BRIGHT],
         dark:   [...DEFAULT_ANSI_DARK],
     },
 };
+
+// The "base" 16-colour palette OSC 104 resets back to: the user-configured
+// palette (set via applyAnsiPalette) or the built-in defaults. Tracked
+// separately from the live colorCodes.ansi arrays, which OSC 4 may have
+// overwritten since.
+let baseAnsiDark = [...DEFAULT_ANSI_DARK];
+let baseAnsiBright = [...DEFAULT_ANSI_BRIGHT];
 
 /** Built-in 16-color ANSI palette. Index 0–7 dark, 8–15 bright. The Settings
  *  modal uses this as the fallback when a profile hasn't overridden a slot. */
@@ -24,10 +36,52 @@ const HEX_RE = /^#[0-9a-f]{6}$/i;
 export function applyAnsiPalette(palette?: readonly (string | undefined)[]): void {
     for (let i = 0; i < 8; i++) {
         const v = palette?.[i];
-        colorCodes.ansi.dark[i] = (typeof v === 'string' && HEX_RE.test(v)) ? v : DEFAULT_ANSI_DARK[i];
+        const dark = (typeof v === 'string' && HEX_RE.test(v)) ? v : DEFAULT_ANSI_DARK[i];
+        colorCodes.ansi.dark[i] = dark;
+        baseAnsiDark[i] = dark;
+        colorCodes.xterm[i] = dark; // 38;5;0..7 mirrors the dark ANSI slots
     }
     for (let i = 0; i < 8; i++) {
         const v = palette?.[i + 8];
-        colorCodes.ansi.bright[i] = (typeof v === 'string' && HEX_RE.test(v)) ? v : DEFAULT_ANSI_BRIGHT[i];
+        const bright = (typeof v === 'string' && HEX_RE.test(v)) ? v : DEFAULT_ANSI_BRIGHT[i];
+        colorCodes.ansi.bright[i] = bright;
+        baseAnsiBright[i] = bright;
+        colorCodes.xterm[i + 8] = bright; // 38;5;8..15 mirrors the bright slots
     }
+}
+
+/**
+ * OSC 4 palette redefinition: point colour index `index` (0–255) at `hex`
+ * (`#rrggbb`). Indices 0–15 also update the 16-colour ANSI table so subsequent
+ * SGR 30–37/40–47/90–107 pick up the change, keeping the two tables coherent.
+ * Out-of-range indices and malformed colours are ignored.
+ */
+export function setPaletteColor(index: number, hex: string): void {
+    if (!Number.isInteger(index) || index < 0 || index > 255) return;
+    if (!HEX_RE.test(hex)) return;
+    colorCodes.xterm[index] = hex;
+    if (index < 8) colorCodes.ansi.dark[index] = hex;
+    else if (index < 16) colorCodes.ansi.bright[index - 8] = hex;
+}
+
+/** OSC 104 single-index reset: restore one palette entry to its base value (the
+ *  user palette for 0–15, the built-in xterm default otherwise). */
+export function resetPaletteColor(index: number): void {
+    if (!Number.isInteger(index) || index < 0 || index > 255) return;
+    if (index < 8) {
+        colorCodes.ansi.dark[index] = baseAnsiDark[index];
+        colorCodes.xterm[index] = baseAnsiDark[index];
+    } else if (index < 16) {
+        colorCodes.ansi.bright[index - 8] = baseAnsiBright[index - 8];
+        colorCodes.xterm[index] = baseAnsiBright[index - 8];
+    } else {
+        colorCodes.xterm[index] = DEFAULT_XTERM[index];
+    }
+}
+
+/** OSC 104 with no index: restore the entire palette to its base state. */
+export function resetAllPaletteColors(): void {
+    for (let i = 16; i < colorCodes.xterm.length; i++) colorCodes.xterm[i] = DEFAULT_XTERM[i];
+    for (let i = 0; i < 8; i++) resetPaletteColor(i);
+    for (let i = 8; i < 16; i++) resetPaletteColor(i);
 }

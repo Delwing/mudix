@@ -6,6 +6,8 @@ import {
   EOR_WILL, EOR_DO,
   SGA_WILL, SGA_DO,
   NEW_ENVIRON_DO, NEW_ENVIRON_WILL, NEW_ENVIRON_WONT,
+  OPT_NEW_ENVIRON, NEW_ENVIRON_IS, NEW_ENVIRON_SEND,
+  NEW_ENVIRON_VAR, NEW_ENVIRON_USERVAR,
 } from '../../../src/mud/protocol/constants';
 import type { MudClientEvents } from '../../../src/mud/events';
 
@@ -93,6 +95,82 @@ describe('login-time telnet negotiation replies', () => {
     const out = sentText(sock);
     expect(out).toContain(NEW_ENVIRON_WILL);
     expect(out).not.toContain(NEW_ENVIRON_WONT);
+  });
+
+  it('accepts DO NEW-ENVIRON with WILL when only plain NEW-ENVIRON is enabled', () => {
+    const { sock } = connected({ newEnvironEnabled: true });
+    sock.deliver(NEW_ENVIRON_DO);
+    const out = sentText(sock);
+    expect(out).toContain(NEW_ENVIRON_WILL);
+    expect(out).not.toContain(NEW_ENVIRON_WONT);
+  });
+
+  // A server's `IAC SB NEW-ENVIRON SEND IAC SE` request — the option parser
+  // strips IAC SB/SE and hands the body (option code + command) to the handler.
+  const sendRequest = '\xFF\xFA' + OPT_NEW_ENVIRON + NEW_ENVIRON_SEND + '\xFF\xF0';
+
+  it('answers a SEND in MNES mode with VAR-framed core variables only', () => {
+    const { sock } = connected({ mnesEnabled: true });
+    sock.deliver(NEW_ENVIRON_DO);
+    sock.sent.length = 0;
+    sock.deliver(sendRequest);
+    const out = sentText(sock);
+    expect(out).toContain(NEW_ENVIRON_IS + NEW_ENVIRON_VAR + 'CHARSET');
+    expect(out).toContain(NEW_ENVIRON_VAR + 'CLIENT_NAME' + '\x01' + 'MUDIX');
+    // MNES restricts to the five core vars — no extended capabilities, no USERVAR.
+    expect(out).not.toContain('ANSI');
+    expect(out).not.toContain(NEW_ENVIRON_USERVAR);
+  });
+
+  it('answers a SEND in NEW-ENVIRON mode with USERVAR-framed extended variables', () => {
+    const { sock } = connected({ newEnvironEnabled: true });
+    sock.deliver(NEW_ENVIRON_DO);
+    sock.sent.length = 0;
+    sock.deliver(sendRequest);
+    const out = sentText(sock);
+    // Core vars still present, but framed as USERVAR (not VAR).
+    expect(out).toContain(NEW_ENVIRON_USERVAR + 'CHARSET');
+    expect(out).not.toContain(NEW_ENVIRON_VAR + 'CHARSET');
+    // Extended capability set is included.
+    expect(out).toContain(NEW_ENVIRON_USERVAR + 'ANSI');
+    expect(out).toContain(NEW_ENVIRON_USERVAR + 'TRUECOLOR');
+  });
+
+  it('lets MNES take precedence over NEW-ENVIRON when both are enabled', () => {
+    const { sock } = connected({ mnesEnabled: true, newEnvironEnabled: true });
+    sock.deliver(NEW_ENVIRON_DO);
+    sock.sent.length = 0;
+    sock.deliver(sendRequest);
+    const out = sentText(sock);
+    expect(out).toContain(NEW_ENVIRON_VAR + 'CHARSET');
+    expect(out).not.toContain('ANSI'); // restricted to the MNES core set
+  });
+
+  it('reports TLS=1 in NEW-ENVIRON mode over a direct wss:// connection', () => {
+    const { sock } = connected({ newEnvironEnabled: true, url: 'wss://secure.invalid' });
+    sock.deliver(NEW_ENVIRON_DO);
+    sock.sent.length = 0;
+    sock.deliver(sendRequest);
+    // USERVAR 'TLS' VALUE(\x01) '1'
+    expect(sentText(sock)).toContain(NEW_ENVIRON_USERVAR + 'TLS' + '\x01' + '1');
+  });
+
+  it('reports TLS=0 in NEW-ENVIRON mode when the transport is not secure (proxy mode)', () => {
+    // Proxy mode passes secureTransport:false — a wss:// proxy URL only secures
+    // the browser↔proxy hop, not the plaintext proxy↔MUD telnet socket.
+    const { sock } = connected({ newEnvironEnabled: true, url: 'wss://proxy.invalid', secureTransport: false });
+    sock.deliver(NEW_ENVIRON_DO);
+    sock.sent.length = 0;
+    sock.deliver(sendRequest);
+    expect(sentText(sock)).toContain(NEW_ENVIRON_USERVAR + 'TLS' + '\x01' + '0');
+  });
+
+  it('emits mnes.negotiated with the active protocol name', () => {
+    const seen: string[] = [];
+    const { sock, bus } = connected({ newEnvironEnabled: true });
+    bus.on('mnes.negotiated', (name) => seen.push(name));
+    sock.deliver(NEW_ENVIRON_DO);
+    expect(seen).toEqual(['NEW-ENVIRON']);
   });
 
   it('emits charLogin.request on Char.Login.Default (no auto-reply)', () => {

@@ -1105,7 +1105,8 @@ export class ScriptingEngine {
         }
         const name = await this.resolveMspMedia(command);
         if (!name) return;
-        const opts: { name: string; volume?: number; loops?: number; tag?: string; continue?: boolean } = { name };
+        // MSP is server-driven, so it rides the 'game' mute gate (muteMediaGame).
+        const opts: { name: string; volume?: number; loops?: number; tag?: string; continue?: boolean; origin?: 'api' | 'game' } = { name, origin: 'game' };
         if (command.volume !== undefined) opts.volume = command.volume;
         if (command.loops !== undefined) opts.loops = command.loops;
         if (command.type) opts.tag = command.type;
@@ -2410,6 +2411,7 @@ export class ScriptingEngine {
                         for (const part of parts) {
                             const buffer = new AnsiAwareBuffer(part.segments);
                             this.wireMxpLinks(buffer, part.links);
+                            this.wireOsc8Links(buffer);
                             units.push({
                                 plain: part.plain,
                                 buffer,
@@ -2419,6 +2421,7 @@ export class ScriptingEngine {
                         }
                     } else {
                         const buffer = new AnsiAwareBuffer(line, carryState);
+                        this.wireOsc8Links(buffer);
                         // The buffer's text is the line with every escape
                         // sequence (SGR, OSC 8 links, cursor moves, …) already
                         // consumed — exactly what's rendered — so trigger
@@ -2482,6 +2485,17 @@ export class ScriptingEngine {
             );
             buffer.setHyperlink([link.start, link.end], hl);
         }
+    }
+
+    /**
+     * Turn OSC 8 hyperlinks (recorded by the ANSI/MXP parser as a bare `url` on
+     * the segment) into clickable links. `createOsc8Hyperlink` maps the URI's
+     * scheme to the action — send a command, seed the command bar, or open a
+     * URL — and drops links whose scheme isn't allowed. Runs after
+     * `wireMxpLinks` so an MXP `<SEND>` overlaid on the same text wins.
+     */
+    private wireOsc8Links(buffer: AnsiAwareBuffer): void {
+        buffer.bindUrlHyperlinks((url) => this.api.createOsc8Hyperlink(url));
     }
 
     /**
@@ -2686,10 +2700,12 @@ export class ScriptingEngine {
             }),
             // MNES / NEW-ENVIRON finished negotiating (server DO → client WILL).
             // Mirror the GMCP/MSDP/MSSP pair so scripts can hook
-            // sysProtocolEnabled('MNES').
-            session.events.on('mnes.negotiated', () => {
+            // sysProtocolEnabled. The payload names the active mode ('MNES' or
+            // 'NEW-ENVIRON') — both ride telnet option 39 but report different
+            // variable sets.
+            session.events.on('mnes.negotiated', (protocol) => {
                 this.mnesNegotiated = true;
-                this.emit('sysProtocolEnabled', ['MNES']);
+                this.emit('sysProtocolEnabled', [protocol]);
             }),
             // MXP finished negotiating (telnet option 91). Flip on in-band markup
             // parsing and mirror the GMCP/MSDP/MSSP pair so scripts can hook

@@ -145,10 +145,50 @@ export const NEW_ENVIRON_DO   = "\xFF\xFD\x27"; // IAC DO NEW-ENVIRON  - server 
 export const NEW_ENVIRON_WILL = "\xFF\xFB\x27"; // IAC WILL NEW-ENVIRON - we agree to report
 export const NEW_ENVIRON_WONT = "\xFF\xFC\x27"; // IAC WONT NEW-ENVIRON - we decline to report (MNES off)
 
-// MTTS (Mud Terminal Type Standard) capability bitvector advertised by both the
-// TTYPE cycle (as `MTTS <n>`) and MNES (as the MTTS variable): ANSI(1) +
-// UTF-8(4) + 256 COLORS(8) + TRUECOLOR(256) = 269.
-export const MTTS_BITVECTOR = 269;
+// MTTS (Mud Terminal Type Standard) capability bits, advertised by both the
+// TTYPE cycle (as `MTTS <n>`) and MNES (as the MTTS variable). See
+// https://tintin.mudhalla.net/protocols/mtts/.
+export const MTTS_ANSI = 1;
+export const MTTS_VT100 = 2;
+export const MTTS_UTF8 = 4;
+export const MTTS_256_COLORS = 8;
+export const MTTS_MOUSE_TRACKING = 16;
+export const MTTS_OSC_COLOR_PALETTE = 32;
+export const MTTS_SCREEN_READER = 64;
+export const MTTS_PROXY = 128;
+export const MTTS_TRUECOLOR = 256;
+export const MTTS_MNES = 512;
+export const MTTS_MSLP = 1024;
+export const MTTS_SSL = 2048;
+
+/** Live capabilities that toggle the dynamic MTTS bits. The static bits (ANSI,
+ *  256 colours, OSC colour palette, truecolour) are always on. */
+export interface MttsCapabilities {
+    /** UTF-8 is the active encoding (sets the UTF-8 bit). */
+    utf8?: boolean;
+    /** The game-facing transport is TLS-encrypted (sets the SSL bit). */
+    tls?: boolean;
+    /** MNES is negotiated (sets the MNES bit). */
+    mnes?: boolean;
+    /** A screen reader is being advertised (sets the SCREEN READER bit). */
+    screenReader?: boolean;
+}
+
+/**
+ * Compose the MTTS bitvector mudix advertises. Mirrors Mudlet's
+ * `getNewEnvironMTTS`: ANSI + 256 COLORS + OSC COLOR PALETTE + TRUECOLOR are
+ * always present (mudix's static terminal capabilities); UTF-8, SSL/TLS, MNES
+ * and SCREEN READER are added from live state. With UTF-8 + TLS this yields
+ * 2349, matching a default Mudlet connection.
+ */
+export function computeMtts(caps: MttsCapabilities = {}): number {
+    let bits = MTTS_ANSI | MTTS_256_COLORS | MTTS_OSC_COLOR_PALETTE | MTTS_TRUECOLOR;
+    if (caps.utf8) bits |= MTTS_UTF8;
+    if (caps.tls) bits |= MTTS_SSL;
+    if (caps.mnes) bits |= MTTS_MNES;
+    if (caps.screenReader) bits |= MTTS_SCREEN_READER;
+    return bits;
+}
 
 // NAWS (Negotiate About Window Size, RFC 1073) — telnet option 31. The client
 // owns the window, so negotiation is client-driven: the client sends IAC WILL

@@ -3193,6 +3193,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 loops: numOpt(o.loops),
                 key: strOpt(o.key),
                 tag: strOpt(o.tag),
+                origin: 'api',
             });
             return true;
         });
@@ -3208,6 +3209,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 key: strOpt(o.key),
                 tag: strOpt(o.tag),
                 continue: o.continue === true || o['continue'] === true,
+                origin: 'api',
             });
             return true;
         });

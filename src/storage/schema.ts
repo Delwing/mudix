@@ -192,10 +192,18 @@ export interface ProtocolSettings {
      *  tags, clickable `<SEND>`/`<A>` links, entities, and custom element
      *  definitions — from the text stream. On by default. */
     mxp?: boolean;
-    /** Telnet MNES / NEW-ENVIRON (option 39). When enabled, the client reports
-     *  its CHARSET / CLIENT_NAME / CLIENT_VERSION / MTTS / TERMINAL_TYPE
-     *  environment variables to servers that request them. Off by default. */
+    /** Telnet MNES — Mud New-Environ Standard (option 39). When enabled, the
+     *  client reports the five MNES core variables (CHARSET / CLIENT_NAME /
+     *  CLIENT_VERSION / MTTS / TERMINAL_TYPE) to servers that request them. Off
+     *  by default. MNES is the restricted subset of NEW-ENVIRON below; when both
+     *  are on, MNES wins (matching Mudlet, which exposes them as two toggles over
+     *  the same telnet option). */
     mnes?: boolean;
+    /** Telnet NEW-ENVIRON — Client Variables Standard (option 39, RFC 1572). When
+     *  enabled (and MNES off), the client reports the five core variables plus an
+     *  extended capability set (ANSI, 256_COLORS, TRUECOLOR, UTF-8, TLS,
+     *  WORD_WRAP, …) framed as USERVAR. Off by default. */
+    newEnviron?: boolean;
     /** Telnet NAWS / Negotiate About Window Size (option 31). When enabled, the
      *  client offers NAWS and reports the main output area's character grid
      *  (columns × rows) to the server, re-sending it on every resize. On by
@@ -228,6 +236,7 @@ export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
     mccp: true,
     mxp: true,
     mnes: false,
+    newEnviron: false,
     naws: true,
     wsTelnetSubprotocol: false,
 };
@@ -595,4 +604,16 @@ export function connectionUrl(c: MudConnection, userProxyUrl?: string): string {
 export function connectionDisplayAddr(c: MudConnection): string {
     if (c.mode === 'mud') return `${c.host ?? ''}:${c.port ?? 23}`;
     return c.url ?? '';
+}
+
+/** Whether the connection's link to the *game server* is TLS-encrypted — the
+ *  signal reported as the NEW-ENVIRON `TLS` variable. In `websocket` mode the
+ *  browser connects straight to the game, so a `wss://` URL is end-to-end TLS.
+ *  In `mud` (proxy) mode the browser↔proxy hop may be `wss://`, but the proxy
+ *  reaches the MUD over a raw TCP telnet socket (`net.connect`, no upstream
+ *  TLS) — so the server's inbound connection is always plaintext and this is
+ *  false regardless of the proxy URL scheme. */
+export function connectionSecureTransport(c: MudConnection): boolean {
+    if (c.mode === 'mud') return false;
+    return (c.url ?? '').trim().toLowerCase().startsWith('wss://');
 }

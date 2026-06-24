@@ -22,6 +22,12 @@
 
 type LoaderFn = (path: string) => Promise<ArrayBuffer | null>;
 
+/** Which mute gate a playback belongs to. `api` = triggered by a Lua script
+ *  (playSoundFile / playMusicFile); `game` = triggered by the server (MSP, and
+ *  GMCP media). Mirrors Mudlet's muteMediaAPI / muteMediaGame split, where API
+ *  media maps to MediaProtocolAPI and game media to MSP/GMCP. */
+export type MediaOrigin = 'api' | 'game';
+
 export interface PlaySoundOptions {
     name: string;
     /** 0..100 — Mudlet scale. Default 50. */
@@ -38,6 +44,8 @@ export interface PlaySoundOptions {
     key?: string;
     /** Group tag — stopMusic({tag=...}) and stopSounds() filter on this. */
     tag?: string;
+    /** Which mute gate governs this playback. Default 'api'. */
+    origin?: MediaOrigin;
 }
 
 export interface PlayMusicOptions extends PlaySoundOptions {
@@ -59,6 +67,7 @@ interface ActiveSource {
     name: string;
     key?: string;
     tag?: string;
+    origin: MediaOrigin;
     source: AudioBufferSourceNode;
     gain: GainNode;
     fadeout: number;
@@ -185,6 +194,15 @@ export class SoundManager {
     /** 0..1, applied as an extra multiplier on every source's gain. */
     private masterVolume = 1;
     /**
+     * Persistent per-origin mute gates — Mudlet's muteMediaAPI / muteMediaGame.
+     * A muted origin's sources keep playing (their position advances) but their
+     * gain is pinned to 0, and new sources of that origin start silent; nothing
+     * is stopped, so unmuting restores audibility mid-track. This mirrors Mudlet
+     * toggling QAudioOutput::setMuted on the live players by protocol rather than
+     * tearing them down.
+     */
+    private muted: Record<MediaOrigin, boolean> = { api: false, game: false };
+    /**
      * Raised when a tracked source ends — whether it played out naturally or
      * was stopped. ScriptingEngine wires this to raise Mudlet's
      * `sysMediaFinished(name, path)`. `stopAll()` nulls each source's onended
@@ -208,8 +226,39 @@ export class SoundManager {
         const now = ctx.currentTime;
         for (const a of this.active.values()) {
             a.gain.gain.cancelScheduledValues(now);
-            a.gain.gain.setValueAtTime(a.volume * this.masterVolume, now);
+            a.gain.gain.setValueAtTime(this.effectiveGain(a), now);
         }
+    }
+
+    /**
+     * Mudlet `muteMediaAPI` / `muteMediaGame`. Sets the persistent mute gate for
+     * a playback origin. While muted, that origin's currently-playing sources are
+     * silenced in place (gain → 0, position keeps advancing) and any new ones
+     * start silent — but nothing is stopped, so unmuting restores audibility
+     * mid-track. `api` gates script playback (playSoundFile/playMusicFile);
+     * `game` gates server-driven media (MSP / GMCP).
+     */
+    setOriginMuted(origin: MediaOrigin, muted: boolean): void {
+        if (this.muted[origin] === muted) return;
+        this.muted[origin] = muted;
+        const ctx = sharedContext;
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        for (const a of this.active.values()) {
+            if (a.origin !== origin || a.stopping) continue;
+            a.gain.gain.cancelScheduledValues(now);
+            a.gain.gain.setValueAtTime(this.effectiveGain(a), now);
+        }
+    }
+
+    isOriginMuted(origin: MediaOrigin): boolean {
+        return this.muted[origin];
+    }
+
+    /** Output gain for a source: its own volume scaled by the master volume,
+     *  pinned to 0 while its origin is muted. */
+    private effectiveGain(a: ActiveSource): number {
+        return this.muted[a.origin] ? 0 : a.volume * this.masterVolume;
     }
 
     async playSound(opts: PlaySoundOptions): Promise<number> {
@@ -385,13 +434,15 @@ export class SoundManager {
         const fadeout = Math.max(0, opts.fadeout ?? 0);
         const loops = opts.loops ?? 1;
         const startOffset = Math.max(0, (opts.start ?? 0) / 1000);
+        const origin: MediaOrigin = opts.origin ?? 'api';
 
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         const gain = ctx.createGain();
         source.connect(gain).connect(ctx.destination);
 
-        const target = volume * this.masterVolume;
+        // A muted origin plays silently from the start; unmuting later restores it.
+        const target = this.muted[origin] ? 0 : volume * this.masterVolume;
         const now = ctx.currentTime;
         if (fadein > 0) {
             gain.gain.setValueAtTime(0, now);
@@ -426,6 +477,7 @@ export class SoundManager {
             name,
             key: opts.key,
             tag: opts.tag,
+            origin,
             source,
             gain,
             fadeout,

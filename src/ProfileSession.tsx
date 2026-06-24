@@ -13,7 +13,7 @@ import { ScriptingDocsModal } from './ui/ScriptingDocsModal';
 import { CharLoginModal } from './ui/CharLoginModal';
 import { QuickOpenPalette } from './ui/QuickOpenPalette';
 import { SessionLogger } from './logging/SessionLogger';
-import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, PROTOCOL_DEFAULTS, type MudConnection } from './storage';
+import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, connectionSecureTransport, PROTOCOL_DEFAULTS, type MudConnection } from './storage';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
 import { applyAnsiPalette } from './mud/text/colors';
@@ -83,6 +83,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const mccpEnabled = protocols?.mccp ?? PROTOCOL_DEFAULTS.mccp;
     const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
     const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
+    const newEnvironEnabled = protocols?.newEnviron ?? PROTOCOL_DEFAULTS.newEnviron;
     const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
     const wsTelnetSubprotocol = protocols?.wsTelnetSubprotocol ?? PROTOCOL_DEFAULTS.wsTelnetSubprotocol;
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
@@ -124,7 +125,11 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // Advertise the mudstandards.org telnet WebSocket profile only when the
     // profile opts in (see ProtocolSettings.wsTelnetSubprotocol).
     const subprotocols = wsTelnetSubprotocol ? [MUD_TELNET_SUBPROTOCOL] : [];
-    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mccpEnabled, mxpEnabled, mnesEnabled, nawsEnabled, subprotocols });
+    // The NEW-ENVIRON TLS variable describes the game-facing link: a direct
+    // wss:// connection is TLS, but proxy mode is plaintext upstream regardless
+    // of the proxy URL scheme (see connectionSecureTransport).
+    const secureTransport = connectionSecureTransport(connection);
+    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mccpEnabled, mxpEnabled, mnesEnabled, newEnvironEnabled, secureTransport, nawsEnabled, subprotocols });
     // Mudlet's "Fix unnecessary linebreaks on GA servers" (config bag, persisted
     // by setConfig). Applied during render — like the protocol toggles above —
     // so it's on the session's options before autoConnect dials, and re-applied

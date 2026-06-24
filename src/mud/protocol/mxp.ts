@@ -21,10 +21,10 @@
 //    parsed-and-discarded: the tag is consumed so it never renders literally,
 //    while any enclosed text still renders inline.
 
-import { FormatState } from "../text/FormatState";
+import { FormatState, applyOscPaletteOps } from "../text/FormatState";
 import type { BufferSegment, FormatColor, FormatStateSnapshot } from "../text/FormatState";
 import { mxpColor } from "../text/colorParsers";
-import { scanEscape } from "../text/ansiEscapes";
+import { scanEscape, parseOsc8Payload, classifyHyperlinkUri, parseOscColorPalette } from "../text/ansiEscapes";
 
 /** A clickable region the parser found, expressed as offsets into `plain`. The
  *  engine builds the actual `FormatHyperlink` (with session/URL behaviour). */
@@ -257,10 +257,29 @@ export class MxpParser {
                 } else if (esc.kind === "csi" && esc.finalByte === "z") {
                     this.flushRun();
                     this.applyLineMode(parseInt(esc.params ?? "", 10) || 0);
+                } else if (esc.kind === "osc" && esc.oscPayload !== undefined) {
+                    // OSC 8 hyperlink: open/close a clickable link on the
+                    // following text. The URI is stashed on the pen and the
+                    // engine wires its click behaviour after the buffer is
+                    // built (bindUrlHyperlinks); a disallowed scheme is ignored.
+                    const link = parseOsc8Payload(esc.oscPayload);
+                    if (link) {
+                        this.flushRun();
+                        if (link.uri === "") {
+                            this.fmt.hyperlink = undefined;
+                        } else if (classifyHyperlinkUri(link.uri)) {
+                            this.fmt.hyperlink = { url: link.uri };
+                        }
+                    } else {
+                        // OSC 4/104 colour palette redefinition (no text/state
+                        // change — retargets colour tables for following runs).
+                        const palette = parseOscColorPalette(esc.oscPayload);
+                        if (palette) applyOscPaletteOps(palette);
+                    }
                 }
-                // Every other recognized sequence (OSC links, cursor moves,
-                // erase, charset designation, DCS strings, …) is consumed and
-                // never rendered as literal text.
+                // Every other recognized sequence (non-OSC-8 OSC commands,
+                // cursor moves, erase, charset designation, DCS strings, …) is
+                // consumed and never rendered as literal text.
                 i = esc.end;
                 continue;
             }

@@ -131,6 +131,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const mccpEnabled = protocols?.mccp ?? PROTOCOL_DEFAULTS.mccp;
     const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
     const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
+    const newEnvironEnabled = protocols?.newEnviron ?? PROTOCOL_DEFAULTS.newEnviron;
     const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
     const wsTelnetSubprotocol = protocols?.wsTelnetSubprotocol ?? PROTOCOL_DEFAULTS.wsTelnetSubprotocol;
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
@@ -149,6 +150,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         : DEFAULT_HISTORY_SAVE_SIZE;
     const showTabConnectionIndicators = (config?.showTabConnectionIndicators as boolean | undefined) ?? true;
     const fixUnnecessaryLinebreaks = (config?.fixUnnecessaryLinebreaks as boolean | undefined) ?? false;
+    const enableBlinkText = (config?.enableBlinkText as boolean | undefined) ?? false;
     // showSentText is stored as a mode string; legacy profiles may hold a boolean
     // (false ≙ never, true/unset ≙ script).
     const rawShowSentText = config?.showSentText;
@@ -466,12 +468,13 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                 <span className="settings-label" id="protocol-mnes-label">
                                     MNES
                                     <HelpTip label="About MNES">
-                                        Telnet option 39 (NEW-ENVIRON). Mud New-Environ Standard —
-                                        when a server requests it, the client reports its
-                                        <code>CHARSET</code>, <code>CLIENT_NAME</code>,
+                                        Telnet option 39, Mud New-Environ Standard — the restricted
+                                        subset of NEW-ENVIRON. When a server requests it, the client
+                                        reports just its <code>CHARSET</code>, <code>CLIENT_NAME</code>,
                                         <code>CLIENT_VERSION</code>, <code>MTTS</code>, and
                                         <code>TERMINAL_TYPE</code>. Off by default; enable for MUDs
-                                        that use it for client detection.
+                                        that use it for client detection. Takes precedence over
+                                        NEW-ENVIRON when both are on.
                                     </HelpTip>
                                 </span>
                                 <Toggle
@@ -479,6 +482,25 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     aria-labelledby="protocol-mnes-label"
                                     checked={mnesEnabled}
                                     onChange={next => patchProtocols({ mnes: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-new-environ-label">
+                                    NEW-ENVIRON
+                                    <HelpTip label="About NEW-ENVIRON">
+                                        Telnet option 39, Client Variables Standard (RFC 1572). Like
+                                        MNES but reports an extended capability set in addition to the
+                                        five core variables — <code>ANSI</code>, <code>256_COLORS</code>,
+                                        <code>TRUECOLOR</code>, <code>UTF-8</code>, <code>TLS</code>,
+                                        <code>WORD_WRAP</code> and more — so servers can tailor output
+                                        to the client. Off by default. When MNES is also on, MNES wins.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-new-environ"
+                                    aria-labelledby="protocol-new-environ-label"
+                                    checked={newEnvironEnabled}
+                                    onChange={next => patchProtocols({ newEnviron: next })}
                                 />
                             </div>
                             <div className="settings-row">
@@ -658,6 +680,22 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         aria-labelledby="fix-unnecessary-linebreaks-label"
                                         checked={fixUnnecessaryLinebreaks}
                                         onChange={next => patchConfig({ fixUnnecessaryLinebreaks: next })}
+                                    />
+                                </div>
+                                <div className="settings-row">
+                                    <span className="settings-label" id="enable-blink-text-label">
+                                        Enable blinking text
+                                        <HelpTip label="About blinking text">
+                                            Animate ANSI blink (SGR 5/6) as a smooth opacity pulse
+                                            (Mudlet's <code>enableBlinkText</code>). Off by default;
+                                            when off, blinking text is shown in italics instead.
+                                        </HelpTip>
+                                    </span>
+                                    <Toggle
+                                        id="enable-blink-text"
+                                        aria-labelledby="enable-blink-text-label"
+                                        checked={enableBlinkText}
+                                        onChange={next => patchConfig({ enableBlinkText: next })}
                                     />
                                 </div>
                                 <div className="settings-row settings-row--top">

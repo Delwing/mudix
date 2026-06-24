@@ -118,6 +118,32 @@ describe('setConfig / getConfig', () => {
         expect(h.run('return getConfig("mapperPanelVisible")')).toBe(false);
     });
 
+    it('routes muteMediaAPI / muteMediaGame to the SoundManager per origin', () => {
+        // Defaults: both origins audible.
+        expect(h.run('return getConfig("muteMediaAPI")')).toBe(false);
+        expect(h.run('return getConfig("muteMediaGame")')).toBe(false);
+
+        // Muting the API origin gates only 'api' on the live SoundManager...
+        expect(h.run('return setConfig("muteMediaAPI", true)')).toBe(true);
+        expect(h.session.sounds.isOriginMuted('api')).toBe(true);
+        expect(h.session.sounds.isOriginMuted('game')).toBe(false);
+        expect(h.run('return getConfig("muteMediaAPI")')).toBe(true);
+        // ...and persists to the config bag so it survives a reload.
+        expect(useAppStore.getState().connectionProfile[CONN]?.config?.muteMediaAPI).toBe(true);
+
+        // The game origin is independent.
+        expect(h.run('return setConfig("muteMediaGame", true)')).toBe(true);
+        expect(h.session.sounds.isOriginMuted('game')).toBe(true);
+        expect(h.run('return getConfig("muteMediaGame")')).toBe(true);
+
+        // Unmuting flips it back live.
+        h.run('setConfig("muteMediaAPI", false)');
+        expect(h.session.sounds.isOriginMuted('api')).toBe(false);
+        expect(h.run('return getConfig("muteMediaAPI")')).toBe(false);
+        h.run('setConfig("muteMediaGame", false)');
+        expect(h.session.sounds.isOriginMuted('game')).toBe(false);
+    });
+
     it('round-trips commandLineHistorySaveSize as a number (default 500)', () => {
         expect(h.run('return getConfig("commandLineHistorySaveSize")')).toBe(500);
         expect(h.run('return setConfig("commandLineHistorySaveSize", 50)')).toBe(true);

@@ -6,5 +6,5 @@ export { MccpHandler } from "./mccp";
 export { EchoHandler } from "./echo";
 export { MspParser, type MspCommand, type MspKind } from "./msp";
 export { MxpParser, splitMxpResultLines, type MxpLink, type MxpLineResult } from "./mxp";
-export { parseMnesRequest, encodeMnesIs, selectMnesVars, type MnesVar, type MnesRequest } from "./mnes";
+export { parseMnesRequest, encodeMnesIs, selectMnesVars, buildNewEnvironVars, CLIENT_VERSION, type MnesVar, type MnesRequest, type NewEnvironState } from "./mnes";
 export { encodeNaws } from "./naws";

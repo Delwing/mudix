@@ -9,6 +9,8 @@ import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
 import type { ScrollBoxManager } from '../ui/scrollbox/ScrollBoxManager';
 import { userWindowQssToScopedCss, cssEscape } from '../ui/labels/qtCss';
 import { AnsiAwareBuffer, type FormatColor, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
+import { classifyHyperlinkUri } from '../mud/text/ansiEscapes';
+import { extractQuery } from '../mud/text/hyperlinkConfig';
 import { namedColorToState } from '../mud/text/colorParsers';
 import { colorCodes } from '../mud/text/colors';
 import { Console } from '../mud/text/Console';
@@ -136,8 +138,6 @@ const CONFIG_PERSIST_ONLY: Record<string, {
     fixUnnecessaryLinebreaks:       { type: 'bool', default: false },
     inputLineStrictUnixEndings:     { type: 'bool', default: false },
     logInHTML:                      { type: 'bool', default: false },
-    muteMediaAPI:                   { type: 'bool', default: false },
-    muteMediaGame:                  { type: 'bool', default: false },
     promptForMXPProcessorOn:        { type: 'bool', default: false },
     promptForVersionInTTYPE:        { type: 'bool', default: false },
     show3dMapView:                  { type: 'bool', default: false },
@@ -623,6 +623,10 @@ export class ScriptingAPI {
         // (true→'script', false→'never') as well as the new mode strings.
         const persistedMode = parseShowSentText(this.configBag().showSentText);
         if (persistedMode) session.showSentText = persistedMode;
+        // Same for the per-origin media mute gates (muteMediaAPI / muteMediaGame).
+        const bag = this.configBag();
+        session.sounds.setOriginMuted('api', configBool(bag.muteMediaAPI ?? false));
+        session.sounds.setOriginMuted('game', configBool(bag.muteMediaGame ?? false));
     }
 
     // ── Connection ────────────────────────────────────────────────────────────
@@ -748,8 +752,8 @@ export class ScriptingAPI {
     //   • structured  — routed to a real ProfileSettings field (protocol
     //     toggles, mapper settings, autoClearInput) so the Settings UI stays in
     //     sync. Protocol changes take effect on the next connect, like Mudlet.
-    //   • live        — showSentText, applied immediately to the session and
-    //     persisted so it survives a reload.
+    //   • live        — showSentText, muteMediaAPI, muteMediaGame: applied
+    //     immediately to the session and persisted so they survive a reload.
     //   • persist-only (CONFIG_PERSIST_ONLY) — stored for round-trip fidelity
     //     but not yet acted on; getConfig returns the stored value or a default.
     // Read-only keys (logDirectory, specialForceMXPProcessorOn) reject writes.
@@ -798,11 +802,14 @@ export class ScriptingAPI {
             case 'enableMTTS': return this.getProtocol('mtts');
             case 'enableMXP':  return this.getProtocol('mxp');
             case 'enableMNES': return this.getProtocol('mnes');
+            case 'enableNewEnviron': return this.getProtocol('newEnviron');
             // structured — inverse "force negotiation off" toggles
             case 'specialForceMxpNegotiationOff':     return !this.getProtocol('mxp');
             case 'specialForceCharsetNegotiationOff': return !this.getProtocol('charset');
             case 'specialForceCompressionOff':        return !this.getProtocol('mccp');
-            case 'forceNewEnvironNegotiationOff':     return !this.getProtocol('mnes');
+            // MNES and NEW-ENVIRON share telnet option 39; "force off" means
+            // neither variant is offered, so it's true only when both are off.
+            case 'forceNewEnvironNegotiationOff':     return !this.getProtocol('mnes') && !this.getProtocol('newEnviron');
             // structured — input line
             case 'autoClearInputLine':
                 return selectProfileField(useAppStore.getState(), this.connectionId, 'autoClearInput') ?? false;
@@ -820,6 +827,8 @@ export class ScriptingAPI {
             // live
             case 'showSentText':       return this.session.showSentText;
             case 'mapperPanelVisible': return this.session.windows.isVisible('map');
+            case 'muteMediaAPI':       return this.session.sounds.isOriginMuted('api');
+            case 'muteMediaGame':      return this.session.sounds.isOriginMuted('game');
             // read-only
             case 'logDirectory':       return '/profiles/' + this.connectionId + '/log';
             case 'specialForceMXPProcessorOn':
@@ -844,10 +853,17 @@ export class ScriptingAPI {
             case 'enableMTTS': this.setProtocol('mtts', configBool(value)); return true;
             case 'enableMXP':  this.setProtocol('mxp',  configBool(value)); return true;
             case 'enableMNES': this.setProtocol('mnes', configBool(value)); return true;
+            case 'enableNewEnviron': this.setProtocol('newEnviron', configBool(value)); return true;
             case 'specialForceMxpNegotiationOff':     this.setProtocol('mxp',     !configBool(value)); return true;
             case 'specialForceCharsetNegotiationOff': this.setProtocol('charset', !configBool(value)); return true;
             case 'specialForceCompressionOff':        this.setProtocol('mccp',    !configBool(value)); return true;
-            case 'forceNewEnvironNegotiationOff':     this.setProtocol('mnes',    !configBool(value)); return true;
+            // Forcing option 39 off disables both variants; un-forcing restores
+            // the RFC-1572 default (plain NEW-ENVIRON on, MNES left off — matching
+            // Mudlet's defaults) rather than guessing which variant to re-enable.
+            case 'forceNewEnvironNegotiationOff':
+                this.setProtocol('newEnviron', !configBool(value));
+                if (configBool(value)) this.setProtocol('mnes', false);
+                return true;
             case 'autoClearInputLine':
                 useAppStore.getState().patchConnectionProfile(this.connectionId, { autoClearInput: configBool(value) });
                 return true;
@@ -877,6 +893,23 @@ export class ScriptingAPI {
                 if (!mode) return false;
                 this.session.showSentText = mode;
                 this.patchConfigBag('showSentText', mode);
+                return true;
+            }
+            // Live per-origin media mute gates, persisted so they survive a
+            // reload (re-applied in the constructor). 'api' silences script
+            // playback (playSoundFile/playMusicFile); 'game' silences server
+            // media (MSP / GMCP). Muting a live track keeps it playing silently;
+            // unmuting restores it mid-track.
+            case 'muteMediaAPI': {
+                const muted = configBool(value);
+                this.session.sounds.setOriginMuted('api', muted);
+                this.patchConfigBag('muteMediaAPI', muted);
+                return true;
+            }
+            case 'muteMediaGame': {
+                const muted = configBool(value);
+                this.session.sounds.setOriginMuted('game', muted);
+                this.patchConfigBag('muteMediaGame', muted);
                 return true;
             }
             // Live window-visibility toggle (mirrors the toolbar's map button):
@@ -1618,6 +1651,33 @@ export class ScriptingAPI {
             onClick: () => sendCmd(payload),
             title: hint || undefined,
         };
+    }
+
+    /**
+     * Build a {@link FormatHyperlink} for an OSC 8 link URI. The scheme decides
+     * the behaviour, mirroring Mudlet: `send:` fires the command immediately,
+     * `prompt:` drops it into the command bar for editing, and the web schemes
+     * open externally. Returns `undefined` for a disallowed scheme so the link
+     * is dropped (the text renders without a click handler).
+     */
+    createOsc8Hyperlink(uri: string): FormatHyperlink | undefined {
+        // Strip the OSC 8 extension query (config=/preset=) before deriving the
+        // command, so a `send:cmd?config={…}` link never leaks JSON into the MUD
+        // command. send:/prompt: drop their whole query; web links keep their
+        // user params. (Rendering the config is Phase C; this only cleans the
+        // command so bare links stay safe meanwhile.)
+        const { base, userPairs } = extractQuery(uri);
+        const isWeb = /^(https?|ftp):/i.test(base);
+        const command = isWeb && userPairs.length > 0 ? `${base}?${userPairs.join('&')}` : base;
+        const action = classifyHyperlinkUri(command);
+        if (!action) return undefined;
+        if (action.kind === 'send') {
+            return { onClick: () => { this.send(action.command); }, title: action.command, url: uri };
+        }
+        if (action.kind === 'prompt') {
+            return { onClick: () => { this.printCmdLine(action.command); }, title: action.command, url: uri };
+        }
+        return { onClick: () => { this.openUrl(action.url); }, title: action.url, url: uri };
     }
 
     echoPopup(text: string, cmds: string[], hints: string[], win?: string): void {

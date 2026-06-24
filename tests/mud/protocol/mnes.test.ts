@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseMnesRequest, encodeMnesIs, selectMnesVars, type MnesVar } from '../../../src/mud/protocol/mnes';
+import { parseMnesRequest, encodeMnesIs, selectMnesVars, buildNewEnvironVars, type MnesVar } from '../../../src/mud/protocol/mnes';
 import {
   GMCP_IAC,
   GMCP_SB,
@@ -11,6 +11,7 @@ import {
   NEW_ENVIRON_VALUE,
   NEW_ENVIRON_ESC,
   NEW_ENVIRON_USERVAR,
+  computeMtts,
 } from '../../../src/mud/protocol/constants';
 
 // Build a SEND request body as the telnet option parser hands it to the
@@ -93,6 +94,72 @@ describe('encodeMnesIs', () => {
     // A value containing IAC (255) must be escaped with ESC.
     const out = encodeMnesIs([{ name: 'X', value: 'a' + GMCP_IAC + 'b' }]);
     expect(out).toContain(NEW_ENVIRON_VALUE + 'a' + NEW_ENVIRON_ESC + GMCP_IAC + 'b');
+  });
+
+  it('frames names as USERVAR when given the USERVAR marker (plain NEW-ENVIRON)', () => {
+    const out = encodeMnesIs([{ name: 'ANSI', value: '1' }], NEW_ENVIRON_USERVAR);
+    expect(out).toBe(
+      GMCP_IAC + GMCP_SB +
+      OPT_NEW_ENVIRON + NEW_ENVIRON_IS +
+      NEW_ENVIRON_USERVAR + 'ANSI' + NEW_ENVIRON_VALUE + '1' +
+      GMCP_IAC + GMCP_SE,
+    );
+  });
+
+  it('defaults to the VAR marker (MNES) when no marker is given', () => {
+    const out = encodeMnesIs([{ name: 'MTTS', value: '269' }]);
+    expect(out).toContain(NEW_ENVIRON_VAR + 'MTTS' + NEW_ENVIRON_VALUE + '269');
+  });
+});
+
+describe('buildNewEnvironVars', () => {
+  const state = { charset: 'UTF-8', utf8: true, tls: true, wrapColumns: 80 };
+
+  it('reports exactly the five MNES core variables when not extended', () => {
+    const vars = buildNewEnvironVars(state, false);
+    expect(vars.map(v => v.name)).toEqual([
+      'CHARSET', 'CLIENT_NAME', 'CLIENT_VERSION', 'MTTS', 'TERMINAL_TYPE',
+    ]);
+    expect(vars).toContainEqual({ name: 'CLIENT_NAME', value: 'MUDIX' });
+    // MTTS is computed from live state: UTF-8 + TLS here → 2349 (matches Mudlet).
+    expect(vars).toContainEqual({ name: 'MTTS', value: String(computeMtts({ utf8: true, tls: true })) });
+    expect(vars).toContainEqual({ name: 'MTTS', value: '2349' });
+    expect(vars).toContainEqual({ name: 'CHARSET', value: 'UTF-8' });
+  });
+
+  it('appends the extended capability set when extended', () => {
+    const names = buildNewEnvironVars(state, true).map(v => v.name);
+    // Core five still come first, in order.
+    expect(names.slice(0, 5)).toEqual([
+      'CHARSET', 'CLIENT_NAME', 'CLIENT_VERSION', 'MTTS', 'TERMINAL_TYPE',
+    ]);
+    // Plus the extended capability vars.
+    expect(names).toEqual(expect.arrayContaining([
+      'ANSI', '256_COLORS', 'TRUECOLOR', 'UTF-8', 'TLS', 'WORD_WRAP',
+      'SCREEN_READER', 'OSC_COLOR_PALETTE', 'OSC_HYPERLINKS', 'VT100',
+    ]));
+  });
+
+  it('derives UTF-8/TLS/WORD_WRAP capability values from live state', () => {
+    const vars = buildNewEnvironVars({ charset: 'ASCII', utf8: false, tls: false, wrapColumns: 0 }, true);
+    const byName = new Map(vars.map(v => [v.name, v.value]));
+    expect(byName.get('CHARSET')).toBe('ASCII');
+    expect(byName.get('UTF-8')).toBe('0');
+    expect(byName.get('TLS')).toBe('0');
+    expect(byName.get('WORD_WRAP')).toBe('0');
+    // Static capabilities mudix always supports.
+    expect(byName.get('ANSI')).toBe('1');
+    expect(byName.get('TRUECOLOR')).toBe('1');
+    expect(byName.get('OSC_COLOR_PALETTE')).toBe('1');
+    expect(byName.get('OSC_HYPERLINKS')).toBe('1');
+    // MTTS drops the UTF-8 and SSL bits when neither is active: ANSI(1) +
+    // 256(8) + OSC_COLOR_PALETTE(32) + TRUECOLOR(256) = 297.
+    expect(byName.get('MTTS')).toBe('297');
+    // OSC 8 sub-features not yet implemented are still reported honestly as "0".
+    expect(byName.get('OSC_HYPERLINKS_MENU')).toBe('0');
+    expect(byName.get('OSC_HYPERLINKS_SPOILER')).toBe('0');
+    // Sub-features that already work read "1".
+    expect(byName.get('OSC_HYPERLINKS_SEND')).toBe('1');
   });
 });
 
