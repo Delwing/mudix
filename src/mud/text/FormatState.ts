@@ -48,9 +48,6 @@ export interface FormatHyperlink {
     /** OSC 8 `id=` parameter — groups split runs of one logical link so hover
      *  can highlight them together. */
     linkId?: string;
-    /** True for OSC 8 links. They default to *no* underline (Mudlet's OSC 8
-     *  convention); MXP/scripted links default to underlined. */
-    osc8?: boolean;
 }
 
 export interface IndexedColor {
@@ -418,6 +415,12 @@ function hasConfig(config: HyperlinkConfig): boolean {
     return Object.keys(config).length > 0;
 }
 
+/** Monotonic source of `data-link-group` keys. Module-global (not per toDom
+ *  call) so keys are unique across every rendered line — navigation scans the
+ *  whole output and dedupes by this key, so per-line numbering would collide
+ *  (every line's first link would be `inst:1`). */
+let navLinkSeq = 0;
+
 /** Merge a per-state link style over the link's base style (state fields win).
  *  Returns undefined when neither is present so callers fall back to plain SGR. */
 function mergeLinkStyle(base?: LinkStateStyle, overlay?: LinkStateStyle): LinkStateStyle | undefined {
@@ -470,7 +473,7 @@ function parseAnsiSegments(
                     } else {
                         const result = parseOsc8Uri(link.uri, registry);
                         if (result?.kind === "link" && classifyHyperlinkUri(result.command)) {
-                            const hl: FormatHyperlink = { url: result.command, osc8: true };
+                            const hl: FormatHyperlink = { url: result.command };
                             if (hasConfig(result.config)) hl.config = result.config;
                             if (link.id) hl.linkId = link.id;
                             state.hyperlink = hl;
@@ -959,10 +962,8 @@ export class AnsiAwareBuffer {
         if (underline) decorations.push("underline");
         if (overlay?.strikethrough ?? state.strikethrough) decorations.push("line-through");
         if (overlay?.overline ?? state.overline) decorations.push("overline");
-        // Non-OSC-8 hyperlinks (MXP, scripted links) default to an underline cue
-        // unless already underlined. OSC 8 links follow their style config —
-        // Mudlet's OSC 8 default is *no* underline (unlike its other links).
-        if (state.hyperlink && !state.hyperlink.osc8 && !underline) decorations.push("underline");
+        // Hyperlinks get an underline cue unless the run is already underlined.
+        if (state.hyperlink && !underline) decorations.push("underline");
         if (decorations.length > 0) {
             styles.push(`text-decoration: ${decorations.join(" ")}`);
             if (overlay?.underlineStyle && overlay.underlineStyle !== "solid") {
@@ -1017,11 +1018,24 @@ export class AnsiAwareBuffer {
         const linkGroups = new Map<string, HTMLElement[]>();
         const baseCssByEl = new WeakMap<HTMLElement, string>();
         const hoverCssByEl = new WeakMap<HTMLElement, string>();
+        // A multicolour link is split into one span per colour run; these group
+        // those runs into one logical link so keyboard nav steps link-by-link
+        // and focus highlights the whole link, not a single run. Keyed by `id=`
+        // when present, else by a per-occurrence instance (adjacent same-command
+        // runs). `navGroups` collects each link's runs for the focus highlight.
+        const navGroups = new Map<string, HTMLElement[]>();
+        // MXP/scripted links carry no url but share one onClick reference across
+        // their colour runs (setHyperlink spreads the same handler), so that ref
+        // identifies the logical link.
+        const onClickKeys = new Map<(ev: MouseEvent) => void, string>();
+        let prevLinkKey: string | null = null;
+        let currentInst = ''; // nav key of the in-progress adjacency run
 
         for (const segment of this.segments) {
             const state = segment.state;
 
             if (!state || isDefaultState(state)) {
+                prevLinkKey = null; // plain text breaks link-run adjacency
                 appendCells(fragment, segment.text);
                 continue;
             }
@@ -1064,6 +1078,41 @@ export class AnsiAwareBuffer {
                     group.push(element);
                     linkGroups.set(link.linkId, group);
                 }
+
+                // Group this run with the rest of its logical link so keyboard
+                // nav and the focus highlight treat a colour-split link as one
+                // unit: id= links group across the line; OSC 8 links (have a url)
+                // group adjacent same-command runs; MXP/scripted links group by
+                // their shared onClick; anything else is its own stop.
+                let navKey: string;
+                if (link.linkId) {
+                    navKey = `id:${link.linkId}`;
+                    prevLinkKey = null;
+                } else if (link.url) {
+                    const k = `u:${link.url}`;
+                    if (prevLinkKey !== k) currentInst = `inst:${++navLinkSeq}`;
+                    navKey = currentInst;
+                    prevLinkKey = k;
+                } else if (link.onClick) {
+                    let k = onClickKeys.get(link.onClick);
+                    if (k === undefined) { k = `cb:${++navLinkSeq}`; onClickKeys.set(link.onClick, k); }
+                    navKey = k;
+                    prevLinkKey = null;
+                } else {
+                    navKey = `inst:${++navLinkSeq}`;
+                    prevLinkKey = null;
+                }
+                element.dataset.linkGroup = navKey;
+                const navGroup = navGroups.get(navKey) ?? [];
+                navGroup.push(element);
+                navGroups.set(navKey, navGroup);
+                // Focusing any run highlights the whole link (spans every run).
+                element.addEventListener('focus', () => {
+                    for (const el of navGroups.get(navKey) ?? [element]) el.classList.add('osc8-link-focused');
+                });
+                element.addEventListener('blur', () => {
+                    for (const el of navGroups.get(navKey) ?? [element]) el.classList.remove('osc8-link-focused');
+                });
 
                 if (link.onClick) {
                     element.addEventListener('click', (e) => {
@@ -1159,13 +1208,12 @@ export class AnsiAwareBuffer {
                     element.addEventListener("click", (e) => {
                         if (!revealed) { e.preventDefault(); e.stopImmediatePropagation(); reveal(); }
                     }, true);
-                    element.tabIndex = 0;
-                    element.addEventListener("keydown", (e) => {
-                        if (e.key !== "Enter" && e.key !== " ") return;
-                        if (!revealed) { e.preventDefault(); reveal(); }
-                        else if (link.onClick) link.onClick(e as unknown as MouseEvent);
-                    });
+                    // Keyboard activation (Enter/Space) is routed through
+                    // link.click() by the nav handler, so this click-capture
+                    // reveal covers the keyboard path too — no keydown needed.
                 }
+            } else {
+                prevLinkKey = null; // a formatted non-link run breaks adjacency
             }
 
             if (initialCss) element.style.cssText = initialCss;

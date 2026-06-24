@@ -699,7 +699,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `getSelection([window])` | ✅ | Bridge.lua wraps `__getSelection` |
 | `getTextFormat([window])` | ✅ | Bridge.lua → documented attribute table |
 | `getUserWindowSize(name)` | ✅ | Bridge.lua → `__getUserWindowSize` |
-| `getWindowWrap(name)` | ✅ | → wrap columns (0 unset). "main" reads the profile `outputWrapAt`; a named window reads the `WindowManager` hint. -1 when the window is missing. Used by `Geyser.MiniConsole:getWindowWrap` |
+| `getWindowWrap(name)` | ✅ | → wrap columns (0 = unset/disabled). "main" reads the profile `outputWrapAt`; a named window reads the `WindowManager` hint. -1 when the window is missing. Used by `Geyser.MiniConsole:getWindowWrap` |
 | `handleWindowResizeEvent()` | ✅ | Fires the resize listener chain (no-op shim that's part of the public API) |
 | `hasFocus([window])` | ✅ | `document.activeElement` check. No name = command bar; a name targets the registered overlay element |
 | `hecho([window,] text)` | ✅ | `#RRGGBBtext` syntax |
@@ -799,7 +799,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setUserWindowTitle(name, title)` | ✅ | JS-exposed |
 | `setUserWindowStyleSheet(name, css)` | ✅ | JS-exposed |
 | `setWindow(...)` | 🚧 | Geyser/window parent reparenting |
-| `setWindowWrap(name, col)` | ✅ | JS-exposed |
+| `setWindowWrap(name, col)` | ✅ | JS-exposed. "main" stores `ProfileSettings.outputWrapAt`; `col = 0` clears it (wrap off, the default). Also settable from the Settings → Appearance UI |
 | `setWindowWrapHangingIndent(name, n)` | ✅ | Indent (chars) of wrapped continuation lines. Stored on `ProfileSettings.outputWrapHangingIndent` ("main") or the `WindowManager` hint (named windows); `StickyOutputPanel` applies it as the `--wrap-hanging` CSS var (`.output-msg-content` `padding-left`). 0 clears |
 | `setWindowWrapIndent(name, n)` | ✅ | Indent (chars) of newline-started lines. Stored on `ProfileSettings.outputWrapIndent` ("main") or the `WindowManager` hint; applied via the `--wrap-indent` CSS var (`text-indent`, relative to the hanging indent). 0 clears |
 | `showCaptureGroups()` | ✅ | Pure Lua via DebugTools.lua (uses `matches`) |

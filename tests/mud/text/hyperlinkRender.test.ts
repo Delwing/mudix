@@ -93,6 +93,47 @@ describe('toDom OSC 8 interactions', () => {
     expect(span.style.cssText).not.toContain('#ff0000');
   });
 
+  it('groups a multicolour link\'s runs under one data-link-group key', () => {
+    // An SGR colour change splits the link into two runs; both belong to one
+    // logical link, so keyboard nav treats them as a single stop.
+    const buf = new AnsiAwareBuffer(
+      `${open('send:flame')}Fla${ESC}[31ming${close}`,
+    );
+    const runs = Array.from(buf.toDom().querySelectorAll('[data-output-clickable]')) as HTMLElement[];
+    expect(runs.length).toBe(2);
+    expect(runs[0].dataset.linkGroup).toBeTruthy();
+    expect(runs[0].dataset.linkGroup).toBe(runs[1].dataset.linkGroup);
+  });
+
+  it('gives links on separate rendered lines distinct nav keys (no cross-line collision)', () => {
+    const root = document.createElement('div');
+    root.appendChild(new AnsiAwareBuffer(`${open('send:a')}A${close}`).toDom());
+    root.appendChild(new AnsiAwareBuffer(`${open('send:b')}B${close}`).toDom());
+    const runs = Array.from(root.querySelectorAll('[data-output-clickable]')) as HTMLElement[];
+    expect(runs.length).toBe(2);
+    expect(runs[0].dataset.linkGroup).not.toBe(runs[1].dataset.linkGroup);
+  });
+
+  it('keeps distinct no-url links (MXP/scripted) as separate nav stops', () => {
+    // Two separate setHyperlink ranges with different handlers must not collapse
+    // into one nav group just because neither carries a url.
+    const buf = new AnsiAwareBuffer('AB');
+    buf.setHyperlink([0, 1], { onClick: () => {} });
+    buf.setHyperlink([1, 2], { onClick: () => {} });
+    const runs = Array.from(buf.toDom().querySelectorAll('[data-output-clickable]')) as HTMLElement[];
+    expect(runs.length).toBe(2);
+    expect(runs[0].dataset.linkGroup).not.toBe(runs[1].dataset.linkGroup);
+  });
+
+  it('groups a single no-url link applied over a multicolour range as one stop', () => {
+    // One setHyperlink call spreads the same handler across both colour runs.
+    const buf = new AnsiAwareBuffer(`X${ESC}[31mY${ESC}[0m`);
+    buf.setHyperlink([0, 2], { onClick: () => {} });
+    const runs = Array.from(buf.toDom().querySelectorAll('[data-output-clickable]')) as HTMLElement[];
+    expect(runs.length).toBe(2);
+    expect(runs[0].dataset.linkGroup).toBe(runs[1].dataset.linkGroup);
+  });
+
   it('hover propagates to every run sharing the same id', () => {
     // The `\e[1m` splits the link into two runs that share id=g.
     const buf = new AnsiAwareBuffer(

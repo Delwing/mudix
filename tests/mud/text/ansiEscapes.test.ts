@@ -74,19 +74,11 @@ describe('AnsiAwareBuffer escape handling', () => {
     expect(tail.getStateAt('linkafter'.indexOf('after'))?.hyperlink).toBeUndefined();
   });
 
-  it('renders an OSC 8 link clickable, with NO default underline (OSC 8 convention)', () => {
+  it('renders OSC 8 link text as clickable + underlined in toHtml', () => {
     const buf = new AnsiAwareBuffer(`${ESC}]8;;https://example.com${ST}go${ESC}]8;;${ST}`);
     const html = buf.toHtml();
     expect(html).toContain('data-output-clickable="true"');
-    // Unlike MXP/scripted links, OSC 8 links are not underlined unless their
-    // style config asks for it (matches Mudlet).
-    expect(html).not.toContain('text-decoration: underline');
-  });
-
-  it('underlines a non-OSC-8 (MXP/scripted) hyperlink by default', () => {
-    const buf = new AnsiAwareBuffer('link');
-    buf.setHyperlink([0, 4], { onClick: () => {} }); // no osc8 flag
-    expect(buf.toHtml()).toContain('text-decoration: underline');
+    expect(html).toContain('text-decoration: underline');
   });
 
   it('drops OSC 8 links with a disallowed scheme (no link span)', () => {

@@ -28,6 +28,8 @@ const DEFAULT_FONT_SIZE = 13;
 const MIN_FONT_SIZE = 6;
 const MAX_FONT_SIZE = 48;
 const MAX_BORDER_PX = 1000;
+const MAX_WRAP_AT = 500;
+const MAX_WRAP_INDENT = 200;
 const EMPTY_BORDERS = { top: 0, right: 0, bottom: 0, left: 0 } as const;
 type BorderSide = 'top' | 'right' | 'bottom' | 'left';
 
@@ -114,6 +116,9 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const ansiPalette = useAppStore(s => selectProfileField(s, connectionId, 'ansiPalette'));
     const outputFont = useAppStore(s => selectProfileField(s, connectionId, 'outputFont'));
     const fontSize = useAppStore(s => selectProfileField(s, connectionId, 'fontSize'));
+    const outputWrapAt = useAppStore(s => selectProfileField(s, connectionId, 'outputWrapAt'));
+    const outputWrapIndent = useAppStore(s => selectProfileField(s, connectionId, 'outputWrapIndent'));
+    const outputWrapHangingIndent = useAppStore(s => selectProfileField(s, connectionId, 'outputWrapHangingIndent'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connectionId, 'promptTimeoutMs'));
     const loggingEnabled = useAppStore(s => selectProfileField(s, connectionId, 'loggingEnabled'));
     const loggingOn = loggingEnabled !== false;
@@ -225,6 +230,41 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         setFontSizeText(String(clamped));
         patchProfile({ fontSize: clamped });
     };
+
+    // Word-wrap settings: wrap width (0 = off, blank = default 100) plus the
+    // first-line and hanging continuation indents (both default 0). An empty
+    // field clears the override; an invalid one reverts to the stored value.
+    const [wrapAtText, setWrapAtText] = useState(outputWrapAt !== undefined ? String(outputWrapAt) : '');
+    const [wrapIndentText, setWrapIndentText] = useState(outputWrapIndent !== undefined ? String(outputWrapIndent) : '');
+    const [wrapHangingText, setWrapHangingText] = useState(outputWrapHangingIndent !== undefined ? String(outputWrapHangingIndent) : '');
+
+    const makeWrapBlurHandler = (
+        key: 'outputWrapAt' | 'outputWrapIndent' | 'outputWrapHangingIndent',
+        max: number,
+        text: string,
+        setText: (s: string) => void,
+        stored: number | undefined,
+    ) => () => {
+        const trimmed = text.trim();
+        if (trimmed === '') {
+            // Blank clears the override → falls back to the field's default.
+            patchProfile({ [key]: undefined });
+            setText('');
+            return;
+        }
+        const parsed = parseInt(trimmed, 10);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            setText(stored !== undefined ? String(stored) : '');
+            return;
+        }
+        const clamped = Math.min(parsed, max);
+        setText(String(clamped));
+        patchProfile({ [key]: clamped });
+    };
+
+    const handleWrapAtBlur = makeWrapBlurHandler('outputWrapAt', MAX_WRAP_AT, wrapAtText, setWrapAtText, outputWrapAt);
+    const handleWrapIndentBlur = makeWrapBlurHandler('outputWrapIndent', MAX_WRAP_INDENT, wrapIndentText, setWrapIndentText, outputWrapIndent);
+    const handleWrapHangingBlur = makeWrapBlurHandler('outputWrapHangingIndent', MAX_WRAP_INDENT, wrapHangingText, setWrapHangingText, outputWrapHangingIndent);
 
     const [historySaveSizeText, setHistorySaveSizeText] = useState(String(historySaveSize));
 
@@ -716,6 +756,67 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                                 />
                                             </label>
                                         ))}
+                                    </div>
+                                </div>
+                                <div className="settings-row settings-row--top">
+                                    <label className="settings-label">
+                                        Word wrap
+                                        <HelpTip label="About line wrapping">
+                                            <strong>at</strong> wraps main-window output at that many
+                                            characters (Mudlet's <code>setWindowWrap("main", N)</code>).
+                                            Default <code>0</code> disables wrapping so lines fill the
+                                            window width.
+                                            {' '}<strong>indent</strong> indents the start of each new
+                                            line (<code>setWindowWrapIndent</code>) and
+                                            {' '}<strong>hanging</strong> indents each wrapped
+                                            continuation line (<code>setWindowWrapHangingIndent</code>),
+                                            both default 0. All fields default to 0; leave blank or set
+                                            0 to use the default.
+                                        </HelpTip>
+                                    </label>
+                                    <div className="settings-borders">
+                                        <label className="settings-border-field">
+                                            <span className="settings-border-side">at</span>
+                                            <Input
+                                                id="output-wrap-at"
+                                                type="number"
+                                                min={0}
+                                                max={MAX_WRAP_AT}
+                                                step={1}
+                                                value={wrapAtText}
+                                                placeholder="0"
+                                                onChange={e => setWrapAtText(e.target.value)}
+                                                onBlur={handleWrapAtBlur}
+                                            />
+                                        </label>
+                                        <label className="settings-border-field">
+                                            <span className="settings-border-side">indent</span>
+                                            <Input
+                                                id="output-wrap-indent"
+                                                type="number"
+                                                min={0}
+                                                max={MAX_WRAP_INDENT}
+                                                step={1}
+                                                value={wrapIndentText}
+                                                placeholder="0"
+                                                onChange={e => setWrapIndentText(e.target.value)}
+                                                onBlur={handleWrapIndentBlur}
+                                            />
+                                        </label>
+                                        <label className="settings-border-field">
+                                            <span className="settings-border-side">hanging</span>
+                                            <Input
+                                                id="output-wrap-hanging"
+                                                type="number"
+                                                min={0}
+                                                max={MAX_WRAP_INDENT}
+                                                step={1}
+                                                value={wrapHangingText}
+                                                placeholder="0"
+                                                onChange={e => setWrapHangingText(e.target.value)}
+                                                onBlur={handleWrapHangingBlur}
+                                            />
+                                        </label>
                                     </div>
                                 </div>
                             </section>

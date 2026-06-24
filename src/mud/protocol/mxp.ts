@@ -276,7 +276,7 @@ export class MxpParser {
                         } else {
                             const result = parseOsc8Uri(link.uri, this.presets);
                             if (result?.kind === "link" && classifyHyperlinkUri(result.command)) {
-                                const hl: FormatHyperlink = { url: result.command, osc8: true };
+                                const hl: FormatHyperlink = { url: result.command };
                                 if (Object.keys(result.config).length > 0) hl.config = result.config;
                                 if (link.id) hl.linkId = link.id;
                                 this.fmt.hyperlink = hl;

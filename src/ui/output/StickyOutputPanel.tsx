@@ -134,7 +134,7 @@ export function StickyOutputPanel({
             {isSplitView && (
                 <div
                     className="output-sticky-handle"
-                    style={{ bottom: stickyHeight + 3 }}
+                    style={{ bottom: stickyHeight }}
                     onMouseDown={handleResizeStart}
                 />
             )}
@@ -159,7 +159,7 @@ export function StickyOutputPanel({
             {isSplitView && (
                 <button
                     className="scroll-to-bottom"
-                    style={{ bottom: stickyHeight + 11 }}
+                    style={{ bottom: stickyHeight + 8 }}
                     onClick={scrollToBottom}
                     type="button"
                     aria-label="Scroll to bottom"

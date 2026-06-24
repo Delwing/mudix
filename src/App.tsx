@@ -41,7 +41,7 @@ export default function App() {
         const conn = connections.find(c => c.id === id);
         if (!conn) return;
         deepLinkProfileId.current = null;
-        openProfile(conn, false);
+        openProfile(conn, conn.autoReconnect ?? false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [connections]);
 
@@ -72,7 +72,7 @@ export default function App() {
                 connecting={false}
                 connectingId={null}
                 onConnect={(conn) => openProfile(conn, true)}
-                onOpen={(conn) => openProfile(conn, false)}
+                onOpen={(conn) => openProfile(conn, conn.autoReconnect ?? false)}
                 onAdd={addConnection}
                 onUpdate={updateConnection}
                 onDelete={removeConnection}

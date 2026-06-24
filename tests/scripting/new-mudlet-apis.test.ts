@@ -112,6 +112,30 @@ describe('setWindowWrapIndent / setWindowWrapHangingIndent', () => {
   });
 });
 
+describe('setWindowWrap / getWindowWrap (main window)', () => {
+  let rt: TestRuntime;
+  beforeAll(async () => { rt = await createTestRuntime(); });
+  afterAll(() => rt.dispose());
+
+  it('defaults the main window to 0 (wrap disabled)', () => {
+    expect(rt.run('return getWindowWrap("main")')).toBe(0);
+  });
+
+  it('round-trips an explicit wrap width', () => {
+    expect(rt.run('return setWindowWrap("main", 80)')).toBe(true);
+    expect(rt.run('return getWindowWrap("main")')).toBe(80);
+  });
+
+  it('disables wrap when set back to 0', () => {
+    expect(rt.run('return setWindowWrap("main", 0)')).toBe(true);
+    expect(rt.run('return getWindowWrap("main")')).toBe(0);
+  });
+
+  it('reports -1 for an unknown named window', () => {
+    expect(rt.run('return getWindowWrap("nope")')).toBe(-1);
+  });
+});
+
 describe('setLinkStyle / resetLinkStyle', () => {
   let rt: TestRuntime;
   beforeAll(async () => { rt = await createTestRuntime(); });

@@ -1699,7 +1699,6 @@ export class ScriptingAPI {
         // apply styling/states/tooltip; a disabled link has no click handler
         // (its activation is blocked) but still shows its tooltip and styling.
         const withConfig = (hl: FormatHyperlink): FormatHyperlink => {
-            hl.osc8 = true; // OSC 8 links default to no underline (Mudlet convention)
             if (config) hl.config = config;
             if (link?.linkId) hl.linkId = link.linkId;
             if (menuHandler) hl.onContextMenu = menuHandler;

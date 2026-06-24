@@ -27,6 +27,16 @@ describe('navigableLinks', () => {
     root.append(a, b, c);
     expect(navigableLinks(root)).toEqual([a, c]);
   });
+
+  it('collapses a multicolour link (shared data-link-group) to one stop', () => {
+    const run1 = link('Fla'), run2 = link('ming'), other = link('Go');
+    run1.dataset.linkGroup = 'inst:1';   // two colour runs of one logical link
+    run2.dataset.linkGroup = 'inst:1';
+    other.dataset.linkGroup = 'inst:2';
+    root.append(run1, run2, other);
+    // Only the first run of each group is a navigation stop.
+    expect(navigableLinks(root)).toEqual([run1, other]);
+  });
 });
 
 describe('focusAdjacentLink', () => {
@@ -88,5 +98,50 @@ describe('handleLinkNavKeydown', () => {
     expect(handleLinkNavKeydown(key({ key: ']' }), root)).toBe(false);
     expect(handleLinkNavKeydown(key({ key: ']', ctrlKey: true, shiftKey: true }), root)).toBe(false);
     expect(handleLinkNavKeydown(key({ key: 'x', ctrlKey: true }), root)).toBe(false);
+  });
+
+  it('Enter / Space activates the focused link (clicks it)', () => {
+    const a = link('a');
+    let clicks = 0;
+    a.addEventListener('click', () => { clicks++; });
+    root.append(a);
+    a.focus();
+    expect(handleLinkNavKeydown(key({ key: 'Enter' }), root)).toBe(true);
+    expect(clicks).toBe(1);
+    expect(handleLinkNavKeydown(key({ key: ' ' }), root)).toBe(true);
+    expect(clicks).toBe(2);
+  });
+
+  it('Menu key / Shift+F10 opens the focused link\'s context menu', () => {
+    const a = link('a');
+    let ctx = 0;
+    a.addEventListener('contextmenu', () => { ctx++; });
+    root.append(a);
+    a.focus();
+    expect(handleLinkNavKeydown(key({ key: 'ContextMenu' }), root)).toBe(true);
+    expect(handleLinkNavKeydown(key({ key: 'F10', shiftKey: true }), root)).toBe(true);
+    expect(ctx).toBe(2);
+  });
+
+  it('does not activate when no link is focused', () => {
+    const a = link('a');
+    let clicks = 0;
+    a.addEventListener('click', () => { clicks++; });
+    root.append(a);
+    a.blur();
+    expect(handleLinkNavKeydown(key({ key: 'Enter' }), root)).toBe(false);
+    expect(clicks).toBe(0);
+  });
+
+  it('skips activation if the key was already handled (defaultPrevented)', () => {
+    const a = link('a');
+    let clicks = 0;
+    a.addEventListener('click', () => { clicks++; });
+    root.append(a);
+    a.focus();
+    const e = key({ key: 'Enter', cancelable: true });
+    e.preventDefault(); // e.g. a spoiler's own reveal handler already acted
+    expect(handleLinkNavKeydown(e, root)).toBe(false);
+    expect(clicks).toBe(0);
   });
 });

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Input, FormField, useConfirm } from './components';
+import { Button, Input, FormField, Toggle, useConfirm } from './components';
 import { ProxyInfoModal } from './ProxyInfoModal';
 import { ProxyWhyModal } from './ProxyWhyModal';
 import { DEFAULT_PROXY_URL, connectionDisplayAddr, useAppStore, type ConnectionMode, type MudConnection } from '../storage';
@@ -103,6 +103,9 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     const [proxyModalOpen, setProxyModalOpen] = useState(false);
     const [proxyWhyOpen, setProxyWhyOpen] = useState(false);
     const [url, setUrl] = useState('');
+    // When true, the "Open" button (and a ?profile= deep link) dials immediately
+    // instead of opening the profile offline. Defaults to false.
+    const [autoReconnect, setAutoReconnect] = useState(false);
     // Optional GMCP Char.Login credentials, saved to the profile (password is
     // plaintext localStorage — see the inline warning).
     const [account, setAccount] = useState('');
@@ -118,6 +121,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         setPort('23');
         setProxyUrl('');
         setUrl('');
+        setAutoReconnect(false);
         setAccount('');
         setPassword('');
     };
@@ -130,6 +134,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         setPort(String(c.port ?? 23));
         setProxyUrl(c.proxyUrl ?? '');
         setUrl(c.url ?? '');
+        setAutoReconnect(c.autoReconnect ?? false);
         setAccount(profiles[c.id]?.charLoginAccount ?? '');
         setPassword(profiles[c.id]?.charLoginPassword ?? '');
     };
@@ -147,6 +152,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                 host: host.trim(),
                 port: isNaN(parsedPort) ? 23 : parsedPort,
                 proxyUrl: proxyUrl.trim() || undefined,
+                autoReconnect: autoReconnect || undefined,
             };
         }
         return {
@@ -154,6 +160,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
             mode: 'websocket',
             url: url.trim(),
             proxyUrl: proxyUrl.trim() || undefined,
+            autoReconnect: autoReconnect || undefined,
         };
     };
 
@@ -370,6 +377,21 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                             <code className="proxy-url-preview-url">{buildPreviewUrl(host, port, proxyUrl, effectiveDefaultProxy)}</code>
                         </div>
                     )}
+
+                    <div className="connection-autoconnect-row">
+                        <label className="connection-autoconnect-label" htmlFor="cs-autoreconnect">
+                            <span className="connection-autoconnect-title">Auto-connect on profile open</span>
+                            <span className="connection-autoconnect-hint">
+                                Dial automatically when this profile is opened, instead of opening offline.
+                            </span>
+                        </label>
+                        <Toggle
+                            id="cs-autoreconnect"
+                            checked={autoReconnect}
+                            onChange={setAutoReconnect}
+                            aria-label="Auto-connect on profile open"
+                        />
+                    </div>
 
                     <div className="connection-creds">
                         <div className="form-section-title form-section-title--sub">Login (optional)</div>

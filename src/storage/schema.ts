@@ -14,6 +14,11 @@ export interface MudConnection {
     host?: string;
     port?: number;
     proxyUrl?: string;      // overrides DEFAULT_PROXY_URL when set
+    /** When true, opening this profile (via the "Open" button or a `?profile=`
+     *  deep link) immediately dials the connection instead of opening offline.
+     *  `undefined`/`false` = open offline (default); the "Connect" button always
+     *  dials regardless. */
+    autoReconnect?: boolean;
 }
 
 export type Theme = 'dark' | 'light' | 'graylight' | 'amber' | 'sky';
@@ -68,7 +73,8 @@ export interface ProfileSettings {
     /** Background color for the local echo of commands you send. Empty/undefined = none. */
     commandEchoBackground?: string;
     outputFont?: OutputFontSource;
-    /** Mudlet setWindowWrap("main", N). 0/undefined disables character-based wrap. */
+    /** Mudlet setWindowWrap("main", N). 0/undefined disables character-based wrap
+     *  (text fills the window width). */
     outputWrapAt?: number;
     /** Mudlet setWindowWrapIndent("main", N). Indent (chars) of newline-started lines. */
     outputWrapIndent?: number;

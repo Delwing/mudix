@@ -647,6 +647,32 @@ html, body, #root {
     color: var(--text-dim);
 }
 
+.connection-autoconnect-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.connection-autoconnect-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    cursor: pointer;
+}
+
+.connection-autoconnect-title {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.connection-autoconnect-hint {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 10px;
+    color: var(--text-dim);
+}
+
 .connection-mode-toggle {
     display: flex;
     gap: 2px;
@@ -1110,7 +1136,10 @@ html, body, #root {
     font-family: var(--font-output, var(--font-mono)), monospace;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
-    padding: 3px;
+    /* No bottom padding: the last line should hug the command bar. The sticky
+       panel (split view) is anchored at bottom:0 to match, so scrolling between
+       the two views doesn't shift the latest line. */
+    padding: 3px 3px 0;
 }
 
 .output-wrapper::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -1149,6 +1178,16 @@ html, body, #root {
 
 .output-msg-content span {
     padding: 2px 0;
+}
+
+/* Keyboard-focused OSC 8 link (Ctrl+] / Ctrl+[). Applied to every run of the
+   logical link so the highlight spans the whole link, not a single colour run.
+   A background tint reads as one continuous box across adjacent runs (an
+   outline would draw seams between them). The default focus ring is suppressed
+   since this is the visible cue. */
+.output-msg-content span.osc8-link-focused {
+    background-color: rgba(255, 255, 255, 0.18);
+    outline: none;
 }
 
 /* Monospace grid cells: each non-ASCII grapheme is boxed into a fixed Nch
@@ -1193,7 +1232,7 @@ html, body, #root {
     visibility: hidden;
     pointer-events: none;
     position: absolute;
-    bottom: 3px;
+    bottom: 0; /* hug the bottom edge, matching the wrapper's zero bottom padding */
     left: 3px;
     right: 9px; /* 3px padding + 6px scrollbar track */
     background: var(--console-bg);
