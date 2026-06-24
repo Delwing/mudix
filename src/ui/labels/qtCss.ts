@@ -25,8 +25,28 @@ const LENGTH_PROPS = new Set([
     'font-size', 'letter-spacing', 'word-spacing',
 ]);
 
+// Parsing a Qt stylesheet (gradient / unit / selector handling) is pure in its
+// source string, but it runs for every label on every overlay render — and
+// during a Geyser split-resize drag the whole overlay re-renders many times a
+// second while only geometry (not the stylesheet) changes. Memoize by source
+// string so repeated renders reuse the parse instead of re-running the regex
+// pipeline. Bounded so dynamically-generated stylesheets can't grow it without
+// limit; the returned objects are treated as read-only by all callers, so it is
+// safe to hand back a shared instance.
+const CACHE_CAP = 1024;
+function memoize<V>(cache: Map<string, V>, key: string, make: () => V): V {
+    let hit = cache.get(key);
+    if (hit === undefined) {
+        hit = make();
+        if (cache.size >= CACHE_CAP) cache.clear();
+        cache.set(key, hit);
+    }
+    return hit;
+}
+
+const STYLE_CACHE = new Map<string, React.CSSProperties>();
 export function cssTextToStyle(css: string): React.CSSProperties {
-    return declarationsToStyle(stripRulesetBraces(css));
+    return memoize(STYLE_CACHE, css, () => declarationsToStyle(stripRulesetBraces(css)));
 }
 
 // Parse a Qt-style stylesheet that mixes flat declarations and selector
@@ -42,11 +62,18 @@ export interface QtMargin {
     left: number;
 }
 
-export function cssTextToParts(css: string): {
+export interface CssParts {
     inline: React.CSSProperties;
     scoped: Array<{ pseudo: string; declarations: string }>;
     margin?: QtMargin;
-} {
+}
+
+const PARTS_CACHE = new Map<string, CssParts>();
+export function cssTextToParts(css: string): CssParts {
+    return memoize(PARTS_CACHE, css, () => cssTextToPartsUncached(css));
+}
+
+function cssTextToPartsUncached(css: string): CssParts {
     if (css.indexOf('{') < 0) {
         const { style, margin } = declarationsToStyleWithMargin(css);
         return { inline: style, scoped: [], margin };

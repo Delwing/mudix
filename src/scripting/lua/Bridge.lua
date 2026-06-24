@@ -134,6 +134,27 @@ function getConnectionInfo()
     return t[0], t[1], t[2]
 end
 
+-- Mudlet getOS() → osName, osVersion, [osType (Linux only)], processor. JS
+-- returns a 0-indexed array (wasmoon convention) whose length varies (3, or 4 on
+-- Linux); unpack it preserving the multi-return arity.
+function getOS()
+    local t = __getOS()
+    local out, i = {}, 0
+    while t[i] ~= nil do
+        out[#out + 1] = t[i]
+        i = i + 1
+    end
+    return unpack(out)
+end
+
+-- Mudlet getKeyCode(idOrName) → keyCode, modifiers — or (nil, errorMessage) when
+-- no binding matches. JS returns a 0-indexed [keyCode|nil, modifiers|errMsg]
+-- array (and raises on a non-number/non-string argument, which propagates here).
+function getKeyCode(idOrName)
+    local t = __getKeyCode(idOrName)
+    return t[0], t[1]
+end
+
 -- Mudlet exportAreaImage(areaID, filePath [, zLevel]) → true on success, or
 -- (false, errMsg). JS returns a 0-indexed [ok, pathOrErr] array; unpack it into
 -- the documented multi-return (and surface the written path as the 2nd value on
@@ -1422,12 +1443,21 @@ function __mudix_to_fn(v, who, argN)
         end
         return fn
     end
-    error(who .. ": bad argument #" .. argN .. " (function or string expected, got " .. type(v) .. ")")
+    -- Mudlet's bad-argument format is "<fn>: bad argument #N type (... got X!)";
+    -- the "type" token matters — IDManager's extractUpstreamError and scripts that
+    -- match on it expect it.
+    error(who .. ": bad argument #" .. argN .. " type (function or string expected, got " .. type(v) .. "!)")
 end
 
 do
     local _raw = __mudix_tempTimer
     function tempTimer(seconds, fn, repeating)
+        -- Validate the delay (arg #1) before the callback (arg #2) so the
+        -- reported argument number matches Mudlet — IDManager.registerNamedTimer
+        -- relies on this ordering to surface the right "#N" in its own error.
+        if type(seconds) ~= 'number' then
+            error("tempTimer: bad argument #1 type (number expected, got " .. type(seconds) .. "!)")
+        end
         return _raw(seconds, __mudix_register_cb(__mudix_to_fn(fn, "tempTimer", 2)), repeating or false)
     end
 end

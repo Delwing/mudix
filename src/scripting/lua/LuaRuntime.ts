@@ -23,7 +23,7 @@ import {setupYajl, type LuaValueTransform} from './yajl';
 import {parseImageSize} from './imageSize';
 import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
 import {QT_CURSOR_NAME_TO_INT, QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
-import {qtKeyToDomCode, qtModifiersToList} from '../../mud/keybindings/qtKeys';
+import {qtKeyToDomCode, qtModifiersToList, domCodeToQtKey} from '../../mud/keybindings/qtKeys';
 import {HttpService} from '../http/HttpService';
 import {TtsManager} from '../../ui/tts/TtsManager';
 
@@ -36,6 +36,24 @@ const MUDLET_LUA_FILES = import.meta.glob('./mudlet-lua/**/*.{lua,json}', {
     import: 'default',
     eager: true,
 }) as Record<string, string>;
+
+// Mudlet's busted *_spec.lua suite + the vendored busted runtime, bundled ONLY
+// when VITE_BUSTED=1 so production builds tree-shake the test corpus out. Both
+// are registered into the same /lua/ VFS namespace as MUDLET_LUA_FILES and
+// resolved by require() via the package.loaders[2] VFS loader. The runner is
+// exposed to the browser as window.__runBusted in flagged builds. See
+// src/scripting/lua/busted/VENDORED.md.
+const BUSTED_ENABLED = !!(import.meta.env as Record<string, unknown>).VITE_BUSTED;
+const BUSTED_FILES = BUSTED_ENABLED
+    ? (import.meta.glob('./busted/**/*.lua', { query: '?raw', import: 'default', eager: true }) as Record<string, string>)
+    : {};
+const SPEC_FILES = BUSTED_ENABLED
+    ? (import.meta.glob('./specs/**/*_spec.lua', { query: '?raw', import: 'default', eager: true }) as Record<string, string>)
+    : {};
+
+// VFS spec paths the busted runner can target (e.g. /lua/specs/StringUtils_spec.lua).
+const bustedSpecVfsPaths = (): string[] =>
+    Object.keys(SPEC_FILES).map(p => `/lua/specs/${p.slice('./specs/'.length)}`);
 
 const DOCKMAP: Record<string, string> = {
     r: 'right',
@@ -94,8 +112,10 @@ function bytesToImageDataUrl(bytes: Uint8Array, path: string): string {
 
 export class LuaRuntime implements IScriptingRuntime {
 
-    // Temp alias/trigger IDs → unsub fns (engines return unsub, not numeric IDs).
-    private readonly tempIds = new Map<number, () => void>();
+    // Temp alias/trigger IDs → { kill fn, type }. Engines return unsub, not
+    // numeric IDs; the type lets exists(id, "alias"/"trigger") recognise
+    // script-created temp items the way Mudlet does.
+    private readonly tempIds = new Map<number, { kill: () => void; type: 'alias' | 'trigger' }>();
     private nextTempId = 1;
     // Tracks label callback ids per slot so re-binds can free the prior Lua-
     // registry slot via __mudix_unregister_cb (avoids the leak the audit flagged
@@ -115,7 +135,9 @@ export class LuaRuntime implements IScriptingRuntime {
     // windowCmdLineActionCbIds but keyed by createCommandLine names. Cleared on
     // resetCmdLineAction(name) and when the cmd line is deleted.
     private overlayCmdLineActionCbIds = new Map<string, number>();
-    private currentMatches: string[] = [];
+    // [fullMatch, cap1, cap2, ...]; an entry is `undefined` for a capture group
+    // that didn't participate (→ nil in the Lua `matches` table, Mudlet parity).
+    private currentMatches: (string | undefined)[] = [];
     // selectCaptureGroup needs the actual offset of each capture in the
     // source line; without these spans it falls back to selectString(text, 1)
     // which picks the wrong occurrence when the captured text repeats.
@@ -336,11 +358,12 @@ export class LuaRuntime implements IScriptingRuntime {
 
         this.lua.global.set('getEpoch', () => Date.now() / 1000);
 
-        // Mudlet getOS() → platform name scripts branch on. We sniff the
-        // underlying OS so windows/mac-specific scripts behave; Mudlet's
-        // optional 2nd "version" return isn't provided (mudlet.supports.osVersion
-        // gates its use, so a single return is safe).
-        this.lua.global.set('getOS', () => this.api.getOS());
+        // Mudlet getOS() → osName, osVersion, [osType (Linux only)], processor.
+        // We sniff the underlying OS so windows/mac-specific scripts behave. JS
+        // hands back a 0-indexed array (length 3, or 4 on Linux); the Bridge.lua
+        // wrapper unpacks it into Mudlet's multi-return. The first value is still
+        // the platform name, so `getOS() == "windows"` comparisons keep working.
+        this.lua.global.set('__getOS', () => this.api.getOSInfo());
 
         // Mudlet getWindowsCodepage() → active ANSI code page string. The browser
         // VFS is UTF-8 (code page 65001) on every host, which is what we report —
@@ -1240,7 +1263,7 @@ export class LuaRuntime implements IScriptingRuntime {
                     this.tempIds.delete(id);
                 }
             }, 'substring');
-            this.tempIds.set(id, () => { unsub(); releaseCb(cbId); });
+            this.tempIds.set(id, { kill: () => { unsub(); releaseCb(cbId); }, type: 'trigger' });
             return id;
         });
 
@@ -2029,26 +2052,26 @@ export class LuaRuntime implements IScriptingRuntime {
 
         // Lua wrapper converts cmds/hints tables to \x01-delimited strings before calling here.
         // xEcho always passes (win, text, cmds_str, hints_str, fmt); win defaults to "main".
-        this.lua.global.set('echoPopup', (win: unknown, text: unknown, cmds: unknown, hints: unknown, _fmt?: unknown) => {
+        this.lua.global.set('echoPopup', (win: unknown, text: unknown, cmds: unknown, hints: unknown, fmt?: unknown) => {
             const textStr = text as string;
             if (!textStr) return;
             const split = (s: unknown) => s ? String(s).split('\x01').filter(Boolean) : [];
             const cmdsArr = split(cmds);
             const hintsArr = split(hints);
             const winStr = (win && win !== 'main') ? win as string : undefined;
-            this.api.echoPopup(textStr, cmdsArr, hintsArr, winStr);
+            this.api.echoPopup(textStr, cmdsArr, hintsArr, winStr, !!fmt);
         });
 
         // insertPopup primitive — same \x01-flatten convention as echoPopup, but
         // inserts the popup span at the cursor instead of appending. The Lua
         // wrapper (Bridge.lua) handles overload disambiguation + table flatten;
         // cinsertPopup/dinsertPopup/hinsertPopup (GUIUtils.lua) route here via xEcho.
-        this.lua.global.set('insertPopup', (win: unknown, text: unknown, cmds: unknown, hints: unknown, _fmt?: unknown) => {
+        this.lua.global.set('insertPopup', (win: unknown, text: unknown, cmds: unknown, hints: unknown, fmt?: unknown) => {
             const textStr = text as string;
             if (!textStr) return;
             const split = (s: unknown) => s ? String(s).split('\x01').filter(Boolean) : [];
             const winStr = (win && win !== 'main') ? win as string : undefined;
-            this.api.insertPopup(textStr, split(cmds), split(hints), winStr);
+            this.api.insertPopup(textStr, split(cmds), split(hints), winStr, !!fmt);
         });
 
         // setPopup primitive — attaches a popup to the current selection. The Lua
@@ -2867,14 +2890,14 @@ export class LuaRuntime implements IScriptingRuntime {
                 this.setMatches(Array.from(m));
                 dispatchCb(cbId, 'tempAlias');
             });
-            this.tempIds.set(id, () => { unsub(); releaseCb(cbId); });
+            this.tempIds.set(id, { kill: () => { unsub(); releaseCb(cbId); }, type: 'alias' });
             return id;
         });
         this.lua.global.set('killAlias', (idOrName: number | string) => {
             if (typeof idOrName === 'string') return this.api.killByName('alias', idOrName);
-            const unsub = this.tempIds.get(idOrName);
-            if (!unsub) return false;
-            unsub(); this.tempIds.delete(idOrName); return true;
+            const entry = this.tempIds.get(idOrName);
+            if (!entry) return false;
+            entry.kill(); this.tempIds.delete(idOrName); return true;
         });
 
         // ── Triggers ──────────────────────────────────────────────────────────
@@ -2924,7 +2947,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 fires++;
                 if (max > 0 && fires >= max) kill();
             }, kind);
-            this.tempIds.set(id, kill);
+            this.tempIds.set(id, { kill, type: 'trigger' });
             return id;
         };
         this.lua.global.set('__mudix_tempTrigger', (pattern: string, cbId: number, expirationCount?: number) =>
@@ -2965,14 +2988,14 @@ export class LuaRuntime implements IScriptingRuntime {
                 fires++;
                 if (fires >= total) kill();
             });
-            this.tempIds.set(id, kill);
+            this.tempIds.set(id, { kill, type: 'trigger' });
             return id;
         });
         this.lua.global.set('killTrigger', (idOrName: number | string) => {
             if (typeof idOrName === 'string') return this.api.killByName('trigger', idOrName);
-            const unsub = this.tempIds.get(idOrName);
-            if (!unsub) return false;
-            unsub(); this.tempIds.delete(idOrName); return true;
+            const entry = this.tempIds.get(idOrName);
+            if (!entry) return false;
+            entry.kill(); this.tempIds.delete(idOrName); return true;
         });
 
         // ── Keys ──────────────────────────────────────────────────────────────
@@ -2983,14 +3006,33 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__mudix_tempKey', (modifier: number, key: string | number, cbId: number) => {
             const mods = qtModifiersToList(modifier);
             const keyCode = qtKeyToDomCode(key, modifier);
+            // Keep the raw Qt key/modifier so getKeyCode() can report them back
+            // unchanged (the Qt→DOM translation above is lossy).
+            const qtKey = typeof key === 'number' ? key : (domCodeToQtKey(key) ?? 0);
             return this.api.keys.addTemp(keyCode, mods, () => {
                 dispatchCb(cbId, 'tempKey');
-            });
+            }, { keyCode: qtKey, modifier });
         });
         this.lua.global.set('killKey', (idOrName: number | string) =>
             typeof idOrName === 'string'
                 ? this.api.killByName('key', idOrName)
                 : this.api.keys.killKey(idOrName));
+        // Mudlet getKeyCode(idOrName) → keyCode, modifiers (Qt::Key int + modifier
+        // mask), or (nil, errorMessage) when no binding matches. A non-number,
+        // non-string argument is a hard error (matches Mudlet's arg validation).
+        // JS returns a 0-indexed array; Bridge.lua unpacks it into the multi-return.
+        this.lua.global.set('__getKeyCode', (arg: unknown) => {
+            if (typeof arg !== 'number' && typeof arg !== 'string') {
+                throw new Error('getKeyCode: bad argument #1 (key id number or name string expected)');
+            }
+            const info = this.api.keys.getKeyCode(arg);
+            if (!info) {
+                return [null, typeof arg === 'number'
+                    ? `getKeyCode: no key binding with id ${arg}`
+                    : `getKeyCode: no key binding named '${arg}'`];
+            }
+            return [info.keyCode, info.modifiers];
+        });
 
         // ── Error / debug ─────────────────────────────────────────────────────
         // showHandlerError is called by Other.lua's dispatchEventToFunctions when
@@ -3485,6 +3527,15 @@ export class LuaRuntime implements IScriptingRuntime {
                 return [`/lua/${rel}`, src] as [string, string];
             })
         );
+        // Vendored busted runtime + spec corpus (VITE_BUSTED builds only). Keyed
+        // so require() resolves them: /lua/busted/core.lua, /lua/luassert/init.lua,
+        // /lua/runBusted.lua, /lua/specs/<Name>_spec.lua, ...
+        for (const [p, src] of Object.entries(BUSTED_FILES)) {
+            builtins.set(`/lua/${p.slice('./busted/'.length)}`, src);
+        }
+        for (const [p, src] of Object.entries(SPEC_FILES)) {
+            builtins.set(`/lua/specs/${p.slice('./specs/'.length)}`, src);
+        }
         this.setupVFS(this.vfs, builtins);
         this.exec(VFS_LUA, 'VFS');
         this.exec(LUA_GLOBAL_SETUP, 'lua-globals-setup');
@@ -3494,6 +3545,46 @@ export class LuaRuntime implements IScriptingRuntime {
         this.toLuaValue = setupYajl(this.lua).transform;
         this.exec(YAJL_LUA, 'Yajl');
         this.exec(LUAGLOBAL, 'LuaGlobal');
+
+        if (BUSTED_ENABLED) this.setupBustedBridge();
+    }
+
+    /**
+     * True when a script-created (temp) alias/trigger with this id is live and of
+     * the given type. Backs exists(id, "alias"/"trigger") for temp items, which
+     * don't live in the persisted store the way permanent items do.
+     */
+    tempItemExists(id: number, type: string): boolean {
+        return this.tempIds.get(id)?.type === type;
+    }
+
+    // ── busted bridge (VITE_BUSTED builds only) ──────────────────────────────
+    // Puts the vendored busted runtime + spec corpus on require()'s search path
+    // and exposes window.__runBusted(pattern) -> results object. The runner is
+    // driven through busted's programmatic core API (see runBusted.lua); results
+    // round-trip as JSON via yajl so there's no DOM race for assertions.
+    private setupBustedBridge(): void {
+        // The mudlet-lua builtins are loaded by explicit dofile('/lua/...') paths,
+        // so /lua was never on package.path. busted uses require(), so add it.
+        this.lua.doStringSync('package.path = "/lua/?.lua;/lua/?/init.lua;" .. package.path');
+
+        if (typeof window === 'undefined') return;
+        const specPaths = bustedSpecVfsPaths();
+        (window as unknown as { __runBusted?: (pattern?: string) => unknown }).__runBusted = (pattern?: string) => {
+            // Prefer an exact spec-name match (`Foo` → /lua/specs/Foo_spec.lua) so
+            // a name that is a substring of another (e.g. "UI" within "GUIUtils")
+            // selects only its own spec; fall back to substring for free patterns.
+            const exact = pattern ? specPaths.filter(p => p.endsWith(`/${pattern}_spec.lua`)) : [];
+            const selected = !pattern || pattern === '*'
+                ? specPaths
+                : (exact.length ? exact : specPaths.filter(p => p.includes(pattern)));
+            // Long-bracket string literals — spec VFS paths never contain ']]'.
+            const listLua = '{' + selected.map(p => `[[${p}]]`).join(',') + '}';
+            const json = this.lua.doStringSync(
+                `return yajl.to_string(require('runBusted')(${listLua}))`,
+            ) as string;
+            return JSON.parse(json);
+        };
     }
 
     // ── luasql.sqlite3 bridge ────────────────────────────────────────────────
@@ -3894,8 +3985,8 @@ export class LuaRuntime implements IScriptingRuntime {
     runWithMatches(
         code: string,
         name: string,
-        matches: string[],
-        multimatches?: string[][],
+        matches: (string | undefined)[],
+        multimatches?: (string | undefined)[][],
         namedGroups?: Record<string, string>,
         captureSpans?: CaptureSpan[],
         namedSpans?: Record<string, CaptureSpan>,
@@ -3930,9 +4021,9 @@ export class LuaRuntime implements IScriptingRuntime {
     // assignment. wasmoon's pushTable splits numeric vs string keys at push
     // time, so `matches[2]` and `matches.foo` coexist on the Lua side just
     // like in Mudlet.
-    private setMatches(matches: string[], multimatches?: string[][], namedGroups?: Record<string, string>): void {
-        const oneIndexed = (arr: string[], named?: Record<string, string>): string[] => {
-            const t: string[] = [];
+    private setMatches(matches: (string | undefined)[], multimatches?: (string | undefined)[][], namedGroups?: Record<string, string>): void {
+        const oneIndexed = (arr: (string | undefined)[], named?: Record<string, string>): (string | undefined)[] => {
+            const t: (string | undefined)[] = [];
             for (let i = 0; i < arr.length; i++) t[i + 1] = arr[i];
             if (named) {
                 const asRec = t as unknown as Record<string, string>;
@@ -3941,7 +4032,7 @@ export class LuaRuntime implements IScriptingRuntime {
             return t;
         };
         this.lua.global.set('matches', oneIndexed(matches, namedGroups));
-        const mm: string[][] = [];
+        const mm: (string | undefined)[][] = [];
         if (multimatches) for (let i = 0; i < multimatches.length; i++) mm[i + 1] = oneIndexed(multimatches[i]);
         this.lua.global.set('multimatches', mm);
         // Mudlet also exposes a separate `namedCaptures` table; keep parity.

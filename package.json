@@ -8,7 +8,9 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "dev:busted": "vite --mode busted --port 5174 --strictPort",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
@@ -38,6 +40,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/pako": "^2.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

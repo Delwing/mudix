@@ -482,6 +482,7 @@ const MUDLET_GLOBALS: Completion[] = [
     // Keys
     fn('tempKey',        '(modifier, key, fn) → id',  'Create a temporary keybinding. modifier: Qt bitflag (0=none, 67108864=Ctrl, 33554432=Shift, 134217728=Alt). key: Qt::Key int or web code string'),
     fn('killKey',        '(id)',                       'Remove a keybinding'),
+    fn('getKeyCode',     '(idOrName) → keyCode, modifiers', 'Look up a keybinding by temp id (number) or permanent name (string). Returns the Qt::Key code and modifier bitmask, or (nil, errorMessage) if none matches.'),
     // Named triggers / timers / event handlers
     fn('registerNamedTrigger',      '(userName, triggerName, substring, fn [, expireAfter]) → bool', 'Register a named substring trigger keyed by (userName, triggerName)'),
     fn('registerNamedRegexTrigger', '(userName, triggerName, regex, fn [, expireAfter]) → bool',     'Register a named regex trigger keyed by (userName, triggerName)'),
@@ -535,7 +536,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('announce',           '(text [, processing])', 'Send text to assistive technology via an ARIA live region. processing controls politeness: "importantall"/"importantmostrecent" → assertive, anything else → polite.'),
     fn('showNotification',   '(title [, content [, expirySeconds]])', 'Show a desktop notification via the Web Notifications API (requests permission on first use). content defaults to title; expirySeconds auto-closes it. Always returns true.'),
     fn('getEpoch',           '() → number',        'Seconds since the Unix epoch (1970-01-01 UTC) with millisecond precision'),
-    fn('getOS',              '() → string',        'Operating system the client is running on, sniffed from the user agent: "windows", "mac", "linux", "freebsd"/"openbsd"/"netbsd", or "unknown". Useful for OS-specific scripts (e.g. mac vs. windows keybinding hints).'),
+    fn('getOS',              '() → osName, osVersion, [osType], processor', 'Operating system the client runs on, sniffed from the user agent. Returns osName ("windows"/"mac"/"linux"/"freebsd"/"openbsd"/"netbsd"/"unknown"), osVersion, and a processor string; Linux inserts an extra osType (distro) before the processor (4 values vs 3). The first value is the name, so `getOS() == "windows"` still works.'),
     fn('getCharacterName',   '() → string',        'Active profile/character name (mudix has one character per profile, so this matches getProfileName). Empty string when unset.'),
     fn('getMudletInfo',      '()',                 'Echo a short diagnostic block (profile, server encoding, platform) to the main window.'),
     fn('getCommandSeparator', '() → string',       "The profile's command separator (splits one Enter into multiple commands). Defaults to \";;\"."),

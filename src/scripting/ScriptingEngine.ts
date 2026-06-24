@@ -1419,6 +1419,9 @@ export class ScriptingEngine {
                 const n = this.uuidToNumericId.get(item.id);
                 if (n !== undefined && n === wanted) return 1;
             }
+            // Temp (script-created) aliases/triggers aren't in the store; ask the
+            // runtime, which tracks them by id + type (matches Mudlet's exists()).
+            if (this.runtimes.lua?.tempItemExists(wanted, type)) return 1;
             return 0;
         }
         const name = String(nameOrId);
@@ -2294,9 +2297,9 @@ export class ScriptingEngine {
 
     private executePermTrigger(
         trigger: TriggerNode,
-        matches: string[],
+        matches: (string | undefined)[],
         matchedText: string,
-        multimatches?: string[][],
+        multimatches?: (string | undefined)[][],
         namedGroups?: Record<string, string>,
         captureSpans?: { start: number; length: number }[],
         namedSpans?: Record<string, { start: number; length: number }>,
@@ -2306,7 +2309,7 @@ export class ScriptingEngine {
         if (trigger.command) {
             const cmd = trigger.command.replace(/%(\d)/g, (_, d) => {
                 const idx = Number(d);
-                return idx === 0 ? matches[0] : (matches[idx] ?? '');
+                return (idx === 0 ? matches[0] : matches[idx]) ?? '';
             });
             this.api.send(cmd, false);
         }

@@ -84,7 +84,15 @@ function parseScripts(els: Element[], parentId: string | null, out: ScriptNode[]
             .filter(c => c.tagName === 'string')
             .map(s => s.textContent?.trim() ?? '').filter(Boolean);
         out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), code: getText(el, 'script'), language: 'lua', eventHandlers });
-        if (group) parseScripts(directChildren(el, 'Script', 'ScriptGroup'), id, out);
+        // Scripts (like triggers) can nest under a NON-folder parent: Mudlet's
+        // TScript model lets a script carry both its own body and child scripts,
+        // and its export nests the children directly inside the parent <Script>
+        // (e.g. a "themes" script holding "dark"/"light"). Recurse
+        // unconditionally — directChildren is empty for true leaves, so this is a
+        // no-op there — otherwise those children are silently dropped and never
+        // loaded (which broke packages like Muxlet whose theme registration lives
+        // in such nested scripts).
+        parseScripts(directChildren(el, 'Script', 'ScriptGroup'), id, out);
     }
 }
 

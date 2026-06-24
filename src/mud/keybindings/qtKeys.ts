@@ -166,3 +166,41 @@ export function qtModifiersToList(modifier: number): string[] {
     if (modifier & 0x10000000) mods.push('meta');
     return mods;
 }
+
+/** Inverse of qtModifiersToList — {ctrl,shift,alt,meta} names → Qt bitmask. */
+export function listToQtModifiers(modifiers: string[]): number {
+    let m = 0;
+    if (modifiers.includes('ctrl')) m |= 0x04000000;
+    if (modifiers.includes('shift')) m |= 0x02000000;
+    if (modifiers.includes('alt')) m |= 0x08000000;
+    if (modifiers.includes('meta')) m |= 0x10000000;
+    return m;
+}
+
+// Inverse of QT_KEY_TO_DOM_CODE. The forward map is many-to-one (e.g. both
+// 0x21 '!' and the digit row land on 'Digit1'); first-writer-wins collapses each
+// DOM code to one canonical Qt key, which round-trips ordinary binds. The
+// digit/letter/numpad ranges are handled directly in domCodeToQtKey below.
+const DOM_CODE_TO_QT_KEY: Record<string, number> = (() => {
+    const r: Record<string, number> = {};
+    for (const [qt, code] of Object.entries(QT_KEY_TO_DOM_CODE)) {
+        if (!(code in r)) r[code] = Number(qt);
+    }
+    return r;
+})();
+
+/**
+ * Inverse of qtKeyToDomCode for the common case — a DOM `KeyboardEvent.code`
+ * back to a Qt::Key integer. Used by getKeyCode() to report a permanent key
+ * binding (stored as a DOM code) in Mudlet's Qt terms. Returns undefined for a
+ * code with no Qt mapping.
+ */
+export function domCodeToQtKey(code: string): number | undefined {
+    const letter = /^Key([A-Z])$/.exec(code);
+    if (letter) return letter[1].charCodeAt(0); // 'A' → 0x41 (Qt::Key_A)
+    const digit = /^Digit([0-9])$/.exec(code);
+    if (digit) return digit[1].charCodeAt(0);    // '0' → 0x30 (Qt::Key_0)
+    const numpad = /^Numpad([0-9])$/.exec(code);
+    if (numpad) return numpad[1].charCodeAt(0);
+    return DOM_CODE_TO_QT_KEY[code];
+}

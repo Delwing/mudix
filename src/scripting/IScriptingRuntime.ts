@@ -29,8 +29,8 @@ export interface IScriptingRuntime {
     runWithMatches(
         code: string,
         name: string,
-        matches: string[],
-        multimatches?: string[][],
+        matches: (string | undefined)[],
+        multimatches?: (string | undefined)[][],
         namedGroups?: Record<string, string>,
         captureSpans?: CaptureSpan[],
         namedSpans?: Record<string, CaptureSpan>,
@@ -54,4 +54,10 @@ export interface IScriptingRuntime {
      * stop firing without waiting for a full runtime reload.
      */
     killScriptHandlers(scriptId: string): void;
+    /**
+     * True when a script-created (temp) alias/trigger with this id is live and of
+     * the given type. Backs exists(id, "alias"/"trigger") for temp items, which
+     * (unlike permanent items) don't live in the persisted store.
+     */
+    tempItemExists(id: number, type: string): boolean;
 }

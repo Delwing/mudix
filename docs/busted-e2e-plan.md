@@ -2,10 +2,91 @@
 
 ## Status
 
-**Not started (this note).** Design only — no code exists yet. This documents how
-to stand up a two-tier harness that runs Mudlet's own `busted` Lua test suite
-against mudix's `LuaRuntime`, so that every failing spec is a concrete gap in
-mudix's Mudlet-compatible API.
+**Landed — single path via Playwright.** Real busted 2.3.0 runs in-process inside
+wasmoon against the **real running mudix app** in a browser. Driving the actual
+app (not a node thin-layer) means the full `ScriptingEngine` — trigger/alias
+dispatch, timer pump, overlay/Geyser geometry — is wired exactly as in
+production, so there is **one execution path for the whole corpus**.
+
+> The original design proposed two tiers (node Vitest + Playwright). We started
+> with the node tier to de-risk "busted-in-wasmoon" (it worked: 4 specs green),
+> then **consolidated to a single Playwright path** — the node `createTestRuntime`
+> can't fire triggers (it omits the `ScriptingEngine` dispatch wiring), so specs
+> using `feedTriggers`/spies could never pass there. The node busted test was
+> removed; the vendored busted + spec corpus + `LuaRuntime` bridge are reused
+> verbatim by Playwright. The two-tier notes below are kept for history.
+
+Run it: `npm run test:e2e` (Playwright boots `npm run dev:busted` — a
+`VITE_BUSTED=1` dev server on port **5174** — and drives Chromium). The default
+`npm test` (Vitest) is untouched and never bundles the corpus.
+
+### What exists now
+
+- **Vendored busted** under `src/scripting/lua/busted/` (busted core + luassert +
+  say + mediator, plus thin `pl.*`/`system` shims; CLI runner/modules dropped).
+  Provenance + omissions in `src/scripting/lua/busted/VENDORED.md`.
+- **`runBusted.lua`** — the in-process programmatic runner (no CLI/`os.exit`),
+  returns a JSON-able results table. It purges the busted ecosystem from
+  `package.loaded` on each call so it is re-invokable in a long-lived runtime.
+- **`LuaRuntime.ts`** — `VITE_BUSTED`-gated `import.meta.glob` bundles the corpus
+  into the `/lua/` VFS namespace, adds `/lua/?.lua;/lua/?/init.lua` to
+  `package.path`, and exposes `window.__runBusted(pattern)` in flagged builds.
+- **Spec corpus** under `src/scripting/lua/specs/` (verbatim from Mudlet;
+  provenance in `specs/SYNCED.md`).
+- **`e2e/busted.spec.ts`** + **`playwright.config.ts`** + **`.env.busted`** —
+  seeds a non-dialing connection into `localStorage` (store v20), deep-links
+  `?profile=`, waits for `window.__runBusted`, asserts the green specs, and logs
+  a scoreboard for the rest.
+
+### Scoreboard (current, in-app — all 24 Mudlet specs synced)
+
+**17 of 24 specs are fully green** and asserted in `e2e/busted.spec.ts`; the rest
+are the parity backlog. ✓ = asserted green. (`bootProfile` polls a trivial run
+until it succeeds, so the test never races the runtime re-creation that happens
+during initial mount.)
+
+| Spec | Result | Note |
+|---|---|---|
+| StringUtils | ✓ 35/35 | green |
+| TableUtils | ✓ 64/64 | green |
+| DateTime | ✓ 2/2 | green |
+| GMCP | ✓ 14/14 | green |
+| Miscallaneous | ✓ 4/4 | `getOS()` now returns Mudlet's `name, version, [type], processor` multi-return |
+| TBufferOSC | ✓ 3/3 | green |
+| GeyserLabel | ✓ 6/6 | green (real overlay geometry) |
+| GeyserButton | ✓ 11/11 | green |
+| GeyserStyleSheet | ✓ 26/26 | green |
+| GeyserAdjustableContainer | ✓ 6/6 | green |
+| KeyBinds | ✓ 10/10 | implemented `getKeyCode` (stores raw Qt key/modifier on temp keys) |
+| DebugTools | ✓ 9/9 | profile named "Mudlet self-test" keeps `errorc` spyable (Mudlet's own setup) |
+| MudletBusted | ✓ 2/2 | profile id contains "mudlet" so `getMudletHomeDir()` matches |
+| Alias | ✓ 3/3 | `exists(id,"alias")` now recognises temp (script-created) aliases |
+| Trigger | ✓ 3/3 | `exists(id,"trigger")` now recognises temp triggers |
+| Regex | ✓ 21/21 | a non-participating capture group is now `nil` (was `""`) — PCRE2_UNSET → `undefined` → Lua `nil`, matching Mudlet (and JS RegExp) |
+| IDManager | ✓ 15/22 (7 pending) | `tempTimer` now validates its delay (arg #1) and raises Mudlet's `bad argument #N type` format, so `registerNamedTimer`'s error reformatting lines up. The 7 pending are upstream `pending()` stubs (async timer tests Mudlet hasn't written) |
+| Other | ✗ 43/44 | 1 `deleteMultiline` line-range nuance |
+| DB | ✗ 65/74 | **feature** — DB.lua column add/delete, `_violations` migration |
+| InsertTextNewline | ✗ 3/8 | **feature** — multi-line `insertText` needs Console line-splitting surgery (the deferred TBuffer line-assembly work) |
+| TextEdit | ✗ 1/19 | **feature** — `createTextEdit`/`deleteTextEdit` widget not implemented |
+| GUIUtils | ✗ 72/98 | **feature** — `ansi2decho` / xterm256 conversion mismatches |
+| UI | ✗ 43/61 | **feature** — `copy2decho`/`copy2html`, `windowType("commandline")` |
+| Mapper | ✗ 4/22 | **feature** — `setRoomBorderColor`, map-menu APIs |
+
+The quick/bounded gaps are closed. What remains is genuine feature work: the
+`*Edit` widget, the `ansi2decho` colour pipeline shared by GUIUtils/UI, DB.lua
+internals, the Mapper menu/border APIs, multi-line `insertText` (the deferred
+TBuffer line-assembly work), and a single `deleteMultiline` line-range nuance.
+Each deserves its own focused pass; tackle a spec, then move it into
+`GREEN_SPECS`.
+
+---
+
+_Original two-tier design notes follow (kept for history; the node tier was
+folded into the single Playwright path above)._
+
+This documents how to stand up a two-tier harness that runs Mudlet's own
+`busted` Lua test suite against mudix's `LuaRuntime`, so that every failing spec
+is a concrete gap in mudix's Mudlet-compatible API.
 
 ## What Mudlet's "busted test suite" actually is
 

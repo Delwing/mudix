@@ -1,9 +1,16 @@
 import type { KeyNode } from '../../storage/schema';
 import { buildEffectivelyEnabledIds } from '../../storage/schema';
+import { domCodeToQtKey, listToQtModifiers } from './qtKeys';
 
 export type { KeyNode };
 
 type TempFn = () => void;
+
+/** Mudlet getKeyCode() result — a Qt::Key integer + Qt::KeyboardModifier mask. */
+export interface KeyCodeInfo {
+    keyCode: number;
+    modifiers: number;
+}
 
 function matchesEvent(key: string, modifiers: string[], event: KeyboardEvent): boolean {
     if (event.code !== key) return false;
@@ -15,17 +22,46 @@ function matchesEvent(key: string, modifiers: string[], event: KeyboardEvent): b
     );
 }
 
+interface TempKey {
+    key: string;
+    modifiers: string[];
+    fn: TempFn;
+    // The original Qt::Key / Qt modifier mask passed to tempKey, kept verbatim so
+    // getKeyCode() round-trips exactly (the DOM-code translation is lossy).
+    qtKey?: number;
+    qtModifier?: number;
+}
+
 export class KeyEngine {
-    private readonly temp = new Map<number, { key: string; modifiers: string[]; fn: TempFn }>();
+    private readonly temp = new Map<number, TempKey>();
     private perm: KeyNode[] = [];
     private nextId = 1;
 
     // ── Temp keybindings (session-scoped, created by scripts) ─────────────────
 
-    addTemp(key: string, modifiers: string[], fn: TempFn): number {
+    addTemp(key: string, modifiers: string[], fn: TempFn, qt?: { keyCode: number; modifier: number }): number {
         const id = this.nextId++;
-        this.temp.set(id, { key, modifiers, fn });
+        this.temp.set(id, { key, modifiers, fn, qtKey: qt?.keyCode, qtModifier: qt?.modifier });
         return id;
+    }
+
+    /**
+     * Mudlet getKeyCode(idOrName) lookup. A numeric id resolves a temp key; a
+     * string resolves a permanent key by name. Returns the Qt key code + modifier
+     * mask, or null when nothing matches (caller turns that into nil + errMsg).
+     */
+    getKeyCode(idOrName: number | string): KeyCodeInfo | null {
+        if (typeof idOrName === 'number') {
+            const t = this.temp.get(idOrName);
+            if (!t) return null;
+            return {
+                keyCode: t.qtKey ?? (typeof t.key === 'string' ? domCodeToQtKey(t.key) ?? 0 : t.key),
+                modifiers: t.qtModifier ?? listToQtModifiers(t.modifiers),
+            };
+        }
+        const node = this.perm.find(k => k.name === idOrName && k.key);
+        if (!node) return null;
+        return { keyCode: domCodeToQtKey(node.key) ?? 0, modifiers: listToQtModifiers(node.modifiers) };
     }
 
     killKey(id: number): boolean {

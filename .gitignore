@@ -38,5 +38,11 @@ Thumbs.db
 # Vite
 .vite/
 
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 .idea
 .claude

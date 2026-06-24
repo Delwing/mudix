@@ -4,8 +4,15 @@ import { buildEffectivelyEnabledIds } from '../../storage/schema';
 
 export type { TriggerNode };
 
+// A capture-group value. `undefined` marks a group that did not participate in
+// the match (e.g. an optional `(...)?` that wasn't present) — Mudlet surfaces
+// those as `nil` in the `matches` table, which a JS `undefined` becomes when
+// pushed to Lua. (PCRE2 reports such groups as PCRE2_UNSET; JS RegExp already
+// yields `undefined`, so this keeps both matcher paths consistent.)
+type Capture = string | undefined;
+
 type TempFn = (
-    matches: string[],
+    matches: Capture[],
     spans?: {
         captureSpans: CaptureSpan[];
         namedSpans?: Record<string, CaptureSpan>;
@@ -26,7 +33,7 @@ type TempFn = (
  */
 type CaptureSpan = { start: number; length: number };
 type MatchResult = {
-    captures: string[];
+    captures: Capture[];
     matchedText: string;
     namedGroups?: Record<string, string>;
     captureSpans?: CaptureSpan[];
@@ -43,9 +50,9 @@ type Matcher = (line: string, isPrompt: boolean) => MatchResult | null;
  */
 export type TriggerMatch = {
     trigger: TriggerNode;
-    captures: string[];
+    captures: Capture[];
     matchedText: string;
-    multimatches?: string[][];
+    multimatches?: Capture[][];
     namedGroups?: Record<string, string>;
     captureSpans?: CaptureSpan[];
     namedSpans?: Record<string, CaptureSpan>;
@@ -175,7 +182,7 @@ type AndState = {
     nextIdx: number;
     startLine: number;
     waitUntilLine: number;
-    captures: string[][];
+    captures: Capture[][];
     namedGroups: Array<Record<string, string>>;
 };
 
@@ -200,7 +207,7 @@ function parseColorPattern(text: string): [number, number] {
 }
 
 function pcreToMatchResult(m: PcreMatch): MatchResult {
-    const captures: string[] = [];
+    const captures: Capture[] = [];
     const captureSpans: CaptureSpan[] = [];
     const namedGroups: Record<string, string> = {};
     const namedSpans: Record<string, CaptureSpan> = {};
@@ -208,11 +215,13 @@ function pcreToMatchResult(m: PcreMatch): MatchResult {
     // the full match at index 0 — so capture groups are at 1..length-1, not 1..length.
     for (let i = 1; i < m.length; i++) {
         const cap = m[i] as PcreMatchGroup | undefined;
-        // PCRE2 sets ovector to PCRE2_UNSET (start === -1) for unmatched optional
-        // groups; surface those as empty strings (and zero-length spans rooted at
-        // 0) to mirror prior JS-RegExp behavior.
+        // PCRE2 sets ovector to PCRE2_UNSET (start === -1) for groups that didn't
+        // participate (e.g. an absent optional `(...)?`). Surface those as
+        // `undefined` so the `matches` table reports `nil` at that slot — Mudlet's
+        // behaviour (and what JS RegExp already yields for unmatched groups). The
+        // span stays a zero-length placeholder to keep span indices aligned.
         const matched = cap && cap.start >= 0;
-        captures.push(matched ? cap!.match : '');
+        captures.push(matched ? cap!.match : undefined);
         captureSpans.push({
             start: matched ? cap!.start : 0,
             length: matched ? cap!.end - cap!.start : 0,
@@ -908,7 +917,7 @@ export class TriggerEngine {
      * if the trigger is also a filter, stash the captured/matched text so
      * descendants see it as their effective input.
      */
-    private openChain(item: TriggerNode, currentLine: number, result: { captures: string[]; matchedText: string }): void {
+    private openChain(item: TriggerNode, currentLine: number, result: { captures: Capture[]; matchedText: string }): void {
         this.chainOpenUntil.set(item.id, currentLine + (item.fireLength ?? 0));
         if (item.isFilter) {
             this.filterActiveText.set(item.id, result.captures[0] ?? result.matchedText);

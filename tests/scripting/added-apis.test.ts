@@ -12,7 +12,7 @@ describe('tempLineTrigger — TriggerEngine.addTempLine', () => {
   it('fires on `howMany` lines starting `from` lines ahead, then self-expires', () => {
     const te = new TriggerEngine();
     const fired: string[] = [];
-    te.addTempLine(1, 2, (m) => fired.push(m[0]));
+    te.addTempLine(1, 2, (m) => fired.push(m[0] ?? ''));
     te.processTemp('line-1');
     te.processTemp('line-2');
     te.processTemp('line-3'); // already expired
@@ -22,7 +22,7 @@ describe('tempLineTrigger — TriggerEngine.addTempLine', () => {
   it('skips `from - 1` lines before the first fire', () => {
     const te = new TriggerEngine();
     const fired: string[] = [];
-    te.addTempLine(3, 1, (m) => fired.push(m[0]));
+    te.addTempLine(3, 1, (m) => fired.push(m[0] ?? ''));
     te.processTemp('a');
     te.processTemp('b');
     te.processTemp('c'); // from=3 → third line fires
@@ -34,7 +34,7 @@ describe('tempLineTrigger — TriggerEngine.addTempLine', () => {
     const te = new TriggerEngine();
     const fired: string[] = [];
     te.addTemp('spawn', () => {
-      te.addTempLine(1, 1, (m) => fired.push(m[0]));
+      te.addTempLine(1, 1, (m) => fired.push(m[0] ?? ''));
     }, 'substring');
     te.processTemp('spawn'); // creation line — the new line trigger must skip it
     te.processTemp('next');  // from=1 → fires here
@@ -45,7 +45,7 @@ describe('tempLineTrigger — TriggerEngine.addTempLine', () => {
   it('early disposal cancels remaining fires', () => {
     const te = new TriggerEngine();
     const fired: string[] = [];
-    const kill = te.addTempLine(1, 5, (m) => fired.push(m[0]));
+    const kill = te.addTempLine(1, 5, (m) => fired.push(m[0] ?? ''));
     te.processTemp('1');
     kill();
     te.processTemp('2');

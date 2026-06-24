@@ -1336,6 +1336,59 @@ export class ScriptingAPI {
     }
 
     /**
+     * Full Mudlet `getOS()` return tuple, ordered as the C++ pushes it:
+     * `osName, osVersion, [osType], processor` — where the Linux branch inserts
+     * an extra `osType` (the distribution type) before the processor, so Linux
+     * yields 4 values and every other platform 3. The Lua-side `getOS()` wrapper
+     * (Bridge.lua) unpacks this 0-indexed array into the multi-return.
+     *
+     * In the browser none of these come from QSysInfo, so each is sniffed from
+     * `navigator` and falls back to a non-empty `"unknown"` (Mudlet's contract,
+     * and the busted spec, require non-empty strings).
+     */
+    getOSInfo(): string[] {
+        const name = this.getOS();
+        const version = this.getOSVersion();
+        const processor = this.getOSProcessor();
+        if (name === 'linux') {
+            const ua = typeof navigator !== 'undefined' ? (navigator.userAgent || '').toLowerCase() : '';
+            const osType = ua.includes('android') ? 'android' : ua.includes('cros') ? 'chromeos' : 'linux';
+            return [name, version, osType, processor];
+        }
+        return [name, version, processor];
+    }
+
+    /** Best-effort OS version string from the user agent; "unknown" if absent. */
+    private getOSVersion(): string {
+        if (typeof navigator === 'undefined') return 'unknown';
+        const ua = navigator.userAgent || '';
+        let m = ua.match(/Windows NT ([\d.]+)/);
+        if (m) return m[1];
+        m = ua.match(/Mac OS X (10[\d_.]+)/);
+        if (m) return m[1].replace(/_/g, '.');
+        m = ua.match(/Android ([\d.]+)/);
+        if (m) return m[1];
+        m = ua.match(/CrOS \S+ ([\d.]+)/);
+        if (m) return m[1];
+        return 'unknown';
+    }
+
+    /** Processor string in Mudlet's format ("x86 (64-bit)", "arm64", …). */
+    private getOSProcessor(): string {
+        if (typeof navigator === 'undefined') return 'unknown';
+        const nav = navigator as Navigator & { userAgentData?: { architecture?: string; bitness?: string } };
+        const arch = (nav.userAgentData?.architecture || '').toLowerCase();
+        if (arch === 'arm') return nav.userAgentData?.bitness === '64' ? 'arm64' : 'arm';
+        if (arch === 'x86') return nav.userAgentData?.bitness === '64' ? 'x86 (64-bit)' : 'x86 (32-bit)';
+        const raw = (nav.platform || nav.userAgent || '').toLowerCase();
+        if (/x86_64|win64|wow64|amd64|x64/.test(raw)) return 'x86 (64-bit)';
+        if (/aarch64|arm64/.test(raw)) return 'arm64';
+        if (/armv\d|\barm\b/.test(raw)) return 'arm';
+        if (/i686|i386|x86|win32/.test(raw)) return 'x86 (32-bit)';
+        return 'unknown';
+    }
+
+    /**
      * Mudlet `getWindowsCodepage()` — on native Windows this reads the active
      * ANSI code page (ACP) from the registry as a string; the bundled
      * utf8_filenames.lua consults it (when getOS() == "windows") to decide

@@ -62,10 +62,11 @@ export interface LabelState {
     zIndex?: number;
 }
 
-/** Event payload for label mouse callbacks. Mirrors Mudlet's button-int convention
- *  (1=left, 2=right, 4=middle) so ported scripts can read `event.button` directly. */
+/** Event payload for label mouse callbacks. `button` is the Qt button *name*
+ *  Mudlet reports ("LeftButton" / "RightButton" / "MidButton" / "NoButton" / …),
+ *  so ported Geyser scripts that branch on `event.button == "LeftButton"` work. */
 export interface LabelMouseEvent {
-    button: number;
+    button: string;
     x: number;
     y: number;
     globalX: number;

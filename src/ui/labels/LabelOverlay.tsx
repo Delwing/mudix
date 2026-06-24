@@ -4,15 +4,29 @@ import type { LabelManager, LabelMouseEvent, LabelState, LabelWheelEvent } from 
 import { cssTextToParts, qtDeclarationsToCss, cssEscape } from './qtCss';
 import './LabelOverlay.css';
 
-// Mudlet uses Qt::MouseButton flags (1=left, 2=right, 4=middle); DOM `button`
-// is 0/1/2 for left/middle/right. Translate so scripts reading `event.button`
-// see Mudlet's encoding.
-const BUTTON_DOM_TO_MUDLET: Record<number, number> = { 0: 1, 1: 4, 2: 2 };
+// Mudlet reports `event.button` as a Qt button *name string* (not an int) — see
+// TLuaInterpreter `csmMouseButtons`. Geyser packages branch on these literals
+// (`if event.button == "LeftButton"`), so we must hand Lua the same strings.
+// DOM `e.button` is 0/1/2/3/4 for left/middle/right/back/forward.
+const BUTTON_DOM_TO_MUDLET: Record<number, string> = {
+    0: 'LeftButton', 1: 'MidButton', 2: 'RightButton', 3: 'BackButton', 4: 'ForwardButton',
+};
+
+// Mudlet's Qt `button()` is only the pressed/released button for
+// press/release/click/double-click; for move/enter/leave it is Qt::NoButton.
+// DOM move/enter/leave report `e.button === 0`, which we must not mistake for a
+// left click — report "NoButton" there to match Mudlet. Exported pure so the
+// DOM→Mudlet mapping (the part packages depend on) is unit-testable.
+export function domButtonToMudlet(type: string, domButton: number): string {
+    if (type === 'mousemove' || type === 'pointermove'
+        || type === 'mouseenter' || type === 'mouseleave') return 'NoButton';
+    return BUTTON_DOM_TO_MUDLET[domButton] ?? 'NoButton';
+}
 
 function buildMouseEvent(e: React.MouseEvent<HTMLDivElement>): LabelMouseEvent {
     const rect = e.currentTarget.getBoundingClientRect();
     return {
-        button:  BUTTON_DOM_TO_MUDLET[e.button] ?? 0,
+        button:  domButtonToMudlet(e.type, e.button),
         x:       Math.round(e.clientX - rect.left),
         y:       Math.round(e.clientY - rect.top),
         globalX: Math.round(e.clientX),
@@ -27,7 +41,7 @@ function buildMouseEvent(e: React.MouseEvent<HTMLDivElement>): LabelMouseEvent {
 function buildWheelEvent(e: React.WheelEvent<HTMLDivElement>): LabelWheelEvent {
     const rect = e.currentTarget.getBoundingClientRect();
     return {
-        button:  0,
+        button:  'NoButton',
         x:       Math.round(e.clientX - rect.left),
         y:       Math.round(e.clientY - rect.top),
         globalX: Math.round(e.clientX),
@@ -155,16 +169,36 @@ function Label({ l }: { l: LabelState }) {
         style.backgroundRepeat = 'no-repeat';
     }
 
+    // Mudlet semantics (TLabel): the click callback fires on mouse PRESS
+    // (mousePressEvent), and Qt grabs the mouse from press until release so the
+    // move/release callbacks keep firing even when the cursor leaves the widget.
+    // We mirror both with pointer events: fire onClick on pointerdown, and when
+    // the label is drag-capable (has a move or release callback) capture the
+    // pointer so onPointerMove/onPointerUp track outside the label's bounds.
+    // Without this, dragging a Geyser pane titlebar stutters and stops the
+    // instant the cursor leaves the titlebar.
+    const dragCapable = !!(l.onMouseMove || l.onMouseUp);
+    const hasPress = !!(l.onClick || l.onMouseDown) || dragCapable;
+    const onPointerDown = hasPress
+        ? (e: React.PointerEvent<HTMLDivElement>) => {
+            if (dragCapable) {
+                try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not supported */ }
+            }
+            ref.current.onMouseDown?.(buildMouseEvent(e));
+            ref.current.onClick?.(buildMouseEvent(e));
+        }
+        : undefined;
+
     return (
         <div
             className="label"
             style={style}
             data-mudix-label={l.name}
             title={l.tooltip}
-            onClick={l.onClick && (e => ref.current.onClick?.(buildMouseEvent(e)))}
-            onMouseUp={l.onMouseUp && (e => ref.current.onMouseUp?.(buildMouseEvent(e)))}
+            onPointerDown={onPointerDown}
+            onPointerUp={l.onMouseUp && (e => ref.current.onMouseUp?.(buildMouseEvent(e)))}
+            onPointerMove={l.onMouseMove && (e => ref.current.onMouseMove?.(buildMouseEvent(e)))}
             onDoubleClick={l.onDoubleClick && (e => ref.current.onDoubleClick?.(buildMouseEvent(e)))}
-            onMouseMove={l.onMouseMove && (e => ref.current.onMouseMove?.(buildMouseEvent(e)))}
             onMouseEnter={l.onMouseEnter && (e => ref.current.onMouseEnter?.(buildMouseEvent(e)))}
             onMouseLeave={l.onMouseLeave && (e => ref.current.onMouseLeave?.(buildMouseEvent(e)))}
             onWheel={l.onWheel && (e => ref.current.onWheel?.(buildWheelEvent(e)))}
