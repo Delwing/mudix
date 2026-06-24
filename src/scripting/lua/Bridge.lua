@@ -78,9 +78,21 @@ function getRoomCoordinates(id)
     return false
 end
 
+-- Cached so Geyser's reposition cascade — which resolves every percentage
+-- constraint against the root window via getMainWindowSize() — reads a Lua local
+-- instead of crossing into JS (and forcing a getBoundingClientRect) once per
+-- widget. A full pane-tree reposition calls this hundreds of times while the
+-- window size is constant. The cache (__mws_w/__mws_h globals) is refreshed from
+-- JS on the authoritative size-change signal: LuaRuntime.emitEvent pushes the
+-- fresh size right before raising sysWindowResizeEvent, so Geyser's reposition
+-- handler — which runs on that same event — always reads current values. Lazily
+-- primed on first use for any read before the first resize tick.
 function getMainWindowSize()
-    local t = __getMainWindowSize()
-    return t[0], t[1]
+    if __mws_w == nil then
+        local t = __getMainWindowSize()
+        __mws_w, __mws_h = t[0], t[1]
+    end
+    return __mws_w, __mws_h
 end
 
 -- Mudlet addCustomLine(roomID, id_to, direction, style, color, arrow). The
@@ -359,11 +371,13 @@ function getHiddenRooms(areaId)
     return out
 end
 
--- Mudlet getSelection([windowName]) → text, start, length on success;
--- nil, "no selection" otherwise. JS hands back a 0-indexed array or nil.
+-- Mudlet getSelection([windowName]) → text, start, length. With no active
+-- selection Mudlet returns ("", 0, 0) (not nil) — GUIUtils.lua's replace() and
+-- other callers test for exactly that tuple. JS hands back a 0-indexed array or
+-- nil for the no-selection case.
 function getSelection(windowName)
     local t = __getSelection(windowName)
-    if t == nil then return nil, "no selection" end
+    if t == nil then return "", 0, 0 end
     return t[0], t[1], t[2]
 end
 
@@ -711,6 +725,27 @@ end
 function deleteLabel(name)
     if __deleteLabel(name) then return true end
     return false, "label \"" .. tostring(name) .. "\" does not exist"
+end
+
+-- deleteMiniConsole/deleteCommandLine/deleteScrollBox mirror deleteLabel: true on
+-- success, (false, errMsg) when the target doesn't exist. The main command line
+-- is protected (Mudlet refuses to delete it).
+function deleteMiniConsole(name)
+    if __deleteMiniConsole(name) then return true end
+    return false, "miniconsole \"" .. tostring(name) .. "\" does not exist"
+end
+
+function deleteCommandLine(name)
+    if name == "main" then
+        return false, "the main command line cannot be deleted"
+    end
+    if __deleteCommandLine(name) then return true end
+    return false, "command line \"" .. tostring(name) .. "\" does not exist"
+end
+
+function deleteScrollBox(name)
+    if __deleteScrollBox(name) then return true end
+    return false, "scroll box \"" .. tostring(name) .. "\" does not exist"
 end
 
 -- Mudlet HTTP APIs: every call dispatches a fire-and-forget background

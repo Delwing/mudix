@@ -117,7 +117,7 @@ test.describe('Mudlet busted suite (in-app)', () => {
             expect(r.total, `${spec}: no tests executed`).toBeGreaterThan(0);
             const mark = r.failed === 0 && r.errors === 0 ? '✓' : '✗';
             board.push(`  ${mark} ${spec.padEnd(14)} ${summarize(r)}`);
-            for (const f of r.failures.slice(0, 5)) {
+            for (const f of r.failures.slice(0, 40)) {
                 board.push(`        · ${f.name || f.spec}: ${String(f.message).split('\n')[0].slice(0, 120)}`);
             }
         }

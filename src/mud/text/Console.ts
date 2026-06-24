@@ -1,5 +1,6 @@
 import { FormatState } from './FormatState';
 import { AnsiAwareBuffer } from './FormatState';
+import type { FormatStateSnapshot } from './FormatState';
 
 /**
  * Self-contained text output entity — equivalent of Mudlet's TConsole.
@@ -199,6 +200,38 @@ export class Console {
         buf.removeFromDom();
         this.history.splice(idx, 1);
         this.cursorIdx = Math.min(idx, this.history.length - 1);
+    }
+
+    /**
+     * Insert `text` at the cursor (Mudlet `insertText`). Embedded `\n` split the
+     * current line into multiple history lines (Mudlet issue #8945): the text up
+     * to the first `\n` is inserted at the cursor column, each subsequent `\n`
+     * starts a new line, and the remainder of the original line trails the last
+     * inserted segment. The cursor ends just after the inserted text. Returns
+     * false when there's no current line to insert into (caller falls back to an
+     * echo). Mid-buffer multi-line inserts update the buffer model fully; the
+     * incremental renderer redraws the affected line(s) lazily.
+     */
+    insertText(text: string, state?: FormatStateSnapshot): boolean {
+        const idx = this.cursor;
+        const cur = this.history[idx];
+        if (!cur) return false;
+        const col = Math.max(0, Math.min(this.getCursorColumn(), cur.length));
+        cur.insert(col, text, state);
+        if (!text.includes('\n')) {
+            this.cursorCol = col + text.length;
+            return true;
+        }
+        // The current line now carries embedded newlines — split it into separate
+        // history entries so getLineCount/getCurrentLine reflect the new lines.
+        const lines = cur.splitLines();
+        cur.removeFromDom();
+        this.history.splice(idx, 1, ...lines);
+        const segs = text.split('\n');
+        this.cursorIdx = Math.min(idx + segs.length - 1, this.history.length - 1);
+        this.cursorCol = segs[segs.length - 1].length;
+        this.evict();
+        return true;
     }
 
     /**

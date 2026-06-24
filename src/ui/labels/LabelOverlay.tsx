@@ -77,6 +77,20 @@ function Label({ l }: { l: LabelState }) {
     const ref = useRef(l);
     ref.current = l;
 
+    // Coalesce high-frequency pointermove into one dispatch per animation frame.
+    // A drag fires pointermove at the display's refresh rate (120Hz+), and each
+    // event runs the label's (often expensive) Lua move callback — e.g. Geyser
+    // pane-drag repositions a whole widget subtree. Running that per event makes
+    // dragging stutter; running it once per frame is visually identical and is
+    // what Qt does (it compresses pending mouse-move events). `pending` holds the
+    // latest already-built event so the frame uses the freshest position.
+    const moveState = useRef<{ raf: number | null; pending: LabelMouseEvent | null }>({ raf: null, pending: null });
+    useEffect(() => () => {
+        if (moveState.current.raf !== null && typeof cancelAnimationFrame !== 'undefined') {
+            cancelAnimationFrame(moveState.current.raf);
+        }
+    }, []);
+
     // Manage a single <style> element per label for Qt pseudo-state rules
     // (`QLabel:hover`, etc.). Inline styles can't express these, and `<style
     // scoped>` was deprecated — so inject into <head>, scoped via the label's
@@ -189,6 +203,41 @@ function Label({ l }: { l: LabelState }) {
         }
         : undefined;
 
+    const flushMove = () => {
+        const st = moveState.current;
+        st.raf = null;
+        const ev = st.pending;
+        st.pending = null;
+        if (ev) ref.current.onMouseMove?.(ev);
+    };
+    const onPointerMove = l.onMouseMove
+        ? (e: React.PointerEvent<HTMLDivElement>) => {
+            // rAF unavailable (SSR/tests) → dispatch synchronously.
+            if (typeof requestAnimationFrame === 'undefined') {
+                ref.current.onMouseMove?.(buildMouseEvent(e));
+                return;
+            }
+            moveState.current.pending = buildMouseEvent(e);
+            if (moveState.current.raf === null) {
+                moveState.current.raf = requestAnimationFrame(flushMove);
+            }
+        }
+        : undefined;
+    const onPointerUp = l.onMouseUp
+        ? (e: React.PointerEvent<HTMLDivElement>) => {
+            // Flush any frame-pending move first so the release sees the final
+            // drag position (e.g. the insertion target picked on the last move),
+            // then drop the scheduled frame.
+            const st = moveState.current;
+            if (st.raf !== null && typeof cancelAnimationFrame !== 'undefined') {
+                cancelAnimationFrame(st.raf);
+                st.raf = null;
+            }
+            if (st.pending) { const ev = st.pending; st.pending = null; ref.current.onMouseMove?.(ev); }
+            ref.current.onMouseUp?.(buildMouseEvent(e));
+        }
+        : undefined;
+
     return (
         <div
             className="label"
@@ -196,8 +245,8 @@ function Label({ l }: { l: LabelState }) {
             data-mudix-label={l.name}
             title={l.tooltip}
             onPointerDown={onPointerDown}
-            onPointerUp={l.onMouseUp && (e => ref.current.onMouseUp?.(buildMouseEvent(e)))}
-            onPointerMove={l.onMouseMove && (e => ref.current.onMouseMove?.(buildMouseEvent(e)))}
+            onPointerUp={onPointerUp}
+            onPointerMove={onPointerMove}
             onDoubleClick={l.onDoubleClick && (e => ref.current.onDoubleClick?.(buildMouseEvent(e)))}
             onMouseEnter={l.onMouseEnter && (e => ref.current.onMouseEnter?.(buildMouseEvent(e)))}
             onMouseLeave={l.onMouseLeave && (e => ref.current.onMouseLeave?.(buildMouseEvent(e)))}

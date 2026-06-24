@@ -24,6 +24,7 @@ import {parseImageSize} from './imageSize';
 import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
 import {QT_CURSOR_NAME_TO_INT, QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
 import {qtKeyToDomCode, qtModifiersToList, domCodeToQtKey} from '../../mud/keybindings/qtKeys';
+import xterm256 from '../../mud/text/xterm256';
 import {HttpService} from '../http/HttpService';
 import {TtsManager} from '../../ui/tts/TtsManager';
 
@@ -503,6 +504,7 @@ export class LuaRuntime implements IScriptingRuntime {
             if (this.api.labels.has(window)) return 'label';
             if (this.api.windows.isMiniConsole(window)) return 'miniconsole';
             if (this.api.windows.has(window)) return 'userwindow';
+            if (this.api.cmdLines.has(window)) return 'commandline';
             if (this.api.scrollBoxes.has(window)) return 'scrollbox';
             if (this.api.isBuffer(window)) return 'buffer';
             return null;
@@ -621,7 +623,11 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet deleteCommandLine(name) → bool. Destroys an overlay command line
         // created by createCommandLine. Fires sysCommandLineDeleted(name) on
         // success, matching Mudlet's sysLabelDeleted / sysMiniConsoleDeleted.
-        this.lua.global.set('deleteCommandLine', (name: unknown) => {
+        // Mudlet deleteCommandLine(name) → true, or (false, errMsg) when the named
+        // command line doesn't exist. Bridge.lua adds the error string (and the
+        // "main cannot be deleted" guard). Fires sysCommandLineDeleted(name) on
+        // success.
+        this.lua.global.set('__deleteCommandLine', (name: unknown) => {
             if (typeof name !== 'string') return false;
             // Free any bound action callback chunk so the Lua registry slot is
             // released — overlayCmdLineActionCbIds bookkeeping mirrors the
@@ -632,10 +638,10 @@ export class LuaRuntime implements IScriptingRuntime {
             if (ok) this.emitEvent('sysCommandLineDeleted', [name]);
             return ok;
         });
-        // Mudlet deleteMiniConsole(name) → bool. Destroys a mini-console created
-        // via createMiniConsole; rejects non-miniconsole targets (main window,
-        // dock panels, unknown names).
-        this.lua.global.set('deleteMiniConsole', (name: unknown) =>
+        // Mudlet deleteMiniConsole(name) → true, or (false, errMsg) when the named
+        // mini-console doesn't exist (Bridge.lua adds the error string). Rejects
+        // non-miniconsole targets (main window, dock panels, unknown names).
+        this.lua.global.set('__deleteMiniConsole', (name: unknown) =>
             typeof name === 'string' ? this.api.deleteMiniConsole(name) : false);
         // Mudlet createScrollBox([parent,] name, x, y, w, h) — absolutely-
         // positioned scrollable container on the named parent viewport (defaults
@@ -658,7 +664,7 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet deleteScrollBox(name) → bool. Destroys a scroll box created via
         // createScrollBox. Fires sysScrollBoxDeleted(name) on success, matching
         // sysCommandLineDeleted / sysMiniConsoleDeleted.
-        this.lua.global.set('deleteScrollBox', (name: unknown) => {
+        this.lua.global.set('__deleteScrollBox', (name: unknown) => {
             if (typeof name !== 'string') return false;
             const ok = this.api.scrollBoxes.destroy(name);
             if (ok) this.emitEvent('sysScrollBoxDeleted', [name]);
@@ -3545,8 +3551,45 @@ export class LuaRuntime implements IScriptingRuntime {
         this.toLuaValue = setupYajl(this.lua).transform;
         this.exec(YAJL_LUA, 'Yajl');
         this.exec(LUAGLOBAL, 'LuaGlobal');
+        this.setupAnsiColorTable();
 
         if (BUSTED_ENABLED) this.setupBustedBridge();
+    }
+
+    // Seed color_table with the xterm-256 palette (ansi_000..ansi_255). Mudlet's
+    // C++ does this; GUIUtils.lua only fills the *named* colours. ansi2decho,
+    // closestColor and the colour-conversion helpers all read color_table
+    // ["ansi_NNN"], so without these they produce wrong output. Sourced from
+    // mudix's own xterm256 palette (shared with the ANSI renderer, so the table
+    // matches what's actually drawn) and only set where unset, so a runtime/theme
+    // override survives. Must run after LuaGlobal.lua creates color_table.
+    private setupAnsiColorTable(): void {
+        const triples = xterm256.map(hex => {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `{${r},${g},${b}}`;
+        }).join(',');
+        // The 16 base colours also get Mudlet's named aliases (ansi_red,
+        // ansi_light_red, …) — keyed to indices 0..15. cecho/hecho conversions
+        // reference these names.
+        const named = [
+            'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+            'light_black', 'light_red', 'light_green', 'light_yellow',
+            'light_blue', 'light_magenta', 'light_cyan', 'light_white',
+        ].map((name, i) => `  if not color_table["ansi_${name}"] then color_table["ansi_${name}"] = p[${i + 1}] end`).join('\n');
+        this.exec(
+            `do
+  color_table = color_table or {}
+  local p = {${triples}}
+  for i = 0, ${xterm256.length - 1} do
+    local k = string.format("ansi_%03d", i)
+    if not color_table[k] then color_table[k] = p[i + 1] end
+  end
+${named}
+end`,
+            'ansi-color-table',
+        );
     }
 
     /**
@@ -4125,6 +4168,16 @@ export class LuaRuntime implements IScriptingRuntime {
         // owning ScriptingEngine tore us down; emitting on a closed lua_State
         // throws a confusing wasm error. Drop the event silently in that case.
         if (this.destroyed) return;
+        // Refresh the Lua-side getMainWindowSize cache (Bridge.lua) from the
+        // authoritative new size on the SAME signal that triggers Geyser's
+        // reposition, set before dispatch so the reposition handler reads current
+        // values. This lets Geyser resolve every percentage against a Lua local
+        // instead of crossing into JS + getBoundingClientRect once per widget.
+        if (event === 'sysWindowResizeEvent'
+            && typeof args[0] === 'number' && typeof args[1] === 'number') {
+            this.lua.global.set('__mws_w', args[0]);
+            this.lua.global.set('__mws_h', args[1]);
+        }
         this.lua.global.set('__mudix_evt_args', args);
         this.lua.global.set('__mudix_evt_name', event);
         this.runChunk('__mudix_dispatch_event()', `event "${event}"`);

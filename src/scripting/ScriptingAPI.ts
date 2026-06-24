@@ -2048,7 +2048,13 @@ export class ScriptingAPI {
         if (!Number.isFinite(length) || length < 0) return false;
         const buf = this.resolveBuffer(windowName);
         if (!buf) return false;
-        this.selection = { windowName, start: from, length };
+        // Mudlet clamps a selection to the buffer: a `from` at/past the end of a
+        // non-empty line refers to the last character (so e.g. selectSection at
+        // column == line length still selects one char) rather than an empty,
+        // format-less selection.
+        const bufLen = buf.length;
+        const start = bufLen > 0 && from >= bufLen ? bufLen - 1 : from;
+        this.selection = { windowName, start, length };
         return true;
     }
 
@@ -2630,9 +2636,10 @@ export class ScriptingAPI {
         const buf = con?.getBuffer();
         if (con && buf) {
             const state = con.format.toSnapshot();
-            const at = Math.max(0, Math.min(con.getCursorColumn(), buf.text.length));
-            buf.insert(at, text, state);
-            if (!this.inTriggerProcessing) buf.rerender();
+            // Console.insertText splits on embedded '\n' into new history lines
+            // (Mudlet #8945); for the single-line case it inserts in place.
+            con.insertText(text, state);
+            if (!this.inTriggerProcessing) con.getBuffer()?.rerender();
             return;
         }
         // No current line: degrade to an echo so the text isn't lost.
@@ -3785,7 +3792,7 @@ export class ScriptingAPI {
             t = A; r = B; bo = C; l = D;
         }
         if (t == null || r == null || bo == null || l == null) return;
-        useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBorders: { top: t, right: r, bottom: bo, left: l } });
+        this.applyBorders({ top: t, right: r, bottom: bo, left: l });
     }
 
     getBorderTop(): number { return selectProfileField(useAppStore.getState(), this.connectionId, 'outputBorders')?.top ?? 0; }
@@ -3811,7 +3818,21 @@ export class ScriptingAPI {
         const v = this.normalizeBorder(size);
         if (v == null) return;
         const cur = selectProfileField(useAppStore.getState(), this.connectionId, 'outputBorders') ?? { top: 0, right: 0, bottom: 0, left: 0 };
-        useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBorders: { ...cur, [side]: v } });
+        this.applyBorders({ ...cur, [side]: v });
+    }
+
+    // Write outputBorders only when a value actually changed. Geyser "console
+    // host" panes (e.g. Muxlet's main pane) call setBorderSizes from their
+    // onReposition handler, so a single layout reflow — closing or drag-dropping
+    // a pane — recomputes the same border geometry many times. Each store write
+    // would otherwise run the persist middleware (localStorage serialize) and
+    // re-render the main OutputArea, turning one reflow into dozens of redundant
+    // output renders. The equality guard collapses those no-op writes.
+    private applyBorders(next: { top: number; right: number; bottom: number; left: number }): void {
+        const cur = selectProfileField(useAppStore.getState(), this.connectionId, 'outputBorders');
+        if (cur && cur.top === next.top && cur.right === next.right
+            && cur.bottom === next.bottom && cur.left === next.left) return;
+        useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBorders: next });
     }
 
     private normalizeBorder(n: unknown): number | null {

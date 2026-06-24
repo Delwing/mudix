@@ -219,9 +219,16 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             setMapInfos(prev => (prev.length === 0 ? prev : []));
             return;
         }
+        // Mirror the position marker's room choice (syncPositionMarker):
+        // selection center → real player room → display-only fallback room
+        // (room 1 / lowest id). Without the fallback the overlay is blank at
+        // startup — before any centerview sets the player room — even though
+        // the marker is already painted on the fallback room. We keep the
+        // data-layer getPlayerRoom() strict (Mudlet parity) and only relax the
+        // view here so the info block always describes the marked room.
         const center = manager.mapStore.getSelectionCenter();
         const playerRoomId = manager.mapStore.getPlayerRoom();
-        const focusRoomId = center ?? playerRoomId;
+        const focusRoomId = center ?? playerRoomId ?? manager.mapStore.getFallbackRoomId();
         const focusRoomArea = focusRoomId != null
             ? manager.mapStore.getRoomArea(focusRoomId)
             : areaId;
@@ -1321,7 +1328,16 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                                 // fires when the user pins the player room via
                                 // the map's right-click action.
                                 manager.onRaiseEvent?.('sysManualLocationSetEvent', [contextMenu.roomId]);
-                                centerViewImplRef.current(contextMenu.roomId);
+                                // Go through the shared store (setPlayerRoom +
+                                // fan-out to every panel's centerView callback),
+                                // not just this panel's local view: pinning the
+                                // player room must update getPlayerRoom() so the
+                                // map-info overlay has a room to describe and any
+                                // other open map panel follows. Calling the local
+                                // centerViewImpl alone left the store stale, so a
+                                // later notify() (e.g. toggling map info) snapped
+                                // the marker back to the previous player room.
+                                manager.centerView(contextMenu.roomId);
                                 setContextMenu(null);
                             },
                         },

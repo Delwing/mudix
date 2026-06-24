@@ -66,18 +66,20 @@ during initial mount.)
 | IDManager | ✓ 15/22 (7 pending) | `tempTimer` now validates its delay (arg #1) and raises Mudlet's `bad argument #N type` format, so `registerNamedTimer`'s error reformatting lines up. The 7 pending are upstream `pending()` stubs (async timer tests Mudlet hasn't written) |
 | Other | ✗ 43/44 | 1 `deleteMultiline` line-range nuance |
 | DB | ✗ 65/74 | **feature** — DB.lua column add/delete, `_violations` migration |
-| InsertTextNewline | ✗ 3/8 | **feature** — multi-line `insertText` needs Console line-splitting surgery (the deferred TBuffer line-assembly work) |
+| InsertTextNewline | ✗ 7/8 | multi-line `insertText`/`cinsertText` now split the current line into new history lines at the cursor (Mudlet #8945) — `Console.insertText`. Last failure is `cecho` after `creplaceLine` in a trigger: needs the trigger-echo output cursor to stay on the replaced line (separate trigger-echo-cursor rework) |
 | TextEdit | ✗ 1/19 | **feature** — `createTextEdit`/`deleteTextEdit` widget not implemented |
-| GUIUtils | ✗ 72/98 | **feature** — `ansi2decho` / xterm256 conversion mismatches |
-| UI | ✗ 43/61 | **feature** — `copy2decho`/`copy2html`, `windowType("commandline")` |
+| GUIUtils | ✗ 86/98 | colour pipeline + `replace` no-selection (`getSelection` now returns `("",0,0)` like Mudlet) fixed. Remaining 11 are deeper buffer/selection model — `selectAll`, `copy2decho`/`copy2html`, buffers, reverse `decho2cecho`/`hecho2cecho`, `setLabelStyleSheet`, `cecho2string` |
+| UI | ✗ 54/61 | multi-line `insertText` (shared `Console.insertText`), delete-error semantics (`deleteMiniConsole`/`CommandLine`/`ScrollBox` → `(false,errMsg)`), `windowType("commandline")`, and `selectSection` boundary clamp (getTextFormat at end-of-line) all fixed. Remaining: `copy2decho`/`copy2html`, one getTextFormat-advanced, nested-trigger capture group, `cecho`-after-`creplaceLine` |
 | Mapper | ✗ 4/22 | **feature** — `setRoomBorderColor`, map-menu APIs |
 
-The quick/bounded gaps are closed. What remains is genuine feature work: the
-`*Edit` widget, the `ansi2decho` colour pipeline shared by GUIUtils/UI, DB.lua
-internals, the Mapper menu/border APIs, multi-line `insertText` (the deferred
-TBuffer line-assembly work), and a single `deleteMultiline` line-range nuance.
-Each deserves its own focused pass; tackle a spec, then move it into
-`GREEN_SPECS`.
+The quick/bounded gaps are closed, plus the GUIUtils/UI colour pipeline. What
+remains is genuine feature work, and much of it shares one root: the **Console
+buffer/cursor/selection model**. `deleteMultiline` (Other), multi-line
+`insertText` (InsertTextNewline + UI), `selectAll`/`copy2decho`/`copy2html`/
+buffers (GUIUtils + UI), and `getTextFormat` (UI) all hinge on it — so investing
+there cascades across four specs. The other independent features: the `*Edit`
+widget (TextEdit), DB.lua internals (DB), and the Mapper menu/border APIs
+(Mapper). Tackle a cluster, then move each spec into `GREEN_SPECS`.
 
 ---
 
