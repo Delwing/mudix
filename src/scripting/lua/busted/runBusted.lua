@@ -10,6 +10,7 @@
 -- Returns: {
 --   total, passed, failed, errors, pending,
 --   failures = { { spec, name, message, trace }, ... },
+--   tests    = { { spec, name, status, message? }, ... },  -- every it(), pass or fail
 -- }
 
 -- Trim a stack traceback at the first C frame, matching busted's file loaders.
@@ -42,6 +43,7 @@ return function(specPaths)
   local results = {
     total = 0, passed = 0, failed = 0, errors = 0, pending = 0,
     failures = {},
+    tests = {},
   }
 
   -- Build a slash-joined name from a test element up to (not including) its file.
@@ -107,6 +109,7 @@ return function(specPaths)
 
   busted.subscribe({ 'test', 'end' }, function(element, parent, status)
     results.total = results.total + 1
+    local message
     if status == 'success' then
       results.passed = results.passed + 1
     elseif status == 'pending' then
@@ -118,7 +121,16 @@ return function(specPaths)
         message = '(' .. tostring(status) .. ')',
       }
       results.failures[#results.failures + 1] = info
+      message = info.message
     end
+    -- One record per test (pass, fail, or pending) so the harness can report
+    -- each it() individually, not just the aggregate counts + failures.
+    results.tests[#results.tests + 1] = {
+      spec = specOf(element),
+      name = fullName(element),
+      status = status,
+      message = message,
+    }
     pending[element] = nil
   end)
 

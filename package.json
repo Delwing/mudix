@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:busted": "vite --mode busted --port 5174 --strictPort",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "gen:busted-manifest": "playwright test -c playwright.manifest.config.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

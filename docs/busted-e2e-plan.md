@@ -26,17 +26,28 @@ Run it: `npm run test:e2e` (Playwright boots `npm run dev:busted` — a
   say + mediator, plus thin `pl.*`/`system` shims; CLI runner/modules dropped).
   Provenance + omissions in `src/scripting/lua/busted/VENDORED.md`.
 - **`runBusted.lua`** — the in-process programmatic runner (no CLI/`os.exit`),
-  returns a JSON-able results table. It purges the busted ecosystem from
-  `package.loaded` on each call so it is re-invokable in a long-lived runtime.
+  returns a JSON-able results table (aggregate counts, a `failures[]` list, and a
+  `tests[]` record per `it()` — pass, fail, or pending — so the harness can report
+  each test individually). It purges the busted ecosystem from `package.loaded` on
+  each call so it is re-invokable in a long-lived runtime.
 - **`LuaRuntime.ts`** — `VITE_BUSTED`-gated `import.meta.glob` bundles the corpus
   into the `/lua/` VFS namespace, adds `/lua/?.lua;/lua/?/init.lua` to
   `package.path`, and exposes `window.__runBusted(pattern)` in flagged builds.
 - **Spec corpus** under `src/scripting/lua/specs/` (verbatim from Mudlet;
   provenance in `specs/SYNCED.md`).
-- **`e2e/busted.spec.ts`** + **`playwright.config.ts`** + **`.env.busted`** —
-  seeds a non-dialing connection into `localStorage` (store v20), deep-links
-  `?profile=`, waits for `window.__runBusted`, asserts the green specs, and logs
-  a scoreboard for the rest.
+- **`e2e/busted.spec.ts`** + **`e2e/bustedHarness.ts`** + **`playwright.config.ts`**
+  + **`.env.busted`** — `bustedHarness.ts` seeds a non-dialing connection into
+  `localStorage` (store v20), deep-links `?profile=`, waits for
+  `window.__runBusted`, and caches one run per spec. `busted.spec.ts` registers
+  **one Playwright `test()` per Mudlet `it()`** (from the committed manifest) so
+  IDE runners / JUnit list every test as a first-class, re-runnable node — plus a
+  per-spec drift guard and the all-specs scoreboard.
+- **`e2e/busted.manifest.json`** + **`e2e/genBustedManifest.ts`** +
+  **`playwright.manifest.config.ts`** — the static `{ spec: [it-name, …] }` list
+  the per-test suite reads at collection time (the test tree must be known before
+  any browser runs, so it can't be discovered live). Regenerate with
+  `npm run gen:busted-manifest` after re-syncing specs or adding to `GREEN_SPECS`;
+  the drift guard fails until it matches the live `it()` set.
 
 ### Scoreboard (current, in-app — all 24 Mudlet specs synced)
 
