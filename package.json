@@ -27,7 +27,7 @@
     "fflate": "^0.8.2",
     "lucide-react": "^1.14.0",
     "marked": "^18.0.4",
-    "mudlet-map-binary-reader": "^1.0.3",
+    "mudlet-map-binary-reader": "^1.1.0",
     "mudlet-map-editor": "^0.25.0",
     "mudlet-map-renderer": "^2.5.1",
     "pako": "^2.1.0",

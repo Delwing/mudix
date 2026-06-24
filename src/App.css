@@ -3336,14 +3336,20 @@ html, body, #root {
 }
 
 /* ── ANSI animations ────────────────────────────────────────── */
+/* ANSI blink (SGR 5/6). Mudlet shows a smooth opacity pulse only when the
+   "enable blinking text" preference is on; otherwise blinking text is rendered
+   in italics. FormatState.toHtml always emits the blink classes — the
+   `blink-text-enabled` root class (toggled from the enableBlinkText config in
+   ProfileSession) picks which presentation applies, so it covers the main
+   output, user windows, and mini-consoles alike. */
 @keyframes ansi-slow-blink {
-    0%, 49% { opacity: 1; }
-    50%, 100% { opacity: 0; }
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.25; }
 }
 
 @keyframes ansi-rapid-blink {
-    0%, 49% { opacity: 1; }
-    50%, 100% { opacity: 0; }
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.25; }
 }
 
 @keyframes ansi-dim-anim {
@@ -3351,8 +3357,11 @@ html, body, #root {
     to   { opacity: var(--dim-end, 0); }
 }
 
-.ansi-slow-blink  { animation: ansi-slow-blink  1s step-end infinite; }
-.ansi-rapid-blink { animation: ansi-rapid-blink 0.3s step-end infinite; }
+.ansi-slow-blink,
+.ansi-rapid-blink { font-style: italic; }
+
+.blink-text-enabled .ansi-slow-blink  { font-style: normal; animation: ansi-slow-blink  1.5s ease-in-out infinite; }
+.blink-text-enabled .ansi-rapid-blink { font-style: normal; animation: ansi-rapid-blink 0.5s ease-in-out infinite; }
 .ansi-dim         { animation: ansi-dim-anim var(--dim-duration, 1000ms) var(--dim-easing, ease-in-out) forwards; }
 
 /* ── Mobile (≤ 600px) ───────────────────────────────────────

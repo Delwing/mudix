@@ -92,6 +92,13 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // tab strip, so the indicator (and always the profile name) live in the title.
     const profileConfig = useAppStore(s => selectProfileField(s, connection.id, 'config'));
     const showConnectionIndicator = (profileConfig?.showTabConnectionIndicators as boolean | undefined) ?? true;
+    // Mudlet's "enable blinking text" (config bag). When on, ANSI blink (SGR
+    // 5/6) renders as a smooth opacity pulse; when off (the default) it's shown
+    // in italics instead. The blink classes are always emitted by
+    // FormatState.toHtml — this root class picks the presentation (see
+    // App.css). Toggled on the document root so it covers the main output, user
+    // windows, and mini-consoles alike.
+    const blinkTextEnabled = (profileConfig?.enableBlinkText as boolean | undefined) ?? false;
     const connectionWindowHints = useAppStore(s => s.connectionWindowHints);
     const connectionDockExtents = useAppStore(s => s.connectionDockExtents);
     const saveWindowHint = useAppStore(s => s.saveWindowHint);
@@ -141,6 +148,11 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             session.setPromptTimeoutMs(promptTimeoutMs);
         }
     }, [promptTimeoutMs, session]);
+
+    useEffect(() => {
+        document.documentElement.classList.toggle('blink-text-enabled', blinkTextEnabled);
+        return () => { document.documentElement.classList.remove('blink-text-enabled'); };
+    }, [blinkTextEnabled]);
 
     // Window title: always the profile name, prefixed with a connection-status
     // dot when showTabConnectionIndicators is on. Restored to the bare app name

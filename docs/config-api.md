@@ -79,6 +79,7 @@ real behaviour:
 | `commandLineHistorySaveSize` | Caps how many sent commands are persisted to `localStorage` for recall/Tab-completion. Default 500 (= in-memory `MAX_HISTORY`); history is shared across profiles. | `CommandBar` → `useCommandHistory` |
 | `showTabConnectionIndicators` | When `true` (default), prefixes the window/tab title with a connection-status dot (🟢/🟡/🔴). The profile name is always shown. mudix has no tab strip, so this lives in the title. | `ProfileSession` |
 | `fixUnnecessaryLinebreaks` | When `true` (default `false`) and the session is GA-driven, strips a single spurious leading newline from the start of each GA-terminated data block — Mudlet's "Fix unnecessary linebreaks on GA servers" (`mUSE_IRE_DRIVER_BUGFIX`, `cTelnet::gotPrompt`), for IRE-style servers that prepend a stray `<LF>` to every transmission. ANSI SGR escapes at the block start are skipped before the newline check. Forwarded to `MudClient.setFixUnnecessaryLinebreaks` via `MudSession`. **Deviation:** the very first transmission (before the first GA latches GA-driver mode) keeps its leading newline, since mudix emits whole lines eagerly and can't tell the session is GA-driven until that GA arrives. | `ProfileSession` → `MudSession` → `MudClient` |
+| `enableBlinkText` | When `true`, ANSI blink (SGR 5/6) renders as a smooth opacity pulse; when `false` (default — matching Mudlet) blinking text is shown in italics instead. `FormatState.toHtml` always emits the `ansi-slow-blink`/`ansi-rapid-blink` classes; the effect toggles a `blink-text-enabled` class on the document root, and `App.css` picks the pulse-vs-italic presentation from it (so it covers the main output, user windows, and mini-consoles alike). | `ProfileSession` → `<html>` class → `App.css` |
 
 ### 3. Persist-only — round-trips but **not yet enforced**
 
@@ -93,15 +94,16 @@ returns `false`).
 `announceIncomingText`, `askTlsAvailable`, `blankLinesBehaviour` (`show`/`hide`),
 `caretShortcut` (`none`/`tab`/`ctrltab`/`f6`),
 `compactInputLine`, `controlCharacterHandling` (`asis`/`oem`/`picture`),
-`editorAutoComplete`, `enableBlinkText`, `enableClosedCaption`, `f3SearchEnabled`,
+`editorAutoComplete`, `enableClosedCaption`, `f3SearchEnabled`,
 `inputLineStrictUnixEndings`, `logInHTML`,
 `muteMediaAPI`, `muteMediaGame`,
 `promptForMXPProcessorOn`, `promptForVersionInTTYPE`, `show3dMapView`,
 `showRoomIdsOnMap`, `showUpperLowerLevels`,
 `specialForceGAOff`, `versionInTTYPE`.
 
-(`commandLineHistorySaveSize` and `showTabConnectionIndicators` also live in the
-`config` bag but are now consumed by the UI — see group 2a.)
+(`commandLineHistorySaveSize`, `showTabConnectionIndicators`,
+`fixUnnecessaryLinebreaks`, and `enableBlinkText` also live in the `config` bag
+but are now consumed by the UI — see group 2a.)
 
 ### 4. Read-only
 
@@ -128,8 +130,7 @@ group 3 to group 1/2 as the underlying feature lands:
 
 - **Accessibility:** `advertiseScreenReader`, `announceIncomingText`,
   `enableClosedCaption`, `caretShortcut` (no caret-browse mode).
-- **Rendering:** `enableBlinkText` (ANSI blink not rendered),
-  `controlCharacterHandling`, `ambiguousEAsianWidthCharacters`,
+- **Rendering:** `controlCharacterHandling`, `ambiguousEAsianWidthCharacters`,
   `blankLinesBehaviour` (no blank-line suppression).
 - **Input line / editor:** `compactInputLine`, `inputLineStrictUnixEndings`,
   `editorAutoComplete`, `f3SearchEnabled`.
