@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:busted": "vite --mode busted --port 5174 --strictPort",
+    "pretest:e2e": "npm run gen:busted-manifest",
     "test:e2e": "playwright test",
     "gen:busted-manifest": "playwright test -c playwright.manifest.config.ts"
   },

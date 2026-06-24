@@ -1,8 +1,5 @@
 import { test, expect } from '@playwright/test';
-import {
-    ALL_SPECS, GREEN_SPECS, loadManifest, bootProfile, reopen, runSpec,
-    summarize, specResults,
-} from './bustedHarness';
+import { ALL_SPECS, loadManifest, specResults } from './bustedHarness';
 
 // Mudlet's busted *_spec.lua suite, run against the real mudix app in a browser.
 // This is the single path for the whole corpus: because the live app wires the
@@ -20,7 +17,7 @@ import {
 const manifest = loadManifest();
 
 // ── Per-test suite: one Playwright test() per Mudlet it() ────────────────────
-for (const spec of GREEN_SPECS) {
+for (const spec of ALL_SPECS) {
     const names = manifest[spec];
     if (!names || names.length === 0) continue; // manifest not generated yet
 
@@ -50,9 +47,11 @@ for (const spec of GREEN_SPECS) {
 
 // ── Drift guard: the manifest must match the live it() set, per spec ─────────
 // Catches specs re-synced (or APIs changed) without regenerating the manifest:
-// without this, an added/removed/renamed it() would silently never run.
+// without this, an added/removed/renamed it() would silently never run. Also
+// catches errors raised outside any it() (load/describe/setup failures), which
+// never produce a test record and would otherwise dodge the per-test assertions.
 test.describe('manifest drift guard', () => {
-    for (const spec of GREEN_SPECS) {
+    for (const spec of ALL_SPECS) {
         test(`${spec}: manifest matches live it() set`, async ({ page }) => {
             const r = await specResults(page, spec);
             const live = r.tests.map(t => t.name).sort();
@@ -61,33 +60,7 @@ test.describe('manifest drift guard', () => {
                 live,
                 `${spec} it() set drifted from manifest — run \`npm run gen:busted-manifest\``,
             ).toEqual(recorded);
-            // Errors raised outside any it() (load/describe/setup failures) never
-            // produce a test record, so they'd dodge the per-test assertions.
             expect(r.errors, `${spec}: ${r.errors} error(s) outside any it()`).toBe(0);
         });
     }
-});
-
-// ── Scoreboard: every bundled spec runs without crashing the runner ──────────
-// Visibility for the parity backlog (the non-green specs) without hard-failing
-// on known gaps. Prints live pass counts.
-test.describe('scoreboard', () => {
-    test('runs every bundled spec without crashing the runner', async ({ page }) => {
-        await bootProfile(page);
-        const board: string[] = [];
-        for (const spec of ALL_SPECS) {
-            // Fresh page per spec so mudix's console state doesn't leak between
-            // specs (busted only insulates Lua _G), keeping the counts accurate.
-            await reopen(page);
-            const r = await runSpec(page, spec);
-            expect(r, `${spec}: no results`).toBeTruthy();
-            expect(r.total, `${spec}: no tests executed`).toBeGreaterThan(0);
-            const mark = r.failed === 0 && r.errors === 0 ? '✓' : '✗';
-            board.push(`  ${mark} ${spec.padEnd(14)} ${summarize(r)}`);
-            for (const f of r.failures.slice(0, 8)) {
-                board.push(`        · ${f.name || f.spec}: ${String(f.message).split('\n')[0].slice(0, 120)}`);
-            }
-        }
-        console.log('\n[busted in-app scoreboard]\n' + board.join('\n'));
-    });
 });

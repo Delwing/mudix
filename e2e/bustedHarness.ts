@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // Shared harness for Mudlet's busted *_spec.lua suite, run against the real mudix
-// app in a browser. Imported by both busted.spec.ts (the per-test suite + drift
-// guard + scoreboard) and genBustedManifest.ts (the manifest generator).
+// app in a browser. Imported by busted.spec.ts (the per-test suite + drift guard)
+// and genBustedManifest.ts (the manifest generator).
 
 export type BustedFailure = { spec: string; name: string; message: string; trace?: string };
 export type BustedTest = { spec: string; name: string; status: string; message?: string };
@@ -14,24 +14,20 @@ export type BustedResults = {
     tests: BustedTest[];
 };
 
-// Every spec bundled in src/scripting/lua/specs/ (the full Mudlet suite).
-export const ALL_SPECS = [
-    'StringUtils', 'TableUtils', 'DateTime', 'GMCP', 'Regex', 'IDManager',
-    'DebugTools', 'Miscallaneous', 'Other', 'DB', 'MudletBusted',
-    'Alias', 'Trigger', 'KeyBinds', 'InsertTextNewline', 'TBufferOSC',
-    'TextEdit', 'GUIUtils', 'GeyserLabel', 'GeyserButton', 'GeyserStyleSheet',
-    'GeyserAdjustableContainer', 'UI', 'Mapper',
-] as const;
+// The specs directory the runtime bundles via import.meta.glob('./specs/**').
+const SPECS_DIR = fileURLToPath(new URL('../src/scripting/lua/specs/', import.meta.url));
 
-// Specs that pass fully in-app today — asserted green per-it; a regression is a
-// real break. The rest are tracked as a parity backlog in docs/busted-e2e-plan.md
-// (genuine Mudlet-API gaps now, not harness limits). Move names here as gaps close.
-export const GREEN_SPECS = [
-    'StringUtils', 'TableUtils', 'DateTime', 'GMCP', 'Miscallaneous', 'TBufferOSC',
-    'GeyserLabel', 'GeyserButton', 'GeyserStyleSheet', 'GeyserAdjustableContainer',
-    'KeyBinds', 'DebugTools', 'MudletBusted', 'Alias', 'Trigger', 'Regex', 'IDManager',
-    'GUIUtils', 'Mapper', 'TextEdit', 'DB', 'Other', 'InsertTextNewline', 'UI',
-] as const;
+// Every spec in src/scripting/lua/specs/ (`<Name>_spec.lua` → `<Name>`),
+// discovered from disk rather than hand-listed, so a re-synced/added/removed spec
+// needs no maintenance here — it just shows up. (busted.spec.ts and
+// genBustedManifest.ts both run in Node, so the filesystem read is available at
+// collection time.) All of them pass in-app and are asserted per-it() in
+// busted.spec.ts; when re-syncing a spec that isn't passing yet, expect per-it()
+// failures here until the gap is closed.
+export const ALL_SPECS: string[] = fs.readdirSync(SPECS_DIR)
+    .filter(f => f.endsWith('_spec.lua'))
+    .map(f => f.slice(0, -'_spec.lua'.length))
+    .sort();
 
 // The committed per-it manifest: { spec: [fullName, ...] }. The drift guard
 // fails if a spec's live it() set diverges from this, so regenerate with
@@ -131,10 +127,6 @@ export function runSpec(page: Page, spec: string): Promise<BustedResults> {
         (s) => (window as unknown as { __runBusted: (p: string) => BustedResults }).__runBusted(s),
         spec,
     );
-}
-
-export function summarize(r: BustedResults): string {
-    return `${r.passed}/${r.total} passed, ${r.failed} failed, ${r.errors} errors, ${r.pending} pending`;
 }
 
 // One full run per spec, cached for the worker. The whole suite runs single-worker
