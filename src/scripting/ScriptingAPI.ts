@@ -2155,11 +2155,24 @@ export class ScriptingAPI {
         const buf = this.resolveBuffer(sel.windowName);
         if (!buf) return null;
         if (sel.start < 0 || sel.start >= buf.length) return null;
-        const state = buf.getStateAt(sel.start);
+        return this.readColorAt(buf, sel.start, channel);
+    }
+
+    /**
+     * Resolve the rgb of `channel` for the character at `pos` in `buf`, falling
+     * back to the profile's configured default when the run carries no explicit
+     * colour. Shared by getFgColor/getBgColor (selection) and getTextFormat
+     * (selection or cursor).
+     */
+    private readColorAt(
+        buf: AnsiAwareBuffer,
+        pos: number,
+        channel: 'foreground' | 'background',
+    ): [number, number, number] {
+        const state = buf.getStateAt(pos);
         const color = channel === 'foreground' ? state?.foreground : state?.background;
         const rgb = formatColorToRgb(color);
         if (rgb) return rgb;
-        // No explicit color — resolve to the profile's configured default.
         if (channel === 'background') {
             const override = selectProfileField(useAppStore.getState(), this.connectionId, 'outputBackgroundColor');
             if (override) return [override.r, override.g, override.b];
@@ -2196,16 +2209,24 @@ export class ScriptingAPI {
         foreground: [number, number, number];
         background: [number, number, number];
     } | null {
-        if (!this.selection) return null;
-        if (!this.selectionMatches(windowName)) return null;
-        const sel = this.selection;
-        const buf = this.resolveBuffer(sel.windowName);
-        if (!buf) return null;
-        if (sel.start < 0 || sel.start >= buf.length) return null;
-        const foreground = this.readSelectionColor('foreground', windowName);
-        const background = this.readSelectionColor('background', windowName);
-        if (!foreground || !background) return null;
-        const state = buf.getStateAt(sel.start);
+        // Mudlet reads the char "under the cursor or selection": prefer an active
+        // selection, otherwise fall back to the cursor position on the current
+        // line (so getTextFormat works after a bare moveCursor, no selectSection).
+        let buf: AnsiAwareBuffer | null;
+        let pos: number;
+        if (this.selection && this.selectionMatches(windowName)) {
+            buf = this.resolveBuffer(this.selection.windowName);
+            pos = this.selection.start;
+        } else {
+            const con = this.getConsole(windowName);
+            buf = con?.getBuffer() ?? null;
+            pos = con?.getCursorColumn() ?? 0;
+        }
+        if (!buf || buf.length === 0 || pos < 0) return null;
+        if (pos >= buf.length) pos = buf.length - 1; // clamp to the last char
+        const foreground = this.readColorAt(buf, pos, 'foreground');
+        const background = this.readColorAt(buf, pos, 'background');
+        const state = buf.getStateAt(pos);
         return {
             bold: !!state?.bold,
             italic: !!state?.italic,

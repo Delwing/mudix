@@ -68,8 +68,8 @@ during initial mount.)
 | DB | ✗ 65/74 | **feature** — DB.lua column add/delete, `_violations` migration |
 | InsertTextNewline | ✗ 7/8 | multi-line `insertText`/`cinsertText` now split the current line into new history lines at the cursor (Mudlet #8945) — `Console.insertText`. Last failure is `cecho` after `creplaceLine` in a trigger: needs the trigger-echo output cursor to stay on the replaced line (separate trigger-echo-cursor rework) |
 | TextEdit | ✗ 1/19 | **feature** — `createTextEdit`/`deleteTextEdit` widget not implemented |
-| GUIUtils | ✗ 86/98 | colour pipeline + `replace` no-selection (`getSelection` now returns `("",0,0)` like Mudlet) fixed. Remaining 11 are deeper buffer/selection model — `selectAll`, `copy2decho`/`copy2html`, buffers, reverse `decho2cecho`/`hecho2cecho`, `setLabelStyleSheet`, `cecho2string` |
-| UI | ✗ 54/61 | multi-line `insertText` (shared `Console.insertText`), delete-error semantics (`deleteMiniConsole`/`CommandLine`/`ScrollBox` → `(false,errMsg)`), `windowType("commandline")`, and `selectSection` boundary clamp (getTextFormat at end-of-line) all fixed. Remaining: `copy2decho`/`copy2html`, one getTextFormat-advanced, nested-trigger capture group, `cecho`-after-`creplaceLine` |
+| GUIUtils | ✗ 89/98 | colour pipeline, `replace`/buffers (`getSelection`→`("",0,0)`), and `copy2decho`/`copy2html` (the in-flight `partial` is now the current line for `getLine`/`getBuffer`, Mudlet's model) fixed. Remaining 8: `selectAll`, reverse `decho2cecho`/`hecho2cecho`, `setLabelStyleSheet`, `cecho2string` |
+| UI | ✗ 59/61 | multi-line `insertText`, delete-error semantics, `windowType("commandline")`, `selectSection` end-of-line clamp, `copy2decho`/`copy2html` (partial-as-current-line), and cursor-based `getTextFormat` (reads char under the cursor when there's no selection) all fixed. Remaining 2: nested-trigger capture group, `cecho`-after-`creplaceLine` (both trigger-internals) |
 | Mapper | ✗ 4/22 | **feature** — `setRoomBorderColor`, map-menu APIs |
 
 The quick/bounded gaps are closed, plus the GUIUtils/UI colour pipeline. What

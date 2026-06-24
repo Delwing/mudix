@@ -185,8 +185,24 @@ export class Console {
         return this.cursorIdx;
     }
 
-    getLine(): string { return this.history[this.cursor]?.text ?? ''; }
-    getBuffer(): AnsiAwareBuffer | null { return this.history[this.cursor] ?? null; }
+    // True when the cursor is "following the end" (never moved into history via
+    // moveCursor/appendLine). In that state the line being built — the in-flight
+    // `partial` from an echo without a trailing newline — IS the current line
+    // (Mudlet's model), so getLine/getBuffer expose it. When the cursor has been
+    // parked on a history line (moveCursor, or the matched line during trigger
+    // processing) that history line is the current one and the partial is ignored.
+    private get followingEnd(): boolean {
+        return this.cursorIdx < 0 || this.cursorIdx >= this.history.length;
+    }
+
+    getLine(): string {
+        if (this.followingEnd && this.partial.length > 0) return this.partial.text;
+        return this.history[this.cursor]?.text ?? '';
+    }
+    getBuffer(): AnsiAwareBuffer | null {
+        if (this.followingEnd && this.partial.length > 0) return this.partial;
+        return this.history[this.cursor] ?? null;
+    }
 
     /** Per-line prompt flag on the current cursor line. Mirrors Mudlet's TBuffer
      *  behaviour: `isPrompt()` follows the cursor, so moveCursor + isPrompt can
