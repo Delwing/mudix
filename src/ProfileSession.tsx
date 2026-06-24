@@ -80,6 +80,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const msspEnabled = protocols?.mssp ?? PROTOCOL_DEFAULTS.mssp;
     const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
     const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
+    const mccpEnabled = protocols?.mccp ?? PROTOCOL_DEFAULTS.mccp;
     const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
     const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
     const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
@@ -116,7 +117,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // Advertise the mudstandards.org telnet WebSocket profile only when the
     // profile opts in (see ProtocolSettings.wsTelnetSubprotocol).
     const subprotocols = wsTelnetSubprotocol ? [MUD_TELNET_SUBPROTOCOL] : [];
-    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mxpEnabled, mnesEnabled, nawsEnabled, subprotocols });
+    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mccpEnabled, mxpEnabled, mnesEnabled, nawsEnabled, subprotocols });
     // Mudlet's "Fix unnecessary linebreaks on GA servers" (config bag, persisted
     // by setConfig). Applied during render — like the protocol toggles above —
     // so it's on the session's options before autoConnect dials, and re-applied

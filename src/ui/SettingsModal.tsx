@@ -128,6 +128,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const msspEnabled = protocols?.mssp ?? PROTOCOL_DEFAULTS.mssp;
     const charsetEnabled = protocols?.charset ?? PROTOCOL_DEFAULTS.charset;
     const mspEnabled = protocols?.msp ?? PROTOCOL_DEFAULTS.msp;
+    const mccpEnabled = protocols?.mccp ?? PROTOCOL_DEFAULTS.mccp;
     const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
     const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
     const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
@@ -421,6 +422,26 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     aria-labelledby="protocol-msp-label"
                                     checked={mspEnabled}
                                     onChange={next => patchProtocols({ msp: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-mccp-label">
+                                    MCCP
+                                    <HelpTip label="About MCCP">
+                                        Telnet option 86 (MCCP2). MUD Client Compression Protocol —
+                                        when a server offers it, the client accepts and transparently
+                                        decompresses the stream, cutting bandwidth. On by default;
+                                        disable to force compression off (Mudlet's
+                                        <code>specialForceCompressionOff</code>) — the client ignores
+                                        the server's offer and the stream stays uncompressed, which is
+                                        handy when debugging the raw telnet bytes.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-mccp"
+                                    aria-labelledby="protocol-mccp-label"
+                                    checked={mccpEnabled}
+                                    onChange={next => patchProtocols({ mccp: next })}
                                 />
                             </div>
                             <div className="settings-row">

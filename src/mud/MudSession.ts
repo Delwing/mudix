@@ -287,13 +287,14 @@ export class MudSession {
     /** Update the telnet protocol toggles applied on the next connect.
      *  Mid-session changes do not retroactively renegotiate — the values are
      *  read by MudClient's constructor, so the next dial sees them. */
-    setProtocolOptions(opts: { gmcpEnabled?: boolean; mttsEnabled?: boolean; msdpEnabled?: boolean; msspEnabled?: boolean; charsetEnabled?: boolean; mspEnabled?: boolean; mxpEnabled?: boolean; mnesEnabled?: boolean; nawsEnabled?: boolean; subprotocols?: string[] }): void {
+    setProtocolOptions(opts: { gmcpEnabled?: boolean; mttsEnabled?: boolean; msdpEnabled?: boolean; msspEnabled?: boolean; charsetEnabled?: boolean; mspEnabled?: boolean; mccpEnabled?: boolean; mxpEnabled?: boolean; mnesEnabled?: boolean; nawsEnabled?: boolean; subprotocols?: string[] }): void {
         if (opts.gmcpEnabled !== undefined) this.options.gmcpEnabled = opts.gmcpEnabled;
         if (opts.mttsEnabled !== undefined) this.options.mttsEnabled = opts.mttsEnabled;
         if (opts.msdpEnabled !== undefined) this.options.msdpEnabled = opts.msdpEnabled;
         if (opts.msspEnabled !== undefined) this.options.msspEnabled = opts.msspEnabled;
         if (opts.charsetEnabled !== undefined) this.options.charsetEnabled = opts.charsetEnabled;
         if (opts.mspEnabled !== undefined) this.options.mspEnabled = opts.mspEnabled;
+        if (opts.mccpEnabled !== undefined) this.options.mccpEnabled = opts.mccpEnabled;
         if (opts.mxpEnabled !== undefined) this.options.mxpEnabled = opts.mxpEnabled;
         if (opts.mnesEnabled !== undefined) this.options.mnesEnabled = opts.mnesEnabled;
         if (opts.nawsEnabled !== undefined) this.options.nawsEnabled = opts.nawsEnabled;

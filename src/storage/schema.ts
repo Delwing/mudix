@@ -180,6 +180,13 @@ export interface ProtocolSettings {
      *  `!!SOUND(...)` and `!!MUSIC(...)` tags are stripped from text and
      *  routed to the sound manager. */
     msp?: boolean;
+    /** Telnet MCCP / MUD Client Compression Protocol (option 86 / MCCP2). When
+     *  enabled, the client accepts the server's `WILL COMPRESS2` and transparently
+     *  inflates the stream (via pako). On by default; disabling it forces
+     *  compression off — the client ignores the server's offer and never sends
+     *  `DO COMPRESS2`, so the stream stays uncompressed (Mudlet's
+     *  `specialForceCompressionOff`). */
+    mccp?: boolean;
     /** Telnet MXP / MUD eXtension Protocol (option 91). When enabled, the
      *  client negotiates MXP and parses in-band HTML-like markup — formatting
      *  tags, clickable `<SEND>`/`<A>` links, entities, and custom element
@@ -218,6 +225,7 @@ export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
     mssp: true,
     charset: true,
     msp: true,
+    mccp: true,
     mxp: true,
     mnes: false,
     naws: true,

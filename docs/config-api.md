@@ -51,6 +51,7 @@ Mudlet); the rest are live.
 | `enableMNES` | `protocols.mnes` | next connect |
 | `specialForceMxpNegotiationOff` | `!protocols.mxp` | inverse flag |
 | `specialForceCharsetNegotiationOff` | `!protocols.charset` | inverse flag |
+| `specialForceCompressionOff` | `!protocols.mccp` | inverse flag — forces MCCP (option 86) off |
 | `forceNewEnvironNegotiationOff` | `!protocols.mnes` | inverse flag |
 | `autoClearInputLine` | `autoClearInput` | live |
 | `mapRoomSize` | `mapper.roomSize` | positive number only |
@@ -97,7 +98,7 @@ returns `false`).
 `muteMediaAPI`, `muteMediaGame`,
 `promptForMXPProcessorOn`, `promptForVersionInTTYPE`, `show3dMapView`,
 `showRoomIdsOnMap`, `showUpperLowerLevels`,
-`specialForceCompressionOff`, `specialForceGAOff`, `versionInTTYPE`.
+`specialForceGAOff`, `versionInTTYPE`.
 
 (`commandLineHistorySaveSize` and `showTabConnectionIndicators` also live in the
 `config` bag but are now consumed by the UI — see group 2a.)
@@ -132,9 +133,8 @@ group 3 to group 1/2 as the underlying feature lands:
   `blankLinesBehaviour` (no blank-line suppression).
 - **Input line / editor:** `compactInputLine`, `inputLineStrictUnixEndings`,
   `editorAutoComplete`, `f3SearchEnabled`.
-- **Telnet edge switches:** `askTlsAvailable`, `specialForceCompressionOff`
-  (MCCP kill-switch), `specialForceGAOff`, `versionInTTYPE`,
-  `promptForVersionInTTYPE`, `promptForMXPProcessorOn`.
+- **Telnet edge switches:** `askTlsAvailable`, `specialForceGAOff`,
+  `versionInTTYPE`, `promptForVersionInTTYPE`, `promptForMXPProcessorOn`.
 - **Map:** `show3dMapView` (no 3D renderer), `showRoomIdsOnMap`,
   `showUpperLowerLevels`.
 - **Media:** `muteMediaAPI`, `muteMediaGame` (`SoundManager` has stop/pause but

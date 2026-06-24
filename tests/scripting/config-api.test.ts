@@ -30,6 +30,17 @@ describe('setConfig / getConfig', () => {
         expect(h.run('return getConfig("enableMXP")')).toBe(false);
     });
 
+    it('maps specialForceCompressionOff to the negated mccp flag', () => {
+        // Default: compression on, so force-off reads false.
+        expect(h.run('return getConfig("specialForceCompressionOff")')).toBe(false);
+        h.run('setConfig("specialForceCompressionOff", true)');
+        expect(useAppStore.getState().connectionProfile[CONN]?.protocols?.mccp).toBe(false);
+        expect(h.run('return getConfig("specialForceCompressionOff")')).toBe(true);
+        h.run('setConfig("specialForceCompressionOff", false)');
+        expect(useAppStore.getState().connectionProfile[CONN]?.protocols?.mccp).toBe(true);
+        expect(h.run('return getConfig("specialForceCompressionOff")')).toBe(false);
+    });
+
     it('routes autoClearInputLine to the autoClearInput field', () => {
         h.run('setConfig("autoClearInputLine", true)');
         expect(useAppStore.getState().connectionProfile[CONN]?.autoClearInput).toBe(true);

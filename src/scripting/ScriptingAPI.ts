@@ -144,7 +144,6 @@ const CONFIG_PERSIST_ONLY: Record<string, {
     showRoomIdsOnMap:               { type: 'bool', default: false },
     showTabConnectionIndicators:    { type: 'bool', default: true },
     showUpperLowerLevels:           { type: 'bool', default: true },
-    specialForceCompressionOff:     { type: 'bool', default: false },
     specialForceGAOff:              { type: 'bool', default: false },
     versionInTTYPE:                 { type: 'bool', default: true },
 };
@@ -802,6 +801,7 @@ export class ScriptingAPI {
             // structured — inverse "force negotiation off" toggles
             case 'specialForceMxpNegotiationOff':     return !this.getProtocol('mxp');
             case 'specialForceCharsetNegotiationOff': return !this.getProtocol('charset');
+            case 'specialForceCompressionOff':        return !this.getProtocol('mccp');
             case 'forceNewEnvironNegotiationOff':     return !this.getProtocol('mnes');
             // structured — input line
             case 'autoClearInputLine':
@@ -846,6 +846,7 @@ export class ScriptingAPI {
             case 'enableMNES': this.setProtocol('mnes', configBool(value)); return true;
             case 'specialForceMxpNegotiationOff':     this.setProtocol('mxp',     !configBool(value)); return true;
             case 'specialForceCharsetNegotiationOff': this.setProtocol('charset', !configBool(value)); return true;
+            case 'specialForceCompressionOff':        this.setProtocol('mccp',    !configBool(value)); return true;
             case 'forceNewEnvironNegotiationOff':     this.setProtocol('mnes',    !configBool(value)); return true;
             case 'autoClearInputLine':
                 useAppStore.getState().patchConnectionProfile(this.connectionId, { autoClearInput: configBool(value) });
