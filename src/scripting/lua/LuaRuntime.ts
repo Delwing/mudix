@@ -846,8 +846,13 @@ export class LuaRuntime implements IScriptingRuntime {
         // setLabelStyleSheet(name, css) — Qt-style CSS string, applied to the
         // label DIV. Used by Mudlet's setGaugeStyleSheet via the _back/_front/_text
         // labels.
-        this.lua.global.set('setLabelStyleSheet', (name: string, css: string) => {
+        // Returns true on success, false when the label doesn't exist; the
+        // Bridge.lua wrapper turns the failure (and the empty-name case) into
+        // Mudlet's (nil, errMsg) multi-return.
+        this.lua.global.set('__setLabelStyleSheet', (name: unknown, css: unknown) => {
+            if (typeof name !== 'string' || !this.api.labels.has(name)) return false;
             this.api.labels.setStyleSheet(name, css == null ? '' : String(css));
+            return true;
         });
         // Mudlet getLabelStyleSheet(name) → the CSS string last set (or "" when
         // none). Returns "" for a missing label too, matching the Lua-side
@@ -3570,14 +3575,21 @@ export class LuaRuntime implements IScriptingRuntime {
             const b = parseInt(hex.slice(5, 7), 16);
             return `{${r},${g},${b}}`;
         }).join(',');
-        // The 16 base colours also get Mudlet's named aliases (ansi_red,
-        // ansi_light_red, …) — keyed to indices 0..15. cecho/hecho conversions
-        // reference these names.
+        // The 16 base colours also get Mudlet's named aliases, in BOTH the
+        // snake_case (ansi_light_red) and camelCase (ansiLightRed) conventions
+        // Mudlet ships — keyed to indices 0..15. cecho/hecho conversions and
+        // cecho2string reference these names.
         const named = [
             'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
             'light_black', 'light_red', 'light_green', 'light_yellow',
             'light_blue', 'light_magenta', 'light_cyan', 'light_white',
-        ].map((name, i) => `  if not color_table["ansi_${name}"] then color_table["ansi_${name}"] = p[${i + 1}] end`).join('\n');
+        ].flatMap((name, i) => {
+            const camel = 'ansi' + name.split('_').map(w => w[0].toUpperCase() + w.slice(1)).join('');
+            return [
+                `  if not color_table["ansi_${name}"] then color_table["ansi_${name}"] = p[${i + 1}] end`,
+                `  if not color_table["${camel}"] then color_table["${camel}"] = p[${i + 1}] end`,
+            ];
+        }).join('\n');
         this.exec(
             `do
   color_table = color_table or {}

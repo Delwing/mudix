@@ -40,10 +40,11 @@ Run it: `npm run test:e2e` (Playwright boots `npm run dev:busted` — a
 
 ### Scoreboard (current, in-app — all 24 Mudlet specs synced)
 
-**17 of 24 specs are fully green** and asserted in `e2e/busted.spec.ts`; the rest
-are the parity backlog. ✓ = asserted green. (`bootProfile` polls a trivial run
-until it succeeds, so the test never races the runtime re-creation that happens
-during initial mount.)
+**18 of 24 specs are fully green** and asserted in `e2e/busted.spec.ts`; the rest
+are the parity backlog. ✓ = asserted green. (`bootProfile`/`reopen` poll a
+trivial run until it succeeds, so the test never races the runtime re-creation
+during initial mount; the scoreboard re-navigates per spec so mudix's JS console
+state can't leak between specs — busted only insulates Lua `_G`.)
 
 | Spec | Result | Note |
 |---|---|---|
@@ -68,18 +69,22 @@ during initial mount.)
 | DB | ✗ 65/74 | **feature** — DB.lua column add/delete, `_violations` migration |
 | InsertTextNewline | ✗ 7/8 | multi-line `insertText`/`cinsertText` now split the current line into new history lines at the cursor (Mudlet #8945) — `Console.insertText`. Last failure is `cecho` after `creplaceLine` in a trigger: needs the trigger-echo output cursor to stay on the replaced line (separate trigger-echo-cursor rework) |
 | TextEdit | ✗ 1/19 | **feature** — `createTextEdit`/`deleteTextEdit` widget not implemented |
-| GUIUtils | ✗ 89/98 | colour pipeline, `replace`/buffers (`getSelection`→`("",0,0)`), and `copy2decho`/`copy2html` (the in-flight `partial` is now the current line for `getLine`/`getBuffer`, Mudlet's model) fixed. Remaining 8: `selectAll`, reverse `decho2cecho`/`hecho2cecho`, `setLabelStyleSheet`, `cecho2string` |
-| UI | ✗ 59/61 | multi-line `insertText`, delete-error semantics, `windowType("commandline")`, `selectSection` end-of-line clamp, `copy2decho`/`copy2html` (partial-as-current-line), and cursor-based `getTextFormat` (reads char under the cursor when there's no selection) all fixed. Remaining 2: nested-trigger capture group, `cecho`-after-`creplaceLine` (both trigger-internals) |
+| GUIUtils | ✓ 97/98 (1 pending) | green — colour pipeline + named ANSI aliases (snake_case *and* camelCase), `replace`/buffers/`copy2decho`/`copy2html` (partial-as-current-line), `setLabelStyleSheet` return values, `selectAll`, `cecho2string`, reverse `decho2cecho`/`hecho2cecho`. The 1 pending is an upstream `pending()` stub |
+| UI | ✗ 59/61 | multi-line `insertText`, delete-error semantics, `windowType("commandline")`, `selectSection` end-of-line clamp, `copy2decho`/`copy2html`, and cursor-based `getTextFormat` all fixed. Remaining 2: nested-trigger capture group, `cecho`-after-`creplaceLine` (both trigger-internals) |
 | Mapper | ✗ 4/22 | **feature** — `setRoomBorderColor`, map-menu APIs |
 
-The quick/bounded gaps are closed, plus the GUIUtils/UI colour pipeline. What
-remains is genuine feature work, and much of it shares one root: the **Console
-buffer/cursor/selection model**. `deleteMultiline` (Other), multi-line
-`insertText` (InsertTextNewline + UI), `selectAll`/`copy2decho`/`copy2html`/
-buffers (GUIUtils + UI), and `getTextFormat` (UI) all hinge on it — so investing
-there cascades across four specs. The other independent features: the `*Edit`
-widget (TextEdit), DB.lua internals (DB), and the Mapper menu/border APIs
-(Mapper). Tackle a cluster, then move each spec into `GREEN_SPECS`.
+The buffer/cursor/selection model is now largely in place (it greened GUIUtils
+and took UI to 59/61). What remains:
+
+- **Trigger internals** (UI's last 2 + InsertTextNewline's last 1): the
+  trigger-echo output cursor (`cecho` after `creplaceLine` must stay on the
+  replaced line) and nested-trigger capture-group selection. Higher risk — the
+  trigger-echo path backs several already-green specs.
+- **Independent features:** the `*Edit` widget (TextEdit), DB.lua internals (DB),
+  the Mapper menu/border APIs (Mapper), and the lone `deleteMultiline` line-range
+  nuance (Other).
+
+Tackle a cluster, then move each spec into `GREEN_SPECS`.
 
 ---
 

@@ -18,7 +18,7 @@ const ALL_SPECS = [
     'DebugTools', 'Miscallaneous', 'Other', 'DB', 'MudletBusted',
     'Alias', 'Trigger', 'KeyBinds', 'InsertTextNewline', 'TBufferOSC',
     'TextEdit', 'GUIUtils', 'GeyserLabel', 'GeyserButton', 'GeyserStyleSheet',
-    'GeyserAdjustableContainer', 'UI', 'Mapper',
+    'GeyserAdjustableContainer', 'UI', 'Mapper', 'Debug',
 ] as const;
 
 // Specs that pass fully in-app today — asserted green; a regression is a real
@@ -28,6 +28,7 @@ const GREEN_SPECS = [
     'StringUtils', 'TableUtils', 'DateTime', 'GMCP', 'Miscallaneous', 'TBufferOSC',
     'GeyserLabel', 'GeyserButton', 'GeyserStyleSheet', 'GeyserAdjustableContainer',
     'KeyBinds', 'DebugTools', 'MudletBusted', 'Alias', 'Trigger', 'Regex', 'IDManager',
+    'GUIUtils',
 ] as const;
 
 // Seed a non-dialing connection into localStorage (store v20) before any app JS
@@ -53,13 +54,22 @@ async function bootProfile(page: Page): Promise<void> {
             },
         }));
     });
+    await reopen(page);
+}
+
+// (Re)navigate to the seeded profile and wait for a stable runtime. Also used to
+// reset state between specs: busted insulates Lua _G but NOT mudix's JS console
+// (history/partial/cursor/selection), so running specs back-to-back in one page
+// leaks console content between them (e.g. a trigger spec's leftover lines break
+// a later selectAll). A fresh navigation rebuilds the runtime + console clean.
+//
+// window.__runBusted is installed at the tail of LuaRuntime.setup(), but the app
+// may recreate the runtime a couple of times during initial mount (React
+// StrictMode remount + the deep-link connection effect), each time resetting the
+// hook — so waiting for it to merely *exist* races a soon-to-be-destroyed
+// runtime. Instead poll an actual trivial run until it returns.
+async function reopen(page: Page): Promise<void> {
     await page.goto('/?profile=mudlet-self-test');
-    // window.__runBusted is installed at the tail of LuaRuntime.setup(). But the
-    // app may recreate the runtime a couple of times during initial mount (React
-    // StrictMode remount + the deep-link connection effect), each time resetting
-    // the hook — so waiting for it to merely *exist* races a soon-to-be-destroyed
-    // runtime. Instead poll an actual trivial run until it returns: by the time a
-    // real spec executes, the mount has settled and the runtime is stable.
     await page.waitForFunction(
         () => {
             const fn = (window as unknown as { __runBusted?: (p: string) => { total?: number } }).__runBusted;
@@ -112,12 +122,15 @@ test.describe('Mudlet busted suite (in-app)', () => {
     test('runs every bundled spec without crashing the runner', async ({ page }) => {
         const board: string[] = [];
         for (const spec of ALL_SPECS) {
+            // Fresh page per spec so mudix's console state doesn't leak between
+            // specs (busted only insulates Lua _G), keeping the counts accurate.
+            await reopen(page);
             const r = await runSpec(page, spec);
             expect(r, `${spec}: no results`).toBeTruthy();
             expect(r.total, `${spec}: no tests executed`).toBeGreaterThan(0);
             const mark = r.failed === 0 && r.errors === 0 ? '✓' : '✗';
             board.push(`  ${mark} ${spec.padEnd(14)} ${summarize(r)}`);
-            for (const f of r.failures.slice(0, 40)) {
+            for (const f of r.failures.slice(0, 8)) {
                 board.push(`        · ${f.name || f.spec}: ${String(f.message).split('\n')[0].slice(0, 120)}`);
             }
         }

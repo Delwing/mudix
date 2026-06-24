@@ -748,6 +748,16 @@ function deleteScrollBox(name)
     return false, "scroll box \"" .. tostring(name) .. "\" does not exist"
 end
 
+-- Mudlet setLabelStyleSheet(name, css) → true on success, (nil, errMsg) for an
+-- empty name or a label that doesn't exist.
+function setLabelStyleSheet(name, css)
+    if name == "" then
+        return nil, "setLabelStyleSheet: a label name cannot have an empty string as the name"
+    end
+    if __setLabelStyleSheet(name, css) then return true end
+    return nil, "setLabelStyleSheet: label name '" .. tostring(name) .. "' not found"
+end
+
 -- Mudlet HTTP APIs: every call dispatches a fire-and-forget background
 -- request and immediately returns (true, url). Completion/failure is
 -- reported via sysXxxHttp* events. The wrappers below add the (true, url)
