@@ -2182,11 +2182,50 @@ export class MapStore {
     }
 
     removeMapMenu(name: string): boolean {
-        return this.mapMenus.delete(name);
+        const had = this.mapMenus.delete(name);
+        // Mudlet removes a menu *and its children* — cascade to any submenus
+        // nested under it (recursively, so grandchildren go too).
+        for (const [childName, menu] of [...this.mapMenus]) {
+            if (menu.parent === name) this.removeMapMenu(childName);
+        }
+        return had;
     }
 
     getMapMenus(): MapMenuEntry[] {
         return [...this.mapMenus.values()];
+    }
+
+    // ── Per-room border colour / thickness (Mudlet) ───────────────────────────
+    // Custom per-room overrides of the map's default room border. Stored in side
+    // maps keyed by room id (like roomHighlights); a missing entry means "use the
+    // map default". Channel/range validation lives in the Lua bindings. (The
+    // binary map renderer doesn't consume these yet — this is the data model the
+    // get/set/clear API round-trips on.)
+    private roomBorderColors = new Map<number, { r: number; g: number; b: number; a: number }>();
+    private roomBorderThicknesses = new Map<number, number>();
+
+    setRoomBorderColor(id: number, r: number, g: number, b: number, a: number): boolean {
+        if (!this.rooms.has(id)) return false;
+        this.roomBorderColors.set(id, { r, g, b, a });
+        return true;
+    }
+    getRoomBorderColor(id: number): { r: number; g: number; b: number; a: number } | null {
+        return this.roomBorderColors.get(id) ?? null;
+    }
+    clearRoomBorderColor(id: number): boolean {
+        return this.roomBorderColors.delete(id);
+    }
+
+    setRoomBorderThickness(id: number, thickness: number): boolean {
+        if (!this.rooms.has(id)) return false;
+        this.roomBorderThicknesses.set(id, thickness);
+        return true;
+    }
+    getRoomBorderThickness(id: number): number | null {
+        return this.roomBorderThicknesses.get(id) ?? null;
+    }
+    clearRoomBorderThickness(id: number): boolean {
+        return this.roomBorderThicknesses.delete(id);
     }
 
     /** Fire the registered event for a context-menu entry. Matches Mudlet's

@@ -40,7 +40,7 @@ Run it: `npm run test:e2e` (Playwright boots `npm run dev:busted` — a
 
 ### Scoreboard (current, in-app — all 24 Mudlet specs synced)
 
-**18 of 24 specs are fully green** and asserted in `e2e/busted.spec.ts`; the rest
+**20 of 24 specs are fully green** and asserted in `e2e/busted.spec.ts`; the rest
 are the parity backlog. ✓ = asserted green. (`bootProfile`/`reopen` poll a
 trivial run until it succeeds, so the test never races the runtime re-creation
 during initial mount; the scoreboard re-navigates per spec so mudix's JS console
@@ -68,21 +68,24 @@ state can't leak between specs — busted only insulates Lua `_G`.)
 | Other | ✗ 43/44 | 1 `deleteMultiline` line-range nuance |
 | DB | ✗ 65/74 | **feature** — DB.lua column add/delete, `_violations` migration |
 | InsertTextNewline | ✗ 7/8 | multi-line `insertText`/`cinsertText` now split the current line into new history lines at the cursor (Mudlet #8945) — `Console.insertText`. Last failure is `cecho` after `creplaceLine` in a trigger: needs the trigger-echo output cursor to stay on the replaced line (separate trigger-echo-cursor rework) |
-| TextEdit | ✗ 1/19 | **feature** — `createTextEdit`/`deleteTextEdit` widget not implemented |
+| TextEdit | ✓ 33/33 | green — `createTextEdit` widget as a data-model registry (`TextEditManager`): create/delete, text get/set/clear, the read-only/placeholder/stylesheet/font/font-size/tab-moves-focus properties, `windowType` → "textedit", and the window funcs + Geyser.TextEdit wrapper. (On-screen rendering of the editor pane is a follow-up.) |
 | GUIUtils | ✓ 97/98 (1 pending) | green — colour pipeline + named ANSI aliases (snake_case *and* camelCase), `replace`/buffers/`copy2decho`/`copy2html` (partial-as-current-line), `setLabelStyleSheet` return values, `selectAll`, `cecho2string`, reverse `decho2cecho`/`hecho2cecho`. The 1 pending is an upstream `pending()` stub |
 | UI | ✗ 59/61 | multi-line `insertText`, delete-error semantics, `windowType("commandline")`, `selectSection` end-of-line clamp, `copy2decho`/`copy2html`, and cursor-based `getTextFormat` all fixed. Remaining 2: nested-trigger capture group, `cecho`-after-`creplaceLine` (both trigger-internals) |
-| Mapper | ✗ 4/22 | **feature** — `setRoomBorderColor`, map-menu APIs |
+| Mapper | ✓ 22/22 | green — map-menu shape (`getMapMenus` → name→parent) + cascade `removeMapMenu`, `getMapInfo` + `enable/disableMapInfo` returning `(nil,errMsg)`, and per-room border colour/thickness (`set/get/clearRoomBorder*`). (Border data model only; the binary map renderer doesn't paint it yet.) |
 
-The buffer/cursor/selection model is now largely in place (it greened GUIUtils
-and took UI to 59/61). What remains:
+Only 4 specs remain, and 3 of them share one root: **the trigger pipeline's
+output cursor / line model**.
 
-- **Trigger internals** (UI's last 2 + InsertTextNewline's last 1): the
-  trigger-echo output cursor (`cecho` after `creplaceLine` must stay on the
-  replaced line) and nested-trigger capture-group selection. Higher risk — the
-  trigger-echo path backs several already-green specs.
-- **Independent features:** the `*Edit` widget (TextEdit), DB.lua internals (DB),
-  the Mapper menu/border APIs (Mapper), and the lone `deleteMultiline` line-range
-  nuance (Other).
+- **Trigger internals** (Other's `deleteMultiline`, UI's last 2,
+  InsertTextNewline's last 1): `feedTriggers` fires trigger callbacks but doesn't
+  append the fed lines to `Console.history`, and `cecho` after `creplaceLine`
+  doesn't keep the output cursor on the replaced line, and nested-trigger capture
+  groups select the wrong group. **Higher risk** — this path backs the
+  already-green Trigger/Regex/Alias specs, so it's best done with a human able to
+  verify no regressions.
+- **DB** (9): DB.lua's live schema migration (`_migrate` via `sqlite_master`
+  introspection + `ALTER TABLE`/recreate) loses rows when columns or `_violations`
+  change. Isolated (SQL only) but a deep, uncertain debug.
 
 Tackle a cluster, then move each spec into `GREEN_SPECS`.
 

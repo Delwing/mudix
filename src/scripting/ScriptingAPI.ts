@@ -7,6 +7,7 @@ import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
 import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
 import type { ScrollBoxManager } from '../ui/scrollbox/ScrollBoxManager';
+import { TextEditManager } from '../ui/textedit/TextEditManager';
 import { userWindowQssToScopedCss, cssEscape } from '../ui/labels/qtCss';
 import { AnsiAwareBuffer, type FormatColor, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
 import { classifyHyperlinkUri } from '../mud/text/ansiEscapes';
@@ -454,6 +455,8 @@ export class ScriptingAPI {
     readonly labels: ScriptingLabelsAPI;
     readonly cmdLines: CommandLineManager;
     readonly scrollBoxes: ScrollBoxManager;
+    // Mudlet createTextEdit widgets (data-model registry; see TextEditManager).
+    readonly textEdits = new TextEditManager();
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
     profileName = '';

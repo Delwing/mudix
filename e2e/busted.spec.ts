@@ -18,7 +18,7 @@ const ALL_SPECS = [
     'DebugTools', 'Miscallaneous', 'Other', 'DB', 'MudletBusted',
     'Alias', 'Trigger', 'KeyBinds', 'InsertTextNewline', 'TBufferOSC',
     'TextEdit', 'GUIUtils', 'GeyserLabel', 'GeyserButton', 'GeyserStyleSheet',
-    'GeyserAdjustableContainer', 'UI', 'Mapper', 'Debug',
+    'GeyserAdjustableContainer', 'UI', 'Mapper',
 ] as const;
 
 // Specs that pass fully in-app today — asserted green; a regression is a real
@@ -28,7 +28,7 @@ const GREEN_SPECS = [
     'StringUtils', 'TableUtils', 'DateTime', 'GMCP', 'Miscallaneous', 'TBufferOSC',
     'GeyserLabel', 'GeyserButton', 'GeyserStyleSheet', 'GeyserAdjustableContainer',
     'KeyBinds', 'DebugTools', 'MudletBusted', 'Alias', 'Trigger', 'Regex', 'IDManager',
-    'GUIUtils',
+    'GUIUtils', 'Mapper', 'TextEdit',
 ] as const;
 
 // Seed a non-dialing connection into localStorage (store v20) before any app JS

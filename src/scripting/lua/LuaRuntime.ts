@@ -505,6 +505,7 @@ export class LuaRuntime implements IScriptingRuntime {
             if (this.api.windows.isMiniConsole(window)) return 'miniconsole';
             if (this.api.windows.has(window)) return 'userwindow';
             if (this.api.cmdLines.has(window)) return 'commandline';
+            if (this.api.textEdits.has(window)) return 'textedit';
             if (this.api.scrollBoxes.has(window)) return 'scrollbox';
             if (this.api.isBuffer(window)) return 'buffer';
             return null;
@@ -670,6 +671,47 @@ export class LuaRuntime implements IScriptingRuntime {
             if (ok) this.emitEvent('sysScrollBoxDeleted', [name]);
             return ok;
         });
+
+        // ── Text edit widgets (Mudlet createTextEdit) ─────────────────────────
+        // createTextEdit([parent,] name, x, y, w, h) → true. The delete/get/set/
+        // property primitives below are __-prefixed and return bool/value; the
+        // Bridge.lua wrappers reshape failures into Mudlet's (nil|false, errMsg).
+        this.lua.global.set('createTextEdit', (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown, f?: unknown) => {
+            const hasParent = f !== undefined;
+            const [parent, name, x, y, w, h] = hasParent
+                ? [a as string, b, c, d, e, f]
+                : [undefined, a, b, c, d, e];
+            if (typeof name !== 'string' || !name) return false;
+            return this.api.textEdits.create(name, {
+                parent: parent && parent !== 'main' ? (parent as string) : 'main',
+                x: Number(x), y: Number(y), width: Number(w), height: Number(h),
+            });
+        });
+        this.lua.global.set('__deleteTextEdit', (name: unknown) =>
+            typeof name === 'string' ? this.api.textEdits.destroy(name) : false);
+        // Returns the text (incl. "") on success or `false` when missing — the
+        // Bridge wrapper distinguishes the empty string from the miss.
+        this.lua.global.set('__getTextEditText', (name: unknown) => {
+            if (typeof name !== 'string') return false;
+            const t = this.api.textEdits.getText(name);
+            return t === null ? false : t;
+        });
+        this.lua.global.set('__setTextEditText', (name: unknown, text: unknown) =>
+            typeof name === 'string' ? this.api.textEdits.setText(name, String(text ?? '')) : false);
+        this.lua.global.set('__clearTextEdit', (name: unknown) =>
+            typeof name === 'string' ? this.api.textEdits.clear(name) : false);
+        this.lua.global.set('__setTextEditReadOnly', (name: unknown, v: unknown) =>
+            typeof name === 'string' ? this.api.textEdits.setReadOnly(name, !!v) : false);
+        this.lua.global.set('__setTextEditPlaceholder', (name: unknown, t: unknown) =>
+            typeof name === 'string' ? this.api.textEdits.setPlaceholder(name, String(t ?? '')) : false);
+        this.lua.global.set('__setTextEditStyleSheet', (name: unknown, css: unknown) =>
+            typeof name === 'string' ? this.api.textEdits.setStyleSheet(name, String(css ?? '')) : false);
+        this.lua.global.set('__setTextEditFont', (name: unknown, font: unknown) =>
+            typeof name === 'string' ? this.api.textEdits.setFont(name, String(font ?? '')) : false);
+        this.lua.global.set('__setTextEditFontSize', (name: unknown, size: unknown) =>
+            typeof name === 'string' ? this.api.textEdits.setFontSize(name, Number(size)) : false);
+        this.lua.global.set('__setTextEditTabMovesFocus', (name: unknown, v: unknown) =>
+            typeof name === 'string' ? this.api.textEdits.setTabMovesFocus(name, !!v) : false);
         // Mudlet `createBuffer(name)`. Off-screen text buffer (no panel) for
         // formatting/storing rich text — like a hidden miniconsole.
         this.lua.global.set('createBuffer', (name: unknown) => {
@@ -709,6 +751,7 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('hideWindow', (name: string) => {
             if (this.api.labels.has(name)) this.api.labels.hide(name);
             else if (this.api.cmdLines.has(name)) this.api.cmdLines.hide(name);
+            else if (this.api.textEdits.has(name)) this.api.textEdits.hide(name);
             else if (this.api.scrollBoxes.has(name)) this.api.scrollBoxes.hide(name);
             else this.api.windows.hide(name);
         });
@@ -719,6 +762,7 @@ export class LuaRuntime implements IScriptingRuntime {
             if (typeof name !== 'string' || !name) return false;
             if (this.api.labels.has(name)) return this.api.labels.show(name);
             if (this.api.cmdLines.has(name)) return this.api.cmdLines.show(name);
+            if (this.api.textEdits.has(name)) return this.api.textEdits.show(name);
             if (this.api.scrollBoxes.has(name)) return this.api.scrollBoxes.show(name);
             return this.api.windows.show(name);
         });
@@ -726,6 +770,7 @@ export class LuaRuntime implements IScriptingRuntime {
             const xn = Number(x), yn = Number(y);
             if (this.api.labels.has(name)) this.api.labels.move(name, xn, yn);
             else if (this.api.cmdLines.has(name)) this.api.cmdLines.move(name, xn, yn);
+            else if (this.api.textEdits.has(name)) this.api.textEdits.move(name, xn, yn);
             else if (this.api.scrollBoxes.has(name)) this.api.scrollBoxes.move(name, xn, yn);
             else if (this.api.windows.has(name)) this.api.windows.move(name, xn, yn);
         });
@@ -733,6 +778,7 @@ export class LuaRuntime implements IScriptingRuntime {
             const wn = Number(w), hn = Number(h);
             if (this.api.labels.has(name)) this.api.labels.resize(name, wn, hn);
             else if (this.api.cmdLines.has(name)) this.api.cmdLines.resize(name, wn, hn);
+            else if (this.api.textEdits.has(name)) this.api.textEdits.resize(name, wn, hn);
             else if (this.api.scrollBoxes.has(name)) this.api.scrollBoxes.resize(name, wn, hn);
             else if (this.api.windows.has(name)) this.api.windows.resize(name, wn, hn);
         });
@@ -1703,6 +1749,51 @@ export class LuaRuntime implements IScriptingRuntime {
         // keyed Lua table.
         this.lua.global.set('__getMapMenus', () => this.api.map.getMapMenus());
 
+        // ── Per-room border colour / thickness ────────────────────────────────
+        // Mudlet setRoomBorderColor(id, r, g, b [, a]) / setRoomBorderThickness
+        // (id, t) → true, or (nil, errMsg) for bad channel/range or a missing
+        // room. These __-prefixed bindings return true on success or an error
+        // STRING; the Bridge.lua wrappers reshape the string into (nil, errMsg).
+        const channel255 = (v: unknown): number | null => {
+            const n = Number(v);
+            return Number.isInteger(n) && n >= 0 && n <= 255 ? n : null;
+        };
+        this.lua.global.set('__setRoomBorderColor', (id: unknown, r: unknown, g: unknown, b: unknown, a?: unknown) => {
+            const rr = channel255(r), gg = channel255(g), bb = channel255(b);
+            // wasmoon hands a missing Lua arg over as `null` (not `undefined`),
+            // so use `== null` to default the optional alpha to fully opaque.
+            const aa = a == null ? 255 : channel255(a);
+            if (rr === null || gg === null || bb === null || aa === null) {
+                return 'setRoomBorderColor: colour channels must be integers between 0 and 255';
+            }
+            if (!this.api.map.setRoomBorderColor(Number(id), rr, gg, bb, aa)) {
+                return `setRoomBorderColor: room ${Number(id)} does not exist`;
+            }
+            return true;
+        });
+        // getRoomBorderColor(id) → r, g, b, a (or nil). JS returns a 0-indexed
+        // array or null; Bridge.lua unpacks it.
+        this.lua.global.set('__getRoomBorderColor', (id: unknown) => {
+            const c = this.api.map.getRoomBorderColor(Number(id));
+            return c ? [c.r, c.g, c.b, c.a] : null;
+        });
+        this.lua.global.set('clearRoomBorderColor', (id: unknown) => this.api.map.clearRoomBorderColor(Number(id)));
+        this.lua.global.set('__setRoomBorderThickness', (id: unknown, t: unknown) => {
+            const n = Number(t);
+            if (!Number.isInteger(n) || n < 1 || n > 10) {
+                return 'setRoomBorderThickness: thickness must be an integer between 1 and 10';
+            }
+            if (!this.api.map.setRoomBorderThickness(Number(id), n)) {
+                return `setRoomBorderThickness: room ${Number(id)} does not exist`;
+            }
+            return true;
+        });
+        // getRoomBorderThickness(id) → number, or nil when the room uses the map
+        // default. Returns null (→ Lua nil) directly, so no Bridge wrapper needed.
+        this.lua.global.set('getRoomBorderThickness', (id: unknown) => this.api.map.getRoomBorderThickness(Number(id)));
+        this.lua.global.set('clearRoomBorderThickness', (id: unknown) => this.api.map.clearRoomBorderThickness(Number(id)));
+
+
         // ── Map info contributors (Mudlet registerMapInfo) ────────────────────
         // Bridge.lua compiles the callback into the `__mudix_cb` registry and
         // hands JS only the numeric id (same pattern as label/timer callbacks).
@@ -1733,6 +1824,9 @@ export class LuaRuntime implements IScriptingRuntime {
             if (typeof label !== 'string' || !label) return false;
             return this.api.map.disableMapInfo(label);
         });
+        // Mudlet getMapInfo() → { [label] = enabledBool }. JS returns the
+        // contributor array ({ label, enabled, ... }); Bridge.lua keys it by label.
+        this.lua.global.set('__getMapInfo', () => this.api.map.getMapInfoContributors());
 
         // ── Map selection (Mudlet getMapSelection / clearMapSelection) ────────
         // Selection is paint-only — driven by clicks in MapPanel — but Mudlet

@@ -939,13 +939,13 @@ describe('map menus — addMapMenu / getMapMenus / removeMapMenu', () => {
   beforeEach(async () => { env = await createTestRuntime(); });
   afterEach(() => env.dispose());
 
-  it('registers, lists (keyed by name), and removes submenus', () => {
+  it('registers, lists (keyed by name → parent), and removes submenus', () => {
     env.run('addMapMenu("combat", nil, "Combat")');
-    env.run('addMapMenu("sub", "combat")'); // displayName defaults to name
-    expect(env.run('return (getMapMenus()).combat["display name"]')).toBe('Combat');
-    expect(env.run('return (getMapMenus()).combat.parent')).toBe('');
-    expect(env.run('return (getMapMenus()).sub.parent')).toBe('combat');
-    expect(env.run('return (getMapMenus()).sub["display name"]')).toBe('sub');
+    env.run('addMapMenu("sub", "combat")');
+    // Mudlet's getMapMenus() shape: { [menuName] = parentName }, where a
+    // top-level menu's value is the string "top-level".
+    expect(env.run('return (getMapMenus()).combat')).toBe('top-level');
+    expect(env.run('return (getMapMenus()).sub')).toBe('combat');
     expect(env.api.map.getMapMenus().length).toBe(2);
     expect(env.run('return next(getMapMenus()) ~= nil')).toBe(true);
     // removal

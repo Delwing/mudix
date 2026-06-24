@@ -758,6 +758,40 @@ function setLabelStyleSheet(name, css)
     return nil, "setLabelStyleSheet: label name '" .. tostring(name) .. "' not found"
 end
 
+-- ── Text edit widgets (Mudlet createTextEdit) ─────────────────────────────
+-- deleteTextEdit → true, or (false, errMsg). getTextEditText → text, or
+-- (nil, errMsg). The set/property functions → true, or (nil, errMsg) when the
+-- named text edit doesn't exist. The __* primitives return value-or-false.
+function deleteTextEdit(name)
+    if __deleteTextEdit(name) then return true end
+    return false, "deleteTextEdit: text edit '" .. tostring(name) .. "' does not exist"
+end
+
+function getTextEditText(name)
+    local t = __getTextEditText(name)
+    if t == false then
+        return nil, "getTextEditText: text edit '" .. tostring(name) .. "' does not exist"
+    end
+    return t
+end
+
+do
+    local function teSetter(raw, fname)
+        return function(name, ...)
+            if raw(name, ...) then return true end
+            return nil, fname .. ": text edit '" .. tostring(name) .. "' does not exist"
+        end
+    end
+    setTextEditText          = teSetter(__setTextEditText, "setTextEditText")
+    clearTextEdit            = teSetter(__clearTextEdit, "clearTextEdit")
+    setTextEditReadOnly      = teSetter(__setTextEditReadOnly, "setTextEditReadOnly")
+    setTextEditPlaceholder   = teSetter(__setTextEditPlaceholder, "setTextEditPlaceholder")
+    setTextEditStyleSheet    = teSetter(__setTextEditStyleSheet, "setTextEditStyleSheet")
+    setTextEditFont          = teSetter(__setTextEditFont, "setTextEditFont")
+    setTextEditFontSize      = teSetter(__setTextEditFontSize, "setTextEditFontSize")
+    setTextEditTabMovesFocus = teSetter(__setTextEditTabMovesFocus, "setTextEditTabMovesFocus")
+end
+
 -- Mudlet HTTP APIs: every call dispatches a fire-and-forget background
 -- request and immediately returns (true, url). Completion/failure is
 -- reported via sysXxxHttp* events. The wrappers below add the (true, url)
@@ -845,9 +879,9 @@ function getMapEvents()
     return out
 end
 
--- Mudlet getMapMenus() → { [menuName] = { ["parent"]=..., ["display name"]=... } }.
--- JS hands back an array of entries (0-indexed); rebuild into Mudlet's keyed
--- shape so scripts can index by literal menu name.
+-- Mudlet getMapMenus() → { [menuName] = parentName }, where a top-level menu's
+-- value is the string "top-level". JS hands back an array of entries
+-- (0-indexed); rebuild into that keyed shape so scripts can index by menu name.
 function getMapMenus()
     local raw = __getMapMenus()
     local out = {}
@@ -855,10 +889,45 @@ function getMapMenus()
         local i = 0
         while raw[i] ~= nil do
             local m = raw[i]
-            out[m.name] = {
-                ["parent"]       = m.parent or "",
-                ["display name"] = m.displayName,
-            }
+            out[m.name] = (m.parent and m.parent ~= "") and m.parent or "top-level"
+            i = i + 1
+        end
+    end
+    return out
+end
+
+-- Mudlet setRoomBorderColor(id, r, g, b [, a]) / setRoomBorderThickness(id, t) →
+-- true, or (nil, errMsg) for a bad value or a missing room. The __* binding
+-- returns true on success or an error string.
+function setRoomBorderColor(id, r, g, b, a)
+    local res = __setRoomBorderColor(id, r, g, b, a)
+    if res == true then return true end
+    return nil, res
+end
+
+-- getRoomBorderColor(id) → r, g, b, a (or nil when no custom colour is set). JS
+-- hands back a 0-indexed array or nil.
+function getRoomBorderColor(id)
+    local t = __getRoomBorderColor(id)
+    if t == nil then return nil end
+    return t[0], t[1], t[2], t[3]
+end
+
+function setRoomBorderThickness(id, t)
+    local res = __setRoomBorderThickness(id, t)
+    if res == true then return true end
+    return nil, res
+end
+
+-- Mudlet getMapInfo() → { [label] = enabledBool }. JS hands back the contributor
+-- array ({ label, enabled, ... } entries, 0-indexed); rebuild the keyed table.
+function getMapInfo()
+    local raw = __getMapInfo()
+    local out = {}
+    if type(raw) == 'table' then
+        local i = 0
+        while raw[i] ~= nil do
+            out[raw[i].label] = raw[i].enabled
             i = i + 1
         end
     end
@@ -2352,11 +2421,11 @@ function killMapInfo(label)
 end
 function enableMapInfo(label)
     if __enableMapInfo(label) then return true end
-    return false, "enableMapInfo: could not find map info called '" .. tostring(label) .. "'"
+    return nil, "enableMapInfo: could not find map info called '" .. tostring(label) .. "'"
 end
 function disableMapInfo(label)
     if __disableMapInfo(label) then return true end
-    return false, "disableMapInfo: could not find map info called '" .. tostring(label) .. "'"
+    return nil, "disableMapInfo: could not find map info called '" .. tostring(label) .. "'"
 end
 
 -- JS-readable result slots for a single registerMapInfo callback invocation.
