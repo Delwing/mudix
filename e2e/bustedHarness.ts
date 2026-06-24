@@ -30,7 +30,7 @@ export const GREEN_SPECS = [
     'StringUtils', 'TableUtils', 'DateTime', 'GMCP', 'Miscallaneous', 'TBufferOSC',
     'GeyserLabel', 'GeyserButton', 'GeyserStyleSheet', 'GeyserAdjustableContainer',
     'KeyBinds', 'DebugTools', 'MudletBusted', 'Alias', 'Trigger', 'Regex', 'IDManager',
-    'GUIUtils', 'Mapper', 'TextEdit', 'DB',
+    'GUIUtils', 'Mapper', 'TextEdit', 'DB', 'Other', 'InsertTextNewline', 'UI',
 ] as const;
 
 // The committed per-it manifest: { spec: [fullName, ...] }. The drift guard
@@ -52,6 +52,20 @@ export function loadManifest(): Record<string, string[]> {
 // on every goto, so localStorage is re-seeded on each reopen().
 export async function seedProfile(page: Page): Promise<void> {
     await page.addInitScript(() => {
+        // Mudlet's "self-test" profile ships a predefined nested filter-trigger
+        // group: `^Foo Bar (.*)$` → `^Baz .*$` → `^\S+\s(?<found>Qux)$`, the last
+        // selecting the named capture. UI_spec's "nested triggers" test
+        // (Mudlet #7886) feeds "Foo Bar Baz Qux" and expects getSelection() ==
+        // "Qux". The busted harness otherwise seeds a bare profile, so we
+        // replicate that fixture here. The patterns are anchored and specific, so
+        // they never fire on any other spec's fed text. connectionTriggers isn't
+        // normally in localStorage (it lives in the profile VFS), but a fresh
+        // profile has no VFS data, so the seeded slice hydrates and survives.
+        const t = (id: string, name: string, parentId: string | null, pattern: string, code: string, isFilter: boolean) => ({
+            id, name, enabled: true, isGroup: false, parentId,
+            patterns: [{ text: pattern, type: 'regex' }], code, language: 'lua',
+            fireLength: 0, multipleMatches: false, multiline: false, delta: 0, isFilter,
+        });
         localStorage.setItem('mudix_v1', JSON.stringify({
             version: 20,
             state: {
@@ -67,6 +81,13 @@ export async function seedProfile(page: Page): Promise<void> {
                     mode: 'websocket',
                     url: 'ws://127.0.0.1:1/',
                 }],
+                connectionTriggers: {
+                    'mudlet-self-test': [
+                        t('st-foobar', 'Foo Bar', null, '^Foo Bar (.*)$', '', true),
+                        t('st-baz', 'Baz', 'st-foobar', '^Baz .*$', '', true),
+                        t('st-qux', 'Qux', 'st-baz', '^\\S+\\s(?<found>Qux)$', 'selectCaptureGroup("found")', false),
+                    ],
+                },
             },
         }));
     });

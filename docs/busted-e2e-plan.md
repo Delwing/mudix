@@ -51,8 +51,9 @@ Run it: `npm run test:e2e` (Playwright boots `npm run dev:busted` — a
 
 ### Scoreboard (current, in-app — all 24 Mudlet specs synced)
 
-**21 of 24 specs are fully green** and asserted in `e2e/busted.spec.ts`; the rest
-are the parity backlog. ✓ = asserted green. (`bootProfile`/`reopen` poll a
+**All 24 specs are fully green** and asserted in `e2e/busted.spec.ts` (the only
+non-100% counts are upstream `pending()` stubs: IDManager 7, GUIUtils 1). ✓ =
+asserted green. (`bootProfile`/`reopen` poll a
 trivial run until it succeeds, so the test never races the runtime re-creation
 during initial mount; the scoreboard re-navigates per spec so mudix's JS console
 state can't leak between specs — busted only insulates Lua `_G`.)
@@ -76,29 +77,20 @@ state can't leak between specs — busted only insulates Lua `_G`.)
 | Trigger | ✓ 3/3 | `exists(id,"trigger")` now recognises temp triggers |
 | Regex | ✓ 21/21 | a non-participating capture group is now `nil` (was `""`) — PCRE2_UNSET → `undefined` → Lua `nil`, matching Mudlet (and JS RegExp) |
 | IDManager | ✓ 15/22 (7 pending) | `tempTimer` now validates its delay (arg #1) and raises Mudlet's `bad argument #N type` format, so `registerNamedTimer`'s error reformatting lines up. The 7 pending are upstream `pending()` stubs (async timer tests Mudlet hasn't written) |
-| Other | ✗ 43/44 | 1 `deleteMultiline` line-range nuance |
+| Other | ✓ 44/44 | green — `deleteMultiline` (deleteLine + moveCursorUp walk): `feedTriggers` now accumulates fed lines across calls (`Console.clearPartial` instead of wiping history), and `deleteLine` leaves the cursor past-end so `getLineNumber()`-driven `moveCursorUp` lands on the new last line instead of skipping one |
 | DB | ✓ 74/74 | green — DB.lua's `_migrate` (column add/delete, `_violations` change) reopens the same DB path mid-run. Two shim fixes: (1) `Luasql.lua` cursors are now `userdata` (via `newproxy`), so `_migrate`'s `type(cur)=="userdata"` PRAGMA-column read fires instead of treating every table as new; (2) the sqlite bridge reuses the live in-memory DB on reconnect to an open path (`SqliteClient.liveId`) instead of stranding it in a fresh `:memory:` and losing the rows |
-| InsertTextNewline | ✗ 7/8 | multi-line `insertText`/`cinsertText` now split the current line into new history lines at the cursor (Mudlet #8945) — `Console.insertText`. Last failure is `cecho` after `creplaceLine` in a trigger: needs the trigger-echo output cursor to stay on the replaced line (separate trigger-echo-cursor rework) |
+| InsertTextNewline | ✓ 8/8 | green — `cecho` after `creplaceLine` in a trigger (Mudlet #8824): a trigger-context `replace` now re-arms the output cursor onto the replaced line (`echoOnMatchedLine`) so a following `cecho` appends there. Also fixed the Lua-facing `getLineCount()` to return the line *count* (size, not size-1) so the spec's `for i = getLineCount()-1, …` scan reaches the last line |
 | TextEdit | ✓ 33/33 | green — `createTextEdit` widget as a data-model registry (`TextEditManager`): create/delete, text get/set/clear, the read-only/placeholder/stylesheet/font/font-size/tab-moves-focus properties, `windowType` → "textedit", and the window funcs + Geyser.TextEdit wrapper. (On-screen rendering of the editor pane is a follow-up.) |
 | GUIUtils | ✓ 97/98 (1 pending) | green — colour pipeline + named ANSI aliases (snake_case *and* camelCase), `replace`/buffers/`copy2decho`/`copy2html` (partial-as-current-line), `setLabelStyleSheet` return values, `selectAll`, `cecho2string`, reverse `decho2cecho`/`hecho2cecho`. The 1 pending is an upstream `pending()` stub |
-| UI | ✗ 59/61 | multi-line `insertText`, delete-error semantics, `windowType("commandline")`, `selectSection` end-of-line clamp, `copy2decho`/`copy2html`, and cursor-based `getTextFormat` all fixed. Remaining 2: nested-trigger capture group, `cecho`-after-`creplaceLine` (both trigger-internals) |
+| UI | ✓ 61/61 | green — `cecho`-after-`creplaceLine` (shared with InsertTextNewline) plus the **nested-trigger capture group** (#7886): the harness now seeds Mudlet's self-test `Foo Bar → Baz → Qux` nested filter-trigger group (`bustedHarness.seedProfile`), `TriggerEngine` re-bases a filtered descendant's capture spans onto the original line (`filterActiveOffset`/`shiftResultSpans`) so `selectCaptureGroup` lands on "Qux", and a trigger-set selection now survives past `endLine` |
 | Mapper | ✓ 22/22 | green — map-menu shape (`getMapMenus` → name→parent) + cascade `removeMapMenu`, `getMapInfo` + `enable/disableMapInfo` returning `(nil,errMsg)`, and per-room border colour/thickness (`set/get/clearRoomBorder*`). (Border data model only; the binary map renderer doesn't paint it yet.) |
 
-Only 4 specs remain, and 3 of them share one root: **the trigger pipeline's
-output cursor / line model**.
+**The full Mudlet busted corpus now passes** (24/24 specs; every non-pending
+`it()` green). Remaining non-green counts are upstream `pending()` stubs only.
 
-- **Trigger internals** (Other's `deleteMultiline`, UI's last 2,
-  InsertTextNewline's last 1): `feedTriggers` fires trigger callbacks but doesn't
-  append the fed lines to `Console.history`, and `cecho` after `creplaceLine`
-  doesn't keep the output cursor on the replaced line, and nested-trigger capture
-  groups select the wrong group. **Higher risk** — this path backs the
-  already-green Trigger/Regex/Alias specs, so it's best done with a human able to
-  verify no regressions.
-- **DB** (9): DB.lua's live schema migration (`_migrate` via `sqlite_master`
-  introspection + `ALTER TABLE`/recreate) loses rows when columns or `_violations`
-  change. Isolated (SQL only) but a deep, uncertain debug.
-
-Tackle a cluster, then move each spec into `GREEN_SPECS`.
+The whole suite is asserted per-`it()` in `e2e/busted.spec.ts` (run
+`npm run test:e2e`); regressions surface as individual test failures, and the
+drift guard fails if any spec's `it()` set diverges from the committed manifest.
 
 ---
 

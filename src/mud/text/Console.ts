@@ -175,6 +175,18 @@ export class Console {
         this.consumeLeadingNewline = false;
     }
 
+    /**
+     * Discard only the in-flight partial (and the leading-newline latch),
+     * leaving history/cursor untouched. `feedTriggers` uses this to drop a
+     * stray partial left by a prior direct `echo()` without wiping accumulated
+     * history — multiple `feedTriggers` calls must accumulate lines (Mudlet
+     * appends fed text to the buffer), which a full `clear()` would destroy.
+     */
+    clearPartial(): void {
+        this.partial = new AnsiAwareBuffer();
+        this.consumeLeadingNewline = false;
+    }
+
     // ── Cursor ────────────────────────────────────────────────────────────────
 
     private get cursor(): number {
@@ -215,7 +227,16 @@ export class Console {
         if (!buf) return;
         buf.removeFromDom();
         this.history.splice(idx, 1);
-        this.cursorIdx = Math.min(idx, this.history.length - 1);
+        // Keep the cursor at the same row index (Mudlet: deleteLine leaves the
+        // cursor on the line that shifts up into the slot). When the deleted line
+        // was the last one, idx now equals history.length — a "past-end" cursor
+        // one slot beyond the final line, which getLineNumber() reports verbatim.
+        // Mudlet's moveCursorUp is getLineNumber()-based (move to curLine - 1), so
+        // the past-end value lets the next moveCursorUp land on the new last line
+        // rather than skipping it — what makes deleteMultiline walk every line.
+        // Reads of line *content* still clamp to the last line via `cursor`.
+        // Previously this clamped to length-1, dropping a line from the range.
+        this.cursorIdx = idx;
     }
 
     /**
@@ -318,7 +339,17 @@ export class Console {
     // Mudlet's TConsole returns 0-indexed cursor.y() for getLineNumber and
     // (size - 1) for getLineCount/getLastLineNumber. An empty buffer reports
     // line index -1 to match Mudlet's "no current line" sentinel.
-    getLineNumber(): number { return this.cursor; }
+    getLineNumber(): number {
+        const len = this.history.length;
+        if (len === 0) return -1;
+        // Following-end (cursorIdx < 0, after output/echo) reports as the last
+        // line. An in-range or past-end cursorIdx is reported verbatim: after
+        // deleteLine removes the last line the cursor sits one slot past the end
+        // (cursorIdx === len), and Mudlet's getLineNumber()-driven moveCursorUp
+        // relies on seeing that past-end value to step onto the new last line.
+        if (this.cursorIdx < 0) return len - 1;
+        return this.cursorIdx;
+    }
     getLineCount(): number  { return this.history.length - 1; }
 
     getLines(from: number, to: number): string[] {

@@ -53,7 +53,7 @@ describe('wrapLine — in-place DOM re-render', () => {
     expect(lineEls()[0].textContent).toBe('hello'); // still stale
 
     // wrapLine re-renders the shared buffer in place; pre-wrap shows the \n.
-    expect(env.run('return (wrapLine("main", getLineCount()))')).toBe(true);
+    expect(env.run('return (wrapLine("main", getLineCount() - 1))')).toBe(true);
     expect(lineEls()[0].textContent).toBe('hello\nworld');
   });
 });

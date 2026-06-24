@@ -105,8 +105,9 @@ describe('wrapLine', () => {
 
   it('returns true for an in-range line and false out of range', () => {
     env.run('createBuffer("tb"); cecho("tb", "Hello\\n")');
-    // one line at index 0 (getLineCount returns the 0-indexed last line number)
-    expect(env.run('return (getLineCount("tb"))')).toBe(0);
+    // one line at index 0; getLineCount is the line *count* (Mudlet semantics),
+    // so a single line reports 1 and the last index is getLineCount()-1.
+    expect(env.run('return (getLineCount("tb"))')).toBe(1);
     expect(env.run('return (wrapLine("tb", 0))')).toBe(true);
     expect(env.run('return (wrapLine("tb", 0))')).toBe(true); // idempotent re-render
     expect(env.run('return (wrapLine("tb", 5))')).toBe(false);
@@ -115,7 +116,7 @@ describe('wrapLine', () => {
 
   it('targets the last line via getLineCount and does not throw', () => {
     env.run('createBuffer("tb"); cecho("tb", "one\\n"); cecho("tb", "two\\n")');
-    expect(() => env.run('wrapLine("tb", getLineCount("tb"))')).not.toThrow();
+    expect(() => env.run('wrapLine("tb", getLineCount("tb") - 1)')).not.toThrow();
   });
 });
 

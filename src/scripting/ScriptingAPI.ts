@@ -2304,7 +2304,11 @@ export class ScriptingAPI {
     endLine(): void {
         this.inTriggerProcessing = false;
         this.echoOnMatchedLine = false;
-        this.selection = null;
+        // NB: the trigger selection is intentionally NOT cleared here. Mudlet
+        // leaves a selection made inside a trigger in place, so a script can read
+        // it back via getSelection() after the line is processed (e.g. UI_spec's
+        // nested-trigger test inspects the selection after feedTriggers). beginLine
+        // resets it at the start of the next line, so it never leaks across lines.
         // Clear the leading-newline latch so it can't leak onto a later echo
         // (timer/alias output) if this line's triggers never echoed.
         this.mainConsole.markCursorAtEnd(false);
@@ -2380,9 +2384,11 @@ export class ScriptingAPI {
             return;
         }
 
-        // Wipe any stray partial left by direct echo() calls so trigger echo
-        // accumulates fresh during batch processing.
-        this.mainConsole.clear();
+        // Drop any stray partial left by direct echo() calls so trigger echo
+        // accumulates fresh during batch processing — but keep history, so
+        // successive feedTriggers calls accumulate lines the way Mudlet appends
+        // fed text to the buffer (a full clear() would strand earlier lines).
+        this.mainConsole.clearPartial();
 
         if (this.feedDispatcher) {
             this.feedDispatcher([{ text: completeLines.join('\n'), type: 'mud' }]);
@@ -2413,16 +2419,19 @@ export class ScriptingAPI {
     }
 
     // Mudlet line-index APIs are 0-indexed: getLineNumber() == cursor.y(),
-    // getLineCount()/getLastLineNumber() == size - 1. Missing windows report
-    // -1 (Mudlet's "no such window" sentinel). With Console as the canonical
-    // buffer (network lines are pushed via beginLine before triggers fire),
-    // these read directly off Console — no special trigger branch needed.
+    // getLastLineNumber() == size - 1. getLineCount(), however, is the line
+    // *count* (size), one more than getLastLineNumber — so a buffer-scan loop
+    // `for i = getLineCount() - 1, 0, -1` starts on the last line. Console's
+    // getLineCount() returns size-1 (the last index, used by internal callers),
+    // so the Lua-facing count adds one. Missing windows report -1 (Mudlet's "no
+    // such window" sentinel).
     getLineNumber(windowName?: string): number {
         return this.getConsole(windowName)?.getLineNumber() ?? -1;
     }
 
     getLineCount(windowName?: string): number {
-        return this.getConsole(windowName)?.getLineCount() ?? -1;
+        const con = this.getConsole(windowName);
+        return con ? con.getLineCount() + 1 : -1;
     }
 
     getLastLineNumber(windowName?: string): number {
@@ -2918,7 +2927,16 @@ export class ScriptingAPI {
         const state = keepColor ? undefined : this.outputConsole(targetWin).format.toSnapshot();
         buf.replace([sel.start, sel.start + sel.length], newText, state);
         this.selection = null;
-        if (!this.inTriggerProcessing) buf.rerender();
+        if (!this.inTriggerProcessing) {
+            buf.rerender();
+        } else if (this.getConsole(targetWin) === this.mainConsole) {
+            // Mudlet #8824: after a replace/creplaceLine during trigger
+            // processing the output cursor stays on the replaced line, so a
+            // following echo/cecho appends to it instead of opening a new line.
+            // (A trigger's first echo may have advanced past the matched line
+            // and cleared this flag; the replace re-establishes the line.)
+            this.echoOnMatchedLine = true;
+        }
     }
 
     /**

@@ -352,6 +352,11 @@ export class TriggerEngine {
 
     // Filter state: chainHeadId → last matched/captured text
     private filterActiveText = new Map<string, string>();
+    // Parallel to filterActiveText: the offset of that text within the ORIGINAL
+    // line. A descendant matching against the filtered text produces spans
+    // relative to it, so selectCaptureGroup/selectString need this offset added
+    // back to land on the real line (Mudlet #7886).
+    private filterActiveOffset = new Map<string, number>();
 
     /** Resolves once PCRE wasm is initialized and patterns can be compiled. */
     static ready(): Promise<void> {
@@ -664,6 +669,10 @@ export class TriggerEngine {
         if (!this.isChainAccessible(item, currentLine)) return;
 
         const effectiveLine = this.getEffectiveLine(item, line);
+        // Offset of effectiveLine within the original line (non-zero only under a
+        // filter ancestor). openChain consumes the UNSHIFTED result (it adds this
+        // offset itself); pushed matches are re-based onto the original line.
+        const effOffset = this.getEffectiveOffset(item);
         const isChainHead = item.isGroup || this.hasChildren.has(item.id);
 
         if (item.isGroup) {
@@ -680,7 +689,7 @@ export class TriggerEngine {
                 seen.add(item.id);
                 this.openChain(item, currentLine, result);
                 if (item.code) {
-                    out.push(matchResultToTriggerMatch(item, result));
+                    out.push(matchResultToTriggerMatch(item, this.shiftResultSpans(result, effOffset)));
                 }
             }
         } else if (entry.kind === 'and') {
@@ -700,7 +709,7 @@ export class TriggerEngine {
                 let firstResult: MatchResult | null = null;
                 for (const r of entry.testAll(effectiveLine)) {
                     if (firstResult === null) firstResult = r;
-                    out.push(matchResultToTriggerMatch(item, r));
+                    out.push(matchResultToTriggerMatch(item, this.shiftResultSpans(r, effOffset)));
                 }
                 if (firstResult !== null && isChainHead) {
                     this.openChain(item, currentLine, firstResult);
@@ -715,7 +724,7 @@ export class TriggerEngine {
                 if (result !== null) {
                     seen.add(item.id);
                     if (isChainHead) this.openChain(item, currentLine, result);
-                    out.push(matchResultToTriggerMatch(item, result));
+                    out.push(matchResultToTriggerMatch(item, this.shiftResultSpans(result, effOffset)));
                 }
             }
         }
@@ -823,6 +832,7 @@ export class TriggerEngine {
         this.lineCounter = 0;
         this.andStates.clear();
         this.filterActiveText.clear();
+        this.filterActiveOffset.clear();
         this.hasChildren.clear();
         this.permReg.clear();
         this.unified = [];
@@ -917,10 +927,18 @@ export class TriggerEngine {
      * if the trigger is also a filter, stash the captured/matched text so
      * descendants see it as their effective input.
      */
-    private openChain(item: TriggerNode, currentLine: number, result: { captures: Capture[]; matchedText: string }): void {
+    private openChain(item: TriggerNode, currentLine: number, result: { captures: Capture[]; matchedText: string; captureSpans?: CaptureSpan[]; matchStart?: number }): void {
         this.chainOpenUntil.set(item.id, currentLine + (item.fireLength ?? 0));
         if (item.isFilter) {
             this.filterActiveText.set(item.id, result.captures[0] ?? result.matchedText);
+            // Where the filtered text starts in the ORIGINAL line: this item's own
+            // effective offset, plus where the captured/matched text sits within
+            // the (possibly already filtered) line this item matched against. A
+            // filter on the first capture group uses that group's span; one with
+            // no capture group passes its whole match, so use the match start.
+            const usesCapture = result.captures[0] !== undefined && result.captureSpans?.[0] !== undefined;
+            const spanStart = usesCapture ? result.captureSpans![0].start : (result.matchStart ?? 0);
+            this.filterActiveOffset.set(item.id, this.getEffectiveOffset(item) + spanStart);
         }
     }
 
@@ -966,6 +984,38 @@ export class TriggerEngine {
             parentId = parent.parentId;
         }
         return effective;
+    }
+
+    /** The offset within the ORIGINAL line at which `item`'s effective (filtered)
+     *  input begins — 0 unless it sits under a filter ancestor. Mirrors
+     *  getEffectiveLine: the innermost filter ancestor's recorded offset. */
+    private getEffectiveOffset(item: TriggerNode): number {
+        let parentId = item.parentId;
+        while (parentId) {
+            const parent = this.allById.get(parentId);
+            if (!parent) break;
+            if (parent.isFilter) {
+                return this.filterActiveOffset.get(parentId) ?? 0;
+            }
+            parentId = parent.parentId;
+        }
+        return 0;
+    }
+
+    /** Return a copy of `r` with every span (matchStart, captureSpans, namedSpans)
+     *  shifted by `offset` — used to re-base a filtered descendant's spans onto
+     *  the original line so selectCaptureGroup/selectString hit the right column.
+     *  Zero-length (unmatched-group) placeholders keep length 0. */
+    private shiftResultSpans(r: MatchResult, offset: number): MatchResult {
+        if (!offset) return r;
+        return {
+            ...r,
+            matchStart: r.matchStart !== undefined ? r.matchStart + offset : undefined,
+            captureSpans: r.captureSpans?.map(s => ({ start: s.start + offset, length: s.length })),
+            namedSpans: r.namedSpans
+                ? Object.fromEntries(Object.entries(r.namedSpans).map(([k, s]) => [k, { start: s.start + offset, length: s.length }]))
+                : undefined,
+        };
     }
 
     /**
