@@ -997,13 +997,23 @@ if type(repl) == 'string' then
 		end
 	end
 elseif type(repl) == 'table' then
-	ret = repl[args[1] or args[0]] or ''
+	-- Match string.gsub: on a table miss keep the original match (args[0]),
+	-- don't drop it. The upstream lib returned '' here, which silently deleted
+	-- any character not present in the replacement table (e.g. multi-byte code
+	-- points passed through utf8.patternEscape).
+	local v = repl[args[1] or args[0]]
+	if v == nil or v == false then v = args[0] end
+	ret = v
 elseif type(repl) == 'function' then
+	local v
 	if #args > 0 then
-		ret = repl(unpack(args, 1)) or ''
+		v = repl(unpack(args, 1))
 	else
-		ret = repl(args[0]) or ''
+		v = repl(args[0])
 	end
+	-- Same string.gsub semantics: nil/false replacement keeps the original.
+	if v == nil or v == false then v = args[0] end
+	ret = v
 end
 return ret
 end

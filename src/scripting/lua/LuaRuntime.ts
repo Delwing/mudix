@@ -3800,6 +3800,16 @@ end`,
 
         this.lua.global.set('__sql_open', (path: unknown): number => {
             const p = String(path);
+            // Reuse a still-open connection to the same path. DB.lua's db:create
+            // → db:_migrate reconnects mid-session (adding a column, changing
+            // _violations) by overwriting db.__conn WITHOUT closing the previous
+            // handle. Opening a fresh :memory: DB each time would both strand the
+            // rows written since the last snapshot (Lua runs synchronously, so
+            // the debounced VFS snapshot hasn't fired) and leak the old handle.
+            // The live in-memory DB already holds the current committed state, so
+            // hand the same dbId back; the VFS is consulted only on a cold open.
+            const live = sql.liveId(p);
+            if (live != null) return live;
             let preload: Uint8Array | undefined;
             if (this.vfs && this.vfs.exists(p)) {
                 let raw: Uint8Array;

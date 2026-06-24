@@ -28,7 +28,16 @@ export const sqliteReady: Promise<void> = (async () => {
 
 export class SqliteClient {
     private readonly dbs = new Map<number, Database>();
+    // path → live dbId, so a reopen of an already-open path reuses the same
+    // in-memory DB instead of stranding it (see open()/liveId()).
+    private readonly idByPath = new Map<string, number>();
+    private readonly pathById = new Map<number, string>();
     private nextId = 1;
+
+    // The dbId of a currently-open connection to `path`, or undefined if none.
+    liveId(path: string): number | undefined {
+        return this.idByPath.get(path);
+    }
 
     private get s(): Sqlite3Static {
         if (initError) throw new Error('sqlite init failed: ' + initError.message);
@@ -36,11 +45,17 @@ export class SqliteClient {
         return sqlite3;
     }
 
-    open(_path: string, preload?: Uint8Array): number {
+    open(path: string, preload?: Uint8Array): number {
+        // Reuse a live connection to the same path (DB.lua reconnects without
+        // closing — see __sql_open). The live DB is authoritative over any
+        // preload bytes, so ignore them here.
+        const existing = this.idByPath.get(path);
+        if (existing != null) return existing;
+
         const sqlite3 = this.s;
-        // We don't use the path — there's no persistent VFS here. Identity
-        // (preload bytes vs. fresh) is what matters; the snapshot back to the
-        // ProfileVFS uses the path supplied to setupSqlBridge, not this one.
+        // The DB itself lives in WASM memory (`:memory:`); cross-session
+        // persistence is the snapshot back to the ProfileVFS in setupSqlBridge.
+        // We track `path` only to reuse a live handle on reconnect (see above).
         const db = new sqlite3.oo1.DB(':memory:', 'c');
         if (preload && preload.byteLength > 0) {
             // sqlite3_deserialize takes ownership of the byte buffer once we
@@ -60,6 +75,8 @@ export class SqliteClient {
         }
         const dbId = this.nextId++;
         this.dbs.set(dbId, db);
+        this.idByPath.set(path, dbId);
+        this.pathById.set(dbId, path);
         return dbId;
     }
 
@@ -93,6 +110,13 @@ export class SqliteClient {
         if (!db) return;
         db.close();
         this.dbs.delete(dbId);
+        const path = this.pathById.get(dbId);
+        if (path !== undefined) {
+            this.pathById.delete(dbId);
+            // Only clear the path→id mapping if it still points at this dbId
+            // (defensive; one path maps to one live id at a time).
+            if (this.idByPath.get(path) === dbId) this.idByPath.delete(path);
+        }
     }
 
     // Single-quote escape — sufficient for SQLite TEXT literals. Mudlet's

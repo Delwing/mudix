@@ -896,11 +896,6 @@ describe('Mudlet-API batch — Lua bindings', () => {
     expect(env.run('return (isAncestorsActive(123, "trigger"))')).toBe(false);
   });
 
-  it('stopAllNamedTrigger is aliased to the plural form', () => {
-    expect(env.run('return type(stopAllNamedTrigger)')).toBe('function');
-    expect(env.run('return stopAllNamedTrigger == stopAllNamedTriggers')).toBe(true);
-  });
-
   it('setModuleInfo / setPackageInfo are callable (no-op without an install)', () => {
     // Both return false here because the engine setter callbacks aren't wired
     // in this harness; the point is the binding exists and doesn't throw.
@@ -1052,18 +1047,13 @@ describe('setOverline — Lua binding round-trips through getTextFormat', () => 
   });
 });
 
-describe('utf8.patternEscape / utf8.title', () => {
+describe('utf8.patternEscape', () => {
   let env: TestRuntime;
   beforeEach(async () => { env = await createTestRuntime(); });
   afterEach(() => env.dispose());
 
   it('utf8.patternEscape escapes Lua pattern magic characters', () => {
     expect(env.run('return (utf8.patternEscape("a.b*c"))')).toBe('a%.b%*c');
-  });
-
-  it('utf8.title uppercases the first code point only', () => {
-    expect(env.run('return (utf8.title("hello world"))')).toBe('Hello world');
-    expect(env.run('return (utf8.title(""))')).toBe('');
   });
 });
 

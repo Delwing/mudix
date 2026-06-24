@@ -51,7 +51,7 @@ Run it: `npm run test:e2e` (Playwright boots `npm run dev:busted` — a
 
 ### Scoreboard (current, in-app — all 24 Mudlet specs synced)
 
-**20 of 24 specs are fully green** and asserted in `e2e/busted.spec.ts`; the rest
+**21 of 24 specs are fully green** and asserted in `e2e/busted.spec.ts`; the rest
 are the parity backlog. ✓ = asserted green. (`bootProfile`/`reopen` poll a
 trivial run until it succeeds, so the test never races the runtime re-creation
 during initial mount; the scoreboard re-navigates per spec so mudix's JS console
@@ -77,7 +77,7 @@ state can't leak between specs — busted only insulates Lua `_G`.)
 | Regex | ✓ 21/21 | a non-participating capture group is now `nil` (was `""`) — PCRE2_UNSET → `undefined` → Lua `nil`, matching Mudlet (and JS RegExp) |
 | IDManager | ✓ 15/22 (7 pending) | `tempTimer` now validates its delay (arg #1) and raises Mudlet's `bad argument #N type` format, so `registerNamedTimer`'s error reformatting lines up. The 7 pending are upstream `pending()` stubs (async timer tests Mudlet hasn't written) |
 | Other | ✗ 43/44 | 1 `deleteMultiline` line-range nuance |
-| DB | ✗ 65/74 | **feature** — DB.lua column add/delete, `_violations` migration |
+| DB | ✓ 74/74 | green — DB.lua's `_migrate` (column add/delete, `_violations` change) reopens the same DB path mid-run. Two shim fixes: (1) `Luasql.lua` cursors are now `userdata` (via `newproxy`), so `_migrate`'s `type(cur)=="userdata"` PRAGMA-column read fires instead of treating every table as new; (2) the sqlite bridge reuses the live in-memory DB on reconnect to an open path (`SqliteClient.liveId`) instead of stranding it in a fresh `:memory:` and losing the rows |
 | InsertTextNewline | ✗ 7/8 | multi-line `insertText`/`cinsertText` now split the current line into new history lines at the cursor (Mudlet #8945) — `Console.insertText`. Last failure is `cecho` after `creplaceLine` in a trigger: needs the trigger-echo output cursor to stay on the replaced line (separate trigger-echo-cursor rework) |
 | TextEdit | ✓ 33/33 | green — `createTextEdit` widget as a data-model registry (`TextEditManager`): create/delete, text get/set/clear, the read-only/placeholder/stylesheet/font/font-size/tab-moves-focus properties, `windowType` → "textedit", and the window funcs + Geyser.TextEdit wrapper. (On-screen rendering of the editor pane is a follow-up.) |
 | GUIUtils | ✓ 97/98 (1 pending) | green — colour pipeline + named ANSI aliases (snake_case *and* camelCase), `replace`/buffers/`copy2decho`/`copy2html` (partial-as-current-line), `setLabelStyleSheet` return values, `selectAll`, `cecho2string`, reverse `decho2cecho`/`hecho2cecho`. The 1 pending is an upstream `pending()` stub |

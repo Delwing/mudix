@@ -30,7 +30,7 @@ export const GREEN_SPECS = [
     'StringUtils', 'TableUtils', 'DateTime', 'GMCP', 'Miscallaneous', 'TBufferOSC',
     'GeyserLabel', 'GeyserButton', 'GeyserStyleSheet', 'GeyserAdjustableContainer',
     'KeyBinds', 'DebugTools', 'MudletBusted', 'Alias', 'Trigger', 'Regex', 'IDManager',
-    'GUIUtils', 'Mapper', 'TextEdit',
+    'GUIUtils', 'Mapper', 'TextEdit', 'DB',
 ] as const;
 
 // The committed per-it manifest: { spec: [fullName, ...] }. The drift guard

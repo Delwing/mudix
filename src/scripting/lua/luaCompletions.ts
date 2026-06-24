@@ -81,7 +81,6 @@ const UTF8_EXT: Completion[] = [
     fn('upper',   '(s) → string',                 'Convert to uppercase'),
     // Mudlet extensions
     fn('patternEscape', '(s) → string', 'Escape Lua pattern magic characters in a UTF-8 string'),
-    fn('title',         '(s) → string', 'Uppercase the first code point of the string (UTF-8 aware)'),
     fn('charpos',     '(s, [i,] n) → pos, code', 'Byte offset and code point of the n-th character (negative counts from the end)'),
     fn('next',        '(s, i?, n?) → pos, code',  'Advance n characters from byte offset i; usable as a stateless iterator'),
     fn('insert',      '(s, [n,] sub) → string',   'Insert sub before the n-th character (default: append)'),
@@ -510,7 +509,6 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('stopNamedTimer',            '(userName, timerName) → bool',    'Disable (without deleting) a named timer'),
     fn('stopNamedEventHandler',     '(userName, handlerName) → bool',  'Disable (without deleting) a named event handler'),
     fn('stopAllNamedTriggers',      '(userName) → bool',               'Disable all named triggers for a user'),
-    fn('stopAllNamedTrigger',       '(userName) → bool',               'Alias of stopAllNamedTriggers (the wiki lists the singular name)'),
     fn('stopAllNamedTimers',        '(userName) → bool',               'Disable all named timers for a user'),
     fn('stopAllNamedEventHandlers', '(userName) → bool',               'Disable all named event handlers for a user'),
     fn('resumeNamedTrigger',        '(userName, triggerName) → bool',  'Re-enable a previously stopped named trigger'),

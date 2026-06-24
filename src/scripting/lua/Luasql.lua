@@ -12,35 +12,45 @@
 -- The JS bridge functions (__sql_*) are synchronous — they return a value
 -- directly, no Promise / __await dance.
 
+-- A LuaSQL cursor must be a *userdata*, not a Lua table: Mudlet's DB.lua
+-- branches on `type(cur) == "userdata"` (e.g. db:_migrate reads existing
+-- columns from a `PRAGMA table_info` cursor only when that test passes). The
+-- real luasql.sqlite3 binding returns userdata cursors, so the shim has to as
+-- well, or _migrate treats every existing table as brand-new and clobbers it.
+-- Lua 5.1's newproxy(true) gives us a userdata with a fresh metatable; methods
+-- live on its __index and close over this cursor's row/position state.
 local function make_cursor(rows, columns)
     local pos = 0
     local n = #rows
-    local cur = {}
 
-    function cur:fetch(t, mode)
-        pos = pos + 1
-        if pos > n then return nil end
-        t = t or {}
-        local row = rows[pos]
-        if mode == "a" then
-            for i = 1, #columns do
-                t[columns[i]] = row[i]
+    local cur = newproxy(true)
+    local mt = getmetatable(cur)
+    mt.__index = {
+        fetch = function(_, t, mode)
+            pos = pos + 1
+            if pos > n then return nil end
+            t = t or {}
+            local row = rows[pos]
+            if mode == "a" then
+                for i = 1, #columns do
+                    t[columns[i]] = row[i]
+                end
+            else
+                for i = 1, #columns do
+                    t[i] = row[i]
+                end
             end
-        else
-            for i = 1, #columns do
-                t[i] = row[i]
-            end
-        end
-        return t
-    end
+            return t
+        end,
 
-    function cur:close() return true end
+        close = function() return true end,
 
-    function cur:getcolnames()
-        local r = {}
-        for i = 1, #columns do r[i] = columns[i] end
-        return r
-    end
+        getcolnames = function()
+            local r = {}
+            for i = 1, #columns do r[i] = columns[i] end
+            return r
+        end,
+    }
 
     return cur
 end
