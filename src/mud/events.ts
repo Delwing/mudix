@@ -11,6 +11,9 @@ export type MudClientEvents = {
     'client.connect': void;
     'client.disconnect': void;
     'client.error': [message: string];
+    /** The WebSocket subprotocol the server selected from our advertised list
+     *  (RFC 6455), or '' if none — only emitted when we advertised any. */
+    'client.subprotocol': [protocol: string];
     'gmcp.negotiated': void;
     'msdp.negotiated': void;
     'mssp.negotiated': void;

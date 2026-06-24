@@ -194,6 +194,14 @@ export interface ProtocolSettings {
      *  (columns × rows) to the server, re-sending it on every resize. On by
      *  default — servers use it for word-wrap and pagination. */
     naws?: boolean;
+    /** Advertise the `telnet.mudstandards.org` WebSocket subprotocol in the
+     *  opening handshake (the mudstandards.org WebSocket proposal). mudix already
+     *  speaks that profile — a full telnet stream over binary frames — this flag
+     *  just announces it via `Sec-WebSocket-Protocol`. Off by default: RFC 6455
+     *  permits a server to reject the handshake on an unrecognized subprotocol,
+     *  so only enable it for servers known to implement the proposal. Applies to
+     *  direct `websocket`-mode connections; the bundled telnet proxy ignores it. */
+    wsTelnetSubprotocol?: boolean;
 }
 
 /** Defaults used when a protocol field is undefined. Off-by-default for MSDP
@@ -213,6 +221,7 @@ export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
     mxp: true,
     mnes: false,
     naws: true,
+    wsTelnetSubprotocol: false,
 };
 
 /** User-tunable subset of the map renderer's Settings. Add new entries here

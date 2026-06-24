@@ -18,6 +18,7 @@ import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
 import { applyAnsiPalette } from './mud/text/colors';
 import type { MudSession } from './mud/MudSession';
+import { MUD_TELNET_SUBPROTOCOL } from './mud/connection/MudClient';
 
 interface Props {
     connection: MudConnection;
@@ -82,6 +83,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
     const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
     const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
+    const wsTelnetSubprotocol = protocols?.wsTelnetSubprotocol ?? PROTOCOL_DEFAULTS.wsTelnetSubprotocol;
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
     const loggingEnabled = useAppStore(s => selectProfileField(s, connection.id, 'loggingEnabled')) !== false;
     // Mudlet's `showTabConnectionIndicators` (config bag). Defaults to true; when
@@ -111,7 +113,10 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // autoConnect effect dials — the MudClient reads them at construction. Set
     // synchronously during render (matching the seededFor pattern); user-driven
     // toggles after the first connect take effect on the next reconnect.
-    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mxpEnabled, mnesEnabled, nawsEnabled });
+    // Advertise the mudstandards.org telnet WebSocket profile only when the
+    // profile opts in (see ProtocolSettings.wsTelnetSubprotocol).
+    const subprotocols = wsTelnetSubprotocol ? [MUD_TELNET_SUBPROTOCOL] : [];
+    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mxpEnabled, mnesEnabled, nawsEnabled, subprotocols });
     // Mudlet's "Fix unnecessary linebreaks on GA servers" (config bag, persisted
     // by setConfig). Applied during render — like the protocol toggles above —
     // so it's on the session's options before autoConnect dials, and re-applied

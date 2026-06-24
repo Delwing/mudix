@@ -131,6 +131,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const mxpEnabled = protocols?.mxp ?? PROTOCOL_DEFAULTS.mxp;
     const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
     const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
+    const wsTelnetSubprotocol = protocols?.wsTelnetSubprotocol ?? PROTOCOL_DEFAULTS.wsTelnetSubprotocol;
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
     const mapperRoomSize = mapper?.roomSize ?? MAPPER_DEFAULTS.roomSize;
     const mapperRoomShape = mapper?.roomShape ?? MAPPER_DEFAULTS.roomShape;
@@ -475,6 +476,27 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     aria-labelledby="protocol-naws-label"
                                     checked={nawsEnabled}
                                     onChange={next => patchProtocols({ naws: next })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="protocol-ws-telnet-label">
+                                    WebSocket subprotocol
+                                    <HelpTip label="About the telnet.mudstandards.org subprotocol">
+                                        Advertises <code>telnet.mudstandards.org</code> in the
+                                        WebSocket opening handshake (the mudstandards.org WebSocket
+                                        proposal). mudix already speaks that profile — a full telnet
+                                        stream over binary frames — this just announces it so a
+                                        conforming server can confirm the dialect. Off by default:
+                                        some servers reject an unrecognized subprotocol, so enable it
+                                        only for servers known to implement the proposal. Applies to
+                                        direct WebSocket connections, not the telnet proxy.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="protocol-ws-telnet"
+                                    aria-labelledby="protocol-ws-telnet-label"
+                                    checked={wsTelnetSubprotocol}
+                                    onChange={next => patchProtocols({ wsTelnetSubprotocol: next })}
                                 />
                             </div>
                             <p className="settings-hint">

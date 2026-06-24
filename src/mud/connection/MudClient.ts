@@ -135,9 +135,25 @@ export interface MudClientOptions {
      *  of each GA-terminated data block — the IRE-server bug Mudlet patches in
      *  `cTelnet::gotPrompt`. See {@link stripLeadingPromptNewline}. */
     fixUnnecessaryLinebreaks?: boolean;
+    /** WebSocket subprotocols to advertise in the opening handshake's
+     *  `Sec-WebSocket-Protocol` header (RFC 6455). Empty by default — we open a
+     *  bare socket, which every server accepts. Set e.g.
+     *  `['telnet.mudstandards.org']` to announce the mudstandards.org WebSocket
+     *  profile we already speak (full telnet stream over BINARY frames). Opt-in
+     *  because RFC 6455 lets a server *fail the handshake* on an unrecognized
+     *  subprotocol — many existing MUD WebSocket endpoints ignore the header, but
+     *  stricter ones reject it. The server's selection is read back from
+     *  `socket.protocol` on open and emitted via `client.subprotocol`. */
+    subprotocols?: string[];
 }
 
 const DEFAULT_PROMPT_TIMEOUT_MS = 300;
+
+/** The WebSocket subprotocol name for the mudstandards.org "full telnet stream
+ *  over binary frames" profile (https://mudstandards.org/websocket/). mudix
+ *  already speaks this wire format; advertising the name lets a conforming
+ *  server confirm the dialect via the RFC 6455 handshake. */
+export const MUD_TELNET_SUBPROTOCOL = 'telnet.mudstandards.org';
 
 /** Version string reported as our client version — GMCP `Core.Hello` and the
  *  MNES CLIENT_VERSION variable. */
@@ -254,6 +270,8 @@ export class MudClient {
      *  each connect(). */
     private mxpStarted = false;
     private readonly mspParser = new MspParser();
+    /** WebSocket subprotocols advertised on connect (see MudClientOptions). */
+    private readonly subprotocols: string[];
     /** Currently active byte→char codec label. Starts at UTF-8 (works for
      *  ASCII and modern MUDs); switches when a CHARSET REQUEST/ACCEPTED
      *  exchange agrees on something else. Also drives outgoing encoding for
@@ -277,6 +295,7 @@ export class MudClient {
             mnesEnabled = false,
             nawsEnabled = true,
             fixUnnecessaryLinebreaks = false,
+            subprotocols = [],
         }: MudClientOptions,
         eventBus: EventBus<MudClientEvents>,
     ) {
@@ -295,6 +314,7 @@ export class MudClient {
         this.mnesEnabled = mnesEnabled;
         this.nawsEnabled = nawsEnabled;
         this.fixUnnecessaryLinebreaks = fixUnnecessaryLinebreaks;
+        this.subprotocols = subprotocols;
 
         this.gmcpStream = createGmcpStream({
             onEnvelope: ({ path, value }) => {
@@ -417,7 +437,12 @@ export class MudClient {
         this.clearTailTimer();
 
         try {
-            this.socket = new WebSocket(this.url);
+            // Advertise subprotocols only when configured — passing an empty
+            // array still sends an (empty) Sec-WebSocket-Protocol header, so omit
+            // the argument entirely in the common case to keep the bare handshake.
+            this.socket = this.subprotocols.length > 0
+                ? new WebSocket(this.url, this.subprotocols)
+                : new WebSocket(this.url);
             // Receive raw binary frames instead of base64 text. The proxy worker
             // sends bytes directly; decoding base64 on every frame was the bulk
             // of its (and our) per-message CPU cost.
@@ -620,6 +645,19 @@ export class MudClient {
 
             this.socket.onopen = (event: Event) => {
                 this.opened = true;
+                // Surface which subprotocol the server actually selected (empty
+                // string when none was negotiated). Lets the UI/logs confirm a
+                // `telnet.mudstandards.org` handshake succeeded vs. fell back.
+                if (this.subprotocols.length > 0) {
+                    const selected = this.socket.protocol;
+                    this.eventBus.emit('client.subprotocol', selected);
+                    if (debugTelnetEnabled()) {
+                        // eslint-disable-next-line no-console
+                        console.debug('[mudix.telnet subprotocol] requested',
+                            this.subprotocols.join(', '), '→ selected',
+                            selected ? `'${selected}'` : '(none)');
+                    }
+                }
                 // Proactively offer NAWS (RFC 1073 has the window-owning side
                 // send WILL). The server replies IAC DO NAWS — handled below —
                 // at which point we send the actual dimensions. Harmless if the
