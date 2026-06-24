@@ -118,7 +118,7 @@ const oneLightHighlightStyle = HighlightStyle.define([
 export const highlightCompartment = new Compartment();
 
 export function highlightFor(theme: string): ReturnType<typeof syntaxHighlighting> {
-    return theme === 'light'
+    return theme === 'light' || theme === 'graylight'
         ? syntaxHighlighting(oneLightHighlightStyle)
         : syntaxHighlighting(oneDarkHighlightStyle);
 }

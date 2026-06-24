@@ -112,6 +112,11 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // synchronously during render (matching the seededFor pattern); user-driven
     // toggles after the first connect take effect on the next reconnect.
     session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mxpEnabled, mnesEnabled, nawsEnabled });
+    // Mudlet's "Fix unnecessary linebreaks on GA servers" (config bag, persisted
+    // by setConfig). Applied during render — like the protocol toggles above —
+    // so it's on the session's options before autoConnect dials, and re-applied
+    // live whenever the config bag changes.
+    session.setFixUnnecessaryLinebreaks((profileConfig?.fixUnnecessaryLinebreaks as boolean | undefined) ?? false);
 
     const { engineRef } = useEngines(session, true, connection);
 

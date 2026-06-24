@@ -16,7 +16,7 @@ export interface MudConnection {
     proxyUrl?: string;      // overrides DEFAULT_PROXY_URL when set
 }
 
-export type Theme = 'dark' | 'light' | 'amber' | 'sky';
+export type Theme = 'dark' | 'light' | 'graylight' | 'amber' | 'sky';
 
 /**
  * Where the output font came from. `system` is the default — a name typed by

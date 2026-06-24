@@ -277,6 +277,13 @@ export class MudSession {
         return this.client?.getPromptTimeoutMs() ?? this.options.promptTimeoutMs ?? null;
     }
 
+    /** Mudlet `setConfig("fixUnnecessaryLinebreaks", …)`. Updates the live client
+     *  and the stored options so the setting survives a reconnect. */
+    setFixUnnecessaryLinebreaks(enabled: boolean): void {
+        this.options.fixUnnecessaryLinebreaks = enabled;
+        this.client?.setFixUnnecessaryLinebreaks(enabled);
+    }
+
     /** Update the telnet protocol toggles applied on the next connect.
      *  Mid-session changes do not retroactively renegotiate — the values are
      *  read by MudClient's constructor, so the next dial sees them. */

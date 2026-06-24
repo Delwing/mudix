@@ -51,6 +51,7 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
     { value: 'amber', label: 'Dark (Amber)' },
     { value: 'sky',   label: 'Dark (Sky Blue)' },
     { value: 'light', label: 'Light (Qt)' },
+    { value: 'graylight', label: 'Light (Gray)' },
 ];
 
 type SettingsTab = 'general' | 'appearance' | 'input' | 'colors' | 'network' | 'mapper';
@@ -145,6 +146,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         ? rawHistorySaveSize
         : DEFAULT_HISTORY_SAVE_SIZE;
     const showTabConnectionIndicators = (config?.showTabConnectionIndicators as boolean | undefined) ?? true;
+    const fixUnnecessaryLinebreaks = (config?.fixUnnecessaryLinebreaks as boolean | undefined) ?? false;
     // showSentText is stored as a mode string; legacy profiles may hold a boolean
     // (false ≙ never, true/unset ≙ script).
     const rawShowSentText = config?.showSentText;
@@ -595,6 +597,24 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         aria-labelledby="show-tab-connection-indicators-label"
                                         checked={showTabConnectionIndicators}
                                         onChange={next => patchConfig({ showTabConnectionIndicators: next })}
+                                    />
+                                </div>
+                                <div className="settings-row">
+                                    <span className="settings-label" id="fix-unnecessary-linebreaks-label">
+                                        Fix unnecessary linebreaks
+                                        <HelpTip label="About fixing unnecessary linebreaks">
+                                            On GA-driven servers, strip a stray leading blank line that
+                                            some MUDs (IRE-style) prepend before each prompt block
+                                            (Mudlet's <code>fixUnnecessaryLinebreaks</code>). Off by
+                                            default; leave it off unless you see a spurious blank line
+                                            before every prompt.
+                                        </HelpTip>
+                                    </span>
+                                    <Toggle
+                                        id="fix-unnecessary-linebreaks"
+                                        aria-labelledby="fix-unnecessary-linebreaks-label"
+                                        checked={fixUnnecessaryLinebreaks}
+                                        onChange={next => patchConfig({ fixUnnecessaryLinebreaks: next })}
                                     />
                                 </div>
                                 <div className="settings-row settings-row--top">
