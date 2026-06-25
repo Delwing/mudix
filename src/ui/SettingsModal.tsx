@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react';
 import { useAppStore, selectProfileField, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, PROTOCOL_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings, type MapInfoBgColor, type ProtocolSettings } from '../storage';
 import { Input, FontPicker, Toggle, HelpTip, Button } from './components';
+import { useModalFocus } from './components/useModalFocus';
 import { DEFAULT_ANSI_PALETTE } from '../mud/text/colors';
 import { DEFAULT_HISTORY_SAVE_SIZE, MAX_HISTORY } from './commandHistory';
 import type { ShowSentTextMode } from '../mud/MudSession';
@@ -86,6 +87,7 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsModalProps) {
+    const modalRef = useModalFocus<HTMLDivElement>(onClose);
     const theme = useAppStore(s => s.client.theme);
     const allowMudPackageInstall = useAppStore(s => s.client.allowMudPackageInstall);
     const notificationsEnabled = useAppStore(s => s.client.notificationsEnabled);
@@ -359,7 +361,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     return (
         <>
             <div className="modal-overlay" onClick={onClose} />
-            <div className="modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
+            <div ref={modalRef} className="modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
                 <div className="modal-header">
                     <span className="modal-title">Settings</span>
                     <button className="modal-close" onClick={onClose} type="button" aria-label="Close">✕</button>

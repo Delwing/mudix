@@ -2,6 +2,7 @@ import { useState } from 'react';
 import WORKER_CODE from '../../worker/index.js?raw';
 import { useAppStore } from '../storage';
 import { Button, Input } from './components';
+import { useModalFocus } from './components/useModalFocus';
 import {
     listAccounts,
     deployWorker,
@@ -63,6 +64,9 @@ export function ProxyWizardModal({ onClose, onUseProxy }: Props) {
     const [progress, setProgress] = useState<Progress[]>(
         STEPS.map(label => ({ label, state: 'pending' })),
     );
+    // Trap focus in the wizard; Escape closes except mid-deploy (matching the
+    // overlay, which also ignores clicks while deploying).
+    const ref = useModalFocus<HTMLDivElement>(stage === 'deploying' ? undefined : onClose);
     const [deployedUrl, setDeployedUrl] = useState<string>('');
 
     const nameValid = WORKER_NAME_PATTERN.test(workerName);
@@ -185,7 +189,7 @@ export function ProxyWizardModal({ onClose, onUseProxy }: Props) {
     return (
         <>
             <div className="modal-overlay" onClick={stage === 'deploying' ? undefined : onClose} />
-            <div className="modal proxy-wizard-modal" role="dialog" aria-modal="true" aria-label="Deploy proxy wizard">
+            <div ref={ref} className="modal proxy-wizard-modal" role="dialog" aria-modal="true" aria-label="Deploy proxy wizard">
                 <div className="modal-header">
                     <span className="modal-title">Deploy proxy to Cloudflare</span>
                     <button

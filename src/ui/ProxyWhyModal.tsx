@@ -1,13 +1,16 @@
+import { useModalFocus } from './components/useModalFocus';
+
 interface Props {
     onClose: () => void;
     onHostYourOwn: () => void;
 }
 
 export function ProxyWhyModal({ onClose, onHostYourOwn }: Props) {
+    const ref = useModalFocus<HTMLDivElement>(onClose);
     return (
         <>
             <div className="modal-overlay" onClick={onClose} />
-            <div className="modal proxy-why-modal" role="dialog" aria-modal="true" aria-label="Why a proxy is needed">
+            <div ref={ref} className="modal proxy-why-modal" role="dialog" aria-modal="true" aria-label="Why a proxy is needed">
                 <div className="modal-header">
                     <span className="modal-title">Why do I need a proxy?</span>
                     <button className="modal-close" onClick={onClose} aria-label="Close">×</button>

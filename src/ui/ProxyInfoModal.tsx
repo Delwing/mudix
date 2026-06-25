@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import WORKER_CODE from '../../worker/index.js?raw';
 import { ProxyWizardModal } from './ProxyWizardModal';
+import { useModalFocus } from './components/useModalFocus';
 
 interface Props {
     onClose: () => void;
@@ -10,6 +11,7 @@ interface Props {
 export function ProxyInfoModal({ onClose, onUseProxy }: Props) {
     const [copied, setCopied] = useState(false);
     const [wizardOpen, setWizardOpen] = useState(false);
+    const ref = useModalFocus<HTMLDivElement>(onClose);
 
     const handleCopy = () => {
         navigator.clipboard.writeText(WORKER_CODE).then(() => {
@@ -21,7 +23,7 @@ export function ProxyInfoModal({ onClose, onUseProxy }: Props) {
     return (
         <>
             <div className="modal-overlay" onClick={onClose} />
-            <div className="modal proxy-info-modal" role="dialog" aria-modal="true" aria-label="Host your own proxy">
+            <div ref={ref} className="modal proxy-info-modal" role="dialog" aria-modal="true" aria-label="Host your own proxy">
                 <div className="modal-header">
                     <span className="modal-title">Host your own proxy</span>
                     <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
