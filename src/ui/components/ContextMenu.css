@@ -34,6 +34,16 @@
     color: var(--accent);
 }
 
+.ctx-menu__item:disabled {
+    color: var(--text-dim);
+    cursor: default;
+}
+
+.ctx-menu__item:disabled:hover {
+    background: none;
+    color: var(--text-dim);
+}
+
 .ctx-menu__item--danger {
     color: var(--danger);
 }

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type React from 'react';
 import type { MudSession } from '../../mud/MudSession';
-import type { MouseEventEntry } from '../MouseEventRegistry';
 import { useStickyOutput, DEFAULT_STICKY_LINES } from '../../hooks/useOutput';
 import { useAppStore, useProfileField, useConnectionId } from '../../storage';
 import { StickyOutputPanel } from './StickyOutputPanel';
+import type { OutputMenuExtraItem } from './OutputContextMenu';
 import { ScreenReaderLog } from './ScreenReaderLog';
 import { CaretReviewPanel } from './CaretReviewPanel';
 import { LabelOverlay } from '../labels/LabelOverlay';
@@ -41,14 +41,14 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
         useStickyOutput(session.events, { stickyLines, showTimestamps });
     const viewportRef = useRef<HTMLDivElement>(null);
 
-    // Mudlet addMouseEvent: custom entries in the output area's right-click menu.
-    const [mouseMenu, setMouseMenu] = useState<{ x: number; y: number; items: MouseEventEntry[] } | null>(null);
-    const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
-        const items = session.mouseEvents.list();
-        if (items.length === 0) return;
-        e.preventDefault();
-        setMouseMenu({ x: e.clientX, y: e.clientY, items });
-    };
+    // Mudlet addMouseEvent: custom entries folded into the output right-click
+    // menu. Evaluated lazily when the menu opens (the registry can change).
+    const getMenuExtraItems = useCallback((): OutputMenuExtraItem[] =>
+        session.mouseEvents.list().map(item => ({
+            label: item.displayName,
+            tooltip: item.tooltip || undefined,
+            onClick: () => session.mouseEvents.dispatch(item.uniqueName),
+        })), [session]);
 
     useEffect(() => {
         session.markOutputReady();
@@ -78,7 +78,7 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
 
     return (
         <>
-            <div className="output-area-content" ref={viewportRef} style={contentStyle} onContextMenu={handleContextMenu}>
+            <div className="output-area-content" ref={viewportRef} style={contentStyle}>
                 <StickyOutputPanel
                     outputRef={outputRef}
                     sentinelRef={sentinelRef}
@@ -90,6 +90,7 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
                     foreground={outputForeground}
                     showTimestamps={showTimestamps}
                     onToggleTimestamps={() => connectionId && patchConnectionProfile(connectionId, { showTimestamps: !showTimestamps })}
+                    getMenuExtraItems={getMenuExtraItems}
                     commandInputRef={commandInputRef}
                     fontSize={fontSize}
                     wrapAt={wrapAt}
@@ -102,35 +103,6 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
             <LabelOverlay manager={session.labels} parent="main" />
             <CommandLineOverlay manager={session.cmdLines} parent="main" />
             <ScrollBoxOverlay manager={session.scrollBoxes} labels={session.labels} cmdLines={session.cmdLines} parent="main" />
-            {mouseMenu && (
-                <>
-                    <div
-                        style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
-                        onMouseDown={() => setMouseMenu(null)}
-                        onContextMenu={(e) => { e.preventDefault(); setMouseMenu(null); }}
-                    />
-                    <div
-                        className="map-context-menu"
-                        style={{ position: 'fixed', left: mouseMenu.x, top: mouseMenu.y, zIndex: 9999 }}
-                        onContextMenu={(e) => e.preventDefault()}
-                    >
-                        {mouseMenu.items.map(item => (
-                            <div
-                                key={item.uniqueName}
-                                className="map-context-menu-item"
-                                title={item.tooltip || undefined}
-                                onMouseDown={(e) => {
-                                    e.stopPropagation();
-                                    session.mouseEvents.dispatch(item.uniqueName);
-                                    setMouseMenu(null);
-                                }}
-                            >
-                                <span className="map-context-menu-label">{item.displayName}</span>
-                            </div>
-                        ))}
-                    </div>
-                </>
-            )}
         </>
     );
 }

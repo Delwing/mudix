@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type React from 'react';
-import { OutputContextMenu } from './OutputContextMenu';
+import { OutputContextMenu, type OutputMenuExtraItem } from './OutputContextMenu';
+import {
+    hasSelectionIn, selectAll, copySelectionText,
+    copySelectionAsHtml, copySelectionAsImage,
+} from './outputCopy';
 
 const DEFAULT_STICKY_HEIGHT = 160;
 const MIN_STICKY_HEIGHT = 40;
@@ -18,6 +22,9 @@ interface StickyOutputPanelProps {
     foreground?: string;
     showTimestamps?: boolean;
     onToggleTimestamps?: () => void;
+    /** Script-provided right-click entries (Mudlet addMouseEvent), evaluated
+     *  lazily when the menu opens since the registry can change. */
+    getMenuExtraItems?: () => OutputMenuExtraItem[];
     commandInputRef?: React.RefObject<HTMLInputElement | null>;
     className?: string;
     fontSize?: number;
@@ -31,10 +38,12 @@ export function StickyOutputPanel({
     outputRef, sentinelRef, stickyAreaRef,
     isSplitView, scrollToBottom,
     background, backgroundExtra, foreground, showTimestamps, onToggleTimestamps,
+    getMenuExtraItems,
     commandInputRef, className, fontSize, fontFamily, wrapAt, wrapIndent, wrapHangingIndent,
 }: StickyOutputPanelProps) {
     const [stickyHeight, setStickyHeight] = useState(DEFAULT_STICKY_HEIGHT);
-    const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+    const [contextMenu, setContextMenu] =
+        useState<{ x: number; y: number; hasSelection: boolean; extraItems: OutputMenuExtraItem[] } | null>(null);
     const stickyOuterRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -75,10 +84,25 @@ export function StickyOutputPanel({
     };
 
     const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-        if (!onToggleTimestamps) return;
         e.preventDefault();
-        setContextMenu({ x: e.clientX, y: e.clientY });
-    }, [onToggleTimestamps]);
+        // We own the output's right-click menu; stop it bubbling to ancestor
+        // handlers (the OutputArea folds its script entries in via extraItems).
+        e.stopPropagation();
+        const container = outputRef.current;
+        setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            hasSelection: container ? hasSelectionIn(container) : false,
+            extraItems: getMenuExtraItems?.() ?? [],
+        });
+    }, [outputRef, getMenuExtraItems]);
+
+    const runCopyAction = useCallback((action: (container: HTMLElement) => void | Promise<void>) => {
+        const container = outputRef.current;
+        if (!container) return;
+        Promise.resolve(action(container)).catch(err =>
+            console.error('Output copy action failed:', err));
+    }, [outputRef]);
 
     const handleResizeStart = (e: React.MouseEvent) => {
         e.preventDefault();
@@ -168,12 +192,18 @@ export function StickyOutputPanel({
                 </button>
             )}
 
-            {contextMenu && onToggleTimestamps && (
+            {contextMenu && (
                 <OutputContextMenu
                     x={contextMenu.x}
                     y={contextMenu.y}
+                    hasSelection={contextMenu.hasSelection}
+                    onSelectAll={() => runCopyAction(selectAll)}
+                    onCopy={() => runCopyAction(copySelectionText)}
+                    onCopyHtml={() => runCopyAction(copySelectionAsHtml)}
+                    onCopyImage={() => runCopyAction(copySelectionAsImage)}
                     showTimestamps={showTimestamps ?? false}
                     onToggleTimestamps={onToggleTimestamps}
+                    extraItems={contextMenu.extraItems}
                     onClose={() => setContextMenu(null)}
                 />
             )}

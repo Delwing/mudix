@@ -512,6 +512,21 @@ function parseAnsiSegments(
 }
 
 /**
+ * A run of text with its visual attributes resolved to concrete CSS colour
+ * strings — the shape a canvas/image renderer wants. `color`/`background` are
+ * undefined when the run uses the console default (the renderer fills in its
+ * own default for those).
+ */
+export interface OutputStyledRun {
+    text: string;
+    color?: string;
+    background?: string;
+    bold: boolean;
+    italic: boolean;
+    underline: boolean;
+}
+
+/**
  * Buffer of text aware of ANSI formatting codes and hyperlink metadata.
  */
 export class AnsiAwareBuffer {
@@ -1020,6 +1035,46 @@ export class AnsiAwareBuffer {
         }
 
         return html;
+    }
+
+    /**
+     * Resolve the buffer's segments to styled runs with concrete CSS colours,
+     * for rendering to a canvas (copy-as-image). Mirrors {@link toHtml}'s colour
+     * handling, including reverse-video on default colours — there the swap
+     * yields no explicit colour, so we hand back the console default of the
+     * opposite role for the renderer to paint.
+     */
+    toStyledRuns(): OutputStyledRun[] {
+        const runs: OutputStyledRun[] = [];
+        for (const segment of this.segments) {
+            const state = segment.state;
+            if (!state || isDefaultState(state)) {
+                runs.push({ text: segment.text, bold: false, italic: false, underline: false });
+                continue;
+            }
+            const overlay = state.hyperlink?.config?.style;
+            const fgSrc = state.inverse ? state.background : state.foreground;
+            const bgSrc = state.inverse ? state.foreground : state.background;
+            const fg = overlay?.foreground ?? fgSrc;
+            const bg = overlay?.background ?? bgSrc;
+            let color: string | undefined;
+            let background: string | undefined;
+            if (fg) color = this.colorToHex(fg);
+            else if (state.inverse && overlay?.foreground === undefined) color = "var(--console-bg)";
+            if (bg) background = this.colorToHex(bg);
+            else if (state.inverse && overlay?.background === undefined) background = "var(--console-text)";
+            const underline = (overlay?.underline ?? state.underline)
+                || (state.hyperlink?.autoUnderline ?? false);
+            runs.push({
+                text: segment.text,
+                color,
+                background,
+                bold: overlay?.bold ?? state.bold ?? false,
+                italic: overlay?.italic ?? state.italic ?? false,
+                underline,
+            });
+        }
+        return runs;
     }
 
     toDom(): DocumentFragment {

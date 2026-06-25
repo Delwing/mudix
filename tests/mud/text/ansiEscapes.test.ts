@@ -131,6 +131,38 @@ describe('AnsiAwareBuffer escape handling', () => {
   });
 });
 
+describe('AnsiAwareBuffer.toStyledRuns (copy-as-image)', () => {
+  it('returns default (uncoloured) runs without colour/attrs', () => {
+    const runs = new AnsiAwareBuffer('plain').toStyledRuns();
+    expect(runs).toEqual([
+      { text: 'plain', bold: false, italic: false, underline: false },
+    ]);
+  });
+
+  it('resolves SGR colour and attributes to concrete values', () => {
+    const buf = new AnsiAwareBuffer(`${ESC}[1;3;4;31mx${ESC}[0m`);
+    const runs = buf.toStyledRuns().filter(r => r.text === 'x');
+    expect(runs).toHaveLength(1);
+    expect(runs[0].color).toMatch(/^#/);
+    expect(runs[0].bold).toBe(true);
+    expect(runs[0].italic).toBe(true);
+    expect(runs[0].underline).toBe(true);
+  });
+
+  it('emits console-default CSS vars for reverse video on default colours', () => {
+    const runs = new AnsiAwareBuffer(`${ESC}[7mrev${ESC}[0m`).toStyledRuns()
+      .filter(r => r.text === 'rev');
+    expect(runs[0].color).toBe('var(--console-bg)');
+    expect(runs[0].background).toBe('var(--console-text)');
+  });
+
+  it('marks OSC 8 links as underlined', () => {
+    const buf = new AnsiAwareBuffer(`${ESC}]8;;https://example.com${ST}go${ESC}]8;;${ST}`);
+    const runs = buf.toStyledRuns().filter(r => r.text === 'go');
+    expect(runs[0].underline).toBe(true);
+  });
+});
+
 describe('MxpParser escape handling', () => {
   function parse(line: string) {
     const parser = new MxpParser({ send: () => {} });
