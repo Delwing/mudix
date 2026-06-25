@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { ModalBounds } from '../storage/schema';
 import { useModalFocus } from './components/useModalFocus';
+import { useViewportMode } from '../hooks/useViewportMode';
 
 type ResizeDir = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw';
 const DIRS: ResizeDir[] = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
@@ -43,6 +44,18 @@ export function ResizableModal({
 
     const boundsRef = useRef(bounds);
     boundsRef.current = bounds;
+
+    // Phones: the @media (≤600px) rules fullscreen this modal and we drop the
+    // drag/resize affordances (touch can't use them and a stray drag would save
+    // off-screen bounds). Tablets: keep a windowed modal but clamp it so an
+    // oversized default (e.g. a 900px editor) can't open partly off-screen.
+    const viewport = useViewportMode();
+    const isMobile = viewport === 'mobile';
+    const interactive = !isMobile;
+
+    const geom = viewport === 'tablet'
+        ? clampToViewport(bounds)
+        : { left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height };
 
     // Focus trap + restore + focus-in for every modal built on this wrapper
     // (script/map editors included). Escape-to-close is intentionally NOT added
@@ -105,9 +118,9 @@ export function ResizableModal({
             aria-modal="true"
             aria-label={title}
             className={`resizable-modal${className ? ` ${className}` : ''}`}
-            style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height }}
+            style={geom}
         >
-            <div className="resizable-modal__header" onMouseDown={handleDragDown}>
+            <div className="resizable-modal__header" onMouseDown={interactive ? handleDragDown : undefined}>
                 <span className="resizable-modal__title">{title}</span>
                 <div className="resizable-modal__header-actions">
                     {headerExtra}
@@ -117,7 +130,7 @@ export function ResizableModal({
             <div className={`resizable-modal__body${bodyClassName ? ` ${bodyClassName}` : ''}`}>
                 {children}
             </div>
-            {DIRS.map(dir => (
+            {interactive && DIRS.map(dir => (
                 <div
                     key={dir}
                     className={`resizable-modal__resize resizable-modal__resize--${dir}`}
@@ -126,4 +139,17 @@ export function ResizableModal({
             ))}
         </div>
     );
+}
+
+// Keep a modal fully on-screen at tablet widths: shrink it to fit the viewport
+// (with a small margin) and pull it back inside the edges if its saved/centered
+// origin would overflow.
+function clampToViewport(b: ModalBounds): { left: number; top: number; width: number; height: number } {
+    const maxW = window.innerWidth  * 0.96;
+    const maxH = window.innerHeight * 0.96;
+    const width  = Math.min(b.width,  maxW);
+    const height = Math.min(b.height, maxH);
+    const left = Math.min(Math.max(0, b.x), Math.max(0, window.innerWidth  - width));
+    const top  = Math.min(Math.max(0, b.y), Math.max(0, window.innerHeight - height));
+    return { left, top, width, height };
 }

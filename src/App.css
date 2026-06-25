@@ -976,7 +976,7 @@ html, body, #root {
 }
 
 .proxy-wizard-modal {
-    width: 560px;
+    width: min(560px, 92vw);
     height: min(640px, 85vh);
 }
 
@@ -1946,12 +1946,12 @@ html, body, #root {
 }
 
 .proxy-info-modal {
-    width: 560px;
+    width: min(560px, 92vw);
     height: min(640px, 85vh);
 }
 
 .proxy-why-modal {
-    width: 480px;
+    width: min(480px, 92vw);
     max-height: 80vh;
 }
 
@@ -3615,6 +3615,21 @@ html, body, #root {
         min-width: 0;
         min-height: 0;
     }
+
+    /* A confirm prompt is small by nature — keep it a centered card, don't let
+       the blanket .modal fullscreen rule blow it up to the whole screen. */
+    .modal.confirm-dialog {
+        width: min(420px, calc(100vw - 32px)) !important;
+        height: auto;
+        max-height: 90dvh;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        border-radius: var(--radius);
+    }
+
+    /* Quick-open: less top offset so the list isn't pushed down the screen. */
+    .qo-overlay { padding-top: 8vh; }
 
     /* Command bar: 16px input font prevents iOS Safari focus-zoom; the input,
        its ghost-suggestion overlay, the prompt glyph and the multi-line variant
