@@ -22,36 +22,43 @@ import { useProfileField } from '../../storage';
 // that gets superseded by the finalized line, so announcing them double-speaks.
 const SKIP_TYPES = new Set(['script-partial']);
 
-// Cap the live region size so it never grows unbounded. Screen readers only
-// announce additions, so old lines just need to be evictable.
+// Cap the number of announcement batches the region holds so it never grows
+// unbounded. Screen readers only announce additions, so superseded batches just
+// need to be evictable.
 export const MAX_LINES = 60;
 
 /**
- * Append one MUD `message` line's plain text to the live `region`, applying the
- * same filtering the session logger uses and capping the region size. Exported
- * for testing. Returns true when a line node was appended.
- *
- * Drops: interim `script-partial` cecho output (superseded by the finalized
- * line), missing text, and blank/whitespace-only lines (no speech, only churn).
+ * The plain text a `message` line should announce, or null when it must be
+ * skipped: interim `script-partial` cecho output (superseded by the finalized
+ * line), missing text, or blank/whitespace-only lines (no speech, only churn).
  * Raw strings carry ANSI, so they route through an {@link AnsiAwareBuffer} for
- * the plain text; an `AnsiAwareBuffer` payload already exposes `.text`.
+ * the plain text; an `AnsiAwareBuffer` payload already exposes `.text`. Pure.
  */
-export function feedScreenReaderLine(
-    region: HTMLElement,
-    text?: string | AnsiAwareBuffer,
-    type?: string,
-): boolean {
-    if (text === undefined || text === null) return false;
-    if (type && SKIP_TYPES.has(type)) return false;
-
+export function screenReaderPlainText(text?: string | AnsiAwareBuffer, type?: string): string | null {
+    if (text === undefined || text === null) return null;
+    if (type && SKIP_TYPES.has(type)) return null;
     const plain = typeof text === 'string' ? new AnsiAwareBuffer(text).text : text.text;
-    if (!plain.trim()) return false;
+    return plain.trim() ? plain : null;
+}
 
-    const line = document.createElement('div');
-    line.textContent = plain;
-    region.appendChild(line);
-
-    while (region.childElementCount > MAX_LINES && region.firstChild) {
+/**
+ * Append a batch of lines to the live `region` as ONE node (a wrapper div with
+ * a child per line) so the screen reader announces the whole burst once — the
+ * way Mudlet coalesces a buffer update into a single announcement — instead of
+ * once per line. Per-line child divs keep the line boundaries in the a11y tree.
+ * Then cap the region to `maxLines` batches. Returns true when a batch was
+ * appended. Exported for testing.
+ */
+export function flushScreenReaderLines(region: HTMLElement, lines: string[], maxLines = MAX_LINES): boolean {
+    if (lines.length === 0) return false;
+    const batch = document.createElement('div');
+    for (const line of lines) {
+        const el = document.createElement('div');
+        el.textContent = line;
+        batch.appendChild(el);
+    }
+    region.appendChild(batch);
+    while (region.childElementCount > maxLines && region.firstChild) {
         region.removeChild(region.firstChild);
     }
     return true;
@@ -74,11 +81,31 @@ export function ScreenReaderLog({ session }: { session: MudSession }) {
             return;
         }
 
+        // Coalesce all lines that arrive in one event-loop turn (e.g. a single
+        // network packet emitting many `message` events) into one announcement,
+        // flushed on a microtask. Matches Mudlet's per-buffer-update batching and
+        // avoids per-line chatter on fast-scrolling MUDs.
+        const pending: string[] = [];
+        let scheduled = false;
+        let disposed = false;
+        const flush = () => {
+            scheduled = false;
+            if (disposed || pending.length === 0) return;
+            flushScreenReaderLines(region, pending.splice(0, pending.length));
+        };
+
         const unsubscribe = session.events.on('message', (text, type) => {
-            feedScreenReaderLine(region, text, type);
+            const plain = screenReaderPlainText(text, type);
+            if (plain === null) return;
+            pending.push(plain);
+            if (!scheduled) { scheduled = true; queueMicrotask(flush); }
         });
 
-        return unsubscribe;
+        return () => {
+            disposed = true;
+            unsubscribe();
+            pending.length = 0;
+        };
     }, [session, announce]);
 
     return (
