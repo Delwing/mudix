@@ -17,11 +17,13 @@ export class AliasEngine extends PatternEngine<AliasNode> {
 
     // ── Perm aliases (persisted, visible in UI) ────────────────────────────────
 
-    /** Returns the first matching perm alias, or null. */
-    matchPerm(input: string): { alias: AliasNode; captures: string[] } | null {
+    /** Returns the first matching perm alias, or null. `matchedText` is the
+     *  portion of `input` the regex actually matched (Mudlet's `matches[1]`),
+     *  which differs from the whole input for an unanchored pattern. */
+    matchPerm(input: string): { alias: AliasNode; matchedText: string; captures: string[] } | null {
         for (const { item, re } of this.permCompiled) {
             const m = input.match(re);
-            if (m) return { alias: item, captures: m.slice(1).map(c => c ?? '') };
+            if (m) return { alias: item, matchedText: m[0], captures: m.slice(1).map(c => c ?? '') };
         }
         return null;
     }

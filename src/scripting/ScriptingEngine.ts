@@ -1992,6 +1992,21 @@ export class ScriptingEngine {
         this.runtimeReady.then(rt => this.runScriptLoad(rt, script)).catch(() => {});
     }
 
+    /**
+     * Force-run a profile script's body right now, even if its code is unchanged.
+     * Backs the editor's "Run" / "Save & Run" button: the store subscription only
+     * re-runs a script when its code or handlers actually change (so editing one
+     * script doesn't re-execute its untouched siblings), which means clicking
+     * "Run" twice — or running a script you didn't edit — would otherwise do
+     * nothing. wrapScript kills the script's previously registered anonymous
+     * handlers before re-registering, so repeated runs stay idempotent.
+     */
+    runScript(scriptId: string): void {
+        const node = (useAppStore.getState().connectionScripts[this.connectionId] ?? [])
+            .find(s => s.id === scriptId);
+        if (node) this.reloadScript(node);
+    }
+
     private runScriptLoad(rt: IScriptingRuntime, script: ScriptNode): void {
         try {
             rt.load(this.wrapScript(script), script.name);
@@ -2025,6 +2040,10 @@ export class ScriptingEngine {
             this.api.flushOutput();
             return true;
         }
+        // Mirror the input into the Lua `command` global before alias matching,
+        // matching Mudlet's AliasUnit::processDataStream. Persists between inputs
+        // so the stock "Repeat Last Command" key (`send(command)`) works.
+        this.runtimes.lua?.setCommand(text);
         // JS temp aliases
         if (this.aliasEngine.processTemp(text)) {
             this.api.flushOutput();
@@ -2033,7 +2052,9 @@ export class ScriptingEngine {
         // Permanent aliases
         const permMatch = this.aliasEngine.matchPerm(text);
         if (permMatch) {
-            this.executePermAlias(permMatch.alias, [text, ...permMatch.captures]);
+            // matches[1] is the matched portion (Mudlet semantics), not the
+            // whole input — see the perm-trigger note above (issue #4).
+            this.executePermAlias(permMatch.alias, [permMatch.matchedText, ...permMatch.captures]);
             this.api.flushOutput();
             return true;
         }
@@ -2534,7 +2555,12 @@ export class ScriptingEngine {
             this.triggerEngine.process(plain, isPrompt, (m) => {
                 this.executePermTrigger(
                     m.trigger,
-                    [plain, ...m.captures],
+                    // Mudlet (and mudix's temp-trigger path) put the whole regex
+                    // MATCH at matches[1], not the whole line — they only differ
+                    // for an unanchored pattern that matches a substring. Passing
+                    // `plain` here made `selectString(matches[1])` highlight the
+                    // entire line (issue #4). matchedText is the matched portion.
+                    [m.matchedText, ...m.captures],
                     m.matchedText,
                     m.multimatches,
                     m.namedGroups,

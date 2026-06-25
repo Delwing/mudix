@@ -4383,6 +4383,14 @@ end`,
         this.lua.global.set('line', line);
     }
 
+    // Mudlet sets the global `command` to the raw command-bar input at the start
+    // of alias processing (AliasUnit::processDataStream). It persists between
+    // inputs so keys/scripts like the stock "Repeat Last Command" can `send(command)`.
+    setCommand(command: string): void {
+        if (this.destroyed) return;
+        this.lua.global.set('command', command);
+    }
+
     dispatchSendRequest(text: string): boolean {
         this._denyCurrentSend = false;
         this.emitEvent('sysDataSendRequest', [text]);

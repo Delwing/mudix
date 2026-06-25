@@ -884,6 +884,7 @@ const MUDLET_GLOBALS: Completion[] = [
     variable('mssp',         'MSSP server-status table — auto-populated once per connection'),
     variable('matches',      'Regex captures in trigger/alias context: [full, cap1, cap2, ...]'),
     variable('line',         'Current trigger line text'),
+    variable('command',      'The last command-bar input, set before alias processing (Mudlet `command`)'),
     variable('multimatches', 'Multiline trigger captures'),
     variable('color_table',  'Mudlet color table: { colorName = {r, g, b} }'),
     variable('speedWalkPath',   'getPath result: 1-indexed list of room IDs along the path (excludes the start room). Reset on every getPath call.'),

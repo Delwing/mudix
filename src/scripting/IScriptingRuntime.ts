@@ -39,6 +39,12 @@ export interface IScriptingRuntime {
     destroy(): void;
     setCurrentLine(line: string, isPrompt: boolean): void;
     /**
+     * Mirror the last command-bar input into the Lua `command` global, matching
+     * Mudlet's AliasUnit::processDataStream. Read by scripts/keys such as the
+     * stock "Repeat Last Command" key (`send(command)`).
+     */
+    setCommand(command: string): void;
+    /**
      * Evaluate a Lua-function trigger pattern. Side effects (raiseEvent, etc.)
      * always run; the trigger "matches" only when the body returns truthy.
      */

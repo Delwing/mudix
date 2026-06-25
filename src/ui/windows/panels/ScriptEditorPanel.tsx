@@ -1416,7 +1416,16 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
         setLogs([]);
         if (category === 'scripts') {
             const handlers = editEventHandlers.split('\n').map(s => s.trim()).filter(Boolean);
+            // The store subscription re-runs a script only when its code or event
+            // handlers actually change. When neither did — clicking "Run", or
+            // re-saving an unedited script — the subscription is a no-op, so force
+            // the run explicitly. When they did change, the subscription already
+            // runs it; forcing again here would execute the body twice.
+            const prevHandlers = (selected as ScriptNode).eventHandlers ?? [];
+            const subscriptionWillRun = selected.code !== editCode
+                || prevHandlers.join('\n') !== handlers.join('\n');
             updateScript(connectionId, selectedId, { name: editName, language: 'lua', code: editCode, eventHandlers: handlers });
+            if (!subscriptionWillRun) scriptingEngineRef?.current?.runScript(selectedId);
         } else if (category === 'aliases') {
             updateAlias(connectionId, selectedId, { name: editName, pattern: editPattern, command: editCommand, language: 'lua', code: editCode });
         } else if (category === 'triggers') {
