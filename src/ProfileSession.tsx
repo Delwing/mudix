@@ -16,7 +16,7 @@ import { SessionLogger } from './logging/SessionLogger';
 import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, connectionSecureTransport, PROTOCOL_DEFAULTS, type MudConnection } from './storage';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
-import { applyAnsiPalette } from './mud/text/colors';
+import { applyAnsiPalette, setServerRedefineColorsAllowed, resetAllPaletteColors } from './mud/text/colors';
 import type { MudSession } from './mud/MudSession';
 import { MUD_TELNET_SUBPROTOCOL } from './mud/connection/MudClient';
 
@@ -65,6 +65,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const outputFont = useAppStore(s => selectProfileField(s, connection.id, 'outputFont'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connection.id, 'promptTimeoutMs'));
     const ansiPalette = useAppStore(s => selectProfileField(s, connection.id, 'ansiPalette'));
+    const serverRedefineColors = useAppStore(s => selectProfileField(s, connection.id, 'serverRedefineColors'));
     const autoClearInput = useAppStore(s => selectProfileField(s, connection.id, 'autoClearInput')) === true;
     const commandSeparator = useAppStore(s => selectProfileField(s, connection.id, 'commandSeparator')) ?? '';
     const commandEchoForeground = useAppStore(s => selectProfileField(s, connection.id, 'commandEchoForeground'));
@@ -186,6 +187,16 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         applyAnsiPalette(ansiPalette);
         return () => applyAnsiPalette(undefined);
     }, [ansiPalette]);
+
+    // Mudlet's "Allow server to redefine your colors" (default on). Gates the
+    // global OSC 4/104 path. Turning it off also snaps the palette back to the
+    // user's colors, revoking anything the server already redefined this session.
+    useEffect(() => {
+        const allowed = serverRedefineColors !== false;
+        setServerRedefineColorsAllowed(allowed);
+        if (!allowed) resetAllPaletteColors();
+        return () => setServerRedefineColorsAllowed(true);
+    }, [serverRedefineColors]);
 
     // Record this session's output to the persistent log store. One logger per
     // profile-session lifetime; reconnects within the same mount append to it.

@@ -27,6 +27,22 @@ let baseAnsiBright = [...DEFAULT_ANSI_BRIGHT];
  *  modal uses this as the fallback when a profile hasn't overridden a slot. */
 export const DEFAULT_ANSI_PALETTE: readonly string[] = [...DEFAULT_ANSI_DARK, ...DEFAULT_ANSI_BRIGHT];
 
+// Whether the server may redefine the palette via OSC 4/104 (Mudlet's "Allow
+// server to redefine your colors", default on). The ANSI/MXP parsers run with
+// no access to profile settings, so the gate lives here as a single module-level
+// flag that `applyOscPaletteOps` consults. Set from ProfileSession per profile.
+let serverRedefineAllowed = true;
+
+/** Enable/disable server-driven OSC 4/104 palette redefinition. */
+export function setServerRedefineColorsAllowed(allowed: boolean): void {
+    serverRedefineAllowed = allowed;
+}
+
+/** Whether the server is currently allowed to redefine palette colors. */
+export function isServerRedefineColorsAllowed(): boolean {
+    return serverRedefineAllowed;
+}
+
 const HEX_RE = /^#[0-9a-f]{6}$/i;
 
 /** Apply an override palette to the global ANSI table (mutates colorCodes.ansi

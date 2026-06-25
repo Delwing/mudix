@@ -125,6 +125,8 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const commandEchoForeground = useAppStore(s => selectProfileField(s, connectionId, 'commandEchoForeground'));
     const commandEchoBackground = useAppStore(s => selectProfileField(s, connectionId, 'commandEchoBackground'));
     const ansiPalette = useAppStore(s => selectProfileField(s, connectionId, 'ansiPalette'));
+    const serverRedefineColors = useAppStore(s => selectProfileField(s, connectionId, 'serverRedefineColors'));
+    const serverRedefineOn = serverRedefineColors !== false;
     const outputFont = useAppStore(s => selectProfileField(s, connectionId, 'outputFont'));
     const fontSize = useAppStore(s => selectProfileField(s, connectionId, 'fontSize'));
     const outputWrapAt = useAppStore(s => selectProfileField(s, connectionId, 'outputWrapAt'));
@@ -1069,6 +1071,24 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     fallback={DEFAULT_BG_FALLBACK}
                                     onChange={v => patchProfile({ commandEchoBackground: v })}
                                     onClear={() => patchProfile({ commandEchoBackground: '' })}
+                                />
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="server-redefine-colors-label">
+                                    Allow server to redefine colors
+                                    <HelpTip label="About server color redefinition">
+                                        When on, the MUD server may remap the ANSI and 256-color
+                                        palette at runtime (via OSC 4 / 104 escape sequences) to
+                                        theme its own output. When off, those sequences are ignored
+                                        and your palette above always wins. Matches Mudlet's option
+                                        of the same name.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="server-redefine-colors"
+                                    aria-labelledby="server-redefine-colors-label"
+                                    checked={serverRedefineOn}
+                                    onChange={next => patchProfile({ serverRedefineColors: next })}
                                 />
                             </div>
                             <div className="settings-ansi-header">

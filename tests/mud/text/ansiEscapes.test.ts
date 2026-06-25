@@ -8,7 +8,7 @@ import {
   parseOscColorPalette,
 } from '../../../src/mud/text/ansiEscapes';
 import { AnsiAwareBuffer } from '../../../src/mud/text/FormatState';
-import { colorCodes, resetAllPaletteColors } from '../../../src/mud/text/colors';
+import { colorCodes, resetAllPaletteColors, setServerRedefineColorsAllowed } from '../../../src/mud/text/colors';
 import { MxpParser } from '../../../src/mud/protocol/mxp';
 
 const ESC = '\x1b';
@@ -306,5 +306,29 @@ describe('OSC 4/104 palette applied through the parser', () => {
     new AnsiAwareBuffer(`${ESC}]4;196;rgb:00/00/ff${ST}`);
     new AnsiAwareBuffer(`${ESC}]104;196${ST}`);
     expect(colorCodes.xterm[196]).toBe(original);
+  });
+});
+
+describe('server-redefine-colors gate', () => {
+  const ESC = '\x1b';
+  const ST = `${ESC}\\`;
+  afterEach(() => {
+    setServerRedefineColorsAllowed(true);
+    resetAllPaletteColors();
+  });
+
+  it('ignores OSC 4 from the server when redefinition is disabled', () => {
+    const original = colorCodes.xterm[196];
+    setServerRedefineColorsAllowed(false);
+    new AnsiAwareBuffer(`${ESC}]4;196;rgb:00/00/ff${ST}`);
+    expect(colorCodes.xterm[196]).toBe(original);
+  });
+
+  it('re-enabling restores the OSC 4 path', () => {
+    setServerRedefineColorsAllowed(false);
+    new AnsiAwareBuffer(`${ESC}]4;196;rgb:00/00/ff${ST}`);
+    setServerRedefineColorsAllowed(true);
+    new AnsiAwareBuffer(`${ESC}]4;196;rgb:00/00/ff${ST}`);
+    expect(colorCodes.xterm[196]).toBe('#0000ff');
   });
 });

@@ -1,4 +1,4 @@
-import { colorCodes, setPaletteColor, resetPaletteColor, resetAllPaletteColors } from "./colors";
+import { colorCodes, setPaletteColor, resetPaletteColor, resetAllPaletteColors, isServerRedefineColorsAllowed } from "./colors";
 import mudletColorsJson from "./mudletColors.json";
 import {
     scanEscape,
@@ -20,6 +20,9 @@ import { appendCells, cellsToHtml } from "./cellRender";
  *  changes affect text parsed *after* this point — which is exactly document
  *  order, since lines are fed to the parser in the order the server sent them. */
 export function applyOscPaletteOps(ops: ReadonlyArray<OscPaletteOp>): void {
+    // Mudlet's "Allow server to redefine your colors": when off, OSC 4/104 from
+    // the server is ignored and the user's palette stands.
+    if (!isServerRedefineColorsAllowed()) return;
     for (const op of ops) {
         if (op.kind === "set") setPaletteColor(op.index, op.color);
         else if (op.kind === "reset") resetPaletteColor(op.index);
