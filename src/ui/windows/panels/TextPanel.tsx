@@ -14,6 +14,9 @@ import { WindowCmdLine } from './WindowCmdLine';
 
 interface TextPanelProps {
     id: string;
+    /** Human-readable window title (defaults to the id), used as the accessible
+     *  name so a screen reader can identify and navigate to this user window. */
+    title?: string;
     manager: WindowManager;
     labels?: LabelManager;
     cmdLines?: CommandLineManager;
@@ -31,7 +34,7 @@ interface TextPanelProps {
     cmdLineValueSeq?: number;
 }
 
-export function TextPanel({ id, manager, labels, cmdLines, scrollBoxes, fontSize, fontFamily, wrapAt, wrapIndent, wrapHangingIndent, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: TextPanelProps) {
+export function TextPanel({ id, title, manager, labels, cmdLines, scrollBoxes, fontSize, fontFamily, wrapAt, wrapIndent, wrapHangingIndent, backgroundColor, backgroundImage, cmdLineEnabled, cmdLineStyleSheet, cmdLineValue, cmdLineValueSeq }: TextPanelProps) {
     const viewportRef = useRef<HTMLDivElement>(null);
     const { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom, controls } =
         useStickyOutput(null, { stickyLines: 50 });
@@ -74,7 +77,13 @@ export function TextPanel({ id, manager, labels, cmdLines, scrollBoxes, fontSize
     );
 
     return (
-        <div ref={viewportRef} data-mudix-window={id} style={VIEWPORT_STYLE}>
+        <div
+            ref={viewportRef}
+            data-mudix-window={id}
+            style={VIEWPORT_STYLE}
+            role="region"
+            aria-label={`${title || id} window`}
+        >
             {cmdLineEnabled ? (
                 <div style={STACK_STYLE}>
                     <div style={OUTPUT_FILL_STYLE}>{stickyPanel}</div>
