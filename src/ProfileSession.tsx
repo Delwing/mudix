@@ -148,10 +148,26 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // `autoConnect` doesn't re-trigger.
     const autoConnectRef = useRef(autoConnect);
     useEffect(() => {
-        if (autoConnectRef.current && !session.destroyed) {
+        if (!autoConnectRef.current || session.destroyed) return;
+        let cancelled = false;
+        const dial = () => {
+            if (cancelled || session.destroyed) return;
             session.connect(connectionUrl(connection, useAppStore.getState().client.userProxyUrl));
+        };
+        // Wait for the profile's scripts and triggers to finish loading before
+        // dialing, so script-registered sysConnectionEvent handlers and triggers
+        // are already in place when the connection event and the server's login
+        // banner arrive — Mudlet loads a profile before it connects. The
+        // useEngines effect is declared first, so engineRef is populated before
+        // this effect runs; fall back to dialing immediately if it isn't.
+        const engine = engineRef.current;
+        if (engine) {
+            void engine.whenScriptsLoaded().then(dial);
+        } else {
+            dial();
         }
-    }, [session, connection]);
+        return () => { cancelled = true; };
+    }, [session, connection, engineRef]);
 
     useEffect(() => {
         if (typeof promptTimeoutMs === 'number') {

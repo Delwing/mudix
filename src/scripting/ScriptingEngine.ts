@@ -209,6 +209,14 @@ export class ScriptingEngine {
     });
     private vfs: ProfileVFS | null = null;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
+    // Resolves once the initial load pass has finished — scripts/aliases/timers/
+    // keys applied, sysLoadEvent fired, and triggers compiled (PCRE wasm ready
+    // and patterns applied). The auto-connect path awaits this so the socket
+    // isn't dialed until every script handler and trigger is in place — matching
+    // Mudlet, where a profile loads before it connects. Resolves on every load
+    // path including failures so a connect never hangs waiting on it.
+    private readonly scriptsLoaded: Promise<void>;
+    private resolveScriptsLoaded!: () => void;
     private readonly mapOpen = new MapOpenNotifier(() => this.raiseEvent('mapOpenEvent'));
     private readonly connectionId: string;
     private storeUnsub: (() => void) | null = null;
@@ -300,6 +308,7 @@ export class ScriptingEngine {
         // torn down on connection switch/unmount (destroy), but a full page
         // unload skips React cleanup — cover that with a beforeunload hook.
         window.addEventListener('beforeunload', this.beforeUnload);
+        this.scriptsLoaded = new Promise<void>(resolve => { this.resolveScriptsLoaded = resolve; });
         this.runtimeReady = this.initRuntime(connectionId);
         this.attachToStore(session);
     }
@@ -377,11 +386,20 @@ export class ScriptingEngine {
 
             // Triggers need PCRE wasm; until that resolves, skip apply on
             // the initial pass and on subsequent store updates. Once ready,
-            // apply whatever the store says now.
-            void TriggerEngine.ready().then(() => {
-                this.triggersReady = true;
-                this.scheduleTriggerApply();
-            });
+            // apply whatever the store says now. The initial apply is done
+            // synchronously (not scheduled) so the load isn't reported complete
+            // with triggers still uncompiled — the auto-connect path waits on
+            // scriptsLoaded, and the login banner must be matchable when the
+            // socket opens. resolveScriptsLoaded is idempotent, so the catch
+            // (wasm init failure) still unblocks connect.
+            void TriggerEngine.ready().then(
+                () => {
+                    this.triggersReady = true;
+                    if (!this.disposed) this.applyTriggersFromStore();
+                    this.resolveScriptsLoaded();
+                },
+                () => { this.resolveScriptsLoaded(); },
+            );
 
             this.storeUnsub = useAppStore.subscribe((state, prevState) => {
                 const id = this.connectionId;
@@ -418,7 +436,13 @@ export class ScriptingEngine {
             if (this.vfs) this.scheduleProfileDataSave();
         };
         const safeStart = () => {
-            start().catch(err => console.warn('[ScriptingEngine] start failed:', err));
+            start().catch(err => {
+                console.warn('[ScriptingEngine] start failed:', err);
+                // start() bailed before the trigger-ready block could resolve the
+                // load latch — unblock any awaiting auto-connect so a failed load
+                // doesn't leave the profile permanently un-dialed.
+                this.resolveScriptsLoaded();
+            });
         };
         if (session.outputReady) {
             safeStart();
@@ -2256,8 +2280,22 @@ export class ScriptingEngine {
         }
     }
 
+    /**
+     * Resolves once the initial load pass has finished (scripts/aliases/timers/
+     * keys applied, sysLoadEvent fired, triggers compiled). The auto-connect
+     * path awaits this so the MUD socket isn't dialed until every handler and
+     * trigger is in place. Always resolves — never rejects — so a failed or
+     * torn-down load can't leave a profile waiting to connect forever.
+     */
+    whenScriptsLoaded(): Promise<void> {
+        return this.scriptsLoaded;
+    }
+
     destroy(): void {
         this.disposed = true;
+        // A teardown before the load latch resolved must unblock any awaiting
+        // auto-connect (the connect path guards on session.destroyed anyway).
+        this.resolveScriptsLoaded();
         // Fire sysExitEvent before any teardown, while handlers can still run.
         window.removeEventListener('beforeunload', this.beforeUnload);
         this.fireExit();
