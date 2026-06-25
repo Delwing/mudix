@@ -217,6 +217,12 @@ export class ScriptingEngine {
     // path including failures so a connect never hangs waiting on it.
     private readonly scriptsLoaded: Promise<void>;
     private resolveScriptsLoaded!: () => void;
+    // True once the initial load pass has finished. Until then, every connect
+    // request (auto-connect on open, or a script calling connect()/
+    // connectToServer() during load) is held in pendingConnectUrl and dialed
+    // when the load completes — last request wins, so exactly one socket opens.
+    private scriptsLoadComplete = false;
+    private pendingConnectUrl: string | null = null;
     private readonly mapOpen = new MapOpenNotifier(() => this.raiseEvent('mapOpenEvent'));
     private readonly connectionId: string;
     private storeUnsub: (() => void) | null = null;
@@ -396,9 +402,9 @@ export class ScriptingEngine {
                 () => {
                     this.triggersReady = true;
                     if (!this.disposed) this.applyTriggersFromStore();
-                    this.resolveScriptsLoaded();
+                    this.markScriptsLoaded();
                 },
-                () => { this.resolveScriptsLoaded(); },
+                () => { this.markScriptsLoaded(); },
             );
 
             this.storeUnsub = useAppStore.subscribe((state, prevState) => {
@@ -438,10 +444,10 @@ export class ScriptingEngine {
         const safeStart = () => {
             start().catch(err => {
                 console.warn('[ScriptingEngine] start failed:', err);
-                // start() bailed before the trigger-ready block could resolve the
-                // load latch — unblock any awaiting auto-connect so a failed load
-                // doesn't leave the profile permanently un-dialed.
-                this.resolveScriptsLoaded();
+                // start() bailed before the trigger-ready block could mark the
+                // load complete — unblock any awaiting/deferred connect so a
+                // failed load doesn't leave the profile permanently un-dialed.
+                this.markScriptsLoaded();
             });
         };
         if (session.outputReady) {
@@ -926,6 +932,10 @@ export class ScriptingEngine {
             });
             this.api.setSendRequestDispatcher((text) =>
                 this.runtimes.lua?.dispatchSendRequest(text) ?? false);
+            // Route script-initiated connect()/connectToServer() through the
+            // load gate so a connect during the initial load defers until every
+            // script and trigger is in place (same as the auto-connect path).
+            this.api.setConnectDispatcher((url) => this.requestConnect(url));
             this.api.setEventRaiser((event, args) => this.raiseEvent(event, args));
             this.api.setFeedDispatcher((groups) => this.processFlushBatch(groups));
             this.api.setPackageInstaller((path) => this.installPackageFromVfsPath(path));
@@ -2291,11 +2301,46 @@ export class ScriptingEngine {
         return this.scriptsLoaded;
     }
 
+    /**
+     * Single entry point for dialing the MUD socket. Before the initial load
+     * finishes, the request is deferred (held in pendingConnectUrl) so the
+     * connection isn't made until every script handler and trigger is in place
+     * — this covers both the auto-connect on profile open and any script that
+     * calls connect()/connectToServer() from its body or a sysLoadEvent handler.
+     * Once loading is done, requests dial immediately (the normal reconnect
+     * path). The latest pending request wins, so exactly one socket opens.
+     */
+    requestConnect(url: string): void {
+        if (this.disposed) return;
+        if (this.scriptsLoadComplete) {
+            this.session.connect(url);
+        } else {
+            this.pendingConnectUrl = url;
+        }
+    }
+
+    /**
+     * Mark the initial load complete: unblock whenScriptsLoaded() and dial any
+     * connect request that arrived while loading. Idempotent. Called on every
+     * load outcome — success, load failure, and teardown — so a connect never
+     * waits forever.
+     */
+    private markScriptsLoaded(): void {
+        if (this.scriptsLoadComplete) return;
+        this.scriptsLoadComplete = true;
+        this.resolveScriptsLoaded();
+        const url = this.pendingConnectUrl;
+        this.pendingConnectUrl = null;
+        if (url !== null && !this.disposed) this.session.connect(url);
+    }
+
     destroy(): void {
         this.disposed = true;
         // A teardown before the load latch resolved must unblock any awaiting
-        // auto-connect (the connect path guards on session.destroyed anyway).
-        this.resolveScriptsLoaded();
+        // auto-connect and drop a still-pending deferred dial — disposed is set
+        // first so markScriptsLoaded won't open a socket on the way down.
+        this.pendingConnectUrl = null;
+        this.markScriptsLoaded();
         // Fire sysExitEvent before any teardown, while handlers can still run.
         window.removeEventListener('beforeunload', this.beforeUnload);
         this.fireExit();

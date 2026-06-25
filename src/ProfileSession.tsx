@@ -149,24 +149,23 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const autoConnectRef = useRef(autoConnect);
     useEffect(() => {
         if (!autoConnectRef.current || session.destroyed) return;
-        let cancelled = false;
-        const dial = () => {
-            if (cancelled || session.destroyed) return;
-            session.connect(connectionUrl(connection, useAppStore.getState().client.userProxyUrl));
-        };
-        // Wait for the profile's scripts and triggers to finish loading before
-        // dialing, so script-registered sysConnectionEvent handlers and triggers
-        // are already in place when the connection event and the server's login
-        // banner arrive — Mudlet loads a profile before it connects. The
-        // useEngines effect is declared first, so engineRef is populated before
-        // this effect runs; fall back to dialing immediately if it isn't.
+        const url = connectionUrl(connection, useAppStore.getState().client.userProxyUrl);
+        // Route through the engine's load gate: the dial is deferred until the
+        // profile's scripts and triggers have finished loading, so their
+        // sysConnectionEvent handlers and triggers are in place when the
+        // connection event and the server's login banner arrive (Mudlet loads a
+        // profile before it connects). The engine holds a single pending slot,
+        // so a script that calls connect() during load supersedes this request
+        // rather than opening a second socket. engineRef is populated by the
+        // useEngines effect, declared first; fall back to dialing directly if it
+        // somehow isn't there yet. A connection switch/unmount destroys the
+        // engine, which drops the pending dial.
         const engine = engineRef.current;
         if (engine) {
-            void engine.whenScriptsLoaded().then(dial);
+            engine.requestConnect(url);
         } else {
-            dial();
+            session.connect(url);
         }
-        return () => { cancelled = true; };
     }, [session, connection, engineRef]);
 
     useEffect(() => {

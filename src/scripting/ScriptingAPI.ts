@@ -511,6 +511,12 @@ export class ScriptingAPI {
     // whether a handler called denyCurrentSend().
     private sendRequestDispatcher: ((text: string) => boolean) | null = null;
 
+    // Callback set by ScriptingEngine. Routes a connect through the load gate so
+    // a script calling connect()/connectToServer() during the initial load
+    // defers the dial until scripts and triggers are loaded. Falls back to an
+    // immediate session.connect when unset (early init, before the runtime).
+    private connectDispatcher: ((url: string) => void) | null = null;
+
     // Callback set by ScriptingEngine. Runs a synthetic flushLines batch
     // through the same pipeline as network-driven flushLines so feedTriggers
     // shares ordering semantics.
@@ -655,7 +661,14 @@ export class ScriptingAPI {
     // ── Connection ────────────────────────────────────────────────────────────
 
     connect(url: string): void {
-        this.session.connect(url);
+        this.dialConnect(url);
+    }
+
+    /** Dial through the engine's load gate when wired (deferring a connect made
+     *  during initial load), else connect the session directly. */
+    private dialConnect(url: string): void {
+        if (this.connectDispatcher) this.connectDispatcher(url);
+        else this.session.connect(url);
     }
 
     disconnect(): void {
@@ -1041,6 +1054,10 @@ export class ScriptingAPI {
 
     setSendRequestDispatcher(fn: ((text: string) => boolean) | null): void {
         this.sendRequestDispatcher = fn;
+    }
+
+    setConnectDispatcher(fn: ((url: string) => void) | null): void {
+        this.connectDispatcher = fn;
     }
 
     setFeedDispatcher(fn: ((groups: { text: string; type: string }[]) => void) | null): void {
@@ -3525,7 +3542,7 @@ export class ScriptingAPI {
         if (save && conn) {
             state.updateConnection(this.connectionId, { ...conn, mode: 'mud', host, port });
         }
-        this.session.connect(url);
+        this.dialConnect(url);
         return true;
     }
 
