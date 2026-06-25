@@ -192,7 +192,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // global OSC 4/104 path. Turning it off also snaps the palette back to the
     // user's colors, revoking anything the server already redefined this session.
     useEffect(() => {
-        const allowed = serverRedefineColors !== false;
+        const allowed = serverRedefineColors === true;
         setServerRedefineColorsAllowed(allowed);
         if (!allowed) resetAllPaletteColors();
         return () => setServerRedefineColorsAllowed(true);

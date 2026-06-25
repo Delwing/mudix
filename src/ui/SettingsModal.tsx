@@ -126,7 +126,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const commandEchoBackground = useAppStore(s => selectProfileField(s, connectionId, 'commandEchoBackground'));
     const ansiPalette = useAppStore(s => selectProfileField(s, connectionId, 'ansiPalette'));
     const serverRedefineColors = useAppStore(s => selectProfileField(s, connectionId, 'serverRedefineColors'));
-    const serverRedefineOn = serverRedefineColors !== false;
+    const serverRedefineOn = serverRedefineColors === true;
     const outputFont = useAppStore(s => selectProfileField(s, connectionId, 'outputFont'));
     const fontSize = useAppStore(s => selectProfileField(s, connectionId, 'fontSize'));
     const outputWrapAt = useAppStore(s => selectProfileField(s, connectionId, 'outputWrapAt'));

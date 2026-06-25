@@ -96,10 +96,10 @@ export interface ProfileSettings {
      *  bright variants. Each entry is `#rrggbb` or undefined (fall through to
      *  the built-in default). `undefined` for the whole array = no override. */
     ansiPalette?: (string | undefined)[];
-    /** Mudlet "Allow server to redefine your colors". When enabled (the
-     *  default), the server may remap the ANSI/256 palette at runtime via OSC 4
-     *  (set color) / OSC 104 (reset). When disabled, those sequences are ignored
-     *  and the user palette stands. `undefined` = enabled. */
+    /** Mudlet "Allow server to redefine your colors". When enabled, the server
+     *  may remap the ANSI/256 palette at runtime via OSC 4 (set color) / OSC 104
+     *  (reset). When disabled, those sequences are ignored and the user palette
+     *  stands. Off by default — only an explicit `true` enables it. */
     serverRedefineColors?: boolean;
     /** Mudlet "Network packet timeout": how long (ms) to buffer a partial line
      *  (text after the last `\n` of a WebSocket frame) before flushing it as a
