@@ -16,6 +16,7 @@ import { SessionLogger } from './logging/SessionLogger';
 import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, connectionSecureTransport, PROTOCOL_DEFAULTS, type MudConnection } from './storage';
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
+import { setBaseTitle, flashTitle, clearTitleFlash } from './utils/documentTitle';
 import { applyAnsiPalette, setServerRedefineColorsAllowed, resetAllPaletteColors } from './mud/text/colors';
 import type { MudSession } from './mud/MudSession';
 import { MUD_TELNET_SUBPROTOCOL } from './mud/connection/MudClient';
@@ -89,6 +90,9 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const wsTelnetSubprotocol = protocols?.wsTelnetSubprotocol ?? PROTOCOL_DEFAULTS.wsTelnetSubprotocol;
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
     const loggingEnabled = useAppStore(s => selectProfileField(s, connection.id, 'loggingEnabled')) !== false;
+    // Flash the tab title when server data arrives while the tab is unfocused
+    // (Mudlet's "notify on new data" / taskbar blink). Off unless explicitly on.
+    const notifyOnNewData = useAppStore(s => selectProfileField(s, connection.id, 'notifyOnNewData')) === true;
     // Mudlet's `showTabConnectionIndicators` (config bag). Defaults to true; when
     // on, the window title is prefixed with a connection-status dot. mudix has no
     // tab strip, so the indicator (and always the profile name) live in the title.
@@ -160,15 +164,28 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         return () => { document.documentElement.classList.remove('blink-text-enabled'); };
     }, [blinkTextEnabled]);
 
-    // Window title: always the profile name, prefixed with a connection-status
-    // dot when showTabConnectionIndicators is on. Restored to the bare app name
-    // when the profile is closed (back to the connection screen).
+    // Window title steady state: the profile name, prefixed with a
+    // connection-status dot when showTabConnectionIndicators is on. Goes through
+    // the central title controller so a new-data / alert() flash composes on top
+    // instead of overwriting it.
     useEffect(() => {
         const dot = status === 'connected' ? '🟢' : status === 'connecting' ? '🟡' : '🔴';
-        const prefix = showConnectionIndicator ? `${dot} ` : '';
-        document.title = `${prefix}${connection.name} — mudix`;
-        return () => { document.title = 'mudix'; };
+        setBaseTitle(`${connection.name} — mudix`, showConnectionIndicator ? dot : '');
     }, [connection.name, status, showConnectionIndicator]);
+
+    // Restore the bare app title (and stop any flash) when the profile closes.
+    useEffect(() => () => { clearTitleFlash(); setBaseTitle('mudix'); }, []);
+
+    // "Notify on new data": flash the title whenever the server flushes lines
+    // while the tab is unfocused. flushLines is the server-only data path
+    // (excludes local command echo), matching Mudlet's notify-on-incoming-data.
+    // flashTitle() no-ops while focused and clears itself when the user returns.
+    useEffect(() => {
+        if (!notifyOnNewData) return;
+        const onData = () => flashTitle();
+        session.events.on('flushLines', onData);
+        return () => session.events.off('flushLines', onData);
+    }, [notifyOnNewData, session]);
 
     // Color for the local echo of sent commands (Settings → Colors). Empty
     // foreground falls back to Mudlet's olive; empty background = none.

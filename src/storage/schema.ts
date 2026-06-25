@@ -124,6 +124,10 @@ export interface ProfileSettings {
      *  enabled so existing profiles opt in without a migration; set to `false`
      *  to stop recording for this profile. */
     loggingEnabled?: boolean;
+    /** Flash the browser tab title (Mudlet's taskbar-blink equivalent) when new
+     *  server data arrives while the mudix tab/window is unfocused. Off unless
+     *  explicitly set to true. */
+    notifyOnNewData?: boolean;
     /** User-tunable subset of mudlet-map-renderer's Settings object. Fields
      *  are forwarded onto the live renderer.settings on mount and whenever
      *  the user changes them in the Mapper tab. Missing fields fall through

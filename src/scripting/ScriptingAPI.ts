@@ -17,6 +17,7 @@ import { openOsc8Menu } from '../ui/output/osc8Menu';
 import { namedColorToState } from '../mud/text/colorParsers';
 import { colorCodes } from '../mud/text/colors';
 import { Console } from '../mud/text/Console';
+import { flashTitle } from '../utils/documentTitle';
 import { MspParser } from '../mud/protocol';
 import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
 import { getHeldModifiers } from './heldModifiers';
@@ -3454,33 +3455,9 @@ export class ScriptingAPI {
      * active.
      */
     alert(seconds?: number): void {
-        if (typeof document === 'undefined') return;
-        if (document.hasFocus()) return;
         const dur = Number.isFinite(seconds) && (seconds as number) > 0 ? (seconds as number) : 10;
-        if (this.alertTimer !== null) {
-            clearInterval(this.alertTimer);
-            this.alertTimer = null;
-            if (this.alertOriginalTitle !== null) document.title = this.alertOriginalTitle;
-        }
-        this.alertOriginalTitle = document.title;
-        const base = this.alertOriginalTitle;
-        let on = false;
-        const flip = () => {
-            on = !on;
-            document.title = on ? `● ${base}` : base;
-        };
-        flip();
-        this.alertTimer = window.setInterval(flip, 1000);
-        const stop = () => {
-            if (this.alertTimer !== null) { clearInterval(this.alertTimer); this.alertTimer = null; }
-            if (this.alertOriginalTitle !== null) { document.title = this.alertOriginalTitle; this.alertOriginalTitle = null; }
-            window.removeEventListener('focus', stop);
-        };
-        window.addEventListener('focus', stop);
-        window.setTimeout(stop, dur * 1000);
+        flashTitle(dur);
     }
-    private alertTimer: number | null = null;
-    private alertOriginalTitle: string | null = null;
 
     /**
      * Mudlet `getMainConsoleWidth()` — pixel width of the main console's text

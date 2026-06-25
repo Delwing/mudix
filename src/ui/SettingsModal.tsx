@@ -135,6 +135,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connectionId, 'promptTimeoutMs'));
     const loggingEnabled = useAppStore(s => selectProfileField(s, connectionId, 'loggingEnabled'));
     const loggingOn = loggingEnabled !== false;
+    const notifyOnNewData = useAppStore(s => selectProfileField(s, connectionId, 'notifyOnNewData')) === true;
     const outputBorders = useAppStore(s => selectProfileField(s, connectionId, 'outputBorders'));
     const borders = outputBorders ?? EMPTY_BORDERS;
     const autoClearInput = useAppStore(s => selectProfileField(s, connectionId, 'autoClearInput')) === true;
@@ -732,6 +733,22 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         aria-labelledby="logging-enabled-label"
                                         checked={loggingOn}
                                         onChange={next => patchProfile({ loggingEnabled: next })}
+                                    />
+                                </div>
+                                <div className="settings-row">
+                                    <span className="settings-label" id="notify-new-data-label">
+                                        Flash title on new data
+                                        <HelpTip label="About new-data notification">
+                                            When the mudix tab is unfocused, flash the browser tab title as new
+                                            output arrives — the web equivalent of Mudlet's taskbar blink. Clears
+                                            when you return to the tab.
+                                        </HelpTip>
+                                    </span>
+                                    <Toggle
+                                        id="notify-new-data"
+                                        aria-labelledby="notify-new-data-label"
+                                        checked={notifyOnNewData}
+                                        onChange={next => patchProfile({ notifyOnNewData: next })}
                                     />
                                 </div>
                                 <div className="settings-row">
