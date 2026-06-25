@@ -156,6 +156,73 @@
     min-height: 0;
 }
 
+/* ── Mobile single-column layout ────────────────────────────────
+   Rendered by MobileLayout only on phone-width viewports: one view at
+   a time (main output or a panel) with a bottom switcher. */
+.mobile-layout {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.mobile-layout__views {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+/* The active panel slot fills the view area like the main output does. */
+.mobile-panel-slot {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+}
+
+.mobile-switcher {
+    display: flex;
+    flex-shrink: 0;
+    gap: 4px;
+    padding: 4px 6px;
+    background: var(--bg-glass);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-top: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;            /* the bar scrolls; no visible track */
+}
+.mobile-switcher::-webkit-scrollbar { display: none; }
+
+.mobile-switcher__tab {
+    flex: 0 0 auto;
+    max-width: 45vw;
+    height: 36px;
+    padding: 0 14px;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    color: var(--text-dim);
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.mobile-switcher__tab--active {
+    color: var(--btn-primary-text);
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
 /* ── Dock areas ─────────────────────────────────────────────── */
 .dock-area {
     display: flex;

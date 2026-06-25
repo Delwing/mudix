@@ -5,6 +5,7 @@ import type { DockSide, DragState, ScriptWindowRenderData } from '../windows/typ
 import type { WindowManager } from '../windows/WindowManager';
 import { OutputArea } from '../output/OutputArea';
 import { DockArea } from './DockArea';
+import { MobileLayout } from './MobileLayout';
 import { FloatingWindowLayer } from './FloatingWindowLayer';
 import { PopoutWindow } from './PopoutWindow';
 import { WindowContextMenu } from './WindowContextMenu';
@@ -15,6 +16,7 @@ import { useButtonStrips } from '../buttons/ButtonsBar';
 import type { ScriptingEngine } from '../../scripting/ScriptingEngine';
 import type { ProfileVFS } from '../../scripting/vfs/ProfileVFS';
 import { DEFAULT_STICKY_LINES } from '../../hooks/useOutput';
+import { useViewportMode } from '../../hooks/useViewportMode';
 import './ScriptWindow.css';
 
 interface ContentLayoutProps {
@@ -47,6 +49,7 @@ export function ContentLayout({
     });
     const [dragState,   setDragState]   = useState<DragState | null>(null);
     const [menuPos,     setMenuPos]     = useState<{ x: number; y: number } | null>(null);
+    const isMobile = useViewportMode() === 'mobile';
 
     const handleTitlebarContextMenu = useCallback((e: React.MouseEvent) => {
         e.preventDefault();
@@ -99,6 +102,35 @@ export function ContentLayout({
     const showBottom = hasBottom || dragState?.potentialDock === 'bottom';
 
     const buttonStrips = useButtonStrips({ connectionId, engineRef: scriptingEngineRef ?? NULL_ENGINE_REF, vfs });
+
+    // Content pool — one panel component per open window, mounted once for its
+    // lifetime. Each renders into a stable portal-target div that the layout
+    // (dock slots / floating frames on desktop, the mobile switcher on phones)
+    // physically moves around without ever unmounting the component. Shared by
+    // both the desktop and mobile branches so panel state survives a rotate.
+    const contentPool = windows.map(w => createPortal(
+        w.kind === 'text' ? <TextPanel id={w.id} title={w.title} manager={manager} labels={session.labels} cmdLines={session.cmdLines} scrollBoxes={session.scrollBoxes} fontSize={w.fontSize} fontFamily={w.fontFamily} wrapAt={w.wrapAt} wrapIndent={w.wrapIndent} wrapHangingIndent={w.wrapHangingIndent} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} cmdLineEnabled={w.cmdLineEnabled} cmdLineStyleSheet={w.cmdLineStyleSheet} cmdLineValue={w.cmdLineValue} cmdLineValueSeq={w.cmdLineValueSeq} />
+      : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} labels={session.labels} cmdLines={session.cmdLines} scrollBoxes={session.scrollBoxes} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} cmdLineEnabled={w.cmdLineEnabled} cmdLineStyleSheet={w.cmdLineStyleSheet} cmdLineValue={w.cmdLineValue} cmdLineValueSeq={w.cmdLineValueSeq} />
+      : <MapPanel id={w.id} manager={manager} connectionId={connectionId} />,
+        manager.getOrCreatePortalTarget(w.id),
+        w.id,
+    ));
+
+    if (isMobile) {
+        return (
+            <div className="content-layout">
+                <MobileLayout
+                    session={session}
+                    manager={manager}
+                    windows={laidOut}
+                    stickyLines={stickyLines}
+                    commandInputRef={commandInputRef}
+                    commandBar={commandBar}
+                />
+                {contentPool}
+            </div>
+        );
+    }
 
     return (
         <div className="content-layout">
@@ -165,16 +197,7 @@ export function ContentLayout({
                 />
             )}
 
-            {/* Content pool — one panel component per open window, mounted once for its lifetime.
-                Each panel renders into a stable portal-target div that shells physically move
-                between dock slots and floating frames without ever unmounting the component. */}
-            {windows.map(w => createPortal(
-                w.kind === 'text' ? <TextPanel id={w.id} title={w.title} manager={manager} labels={session.labels} cmdLines={session.cmdLines} scrollBoxes={session.scrollBoxes} fontSize={w.fontSize} fontFamily={w.fontFamily} wrapAt={w.wrapAt} wrapIndent={w.wrapIndent} wrapHangingIndent={w.wrapHangingIndent} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} cmdLineEnabled={w.cmdLineEnabled} cmdLineStyleSheet={w.cmdLineStyleSheet} cmdLineValue={w.cmdLineValue} cmdLineValueSeq={w.cmdLineValueSeq} />
-              : w.kind === 'html' ? <HtmlPanel id={w.id} manager={manager} labels={session.labels} cmdLines={session.cmdLines} scrollBoxes={session.scrollBoxes} backgroundColor={w.backgroundColor} backgroundImage={w.backgroundImage} cmdLineEnabled={w.cmdLineEnabled} cmdLineStyleSheet={w.cmdLineStyleSheet} cmdLineValue={w.cmdLineValue} cmdLineValueSeq={w.cmdLineValueSeq} />
-              : <MapPanel id={w.id} manager={manager} connectionId={connectionId} />,
-                manager.getOrCreatePortalTarget(w.id),
-                w.id,
-            ))}
+            {contentPool}
         </div>
     );
 }
