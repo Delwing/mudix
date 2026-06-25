@@ -51,6 +51,13 @@ export default defineConfig({
     },
     build: {
         rollupOptions: {
+            // Multi-page: main app + the scripting-worker PoC (poc-worker.html).
+            // Dev (`npm run dev`) serves both automatically — visit /poc-worker.html.
+            // The build step needs them declared so both end up in dist/.
+            input: {
+                main: resolve('index.html'),
+                pocWorker: resolve('poc-worker.html'),
+            },
             onwarn(warning, defaultHandler) {
                 if (
                     warning.code === 'COMMONJS_VARIABLE_IN_ESM' &&
