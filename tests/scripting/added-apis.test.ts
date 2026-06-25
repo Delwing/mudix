@@ -537,6 +537,35 @@ describe('connectExitStub', () => {
   });
 });
 
+// getRooms / getRoomCoordinates go through the raw lua_* marshalling path
+// (issue #2). These guard that the raw build keeps the exact shapes the
+// generic path produced: getRooms → { [roomId] = name } (wasmoon stringifies
+// the integer object keys), getRoomCoordinates → three unpacked values.
+describe('raw map getters — getRooms / getRoomCoordinates', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('getRooms returns { [roomId] = name } (string-keyed, as the generic path was)', () => {
+    env.run('addRoom(7); setRoomName(7, "Plaza")');
+    env.run('addRoom(8); setRoomName(8, "Alley")');
+    // wasmoon stringifies integer object keys, so rooms are keyed "7"/"8".
+    // The raw marshalling preserves that exactly (no behaviour change).
+    expect(env.run('return getRooms()["7"]')).toBe('Plaza');
+    expect(env.run('return getRooms()["8"]')).toBe('Alley');
+    // pairs() iterates every entry regardless of key representation.
+    expect(env.run('local n=0 for _ in pairs(getRooms()) do n=n+1 end return n')).toBe(2);
+  });
+
+  it('getRoomCoordinates unpacks to x, y, z (and false on a miss)', () => {
+    env.run('addRoom(9); setRoomCoordinates(9, 3, -4, 2)');
+    expect(env.run('return (select(1, getRoomCoordinates(9)))')).toBe(3);
+    expect(env.run('return (select(2, getRoomCoordinates(9)))')).toBe(-4);
+    expect(env.run('return (select(3, getRoomCoordinates(9)))')).toBe(2);
+    expect(env.run('return (getRoomCoordinates(999))')).toBe(false);
+  });
+});
+
 describe('deleteMap', () => {
   let env: TestRuntime;
   beforeEach(async () => { env = await createTestRuntime(); });

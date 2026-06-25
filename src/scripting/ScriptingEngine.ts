@@ -2265,6 +2265,9 @@ export class ScriptingEngine {
         this.flushProfileData();
         for (const t of this.moduleSyncTimers.values()) clearTimeout(t);
         this.moduleSyncTimers.clear();
+        // Cancel a still-pending deferred mapOpenEvent so it can't fire mid/post
+        // teardown (the emit would no-op anyway, but don't leave a stray timer).
+        this.mapOpen.dispose();
         this.storeUnsub?.();
         this.storeUnsub = null;
         for (const unsub of this.unsubs) unsub();

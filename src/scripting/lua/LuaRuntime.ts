@@ -28,6 +28,11 @@ import xterm256 from '../../mud/text/xterm256';
 import {HttpService} from '../http/HttpService';
 import {TtsManager} from '../../ui/tts/TtsManager';
 
+// wasmoon doesn't re-export its opaque lua_State pointer type; derive it from
+// the public API so the raw lua_* bindings (see pushJsValue / registerRawGlobal)
+// can be typed without reaching into the package internals.
+type LuaState = Lua['global']['address'];
+
 // All *.lua and *.json files under mudlet-lua/ are served via the VFS at
 // /lua/<relative-path>. Adding a new file to the directory tree automatically
 // makes it available to dofile() / io.open(). JSON files ship the translation
@@ -159,6 +164,10 @@ export class LuaRuntime implements IScriptingRuntime {
     // FS notifier, so this only catches Lua-driven changes; external edits to
     // a linked folder still need a ProfileVFS.resync() to be observed.
     private readonly watchedPaths = new Set<string>();
+    // Emscripten function-table slots allocated by registerRawGlobal() for the
+    // raw lua_CFunction map getters. Freed in destroy() so a profile/connection
+    // switch doesn't leak table entries across runtime lifecycles.
+    private readonly rawFnPtrs: number[] = [];
     private http!: HttpService;
     // Web Speech text-to-speech backend (Mudlet ttsSpeak/ttsQueue/...). Raises
     // tts* state + change events through emitEvent, same as HttpService.
@@ -1384,8 +1393,14 @@ export class LuaRuntime implements IScriptingRuntime {
             const area = typeof a === 'number' ? a : (typeof a === 'string' ? a : Number(a));
             return this.api.map.setRoomArea(rooms, area);
         });
-        // getRoomCoordinates returns {x,y,z} as a table; a Lua wrapper below unpacks to three values.
-        this.lua.global.set('__getRoomCoordinates', (id: number)      => this.api.map.getRoomCoordinates(id));
+        // getRoomCoordinates returns [x,y,z] as a 0-indexed table; a Lua wrapper
+        // below unpacks to three values. Raw-marshalled (issue #2) — undefined
+        // (room miss) lands as nil, which Bridge.lua turns into the `false` miss.
+        this.registerRawGlobal('__getRoomCoordinates', (L) => {
+            const id = this.lua.global.luaApi.lua_tointeger(L, 1);
+            this.pushJsValue(L, this.api.map.getRoomCoordinates(id));
+            return 1;
+        });
         this.lua.global.set('setRoomCoordinates',   (id: number, x: number, y: number, z: number) => this.api.map.setRoomCoordinates(id, x, y, z));
         this.lua.global.set('getRoomsByPosition',   (areaId: number, x: number, y: number, z: number) => this.api.map.getRoomsByPosition(areaId, x, y, z));
         this.lua.global.set('getRoomEnv',   (id: number)              => this.api.map.getRoomEnv(id));
@@ -1445,14 +1460,22 @@ export class LuaRuntime implements IScriptingRuntime {
         // With `fullErr=true` Mudlet differentiates the miss cases: returns
         // (false, errMsg). The raw entry point reports which case applied so
         // the Bridge.lua wrapper can shape the multi-return.
-        this.lua.global.set('__getRoomUserData', (id: unknown, k: unknown) => {
-            const rid = Number(id);
-            const key = String(k ?? '');
-            if (!Number.isFinite(rid) || !this.api.map.roomExists(rid)) {
-                return { miss: 'room', id: rid };
+        // Raw-marshalled (issue #2): this is the hottest per-room query in the
+        // map-iteration trace. The {miss}/{value} shape is unchanged, so the
+        // Bridge.lua getRoomUserData wrapper consumes it exactly as before.
+        this.registerRawGlobal('__getRoomUserData', (L) => {
+            const api = this.lua.global.luaApi;
+            const rid = api.lua_tointeger(L, 1);
+            const key = api.lua_tolstring(L, 2, null) ?? '';
+            let result: unknown;
+            if (!this.api.map.roomExists(rid)) {
+                result = { miss: 'room', id: rid };
+            } else {
+                const v = this.api.map.getRoomUserData(rid, key);
+                result = v === undefined ? { miss: 'key', key } : { value: v };
             }
-            const v = this.api.map.getRoomUserData(rid, key);
-            return v === undefined ? { miss: 'key', key } : { value: v };
+            this.pushJsValue(L, result);
+            return 1;
         });
         this.lua.global.set('setRoomUserData', (id: number, k: string, v: string)=> this.api.map.setRoomUserData(id, k, v));
         // Mudlet `getRoomUserDataKeys(id)` → sequential table of keys, or nil
@@ -1521,7 +1544,13 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet's setExit/setExitStub accept the direction either as the
         // numeric 1-12 index or as a name ("north"/"n"/etc.); MapStore's
         // parseDirection normalizes both forms.
-        this.lua.global.set('getRoomExits',      (id: number)                          => this.api.map.getRoomExits(id));
+        // Raw-marshalled (issue #2): returns a {dir = roomId} table (string keys,
+        // integer values), identical to the generic path. Empty table for a miss.
+        this.registerRawGlobal('getRoomExits', (L) => {
+            const id = this.lua.global.luaApi.lua_tointeger(L, 1);
+            this.pushJsValue(L, this.api.map.getRoomExits(id));
+            return 1;
+        });
         // Mudlet getPath(from, to). Returns a string error message (validation
         // failure or no-path) or the PathfindResult object. The Bridge.lua
         // wrapper resets the speedWalkPath/Dir/Weight globals on every call,
@@ -2030,8 +2059,18 @@ export class LuaRuntime implements IScriptingRuntime {
             if (r === true) return true;
             return { ok: false, err: typeof r === 'object' ? r.err : 'setAreaName: failed' };
         });
-        this.lua.global.set('getAreaRooms',   (areaId: number)          => this.api.map.getAreaRooms(areaId));
-        this.lua.global.set('getRooms',       ()                        => this.api.map.getRooms());
+        // Raw-marshalled (issue #2): getAreaRooms → 0-indexed array of room ids
+        // (getAreaRooms1 reindexes to 1-based); getRooms → { [roomId] = name }
+        // with string keys, both identical to the generic path.
+        this.registerRawGlobal('getAreaRooms', (L) => {
+            const areaId = this.lua.global.luaApi.lua_tointeger(L, 1);
+            this.pushJsValue(L, this.api.map.getAreaRooms(areaId));
+            return 1;
+        });
+        this.registerRawGlobal('getRooms', (L) => {
+            this.pushJsValue(L, this.api.map.getRooms());
+            return 1;
+        });
         // Mudlet getMapLabels(areaID) → { [labelID] = labelText }. Bridge.lua
         // re-keys via tonumber since wasmoon hands object keys across as
         // numeric strings; Mudlet scripts expect to index by integer label id.
@@ -4309,7 +4348,13 @@ end`,
     setGmcpValue(path: string, value: unknown): void {
         if (this.destroyed || !path) return;
         this.lua.global.set('__mudix_gmcp_path', path);
-        this.lua.global.set('__mudix_gmcp_val', this.toLuaValue(value));
+        // Raw-push the (potentially large, deeply nested) decoded payload instead
+        // of wasmoon's generic pushValue, whose ref/unref bookkeeping is O(n²) in
+        // the node count (issue #2). pushJsValue mirrors toLuaValue's conventions
+        // and delegates the yajl.null sentinel leaves back to wasmoon.
+        const L = this.lua.global.address;
+        this.pushJsValue(L, this.toLuaValue(value));
+        this.lua.global.luaApi.lua_setglobal(L, '__mudix_gmcp_val');
         this.runChunk('__mudix_set_gmcp(__mudix_gmcp_path, __mudix_gmcp_val)', `set-gmcp "${path}"`);
     }
 
@@ -4319,7 +4364,11 @@ end`,
     setMsdpValue(path: string, value: unknown): void {
         if (this.destroyed || !path) return;
         this.lua.global.set('__mudix_msdp_path', path);
-        this.lua.global.set('__mudix_msdp_val', this.toLuaValue(value));
+        // Raw-push the decoded value (see setGmcpValue) to avoid the O(n²)
+        // generic pushValue on large nested MSDP tables (issue #2).
+        const L = this.lua.global.address;
+        this.pushJsValue(L, this.toLuaValue(value));
+        this.lua.global.luaApi.lua_setglobal(L, '__mudix_msdp_val');
         this.runChunk('__mudix_set_msdp(__mudix_msdp_path, __mudix_msdp_val)', `set-msdp "${path}"`);
     }
 
@@ -4455,6 +4504,103 @@ end`,
         return { text, isBold, isItalic, color };
     }
 
+    /**
+     * Push a JS value onto `L`'s stack via the raw lua_* C API, mirroring
+     * wasmoon's pushValue conventions EXACTLY so behaviour is byte-identical to
+     * the generic path — only the O(n²) ref/unref bookkeeping wasmoon's
+     * pushTable does (see issue #2) is gone:
+     *   - integer-valued numbers → lua_pushinteger, others → lua_pushnumber
+     *   - arrays keyed by Object.keys + lua_rawseti, so dense 0-based arrays
+     *     (map getters) stay 0-indexed and the sparse 1-based arrays toLuaValue
+     *     builds stay 1-indexed — identical to wasmoon's arrIndexs handling
+     *   - plain objects → string keys via lua_setfield
+     * Anything that isn't a primitive / plain array / plain object (wasmoon
+     * LuaTable proxies such as the yajl.null sentinel, functions, Maps, class
+     * instances) is delegated to wasmoon's own pushValue, which is O(1) for
+     * these leaves and preserves their reference identity. Such values only
+     * appear as leaves of GMCP/MSDP payloads (toLuaValue rebuilds every
+     * container as a fresh plain array/object) and always push on the main
+     * thread; on a coroutine stack we can't safely delegate, so degrade to nil.
+     */
+    private pushJsValue(L: LuaState, value: unknown, depth = 0): void {
+        const api = this.lua.global.luaApi;
+        if (value === null || value === undefined) {
+            api.lua_pushnil(L);
+            return;
+        }
+        switch (typeof value) {
+            case 'number':
+                if (Number.isInteger(value)) api.lua_pushinteger(L, value);
+                else api.lua_pushnumber(L, value);
+                return;
+            case 'string':
+                api.lua_pushstring(L, value);
+                return;
+            case 'boolean':
+                api.lua_pushboolean(L, value ? 1 : 0);
+                return;
+        }
+        const isArray = Array.isArray(value);
+        if (!isArray) {
+            const proto = Object.getPrototypeOf(value);
+            if (proto !== Object.prototype && proto !== null) {
+                // Proxy / function / Map / class instance — defer to wasmoon so
+                // reference identity is preserved. Safe only on the main thread.
+                if (L === this.lua.global.address) this.lua.global.pushValue(value);
+                else api.lua_pushnil(L);
+                return;
+            }
+        }
+        // Guard against pathological / cyclic input overflowing the WASM stack.
+        // Map data and decoded GMCP/MSDP are shallow JSON, so this never trips
+        // in practice; it just bounds the blast radius of a surprise cycle.
+        if (depth > 64) { api.lua_pushnil(L); return; }
+        api.lua_checkstack(L, 4);
+        const keys = Object.keys(value as object);
+        if (isArray) {
+            const arr = value as unknown[];
+            api.lua_createtable(L, arr.length, 0);
+            for (const k of keys) {
+                this.pushJsValue(L, arr[Number(k)], depth + 1);
+                api.lua_rawseti(L, -2, Number(k));
+            }
+        } else {
+            api.lua_createtable(L, 0, keys.length);
+            for (const k of keys) {
+                this.pushJsValue(L, (value as Record<string, unknown>)[k], depth + 1);
+                api.lua_setfield(L, -2, k);
+            }
+        }
+    }
+
+    /**
+     * Register `name` as a raw lua_CFunction (bypassing wasmoon's generic
+     * pushValue marshalling for the return value). `fn` receives the lua_State
+     * pointer, reads its args via the raw lua_* API, pushes its results with
+     * pushJsValue(), and returns the result count. A throw across the WASM
+     * trampoline would corrupt the C stack, so it is contained and the getter
+     * degrades to a single nil (these are read-only queries — a nil miss is a
+     * safe fallback).
+     */
+    private registerRawGlobal(name: string, fn: (L: LuaState) => number): void {
+        const api = this.lua.global.luaApi;
+        const mod = api.module as unknown as {
+            addFunction(f: (L: LuaState) => number, sig: string): number;
+        };
+        const ptr = mod.addFunction((L: LuaState) => {
+            try {
+                return fn(L);
+            } catch (err) {
+                console.error(`[mudix] raw lua binding "${name}" threw (ignored):`, err);
+                api.lua_pushnil(L);
+                return 1;
+            }
+        }, 'ii');
+        this.rawFnPtrs.push(ptr);
+        api.lua_pushcfunction(this.lua.global.address, ptr);
+        api.lua_setglobal(this.lua.global.address, name);
+    }
+
     destroy(): void {
         if (this.destroyed) return; // idempotent — a double lua_close corrupts the heap
         this.destroyed = true;
@@ -4472,6 +4618,18 @@ end`,
             this.lua.global.close();
         } catch (err) {
             console.error('[mudix] error closing Lua runtime (ignored):', err);
+        }
+        // Release the Emscripten function-table slots for the raw map getters.
+        // The module survives lua_close, so the slots would otherwise leak for
+        // the life of the page across repeated profile switches.
+        try {
+            const mod = this.lua.global.luaApi.module as unknown as {
+                removeFunction(p: number): void;
+            };
+            for (const ptr of this.rawFnPtrs) mod.removeFunction(ptr);
+            this.rawFnPtrs.length = 0;
+        } catch (err) {
+            console.error('[mudix] error freeing raw lua bindings (ignored):', err);
         }
     }
 }
