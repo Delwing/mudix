@@ -209,7 +209,14 @@ export class MxpParser {
     }
 
     private effectiveMode(): MxpMode {
-        return this.lockedMode ?? this.lineMode;
+        // The current line's mode. Lock modes (5/6/7) only change the *default*
+        // that `resetTransientMode` restores at the start of each new line — they
+        // are NOT an override that beats a per-line mode tag (0/1/2). Servers that
+        // wrap each control in `ESC[1z…ESC[7z` (e.g. Avalon) rely on a later
+        // `ESC[1z` re-entering secure mode for the current line even though the
+        // locked default is "locked"; returning `lockedMode` here instead would
+        // make every tag after the first `ESC[7z` render as literal text.
+        return this.lineMode;
     }
 
     private resetTransientMode(): void {

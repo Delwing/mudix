@@ -102,6 +102,26 @@ describe('MxpParser — secure-mode gating', () => {
     expect(r.plain).toBe('<b>not bold</b>');
     expect(r.links).toHaveLength(0);
   });
+
+  it('lets a per-line SECURE tag override a locked-locked default (Avalon)', () => {
+    // Avalon wraps every MXP control in ESC[1z … ESC[7z: ESC[7z (lock-locked)
+    // sets the *default* line mode, ESC[1z re-enters SECURE for the next tag.
+    // A lock mode must not beat a per-line mode tag on the same/following line,
+    // or every tag after the first ESC[7z degrades to literal text.
+    const { parser, sent } = makeParser();
+
+    // Handshake frame: ESC[7z poisons the locked default; the second handshake
+    // tag must still fire its reply.
+    parser.parseLine(`${SECURE}<support>${ESC}[7z${SECURE}<version>${ESC}[7z`);
+    expect(sent.some(s => /<SUPPORTS /.test(s))).toBe(true);
+    expect(sent.some(s => /<VERSION /.test(s))).toBe(true);
+
+    // Later game line: a <send> wrapped the same way must still produce a link.
+    const r = parser.parseLine(`Tippe ${SECURE}<send hilfe>${ESC}[7zhilfe${SECURE}</send> dazu`);
+    expect(r.plain).toBe('Tippe hilfe dazu');
+    expect(r.links).toHaveLength(1);
+    expect(r.links[0]).toMatchObject({ kind: 'command', payload: 'hilfe' });
+  });
 });
 
 describe('MxpParser — links', () => {
