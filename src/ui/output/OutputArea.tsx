@@ -15,7 +15,7 @@ import { backgroundImageStyle } from './backgroundImageStyle';
 interface OutputAreaProps {
     session: MudSession;
     stickyLines?: number;
-    commandInputRef?: React.RefObject<HTMLInputElement | null>;
+    commandInputRef?: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>;
 }
 
 export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, commandInputRef }: OutputAreaProps) {

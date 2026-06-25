@@ -10,7 +10,7 @@ interface CommandBarProps {
     command: string;
     onCommandChange: (command: string) => void;
     passwordMode?: boolean;
-    commandInputRef: React.RefObject<HTMLInputElement | null>;
+    commandInputRef: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>;
     onSubmit: () => void;
     cmdLineMenu: CmdLineMenuRegistry;
     /** Tab-completion suggestions added via Mudlet's addCmdLineSuggestion API.
@@ -55,6 +55,11 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
     // re-renders. Set inside the keydown handler, applied in useLayoutEffect.
     const pendingCaretEndRef = useRef(false);
 
+    // Explicit caret position to restore after a re-render (e.g. inserting a
+    // newline mid-text via Ctrl/Shift+Enter). Takes precedence over the
+    // pin-to-end behaviour above.
+    const pendingCaretPosRef = useRef<number | null>(null);
+
     // In-progress argument-word Tab cycle. `lastValue` is the value we last wrote
     // — if the box no longer matches it, the user has edited and the cycle is
     // stale, so the next Tab recomputes matches from scratch.
@@ -87,7 +92,9 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
     );
 
     const ghostText = useMemo(() => {
-        if (passwordMode || ghostHidden || matches.length === 0) return '';
+        // No inline ghost while composing a multi-line command — the overlay is
+        // a single centred line and would render against the wrong row.
+        if (passwordMode || ghostHidden || matches.length === 0 || command.includes('\n')) return '';
         const top = matches[0];
         // Only a true prefix match produces a visible inline ghost — anything
         // else would shift the displayed glyph and look like a glitch.
@@ -107,17 +114,37 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
     }, [command]);
 
     useLayoutEffect(() => {
+        const el = commandInputRef.current;
+        if (pendingCaretPosRef.current !== null) {
+            const pos = pendingCaretPosRef.current;
+            pendingCaretPosRef.current = null;
+            if (el) el.setSelectionRange(pos, pos);
+            return;
+        }
         if (!pendingCaretEndRef.current) return;
         pendingCaretEndRef.current = false;
-        const el = commandInputRef.current;
         if (!el) return;
         const len = el.value.length;
         el.setSelectionRange(len, len);
     });
 
+    // Auto-grow the multi-line command box to fit its content (up to the CSS
+    // max-height, beyond which it scrolls). Reset to 'auto' first so it can
+    // shrink back when lines are removed. Single-line <input> (password mode)
+    // is left untouched.
+    useLayoutEffect(() => {
+        const el = commandInputRef.current;
+        if (!el || el.tagName !== 'TEXTAREA') return;
+        el.style.height = 'auto';
+        el.style.height = `${el.scrollHeight}px`;
+    }, [command, commandInputRef]);
+
+    // Focus on mount and whenever the element swaps between the command
+    // <textarea> and the password <input> (mode toggle), so the user can keep
+    // typing without re-clicking the box.
     useEffect(() => {
         commandInputRef.current?.focus();
-    }, [commandInputRef]);
+    }, [commandInputRef, passwordMode]);
 
     useEffect(() => {
         if (!menu) return;
@@ -141,7 +168,7 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         onCommandChange(val);
     };
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const val = e.target.value;
         draftRef.current = val;
         setCursor(-1);
@@ -150,8 +177,7 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         setValue(val);
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
+    const submit = () => {
         if (isComposingRef.current) return;
         // Empty Enter is still sent — many MUDs treat a bare newline as a
         // meaningful command (continue prompts, "look" repeats). Just don't
@@ -162,6 +188,28 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         setGhostHidden(false);
         resetCycle();
         onSubmit();
+    };
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        submit();
+    };
+
+    // Insert a newline at the caret. Mudlet binds Ctrl+Enter to this so the user
+    // can stage several commands in the box; a plain Enter then sends each line
+    // (split downstream in handleSend). Shift+Enter is accepted too as the more
+    // common editor convention.
+    const insertNewlineAtCaret = () => {
+        const el = commandInputRef.current;
+        const start = el?.selectionStart ?? command.length;
+        const end = el?.selectionEnd ?? command.length;
+        const next = command.slice(0, start) + '\n' + command.slice(end);
+        draftRef.current = next;
+        setCursor(-1);
+        setGhostHidden(true);
+        resetCycle();
+        pendingCaretPosRef.current = start + 1;
+        setValue(next);
     };
 
     // Complete the trailing word by cycling through prefix matches. `dir` is +1
@@ -203,20 +251,25 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         }
     };
 
-    const qualifiesForTraversal = (): boolean => {
+    const qualifiesForTraversal = (dir: 'up' | 'down'): boolean => {
         const el = commandInputRef.current;
         if (!el) return false;
-        const len = el.value.length;
+        const value = el.value;
+        const len = value.length;
         if (len === 0) return true;
         const s = el.selectionStart ?? 0;
         const e = el.selectionEnd ?? 0;
+        // In a multi-line command Up/Down navigate between rows; only hand off to
+        // history once the caret sits on the boundary row in the press direction.
+        if (dir === 'up' && value.lastIndexOf('\n', s - 1) !== -1) return false;
+        if (dir === 'down' && value.indexOf('\n', e) !== -1) return false;
         if (s === 0 && e === len) return true;  // full selection
         if (s === 0 && e === 0) return true;    // caret at start
         if (s === len && e === len) return true; // caret at end
         return false;
     };
 
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         if (isComposingRef.current || e.nativeEvent.isComposing) return;
 
         if (e.key === 'Escape') {
@@ -224,6 +277,20 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
             if (ghostText) {
                 setGhostHidden(true);
                 e.preventDefault();
+            }
+            return;
+        }
+
+        if (e.key === 'Enter') {
+            // Ctrl/Shift/etc.+Enter stages a newline instead of sending, so the
+            // user can compose several commands at once. Passwords stay single
+            // line. A plain Enter always sends; we preventDefault so the textarea
+            // doesn't insert its own newline first.
+            e.preventDefault();
+            if (!passwordMode && (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey)) {
+                insertNewlineAtCaret();
+            } else {
+                submit();
             }
             return;
         }
@@ -251,7 +318,7 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
         }
 
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-            if (!qualifiesForTraversal()) return;
+            if (!qualifiesForTraversal(e.key === 'ArrowUp' ? 'up' : 'down')) return;
             if (history.length === 0 && cursor === -1) return;
 
             if (e.key === 'ArrowUp') {
@@ -276,7 +343,7 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
     const handleCompositionStart = () => { isComposingRef.current = true; };
     const handleCompositionEnd = () => { isComposingRef.current = false; };
 
-    const handleContextMenu = (e: React.MouseEvent<HTMLInputElement>) => {
+    const handleContextMenu = (e: React.MouseEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const items = cmdLineMenu.list();
         if (items.length === 0) return;
         e.preventDefault();
@@ -295,22 +362,44 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
                     </div>
                 )}
 
-                <Input
-                    ref={commandInputRef}
-                    className="command-input"
-                    type={passwordMode ? 'password' : 'text'}
-                    value={command}
-                    onChange={handleChange}
-                    onKeyDown={handleKeyDown}
-                    onCompositionStart={handleCompositionStart}
-                    onCompositionEnd={handleCompositionEnd}
-                    onContextMenu={handleContextMenu}
-                    placeholder={passwordMode ? 'Enter password…' : 'Enter command…'}
-                    autoComplete="off"
-                    spellCheck={false}
-                    aria-label="Command input"
-                    style={inputStyle}
-                />
+                {passwordMode ? (
+                    <Input
+                        ref={commandInputRef as React.RefObject<HTMLInputElement>}
+                        className="command-input"
+                        type="password"
+                        value={command}
+                        onChange={handleChange}
+                        onKeyDown={handleKeyDown}
+                        onCompositionStart={handleCompositionStart}
+                        onCompositionEnd={handleCompositionEnd}
+                        onContextMenu={handleContextMenu}
+                        placeholder="Enter password…"
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-label="Command input"
+                        style={inputStyle}
+                    />
+                ) : (
+                    // A <textarea> (not <input>) so Ctrl/Shift+Enter can stage
+                    // multiple lines. rows=1 keeps it single-line until the user
+                    // adds a newline; the auto-grow effect resizes it to fit.
+                    <textarea
+                        ref={commandInputRef as React.RefObject<HTMLTextAreaElement>}
+                        className="command-input command-input--multiline input"
+                        rows={1}
+                        value={command}
+                        onChange={handleChange}
+                        onKeyDown={handleKeyDown}
+                        onCompositionStart={handleCompositionStart}
+                        onCompositionEnd={handleCompositionEnd}
+                        onContextMenu={handleContextMenu}
+                        placeholder="Enter command…"
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-label="Command input"
+                        style={inputStyle}
+                    />
+                )}
             </div>
 
             <Button

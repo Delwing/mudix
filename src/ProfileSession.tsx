@@ -44,7 +44,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const [charLogin, setCharLogin] = useState<{ error?: string } | null>(null);
     const [cmdLineSuggestions, setCmdLineSuggestions] = useState<string[]>([]);
     const [bufferWords, setBufferWords] = useState<BufferWordIndex | null>(null);
-    const commandInputRef = useRef<HTMLInputElement>(null);
+    const commandInputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
     const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
 
     // Live mirror of the current command bar text — read by Lua's getCmdLine()
@@ -496,13 +496,19 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         setFilesOpen({ initialPath, ...(initialLine !== undefined ? { initialLine } : {}), pickedAt: Date.now() });
 
     const handleSend = () => {
-        // Mudlet's command separator: one Enter expands to N commands, each run
-        // through aliases independently. Empty separator (or a separator that
-        // doesn't appear in the text) yields a single-element array, so the
-        // single-command path is just a special case of the loop.
-        const parts = commandSeparator && command.includes(commandSeparator)
-            ? command.split(commandSeparator)
-            : [command];
+        // The command box is multi-line (Ctrl/Shift+Enter stages newlines), so a
+        // single Enter can carry several lines — each line is its own command.
+        // Then Mudlet's command separator expands each line further. Both splits
+        // degenerate to one element for ordinary single-line input, so the common
+        // case is just one pass through the loop.
+        const parts: string[] = [];
+        for (const line of command.split('\n')) {
+            if (commandSeparator && line.includes(commandSeparator)) {
+                parts.push(...line.split(commandSeparator));
+            } else {
+                parts.push(line);
+            }
+        }
         for (const part of parts) {
             const consumed = engineRef.current?.processInput(part) ?? false;
             if (consumed) continue;

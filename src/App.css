@@ -1371,7 +1371,7 @@ html, body, #root {
     display: flex;
     align-items: center;
     gap: 6px;
-    height: var(--cmdbar-h);
+    min-height: var(--cmdbar-h);
     padding: 0 10px;
     background: var(--bg-glass);
     backdrop-filter: blur(14px);
@@ -1392,7 +1392,9 @@ html, body, #root {
 .prompt {
     position: absolute;
     left: 10px;
-    top: 50%;
+    /* Pinned to the first text row (not the box centre) so it stays put when the
+       multi-line command box grows downward. */
+    top: 16px;
     transform: translateY(-50%);
     color: var(--accent);
     font-size: 13px;
@@ -1405,16 +1407,41 @@ html, body, #root {
     height: 32px;
 }
 
-/* Command input overrides the base .input styles for the transparent bar style */
+/* Command input overrides the base .input styles for the transparent bar style.
+   These metrics are shared by the password <input> and the multi-line
+   <textarea> (and mirrored by .command-ghost) so text sits in the exact same
+   spot in every mode — no vertical jump when the element swaps. With a 20px
+   line-height and 5px top/bottom padding in a 32px border-box, a single row's
+   line fills the content area exactly, so the input's text is centred and the
+   textarea's top-aligned text land on the same baseline. */
 .command-input.input {
     background: color-mix(in srgb, var(--bg-input) 60%, transparent);
     border-color: var(--border);
     font-size: 13px;
     height: 32px;
-    padding: 0 8px 0 24px;
+    padding: 5px 8px 5px 24px;
+    line-height: 20px;
     width: 100%;
     position: relative;
     z-index: 1;
+    /* block (not the default inline-block) so the field has no baseline
+       descender gap beneath it — that gap made the wrap taller than the field
+       and let the ghost overlay drift below the text. */
+    display: block;
+    vertical-align: top;
+}
+
+/* The multi-line variant is a <textarea>: it starts as one row and the JS
+   auto-grow effect sets its inline height to fit the content, clamped by
+   max-height (after which it scrolls). */
+.command-input--multiline.input {
+    height: 32px;
+    min-height: 32px;
+    max-height: 140px;
+    resize: none;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
 }
 
 /* Inline ghost suggestion shown behind the input text. The shadow span is the
@@ -1424,14 +1451,18 @@ html, body, #root {
     position: absolute;
     left: 0;
     right: 0;
+    /* Pinned to the top as a single auto-height line (NOT stretched to the box
+       bottom) so it can only ever overlay the first text row — it can't drift
+       into the gap below the field. Mirrors the input's box model exactly (same
+       transparent border + padding + line-height) so the suffix lands on the
+       typed text's baseline. */
     top: 0;
-    bottom: 0;
-    padding: 0 8px 0 24px;
-    display: flex;
-    align-items: center;
+    height: 32px;
+    border: 1px solid transparent;
+    padding: 5px 8px 5px 24px;
     font-family: var(--font-mono), monospace;
     font-size: 13px;
-    line-height: 32px;
+    line-height: 20px;
     white-space: pre;
     overflow: hidden;
     pointer-events: none;

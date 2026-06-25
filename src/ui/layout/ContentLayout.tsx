@@ -22,7 +22,7 @@ interface ContentLayoutProps {
     manager: WindowManager;
     connectionId: string;
     stickyLines?: number;
-    commandInputRef?: React.RefObject<HTMLInputElement | null>;
+    commandInputRef?: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>;
     commandBar?: React.ReactNode;
     contextMenuHandlerRef?: React.RefObject<((e: React.MouseEvent) => void) | null>;
     /** Live ref so button clicks reach the engine even though the ref is set after initial render. */

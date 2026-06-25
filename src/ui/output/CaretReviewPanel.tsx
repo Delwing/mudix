@@ -32,7 +32,7 @@ export function CaretReviewPanel({
     commandInputRef,
 }: {
     session: MudSession;
-    commandInputRef?: React.RefObject<HTMLInputElement | null>;
+    commandInputRef?: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>;
 }) {
     const config = useProfileField('config');
     const shortcut = (config?.caretShortcut as CaretShortcut | undefined) ?? 'none';

@@ -25,7 +25,7 @@ interface StickyOutputPanelProps {
     /** Script-provided right-click entries (Mudlet addMouseEvent), evaluated
      *  lazily when the menu opens since the registry can change. */
     getMenuExtraItems?: () => OutputMenuExtraItem[];
-    commandInputRef?: React.RefObject<HTMLInputElement | null>;
+    commandInputRef?: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>;
     className?: string;
     fontSize?: number;
     fontFamily?: string;
