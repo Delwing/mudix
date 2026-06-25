@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input } from './components';
 import { useConnectionId, useProfileField } from '../storage';
+import { useIsMobile } from '../hooks/useViewportMode';
 import { useCommandHistory } from './useCommandHistory';
 import { matchHistory, type Match } from './commandHistory';
 import { hasPrecedingWord, matchWordCandidates, splitTrailingWord, type ActiveWord, type BufferWordIndex } from './bufferWords';
@@ -67,6 +68,7 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
     const resetCycle = () => { cycleRef.current = null; };
 
     const [ghostHidden, setGhostHidden] = useState(false);
+    const isMobile = useIsMobile();
 
     // Suggestions (from Mudlet's addCmdLineSuggestion) come before history so
     // they outrank older entries when prefix kinds tie. Dedup is case-insensitive
@@ -93,14 +95,15 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
 
     const ghostText = useMemo(() => {
         // No inline ghost while composing a multi-line command — the overlay is
-        // a single centred line and would render against the wrong row.
-        if (passwordMode || ghostHidden || matches.length === 0 || command.includes('\n')) return '';
+        // a single centred line and would render against the wrong row. On mobile
+        // the floating history suggestion is unwanted noise behind the text.
+        if (passwordMode || ghostHidden || isMobile || matches.length === 0 || command.includes('\n')) return '';
         const top = matches[0];
         // Only a true prefix match produces a visible inline ghost — anything
         // else would shift the displayed glyph and look like a glitch.
         if (top.kind !== 'prefix-start') return '';
         return top.item.slice(command.length);
-    }, [matches, command, ghostHidden, passwordMode]);
+    }, [matches, command, ghostHidden, passwordMode, isMobile]);
 
     // External `command` updates (script.setcmd / appendcmd / clearcmd) snap
     // us back to the draft slot and re-arm the ghost.
@@ -375,6 +378,8 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
                         onContextMenu={handleContextMenu}
                         placeholder="Enter password…"
                         autoComplete="off"
+                        autoCapitalize="none"
+                        autoCorrect="off"
                         spellCheck={false}
                         aria-label="Command input"
                         style={inputStyle}
@@ -395,6 +400,8 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
                         onContextMenu={handleContextMenu}
                         placeholder="Enter command…"
                         autoComplete="off"
+                        autoCapitalize="none"
+                        autoCorrect="off"
                         spellCheck={false}
                         aria-label="Command input"
                         style={inputStyle}
