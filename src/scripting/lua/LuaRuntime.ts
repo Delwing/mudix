@@ -2067,8 +2067,21 @@ export class LuaRuntime implements IScriptingRuntime {
             this.pushJsValue(L, this.api.map.getAreaRooms(areaId));
             return 1;
         });
+        // getRooms → { [roomId] = name }. Mudlet keys this by INTEGER room id
+        // (its map is a QMap<int,...>); the generic pushValue path stringified
+        // the keys, so build the table with integer keys directly here to match
+        // real Mudlet (room ids are genuine integers — unlike GMCP/MSDP object
+        // keys, which Mudlet's parseJSON keeps as strings).
         this.registerRawGlobal('getRooms', (L) => {
-            this.pushJsValue(L, this.api.map.getRooms());
+            const api = this.lua.global.luaApi;
+            const rooms = this.api.map.getRooms();
+            const keys = Object.keys(rooms);
+            api.lua_checkstack(L, 4);
+            api.lua_createtable(L, 0, keys.length);
+            for (const k of keys) {
+                api.lua_pushstring(L, rooms[k as unknown as number]);
+                api.lua_rawseti(L, -2, Number(k));
+            }
             return 1;
         });
         // Mudlet getMapLabels(areaID) → { [labelID] = labelText }. Bridge.lua

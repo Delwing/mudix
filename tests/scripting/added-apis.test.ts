@@ -546,14 +546,15 @@ describe('raw map getters — getRooms / getRoomCoordinates', () => {
   beforeEach(async () => { env = await createTestRuntime(); });
   afterEach(() => env.dispose());
 
-  it('getRooms returns { [roomId] = name } (string-keyed, as the generic path was)', () => {
+  it('getRooms returns { [roomId] = name } keyed by INTEGER id (Mudlet parity)', () => {
     env.run('addRoom(7); setRoomName(7, "Plaza")');
     env.run('addRoom(8); setRoomName(8, "Alley")');
-    // wasmoon stringifies integer object keys, so rooms are keyed "7"/"8".
-    // The raw marshalling preserves that exactly (no behaviour change).
-    expect(env.run('return getRooms()["7"]')).toBe('Plaza');
-    expect(env.run('return getRooms()["8"]')).toBe('Alley');
-    // pairs() iterates every entry regardless of key representation.
+    // Mudlet keys getRooms() by integer room id; the raw marshalling builds
+    // integer keys directly (the generic path used to stringify them).
+    expect(env.run('return getRooms()[7]')).toBe('Plaza');
+    expect(env.run('return getRooms()[8]')).toBe('Alley');
+    // The string form is NOT present — keys are genuine integers.
+    expect(env.run('return getRooms()["7"]')).toBeNull();
     expect(env.run('local n=0 for _ in pairs(getRooms()) do n=n+1 end return n')).toBe(2);
   });
 
