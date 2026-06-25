@@ -145,6 +145,15 @@ html, body, #root {
     font-size: 13px;
     line-height: 1.5;
     overflow: hidden;
+    /* Pin text to its declared size on mobile. iOS Safari / Android Chrome
+     * default to `auto`, which inflates in-flow text for readability — but the
+     * hidden, absolutely-positioned probe used to measure the monospace cell
+     * (WindowManager.measureCharCell / getColumnCount) gets no such boost. The
+     * mismatch makes the probe report a narrower cell than the text actually
+     * renders, so the NAWS column count comes out too high and the server wraps
+     * its MOTD too wide for the screen. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }
 
 /* ── Global scrollbar styling (themed) ────────────────────────── */
@@ -628,6 +637,34 @@ html, body, #root {
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+/* Inside the modal the form is just the content of .modal-body, so drop its
+   standalone card chrome (background/border/shadow/padding). */
+.connection-form--modal {
+    background: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 0;
+}
+
+/* Connection editor dialog (built on the shared .modal — fullscreen on phones
+   via the ≤600px block). Anchored near the top so it doesn't recenter as the
+   MUD/WebSocket toggle changes the form height. */
+.connection-form-modal {
+    width: min(560px, 92vw);
+    max-height: 85vh;
+    top: 8vh;
+    transform: translateX(-50%);
+}
+
+/* Full-width "+ Add connection" affordance below the profile list. */
+.connection-add-btn {
+    align-self: stretch;
+    justify-content: center;
 }
 
 .form-section-title {

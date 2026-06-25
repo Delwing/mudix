@@ -136,6 +136,14 @@ export class MudSession {
     connect(url: string): void {
         this.lastUrl = url;
         this.teardownClient();
+        // Synchronously re-measure the main console's char grid before dialing.
+        // The resize observer that normally feeds windowSize is async, so a quick
+        // connect (notably on mobile, where layout settles late) can otherwise
+        // negotiate NAWS before the real size is known and ship the 80×24
+        // fallback — leaving the server's first MOTD formatted for the wrong
+        // width. A synchronous measure here closes that race (Mudlet gets the
+        // size synchronously from Qt; this is the web equivalent).
+        this.windows.remeasureMainGrid();
         const client = new MudClient({ url, ...this.options }, this.events as EventBus<MudClientEvents>);
         this.client = client;
         // Seed the fresh client with the last known window size so NAWS reports

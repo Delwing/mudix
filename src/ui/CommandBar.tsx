@@ -135,11 +135,19 @@ export function CommandBar({ command, onCommandChange, passwordMode, commandInpu
     // max-height, beyond which it scrolls). Reset to 'auto' first so it can
     // shrink back when lines are removed. Single-line <input> (password mode)
     // is left untouched.
+    //
+    // The field is `box-sizing: border-box`, but `scrollHeight` excludes the
+    // border — so setting height = scrollHeight leaves the border eating into the
+    // content box, overflowing by the border width and showing a spurious
+    // scrollbar even on a single line. Add the vertical border back so the box
+    // fits its content exactly.
     useLayoutEffect(() => {
         const el = commandInputRef.current;
         if (!el || el.tagName !== 'TEXTAREA') return;
         el.style.height = 'auto';
-        el.style.height = `${el.scrollHeight}px`;
+        const cs = getComputedStyle(el);
+        const borderY = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+        el.style.height = `${el.scrollHeight + borderY}px`;
     }, [command, commandInputRef]);
 
     // Focus on mount and whenever the element swaps between the command

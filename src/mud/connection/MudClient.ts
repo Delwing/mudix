@@ -1175,6 +1175,11 @@ export class MudClient {
      *  sentinel, which some servers treat as "disable wrapping". */
     private sendNawsSize(): void {
         const { cols, rows } = this.windowSize ?? { cols: 80, rows: 24 };
+        if (debugTelnetEnabled()) {
+            const fallback = this.windowSize ? '' : ' (fallback — no size measured yet)';
+            // eslint-disable-next-line no-console
+            console.debug(`[mudix.telnet OUT] SB NAWS ${cols}x${rows}${fallback}`);
+        }
         this.sendRaw(encodeNaws(cols, rows));
     }
 

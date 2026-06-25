@@ -565,6 +565,22 @@ export class WindowManager {
         return { cellW: cellW > 0 ? cellW : 8, cellH: cellH > 0 ? cellH : 16 };
     }
 
+    /** Synchronously re-measure the main console's char grid and emit it
+     *  (sysConsoleSizeChanged + onMainConsoleResize) so NAWS can seed with the
+     *  real on-screen size at connect time, rather than whatever the async
+     *  resize observer last reported — which on a fast/mobile connect may be
+     *  stale or not yet fired. No-op when the main element isn't mounted, or
+     *  when the size is unchanged (the dedup guard in emitConsoleGridIfChanged). */
+    remeasureMainGrid(): void {
+        const el = this.elements.get('main') ?? this.mainViewportEl;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const w = Math.round(rect.width);
+        const h = Math.round(rect.height);
+        if (w <= 0 && h <= 0) return;
+        this.emitConsoleGridIfChanged('main', w, h, el);
+    }
+
     /** Compute the rendered char-grid for `id` and emit sysConsoleSizeChanged
      *  when (cols, rows) changes. Metrics are measured against the registered
      *  text element (which carries the MUD output font), not the observed
