@@ -543,24 +543,51 @@ export class WindowManager {
         this.resizeObservers.set(id, observer);
     }
 
-    /** Compute the rendered char-grid for `id` and emit sysConsoleSizeChanged
-     *  when (cols, rows) changes. The cell metrics come from getComputedStyle
-     *  off the observed element so theme / font-size changes propagate. */
-    private emitConsoleGridIfChanged(id: string, w: number, h: number, element: HTMLElement): void {
-        let cellW = 8, cellH = 16;
+    /** Measure one monospace cell (px) by probing `el` with its own inherited
+     *  font — the same technique getColumnCount uses, so the NAWS grid and
+     *  getColumnCount agree. Falls back to a fontSize estimate when the probe
+     *  can't measure (detached element / happy-dom tests). */
+    private measureCharCell(el: HTMLElement): { cellW: number; cellH: number } {
+        let cellW = 0, cellH = 0;
         try {
-            const cs = getComputedStyle(element);
+            const cs = getComputedStyle(el);
             const fs = parseFloat(cs.fontSize) || 12;
             const lh = parseFloat(cs.lineHeight);
             cellH = Number.isFinite(lh) && lh > 0 ? lh : fs * 1.4;
-            // Monospace cell width ≈ font-size × 0.6 — close enough for the
-            // grid estimate without a canvas measure (called on every resize).
-            cellW = fs * 0.6;
+            const probe = document.createElement('span');
+            probe.textContent = '0'.repeat(100);
+            probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:inherit;letter-spacing:inherit;';
+            el.appendChild(probe);
+            cellW = probe.getBoundingClientRect().width / 100;
+            probe.remove();
+            if (!(cellW > 0)) cellW = fs * 0.6; // estimate when layout reports 0
         } catch { /* SSR / detached element — keep fallback metrics */ }
+        return { cellW: cellW > 0 ? cellW : 8, cellH: cellH > 0 ? cellH : 16 };
+    }
+
+    /** Compute the rendered char-grid for `id` and emit sysConsoleSizeChanged
+     *  when (cols, rows) changes. Metrics are measured against the registered
+     *  text element (which carries the MUD output font), not the observed
+     *  viewport — the viewport's computed font is the app's base font, so
+     *  estimating cells off it reports the wrong column count and, through
+     *  onMainConsoleResize → NAWS, hands the server the wrong window width (so
+     *  MOTDs / room art don't fit the screen). This matches getColumnCount,
+     *  which probes the same element. Falls back to the viewport box when the
+     *  text element isn't mounted yet. */
+    private emitConsoleGridIfChanged(id: string, w: number, h: number, element: HTMLElement): void {
+        const textEl = this.elements.get(id) ?? element;
+        const { cellW, cellH } = this.measureCharCell(textEl);
+        let usableW = textEl.clientWidth || w;
+        let usableH = textEl.clientHeight || h;
+        try {
+            const cs = getComputedStyle(textEl);
+            usableW -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+            usableH -= (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+        } catch { /* keep the raw box */ }
         const win = this.windows.get(id);
         const wrap = win?.wrapAt ?? 0;
-        const cols = wrap > 0 ? wrap : Math.max(1, Math.floor(w / cellW));
-        const rows = Math.max(1, Math.floor(h / cellH));
+        const cols = wrap > 0 ? wrap : Math.max(1, Math.floor(Math.max(0, usableW) / cellW));
+        const rows = Math.max(1, Math.floor(Math.max(0, usableH) / cellH));
         const last = this.lastEmittedGrid.get(id);
         if (last && last.cols === cols && last.rows === rows) return;
         this.lastEmittedGrid.set(id, { cols, rows });
