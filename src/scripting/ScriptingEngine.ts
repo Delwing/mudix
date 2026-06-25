@@ -280,6 +280,10 @@ export class ScriptingEngine {
         // Let WindowManager raise system events (e.g. sysUserWindowResizeEvent)
         // through the same path as everything else.
         session.windows.onRaiseEvent = (event, args) => this.raiseEvent(event, args);
+        // A File dropped on a window can't be installed from its name alone, so
+        // stage its bytes in the profile VFS and then raise sysDropEvent with a
+        // path the bundled packageDrop handler can read.
+        session.windows.onFileDrop = (file, x, y, id) => { void this.stageDroppedFile(file, x, y, id); };
         // SoundManager raises sysMediaFinished(name, path) when a source ends.
         // sysSoundFinished is the pre-4.15 name, superseded by sysMediaFinished
         // but still fired here as a compat alias so older scripts keep working.
@@ -1050,6 +1054,34 @@ export class ScriptingEngine {
     notifyPackageUninstalled(packageName: string): void {
         this.raiseEvent('sysUninstall', [packageName]);
         this.raiseEvent('sysUninstallPackage', [packageName]);
+    }
+
+    /**
+     * Stage a File dropped on a window into the profile VFS, then raise Mudlet's
+     * sysDropEvent(filepath, suffix, x, y, name) with the resulting VFS path. The
+     * bundled packageDrop handler (Other.lua) picks it up and routes acceptable
+     * suffixes to verbosePackageInstall / verboseModuleInstall — so dropping an
+     * XML/.mpackage/.zip onto the main console or a userwindow installs it, the
+     * same as Mudlet. Non-package files just land in the profile home dir, which
+     * matches the harmless no-op packageDrop does for unrecognised suffixes.
+     */
+    private async stageDroppedFile(file: File, x: number, y: number, id: string): Promise<void> {
+        const vfs = this.vfs;
+        if (!vfs) return;
+        const name = file.name || 'dropped-file';
+        const dest = `${vfs.profilePath}/${name}`;
+        try {
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            vfs.writeBinaryFile(dest, bytes);
+            await vfs.flush();
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.api.printError(`[drop] could not stage ${name}: ${msg}`);
+            return;
+        }
+        const dot = name.lastIndexOf('.');
+        const suffix = dot >= 0 ? name.slice(dot + 1) : '';
+        this.raiseEvent('sysDropEvent', [dest, suffix, x, y, id]);
     }
 
     /**
@@ -2221,6 +2253,7 @@ export class ScriptingEngine {
         for (const unsub of this.unsubs) unsub();
         this.unsubs.length = 0;
         this.session.windows.onRaiseEvent = undefined;
+        this.session.windows.onFileDrop = undefined;
         this.session.sounds.onMediaFinished = undefined;
         // Stop everything that can fire a Lua callback BEFORE closing the VM.
         // The timer engine is the only autonomous async caller into Lua (a

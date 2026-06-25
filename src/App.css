@@ -2036,6 +2036,12 @@ html, body, #root {
     padding: 2px 0;
 }
 
+/* Active while OS files are dragged over empty tree space (drop-to-upload). */
+.vfs-tree-panel--drop {
+    background: var(--accent-glow);
+    box-shadow: inset 0 0 0 2px var(--accent-dim);
+}
+
 .vfs-preview-panel {
     flex: 1;
     overflow-y: auto;

@@ -151,6 +151,11 @@ export class WindowManager {
     /** Bridge to ScriptingEngine.raiseEvent — used to fire system events
      *  (e.g. sysUserWindowResizeEvent) from window-lifecycle code. */
     onRaiseEvent?:        (event: string, args: unknown[]) => void;
+    /** Called when a real File is dropped on a window. The handler (wired by
+     *  ScriptingEngine) writes the bytes into the profile VFS and then raises
+     *  Mudlet's sysDropEvent with a readable path — browsers don't expose a
+     *  filesystem path on the dropped File, so we can't raise it inline here. */
+    onFileDrop?:          (file: File, x: number, y: number, id: string) => void;
     /** Called whenever the *main* console's character grid changes (columns ×
      *  rows). MudSession wires this to the client so NAWS (telnet window size)
      *  tracks the output area. Distinct from onRaiseEvent (which drives Lua
@@ -402,6 +407,7 @@ export class WindowManager {
         if (element) {
             this.observeResize('main', element);
             this.observeMouse('main', element);
+            this.observeDrop('main', element);
         } else {
             this.resizeObservers.get('main')?.disconnect();
             this.resizeObservers.delete('main');
@@ -624,10 +630,12 @@ export class WindowManager {
             const file = dt.files && dt.files.length > 0 ? dt.files[0] : null;
             if (file) {
                 e.preventDefault();
-                const path = (file as File & { path?: string }).path ?? file.name;
-                const dot = path.lastIndexOf('.');
-                const suffix = dot >= 0 ? path.slice(dot + 1) : '';
-                this.onRaiseEvent?.('sysDropEvent', [path, suffix, x, y, id]);
+                // Browsers don't expose a filesystem path on a dropped File, so
+                // we can't raise sysDropEvent inline — the bundled packageDrop
+                // handler would have nothing readable to install. Hand the File
+                // to ScriptingEngine, which stages the bytes in the profile VFS
+                // and raises sysDropEvent with a path that resolves there.
+                this.onFileDrop?.(file, x, y, id);
                 return;
             }
             const text = dt.getData('text/uri-list') || dt.getData('text/plain');

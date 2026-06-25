@@ -1027,12 +1027,11 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
         setUploadDir(path);
     }, [vfs]);
 
-    const handleUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-        const files = Array.from(e.target.files ?? []);
-        e.target.value = '';
+    // Write a batch of picked/dropped Files into the VFS under targetDir,
+    // preserving any folder layout carried on webkitRelativePath. Shared by
+    // the upload buttons (handleUpload) and drag-and-drop from the OS.
+    const uploadFiles = useCallback((files: File[], targetDir: string) => {
         if (!vfs || files.length === 0) return;
-        const targetDir = uploadDirRef.current || vfs.profilePath;
-
         // Always read as ArrayBuffer and write as binary. UTF-8 text files
         // round-trip cleanly because ZenFS stores them as raw bytes; reading
         // them later via vfs.readFile decodes UTF-8 back to the original
@@ -1043,7 +1042,7 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
             const reader = new FileReader();
             // webkitRelativePath is set when the user picked a folder — it
             // looks like "myfolder/sub/file.txt" and we preserve that layout
-            // under the target dir. Plain file picks leave it empty.
+            // under the target dir. Plain file picks/drops leave it empty.
             const relPath = file.webkitRelativePath || file.name;
             const destPath = `${targetDir}/${relPath}`;
             reader.onload = () => {
@@ -1063,6 +1062,13 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
             reader.readAsArrayBuffer(file);
         }
     }, [vfs, bumpRev]);
+
+    const handleUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files ?? []);
+        e.target.value = '';
+        if (!vfs) return;
+        uploadFiles(files, uploadDirRef.current || vfs.profilePath);
+    }, [vfs, uploadFiles]);
 
     // ── New folder ────────────────────────────────────────────────────────
 
@@ -1210,6 +1216,13 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
 
     const handleDragOverDir = useCallback((e: React.DragEvent, dirPath: string) => {
         e.preventDefault();
+        // OS file drag (vs. an internal node move): types carries 'Files'.
+        // getData is blocked during dragover, so detect via types here.
+        if (e.dataTransfer.types.includes('Files')) {
+            e.dataTransfer.dropEffect = 'copy';
+            setDropTarget(prev => prev === dirPath ? prev : dirPath);
+            return;
+        }
         const src = dragPathRef.current;
         if (src && canMove(src, dirPath)) {
             e.dataTransfer.dropEffect = 'move';
@@ -1226,6 +1239,13 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
     const handleDropOnDir = useCallback((e: React.DragEvent, destDirPath: string) => {
         e.preventDefault();
         setDropTarget(null);
+        // Files dropped from the OS → upload into this directory. Stop here so
+        // the drop doesn't also bubble to the tree panel's catch-all handler.
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            e.stopPropagation();
+            uploadFiles(Array.from(e.dataTransfer.files), destDirPath);
+            return;
+        }
         const srcPath = e.dataTransfer.getData('text/plain') || dragPathRef.current;
         dragPathRef.current = null;
         setDragPath(null);
@@ -1238,7 +1258,29 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
         } catch (err) {
             console.error('Move failed:', err);
         }
-    }, [vfs, clearSelection, pruneExpanded, bumpRev]);
+    }, [vfs, clearSelection, pruneExpanded, bumpRev, uploadFiles]);
+
+    // Catch-all for OS files dropped on empty tree space (or anywhere not over
+    // a specific directory): upload into the current target dir, else the root.
+    const [panelDropActive, setPanelDropActive] = useState(false);
+    const handlePanelDragOver = useCallback((e: React.DragEvent) => {
+        if (!vfs || !e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        setPanelDropActive(true);
+    }, [vfs]);
+    const handlePanelDragLeave = useCallback((e: React.DragEvent) => {
+        // Only clear when the pointer actually leaves the panel, not when it
+        // crosses into a child row (relatedTarget still inside the panel).
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        setPanelDropActive(false);
+    }, []);
+    const handlePanelDrop = useCallback((e: React.DragEvent) => {
+        setPanelDropActive(false);
+        if (!vfs || e.dataTransfer.files.length === 0) return;
+        e.preventDefault();
+        uploadFiles(Array.from(e.dataTransfer.files), uploadDirRef.current || vfs.profilePath);
+    }, [vfs, uploadFiles]);
 
     const dnd: DragHandlers = {
         dragPath, dropTarget,
@@ -1546,7 +1588,13 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                 )}
 
                 <div className="vfs-split">
-                    <div className="vfs-tree-panel" onContextMenu={handleTreeBgContextMenu}>
+                    <div
+                        className={`vfs-tree-panel${panelDropActive ? ' vfs-tree-panel--drop' : ''}`}
+                        onContextMenu={handleTreeBgContextMenu}
+                        onDragOver={handlePanelDragOver}
+                        onDragLeave={handlePanelDragLeave}
+                        onDrop={handlePanelDrop}
+                    >
                         {!vfs ? (
                             <p className="vfs-empty">No profile mounted.</p>
                         ) : tree.length === 0 ? (
