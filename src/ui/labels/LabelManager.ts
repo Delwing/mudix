@@ -135,7 +135,14 @@ export class LabelManager {
     move(name: string, x: number, y: number): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
-        lbl.x = safeCoord(x); lbl.y = safeCoord(y);
+        const nx = safeCoord(x), ny = safeCoord(y);
+        // Skip the notify (and its overlay re-render) when nothing moved. Geyser
+        // reflows re-issue moveWindow for every widget in a subtree, so closing a
+        // pane — which repositions multiple sibling panes via _notifyAllReposition
+        // — moves many widgets to the coordinates they already hold. Each of those
+        // no-ops would otherwise rebuild the label list and re-render the overlay.
+        if (lbl.x === nx && lbl.y === ny) return true;
+        lbl.x = nx; lbl.y = ny;
         this.notify(lbl.parent);
         return true;
     }
@@ -143,7 +150,9 @@ export class LabelManager {
     resize(name: string, width: number, height: number): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
-        lbl.width = safeCoord(width); lbl.height = safeCoord(height);
+        const nw = safeCoord(width), nh = safeCoord(height);
+        if (lbl.width === nw && lbl.height === nh) return true;
+        lbl.width = nw; lbl.height = nh;
         this.notify(lbl.parent);
         return true;
     }

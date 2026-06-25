@@ -95,6 +95,36 @@ function getMainWindowSize()
     return __mws_w, __mws_h
 end
 
+-- Skip the Lua->JS crossing for moveWindow/resizeWindow when the geometry is
+-- unchanged. Measured: with getMainWindowSize cached, these two calls are ~54%
+-- of a reposition's cost (~2.4us of wasmoon marshalling each, ~2 per widget). A
+-- Geyser reflow — closing a pane runs organize()+reposition()+_notifyAllReposition
+-- over the whole tree — re-issues move/resize for every widget, but most land on
+-- coordinates the widget already holds (the unaffected panes don't actually move).
+-- Caching last-applied geometry per window name and dropping no-ops removes that
+-- half on reflow-heavy ops. Safe because the Lua moveWindow/resizeWindow globals
+-- are the SOLE writers of widget geometry (verified: LabelManager.move/resize have
+-- no other JS callers), and Geyser creates every widget at its computed position,
+-- so a cache hit always means the widget is already there. Invalidated on
+-- deleteLabel so a recycled name can never match a stale entry.
+__mwGeo = {}
+do
+    local geo = __mwGeo
+    local _moveWindow, _resizeWindow = moveWindow, resizeWindow
+    function moveWindow(name, x, y)
+        local g = geo[name]
+        if g and g.x == x and g.y == y then return end
+        if g then g.x = x; g.y = y else geo[name] = { x = x, y = y } end
+        return _moveWindow(name, x, y)
+    end
+    function resizeWindow(name, w, h)
+        local g = geo[name]
+        if g and g.w == w and g.h == h then return end
+        if g then g.w = w; g.h = h else geo[name] = { w = w, h = h } end
+        return _resizeWindow(name, w, h)
+    end
+end
+
 -- Mudlet addCustomLine(roomID, id_to, direction, style, color, arrow). The
 -- id_to (target room id OR list of {x,y,z} points) and color ({r,g,b}) tables
 -- are flattened here — wasmoon's LuaTable proxy doesn't iterate reliably from
@@ -723,6 +753,7 @@ end
 -- Mudlet deleteLabel(name) → true on success, (false, errMsg) when the label
 -- doesn't exist.
 function deleteLabel(name)
+    __mwGeo[name] = nil   -- drop cached geometry so a recycled name re-applies fresh
     if __deleteLabel(name) then return true end
     return false, "label \"" .. tostring(name) .. "\" does not exist"
 end
