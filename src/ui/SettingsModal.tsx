@@ -344,6 +344,28 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
 
     const handleAnsiResetAll = () => patchProfile({ ansiPalette: undefined });
 
+    // Reset every color on this tab — output, input, command echo, and the ANSI
+    // palette — back to their built-in defaults in one action.
+    const handleResetAllColors = () =>
+        patchProfile({
+            outputBackground: '',
+            outputForeground: undefined,
+            inputBackground: undefined,
+            inputForeground: undefined,
+            commandEchoForeground: undefined,
+            commandEchoBackground: undefined,
+            ansiPalette: undefined,
+        });
+
+    const colorsAreDefault =
+        !outputBackground &&
+        !outputForeground &&
+        !inputBackground &&
+        !inputForeground &&
+        !commandEchoForeground &&
+        !commandEchoBackground &&
+        !ansiPalette;
+
     const handleBorderChange = (side: BorderSide, raw: string) => {
         // Empty input clears that side back to 0 (Mudlet's no-border state).
         // Negative or non-numeric input is ignored so the field's display value
@@ -1000,6 +1022,16 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                     )}
                     {activeTab === 'colors' && connectionId && (
                         <section className="settings-section">
+                            <div className="settings-colors-toolbar">
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={handleResetAllColors}
+                                    disabled={colorsAreDefault}
+                                >
+                                    Reset all colors
+                                </Button>
+                            </div>
                             <div className="settings-colors-grid">
                                 <ColorCell
                                     label="Output background"

@@ -37,18 +37,42 @@ export function hasSelectionIn(container: HTMLElement): boolean {
     return range.intersectsNode(container);
 }
 
-/** Buffers for every line whose element the selection intersects, in order. */
-function selectedLineBuffers(container: HTMLElement): AnsiAwareBuffer[] {
+interface SelectedLine {
+    buffer: AnsiAwareBuffer;
+    /** Visible timestamp text for this line, or null when timestamps are hidden.
+     *  The timestamp lives in a `user-select: none` span so it never lands in the
+     *  native selection — copy-as-HTML/image re-add it here when it's shown. */
+    timestamp: string | null;
+}
+
+/** Every line whose element the selection intersects, in order, with its
+ *  timestamp (when the timestamp column is currently visible). */
+function selectedLines(container: HTMLElement): SelectedLine[] {
     const sel = window.getSelection();
-    const out: AnsiAwareBuffer[] = [];
+    const out: SelectedLine[] = [];
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return out;
     const range = sel.getRangeAt(0);
+    const showTimestamps = container.classList.contains('output-show-timestamps');
     container.querySelectorAll('.output-msg').forEach(el => {
         if (!range.intersectsNode(el)) return;
-        const buf = elementBuffers.get(el);
-        if (buf) out.push(buf);
+        const buffer = elementBuffers.get(el);
+        if (!buffer) return;
+        const timestamp = showTimestamps
+            ? (el.querySelector('.output-timestamp')?.textContent || null)
+            : null;
+        out.push({ buffer, timestamp });
     });
     return out;
+}
+
+/** The console's dim timestamp colour, read from a live timestamp element. */
+function timestampColor(container: HTMLElement, fallback: string): string {
+    const el = container.querySelector('.output-timestamp');
+    return (el && getComputedStyle(el).color) || fallback;
+}
+
+function escapeHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /** Select every line in the container (Range over its contents). */
@@ -72,15 +96,21 @@ export async function copySelectionText(): Promise<void> {
  *  rendering, and carries the console `--console-*` vars so reverse-video spans
  *  resolve in the standalone document. */
 function buildSelectionHtmlDoc(container: HTMLElement): string | null {
-    const buffers = selectedLineBuffers(container);
-    if (buffers.length === 0) return null;
+    const selected = selectedLines(container);
+    if (selected.length === 0) return null;
     const style = readConsoleStyle(container);
     const cs = getComputedStyle(container);
     const consoleBg = cs.getPropertyValue('--console-bg').trim() || style.background;
     const consoleText = cs.getPropertyValue('--console-text').trim() || style.color;
+    const tsColor = timestampColor(container, '#888888');
 
-    const lines = buffers
-        .map(b => `<div class="line">${b.toHtml() || '&nbsp;'}</div>`)
+    const lines = selected
+        .map(({ buffer, timestamp }) => {
+            const ts = timestamp
+                ? `<span class="ts">${escapeHtml(timestamp)} </span>`
+                : '';
+            return `<div class="line">${ts}${buffer.toHtml() || '&nbsp;'}</div>`;
+        })
         .join('\n');
     return `<!DOCTYPE html>
 <html lang="en">
@@ -93,6 +123,7 @@ function buildSelectionHtmlDoc(container: HTMLElement): string | null {
     background: ${style.background}; color: ${style.color};
     font-family: ${style.fontFamily}; font-size: ${style.fontSize}px; line-height: 1.4; }
   .line { white-space: pre-wrap; word-break: break-word; }
+  .ts { color: ${tsColor}; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -126,10 +157,11 @@ export async function copySelectionAsHtml(container: HTMLElement): Promise<void>
 
 /** Render the selected lines to a canvas matching the console's look. */
 function selectionToCanvas(container: HTMLElement): HTMLCanvasElement | null {
-    const buffers = selectedLineBuffers(container);
-    if (buffers.length === 0) return null;
+    const selected = selectedLines(container);
+    if (selected.length === 0) return null;
     const style = readConsoleStyle(container);
     const { background, color, fontFamily, fontSize } = style;
+    const tsColor = timestampColor(container, '#888888');
 
     const lineHeight = 1.4;
     const padding = 10;
@@ -145,10 +177,12 @@ function selectionToCanvas(container: HTMLElement): HTMLCanvasElement | null {
         return c;
     };
 
-    // Each buffer is one logical line; split defensively on any embedded newline.
-    const lines = buffers.map(b => {
-        const runs = b.toStyledRuns();
+    // Each buffer is one logical line; split defensively on any embedded
+    // newline, and prepend the timestamp (when shown) to the line's first row.
+    const lines = selected.map(({ buffer, timestamp }) => {
+        const runs = buffer.toStyledRuns();
         const rows: typeof runs[] = [[]];
+        if (timestamp) rows[0].push({ text: `${timestamp} `, color: tsColor, bold: false, italic: false, underline: false });
         for (const run of runs) {
             const parts = run.text.split('\n');
             parts.forEach((p, i) => {

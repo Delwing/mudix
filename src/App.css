@@ -1272,6 +1272,10 @@ html, body, #root {
     color: var(--text-dim);
     flex-shrink: 0;
     font-variant-numeric: tabular-nums;
+    /* Excluded from text selection: "Select all"/"Copy" skip the timestamp
+     * column. Copy-as-HTML/image re-add it explicitly when it's visible. */
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .output-show-timestamps .output-timestamp {
@@ -3293,6 +3297,12 @@ html, body, #root {
     max-height: 80vh;
     top: 10vh;
     transform: translateX(-50%);
+}
+
+.settings-colors-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
 }
 
 .settings-colors-grid {
