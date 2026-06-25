@@ -151,14 +151,67 @@ describe('setConfig / getConfig', () => {
         expect(useAppStore.getState().connectionProfile[CONN]?.config?.commandLineHistorySaveSize).toBe(50);
     });
 
+    it('defaults announceIncomingText on so the screen-reader mirror is not silently muted', () => {
+        // ScreenReaderLog gates its ARIA live region on this key; a default-false
+        // would mute the screen-reader path for everyone. Mudlet defaults it on.
+        expect(h.run('return getConfig("announceIncomingText")')).toBe(true);
+        expect(h.run('return setConfig("announceIncomingText", false)')).toBe(true);
+        expect(h.run('return getConfig("announceIncomingText")')).toBe(false);
+        expect(useAppStore.getState().connectionProfile[CONN]?.config?.announceIncomingText).toBe(false);
+        // Restore so later tests see the default again.
+        h.run('setConfig("announceIncomingText", true)');
+    });
+
     it('persists unbacked keys for round-trip and validates enums', () => {
-        // default before set
-        expect(h.run('return getConfig("blankLinesBehaviour")')).toBe('show');
-        expect(h.run('return setConfig("blankLinesBehaviour", "hide")')).toBe(true);
-        expect(h.run('return getConfig("blankLinesBehaviour")')).toBe('hide');
+        // default before set (CONFIG_PERSIST_ONLY string key with an enum)
+        expect(h.run('return getConfig("caretShortcut")')).toBe('none');
+        expect(h.run('return setConfig("caretShortcut", "ctrltab")')).toBe(true);
+        expect(h.run('return getConfig("caretShortcut")')).toBe('ctrltab');
         // out-of-range enum value is rejected
-        expect(h.run('return setConfig("blankLinesBehaviour", "bogus")')).toBe(false);
+        expect(h.run('return setConfig("caretShortcut", "bogus")')).toBe(false);
+        expect(h.run('return getConfig("caretShortcut")')).toBe('ctrltab');
+    });
+
+    it('routes the canonical / alias / charset / naws protocol keys', () => {
+        // enableNEWENVIRON (Mudlet's canonical all-caps key) and the mudix alias
+        // enableNewEnviron both drive protocols.newEnviron.
+        h.run('setConfig("enableNEWENVIRON", false)');
+        expect(useAppStore.getState().connectionProfile[CONN]?.protocols?.newEnviron).toBe(false);
+        expect(h.run('return getConfig("enableNEWENVIRON")')).toBe(false);
+        expect(h.run('return getConfig("enableNewEnviron")')).toBe(false);
+        h.run('setConfig("enableNewEnviron", true)');
+        expect(h.run('return getConfig("enableNEWENVIRON")')).toBe(true);
+
+        // enableCHARSET / enableNAWS are the positive forms of the protocol flags.
+        h.run('setConfig("enableCHARSET", false)');
+        expect(useAppStore.getState().connectionProfile[CONN]?.protocols?.charset).toBe(false);
+        expect(h.run('return getConfig("enableCHARSET")')).toBe(false);
+        // ...and stay in sync with the deprecated inverse key.
+        expect(h.run('return getConfig("specialForceCharsetNegotiationOff")')).toBe(true);
+
+        h.run('setConfig("enableNAWS", false)');
+        expect(useAppStore.getState().connectionProfile[CONN]?.protocols?.naws).toBe(false);
+        expect(h.run('return getConfig("enableNAWS")')).toBe(false);
+    });
+
+    it('applies blankLinesBehaviour live on the session and rejects bad modes', () => {
+        expect(h.run('return getConfig("blankLinesBehaviour")')).toBe('show');
+        expect(h.session.blankLinesBehaviour).toBe('show');
+
+        expect(h.run('return setConfig("blankLinesBehaviour", "hide")')).toBe(true);
+        expect(h.session.blankLinesBehaviour).toBe('hide');
         expect(h.run('return getConfig("blankLinesBehaviour")')).toBe('hide');
+        expect(useAppStore.getState().connectionProfile[CONN]?.config?.blankLinesBehaviour).toBe('hide');
+
+        expect(h.run('return setConfig("blankLinesBehaviour", "replacewithspace")')).toBe(true);
+        expect(h.session.blankLinesBehaviour).toBe('replacewithspace');
+
+        // Unknown mode string is rejected, leaving the live value unchanged.
+        expect(h.run('return setConfig("blankLinesBehaviour", "bogus")')).toBe(false);
+        expect(h.session.blankLinesBehaviour).toBe('replacewithspace');
+
+        // Restore the default so later tests / rendering aren't affected.
+        h.run('setConfig("blankLinesBehaviour", "show")');
     });
 
     it('rejects writes to read-only keys and returns a value for them', () => {

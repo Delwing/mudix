@@ -22,6 +22,12 @@ export type MudSessionOptions = Omit<MudClientOptions, 'url'>;
  *  (the default). `always`: echo even when a script passes `send(cmd, false)`. */
 export type ShowSentTextMode = 'never' | 'script' | 'always';
 
+/** Mudlet `blankLinesBehaviour` modes — controls how empty server lines render.
+ *  `show`: render the blank line as-is (default). `hide`: suppress it entirely.
+ *  `replacewithspace`: render it as a single space (so screen readers announce
+ *  it — Mudlet's QTBUG-105035 workaround). */
+export type BlankLinesBehaviour = 'show' | 'hide' | 'replacewithspace';
+
 export type ScriptLogSourceKind = 'script' | 'alias' | 'trigger' | 'timer' | 'key' | 'button';
 
 export interface ScriptLogSource {
@@ -77,6 +83,12 @@ export class MudSession {
      *  `send(cmd, false)`; `always` echoes even then; `never` never echoes.
      *  Toggled live by the config registry in ScriptingAPI. */
     showSentText: ShowSentTextMode = 'script';
+
+    /** Mudlet `setConfig("blankLinesBehaviour", ...)`. Controls how empty server
+     *  lines render in the main output. Read by ScriptingEngine.processFlushBatch
+     *  per line; toggled live (and persisted) by the config registry in
+     *  ScriptingAPI. */
+    blankLinesBehaviour: BlankLinesBehaviour = 'show';
 
     /** Bounded script.log buffer so the editor panel can backfill entries that
      *  arrived before it was first opened (e.g. errors during initial load). */

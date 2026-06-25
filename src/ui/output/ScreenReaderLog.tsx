@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { MudSession } from '../../mud/MudSession';
 import { AnsiAwareBuffer } from '../../mud/text/FormatState';
+import { useProfileField } from '../../storage';
 
 /**
  * Off-screen ARIA live region that mirrors MUD output as plain text so the
@@ -23,36 +24,62 @@ const SKIP_TYPES = new Set(['script-partial']);
 
 // Cap the live region size so it never grows unbounded. Screen readers only
 // announce additions, so old lines just need to be evictable.
-const MAX_LINES = 60;
+export const MAX_LINES = 60;
+
+/**
+ * Append one MUD `message` line's plain text to the live `region`, applying the
+ * same filtering the session logger uses and capping the region size. Exported
+ * for testing. Returns true when a line node was appended.
+ *
+ * Drops: interim `script-partial` cecho output (superseded by the finalized
+ * line), missing text, and blank/whitespace-only lines (no speech, only churn).
+ * Raw strings carry ANSI, so they route through an {@link AnsiAwareBuffer} for
+ * the plain text; an `AnsiAwareBuffer` payload already exposes `.text`.
+ */
+export function feedScreenReaderLine(
+    region: HTMLElement,
+    text?: string | AnsiAwareBuffer,
+    type?: string,
+): boolean {
+    if (text === undefined || text === null) return false;
+    if (type && SKIP_TYPES.has(type)) return false;
+
+    const plain = typeof text === 'string' ? new AnsiAwareBuffer(text).text : text.text;
+    if (!plain.trim()) return false;
+
+    const line = document.createElement('div');
+    line.textContent = plain;
+    region.appendChild(line);
+
+    while (region.childElementCount > MAX_LINES && region.firstChild) {
+        region.removeChild(region.firstChild);
+    }
+    return true;
+}
 
 export function ScreenReaderLog({ session }: { session: MudSession }) {
     const regionRef = useRef<HTMLDivElement>(null);
+    // Mudlet's mAnnounceIncomingText — when off, the live region is not fed (and
+    // is cleared) so the user's screen reader stops narrating game output. The
+    // key lives in the `setConfig` bag and defaults on (see CONFIG_PERSIST_ONLY).
+    const config = useProfileField('config');
+    const announce = (config?.announceIncomingText as boolean | undefined) ?? true;
 
     useEffect(() => {
         const region = regionRef.current;
         if (!region) return;
+        if (!announce) {
+            // Disabled mid-session: drop any pending lines so nothing lingers.
+            region.replaceChildren();
+            return;
+        }
 
         const unsubscribe = session.events.on('message', (text, type) => {
-            if (text === undefined || text === null) return;
-            if (type && SKIP_TYPES.has(type)) return;
-
-            // Strip ANSI: raw strings route through a buffer (same as the logger);
-            // an AnsiAwareBuffer already exposes its plain text.
-            const plain = typeof text === 'string' ? new AnsiAwareBuffer(text).text : text.text;
-            // Empty/whitespace-only lines produce no speech — skip the node churn.
-            if (!plain.trim()) return;
-
-            const line = document.createElement('div');
-            line.textContent = plain;
-            region.appendChild(line);
-
-            while (region.childElementCount > MAX_LINES && region.firstChild) {
-                region.removeChild(region.firstChild);
-            }
+            feedScreenReaderLine(region, text, type);
         });
 
         return unsubscribe;
-    }, [session]);
+    }, [session, announce]);
 
     return (
         <div

@@ -49,7 +49,9 @@ Mudlet); the rest are live.
 | `enableMTTS` | `protocols.mtts` | next connect |
 | `enableMXP` | `protocols.mxp` | next connect |
 | `enableMNES` | `protocols.mnes` | next connect — restricted core variable set (telnet option 39) |
-| `enableNewEnviron` | `protocols.newEnviron` | next connect — extended NEW-ENVIRON variable set (telnet option 39) |
+| `enableNEWENVIRON` / `enableNewEnviron` | `protocols.newEnviron` | next connect — extended NEW-ENVIRON variable set (telnet option 39). `enableNEWENVIRON` is Mudlet's canonical (all-caps) key; `enableNewEnviron` is a mudix alias. |
+| `enableCHARSET` | `protocols.charset` | next connect — positive form of `specialForceCharsetNegotiationOff` (telnet CHARSET) |
+| `enableNAWS` | `protocols.naws` | next connect — window-size negotiation (telnet option 31) |
 | `specialForceMxpNegotiationOff` | `!protocols.mxp` | inverse flag |
 | `specialForceCharsetNegotiationOff` | `!protocols.charset` | inverse flag |
 | `specialForceCompressionOff` | `!protocols.mccp` | inverse flag — forces MCCP (option 86) off |
@@ -67,6 +69,7 @@ Mudlet); the rest are live.
 | Config key | Effect |
 |---|---|
 | `showSentText` | Three-state echo mode stored in `MudSession.showSentText` (`'never'` / `'script'` / `'always'`). `never` suppresses the local echo of sent commands entirely; `script` (default) echoes unless a script passes `send(cmd, false)`; `always` echoes even then. Booleans / boolean-ish strings are accepted for back-compat (`true`→`script`, `false`→`never`); an unknown mode string is rejected (`setConfig`→`false`). Persisted to the `config` bag and re-applied on profile load (constructor of `ScriptingAPI`). **Credentials are exempt:** the auto-login password goes through `MudSession.sendSecret()`, which never echoes regardless of mode; user-typed passwords are also safe because `echoCommand` is gated on `shouldEchoCommand()` (false while the server is in password/echo-off mode). |
+| `blankLinesBehaviour` | How empty server lines render in the main output (`'show'` / `'hide'` / `'replacewithspace'`). Stored live in `MudSession.blankLinesBehaviour` and read per-line by `ScriptingEngine.processFlushBatch`: `show` (default) renders the blank line as-is, `hide` suppresses it entirely, `replacewithspace` renders it as a single space (Mudlet's screen-reader workaround for QTBUG-105035 — see `TBuffer.cpp`). Scoped to `mud`-typed output, so echoes/errors are unaffected (matching Mudlet's TBuffer-only handling). An unknown mode string is rejected (`setConfig`→`false`). Persisted to the `config` bag and re-applied on profile load (`ScriptingAPI` constructor). **mudix note:** `show` already pads an empty line to `&nbsp;` so it keeps its height, so `show` and `replacewithspace` look near-identical in mudix; `hide` is the visibly distinct mode. |
 | `mapperPanelVisible` | Opens (`true`) or hides (`false`) the docked `MapPanel` via `WindowManager` — the same action as the toolbar's map button. `getConfig` reports the live `isVisible('map')`. Not persisted (window visibility is ephemeral window state, restored from the layout snapshot). |
 | `muteMediaAPI` | Mutes media triggered by the scripting API (`playSoundFile` / `playMusicFile`). Forwarded to `SoundManager.setOriginMuted('api', …)`: currently-playing API sources are silenced in place (gain → 0, position keeps advancing) and new API sources start silent; unmuting restores audibility mid-track — mirroring Mudlet toggling `QAudioOutput::setMuted` on the live `MediaProtocolAPI` players. Persisted to the `config` bag and re-applied on profile load (`ScriptingAPI` constructor). `getConfig` reports the live `SoundManager.isOriginMuted('api')`. |
 | `muteMediaGame` | Same as `muteMediaAPI` but for server-driven media — MSP `!!SOUND`/`!!MUSIC` and GMCP media (Mudlet's `MediaProtocolMSP`/`MediaProtocolGMCP`). Forwarded to `SoundManager.setOriginMuted('game', …)`; the MSP dispatch in `ScriptingEngine` tags its plays with `origin: 'game'`. |
@@ -94,7 +97,7 @@ below). String keys with an `enum` reject out-of-range writes (`setConfig`
 returns `false`).
 
 `advertiseScreenReader`, `ambiguousEAsianWidthCharacters` (`auto`/`wide`/`narrow`),
-`announceIncomingText`, `askTlsAvailable`, `blankLinesBehaviour` (`show`/`hide`),
+`announceIncomingText`, `askTlsAvailable`,
 `caretShortcut` (`none`/`tab`/`ctrltab`/`f6`),
 `compactInputLine`, `controlCharacterHandling` (`asis`/`oem`/`picture`),
 `editorAutoComplete`, `enableClosedCaption`, `f3SearchEnabled`,
@@ -132,8 +135,7 @@ group 3 to group 1/2 as the underlying feature lands:
 
 - **Accessibility:** `advertiseScreenReader`, `announceIncomingText`,
   `enableClosedCaption`, `caretShortcut` (no caret-browse mode).
-- **Rendering:** `controlCharacterHandling`, `ambiguousEAsianWidthCharacters`,
-  `blankLinesBehaviour` (no blank-line suppression).
+- **Rendering:** `controlCharacterHandling`, `ambiguousEAsianWidthCharacters`.
 - **Input line / editor:** `compactInputLine`, `inputLineStrictUnixEndings`,
   `editorAutoComplete`, `f3SearchEnabled`.
 - **Telnet edge switches:** `askTlsAvailable`, `specialForceGAOff`,

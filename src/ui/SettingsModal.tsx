@@ -56,15 +56,16 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
     { value: 'graylight', label: 'Light (Gray)' },
 ];
 
-type SettingsTab = 'general' | 'appearance' | 'input' | 'colors' | 'network' | 'mapper';
+type SettingsTab = 'general' | 'appearance' | 'input' | 'accessibility' | 'colors' | 'network' | 'mapper';
 
 const TABS: { value: SettingsTab; label: string }[] = [
-    { value: 'general',    label: 'General' },
-    { value: 'appearance', label: 'Appearance' },
-    { value: 'input',      label: 'Input' },
-    { value: 'colors',     label: 'Colors' },
-    { value: 'network',    label: 'Network' },
-    { value: 'mapper',     label: 'Mapper' },
+    { value: 'general',       label: 'General' },
+    { value: 'appearance',    label: 'Appearance' },
+    { value: 'input',         label: 'Input' },
+    { value: 'accessibility', label: 'Accessibility' },
+    { value: 'colors',        label: 'Colors' },
+    { value: 'network',       label: 'Network' },
+    { value: 'mapper',        label: 'Mapper' },
 ];
 
 const DEFAULT_COMMAND_SEPARATOR = ';;';
@@ -156,6 +157,10 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const showTabConnectionIndicators = (config?.showTabConnectionIndicators as boolean | undefined) ?? true;
     const fixUnnecessaryLinebreaks = (config?.fixUnnecessaryLinebreaks as boolean | undefined) ?? false;
     const enableBlinkText = (config?.enableBlinkText as boolean | undefined) ?? false;
+    // Accessibility: mirror MUD output to an off-screen ARIA live region so the
+    // user's screen reader narrates it. Defaults on (matches Mudlet); the
+    // ScreenReaderLog component reads the same key.
+    const announceIncomingText = (config?.announceIncomingText as boolean | undefined) ?? true;
     // showSentText is stored as a mode string; legacy profiles may hold a boolean
     // (false ≙ never, true/unset ≙ script).
     const rawShowSentText = config?.showSentText;
@@ -905,6 +910,33 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     ))}
                                 </select>
                             </div>
+                        </section>
+                    )}
+                    {activeTab === 'accessibility' && connectionId && (
+                        <section className="settings-section">
+                            <div className="settings-row">
+                                <span className="settings-label" id="announce-incoming-text-label">
+                                    Announce incoming text
+                                    <HelpTip label="About announcing incoming text">
+                                        Mirror MUD output to an off-screen live region so your
+                                        screen reader (NVDA, JAWS, VoiceOver, Orca) narrates each
+                                        new line in your own voice and braille settings (Mudlet's
+                                        <code> announceIncomingText</code>). On by default; it is
+                                        invisible and has no effect if you don't use a screen reader.
+                                        Turn it off to silence that narration.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="announce-incoming-text"
+                                    aria-labelledby="announce-incoming-text-label"
+                                    checked={announceIncomingText}
+                                    onChange={next => patchConfig({ announceIncomingText: next })}
+                                />
+                            </div>
+                            <p className="settings-hint">
+                                More screen-reader options (keyboard reading cursor, server
+                                advertisement) are coming as those features land.
+                            </p>
                         </section>
                     )}
                     {activeTab === 'colors' && connectionId && (

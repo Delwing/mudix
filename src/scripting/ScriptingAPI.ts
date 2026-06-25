@@ -1,4 +1,4 @@
-import type { MudSession, ScriptLogSource, ShowSentTextMode } from '../mud/MudSession';
+import type { MudSession, ScriptLogSource, ShowSentTextMode, BlankLinesBehaviour } from '../mud/MudSession';
 import type { AliasEngine } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine } from '../mud/timers/TimerEngine';
@@ -111,6 +111,15 @@ function parseShowSentText(value: unknown): ShowSentTextMode | null {
     return null;
 }
 
+/** Coerce a `setConfig("blankLinesBehaviour", …)` value into a
+ *  {@link BlankLinesBehaviour}. Accepts the three mode strings (case-insensitive);
+ *  returns null for anything else so `setConfig` reports failure. */
+function parseBlankLinesBehaviour(value: unknown): BlankLinesBehaviour | null {
+    if (typeof value !== 'string') return null;
+    const s = value.trim().toLowerCase();
+    return s === 'show' || s === 'hide' || s === 'replacewithspace' ? s : null;
+}
+
 /** Mudlet config keys persisted in the {@link ProfileSettings.config} bag rather
  *  than a dedicated structured field. Each entry gives the value type and the
  *  default `getConfig` returns before the key has been set, so first reads match
@@ -127,9 +136,12 @@ const CONFIG_PERSIST_ONLY: Record<string, {
 }> = {
     advertiseScreenReader:          { type: 'bool', default: false },
     ambiguousEAsianWidthCharacters: { type: 'str',  default: 'auto', enum: ['auto', 'wide', 'narrow'] },
-    announceIncomingText:           { type: 'bool', default: false },
+    // Default true, matching Mudlet's mAnnounceIncomingText: the off-screen
+    // ARIA live region (ScreenReaderLog) mirrors incoming output to the user's
+    // screen reader. Gating this on a default-false key would silently mute that
+    // path, so it stays on unless the user explicitly disables it.
+    announceIncomingText:           { type: 'bool', default: true },
     askTlsAvailable:                { type: 'bool', default: true },
-    blankLinesBehaviour:            { type: 'str',  default: 'show', enum: ['show', 'hide'] },
     caretShortcut:                  { type: 'str',  default: 'none', enum: ['none', 'tab', 'ctrltab', 'f6'] },
     commandLineHistorySaveSize:     { type: 'num',  default: 500 },
     compactInputLine:               { type: 'bool', default: false },
@@ -630,6 +642,9 @@ export class ScriptingAPI {
         // (true→'script', false→'never') as well as the new mode strings.
         const persistedMode = parseShowSentText(this.configBag().showSentText);
         if (persistedMode) session.showSentText = persistedMode;
+        // Same for blankLinesBehaviour (how empty server lines render).
+        const persistedBlank = parseBlankLinesBehaviour(this.configBag().blankLinesBehaviour);
+        if (persistedBlank) session.blankLinesBehaviour = persistedBlank;
         // Same for the per-origin media mute gates (muteMediaAPI / muteMediaGame).
         const bag = this.configBag();
         session.sounds.setOriginMuted('api', configBool(bag.muteMediaAPI ?? false));
@@ -809,7 +824,12 @@ export class ScriptingAPI {
             case 'enableMTTS': return this.getProtocol('mtts');
             case 'enableMXP':  return this.getProtocol('mxp');
             case 'enableMNES': return this.getProtocol('mnes');
+            // Mudlet's canonical key is the all-caps `enableNEWENVIRON`; the
+            // mixed-case `enableNewEnviron` is kept as a mudix alias.
+            case 'enableNEWENVIRON':
             case 'enableNewEnviron': return this.getProtocol('newEnviron');
+            case 'enableCHARSET': return this.getProtocol('charset');
+            case 'enableNAWS': return this.getProtocol('naws');
             // structured — inverse "force negotiation off" toggles
             case 'specialForceMxpNegotiationOff':     return !this.getProtocol('mxp');
             case 'specialForceCharsetNegotiationOff': return !this.getProtocol('charset');
@@ -833,6 +853,7 @@ export class ScriptingAPI {
             }
             // live
             case 'showSentText':       return this.session.showSentText;
+            case 'blankLinesBehaviour': return this.session.blankLinesBehaviour;
             case 'mapperPanelVisible': return this.session.windows.isVisible('map');
             case 'muteMediaAPI':       return this.session.sounds.isOriginMuted('api');
             case 'muteMediaGame':      return this.session.sounds.isOriginMuted('game');
@@ -860,7 +881,12 @@ export class ScriptingAPI {
             case 'enableMTTS': this.setProtocol('mtts', configBool(value)); return true;
             case 'enableMXP':  this.setProtocol('mxp',  configBool(value)); return true;
             case 'enableMNES': this.setProtocol('mnes', configBool(value)); return true;
+            // Mudlet's canonical key is `enableNEWENVIRON`; `enableNewEnviron` is
+            // a mudix alias. Both route to the same NEW-ENVIRON protocol flag.
+            case 'enableNEWENVIRON':
             case 'enableNewEnviron': this.setProtocol('newEnviron', configBool(value)); return true;
+            case 'enableCHARSET': this.setProtocol('charset', configBool(value)); return true;
+            case 'enableNAWS': this.setProtocol('naws', configBool(value)); return true;
             case 'specialForceMxpNegotiationOff':     this.setProtocol('mxp',     !configBool(value)); return true;
             case 'specialForceCharsetNegotiationOff': this.setProtocol('charset', !configBool(value)); return true;
             case 'specialForceCompressionOff':        this.setProtocol('mccp',    !configBool(value)); return true;
@@ -900,6 +926,13 @@ export class ScriptingAPI {
                 if (!mode) return false;
                 this.session.showSentText = mode;
                 this.patchConfigBag('showSentText', mode);
+                return true;
+            }
+            case 'blankLinesBehaviour': {
+                const mode = parseBlankLinesBehaviour(value);
+                if (!mode) return false;
+                this.session.blankLinesBehaviour = mode;
+                this.patchConfigBag('blankLinesBehaviour', mode);
                 return true;
             }
             // Live per-origin media mute gates, persisted so they survive a

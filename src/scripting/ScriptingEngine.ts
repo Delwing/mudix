@@ -2515,11 +2515,24 @@ export class ScriptingEngine {
                             this.emit('output', [outputLine, type]);
                         }
 
-                        const shouldRender =
+                        let shouldRender =
                             !buffer.deleted &&
                             (blankRenders || plain.length > 0 || !FILTER_ANSI_ONLY_LINES);
+                        // Mudlet `blankLinesBehaviour` (TBuffer): for empty server
+                        // lines, either hide them or replace them with a single
+                        // space. Scoped to mud-typed output — echoes/errors are
+                        // unaffected, matching Mudlet's TBuffer-only handling.
+                        let renderBuffer = buffer;
+                        if (shouldRender && type === 'mud' && plain.length === 0) {
+                            const behaviour = this.session.blankLinesBehaviour;
+                            if (behaviour === 'hide') {
+                                shouldRender = false;
+                            } else if (behaviour === 'replacewithspace') {
+                                renderBuffer = new AnsiAwareBuffer(' ');
+                            }
+                        }
                         if (shouldRender) {
-                            this.session.events.emit('message', buffer, type, Date.now(), isPrompt);
+                            this.session.events.emit('message', renderBuffer, type, Date.now(), isPrompt);
                         }
 
                         // Flush this line's trigger echoes right after it renders so
