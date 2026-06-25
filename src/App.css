@@ -3759,8 +3759,11 @@ html, body, #root {
         font-size: 16px;
     }
 
-    /* Log browser: stack the session list above the viewer. */
-    .resizable-modal__body.log-browser__body { flex-direction: column; }
+    /* Log browser: stack the session list above the viewer. The `.log-browser`
+       scope lifts specificity above the default `flex-direction: row` rule,
+       which sits later in the file and would otherwise win the source-order
+       tie even while this media query matches. */
+    .resizable-modal.log-browser .log-browser__body { flex-direction: column; }
     .log-browser .lb-sidebar {
         width: 100%;
         max-height: 40%;
