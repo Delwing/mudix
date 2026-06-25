@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from './Button';
+import { useModalFocus } from './useModalFocus';
 
 export interface ConfirmButton<T = unknown> {
     label: string;
@@ -34,7 +35,9 @@ export function ConfirmDialog<T>({
     tone = 'default',
     onResolve,
 }: DialogProps<T>) {
-    const dialogRef = useRef<HTMLDivElement>(null);
+    // Trap + restore via the shared hook; this dialog keeps its own Escape
+    // (gated on `blocking`) and its own initial focus (the default button).
+    const dialogRef = useModalFocus<HTMLDivElement>(undefined, { autoFocus: false, closeOnEscape: false });
     const resolvedRef = useRef(false);
 
     const resolve = useCallback((value: T | undefined) => {

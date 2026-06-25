@@ -55,9 +55,20 @@ export function focusTrapTarget(
     return !inside || active === last ? first : null;
 }
 
+export interface ModalFocusOptions {
+    /** Move focus into the dialog on open. Default true. Set false when the
+     *  modal manages its own initial focus (e.g. a specific field or button). */
+    autoFocus?: boolean;
+    /** Close on Escape via `onClose`. Default true. Set false when the modal has
+     *  its own Escape handling (then `onClose` may be omitted). */
+    closeOnEscape?: boolean;
+}
+
 export function useModalFocus<T extends HTMLElement = HTMLDivElement>(
     onClose?: () => void,
+    opts: ModalFocusOptions = {},
 ): React.RefObject<T | null> {
+    const { autoFocus = true, closeOnEscape = true } = opts;
     const ref = useRef<T | null>(null);
     // Keep the latest onClose without re-running the setup effect (which would
     // re-grab focus on every parent render).
@@ -70,13 +81,17 @@ export function useModalFocus<T extends HTMLElement = HTMLDivElement>(
         const opener = document.activeElement as HTMLElement | null;
 
         // Move focus in: first focusable control, else the dialog itself (made
-        // programmatically focusable so the screen reader lands on it).
-        const initial = focusableWithin(node)[0] ?? node;
-        if (initial === node && !node.hasAttribute('tabindex')) node.tabIndex = -1;
-        initial.focus();
+        // programmatically focusable so the screen reader lands on it). Skip when
+        // something inside already holds focus — a child (e.g. a code editor) may
+        // have autofocused itself, and stealing that back would be wrong.
+        if (autoFocus && !node.contains(document.activeElement)) {
+            const initial = focusableWithin(node)[0] ?? node;
+            if (initial === node && !node.hasAttribute('tabindex')) node.tabIndex = -1;
+            initial.focus();
+        }
 
         const onKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
+            if (closeOnEscape && e.key === 'Escape') {
                 e.stopPropagation();
                 onCloseRef.current?.();
                 return;

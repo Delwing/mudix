@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Button } from './components/Button';
 import { Input } from './components/Input';
+import { useModalFocus } from './components/useModalFocus';
 
 interface CharLoginModalProps {
     /** Connection name, shown in the title for context. */
@@ -43,6 +44,9 @@ export function CharLoginModal({
     const [remember, setRemember] = useState(initialRemember ?? !!initialPassword);
     const accountRef = useRef<HTMLInputElement>(null);
     const passwordRef = useRef<HTMLInputElement>(null);
+    // Trap + restore only; this modal keeps its own Escape (window) and its own
+    // initial focus (first empty field, for the password-manager flow).
+    const modalRef = useModalFocus<HTMLDivElement>(undefined, { autoFocus: false, closeOnEscape: false });
 
     useEffect(() => {
         // Focus the first empty field so a fully-prefilled form is one Enter away.
@@ -73,7 +77,7 @@ export function CharLoginModal({
             {/* No overlay-click dismissal: a login decision should be explicit
                 (Cancel falls back to text login). Escape still cancels. */}
             <div className="modal-overlay" />
-            <div className="modal char-login-modal" role="dialog" aria-modal="true" aria-label="Log in">
+            <div ref={modalRef} className="modal char-login-modal" role="dialog" aria-modal="true" aria-label="Log in">
                 <div className="modal-header">
                     <span className="modal-title">
                         Log in{connectionName ? ` — ${connectionName}` : ''}

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { ModalBounds } from '../storage/schema';
+import { useModalFocus } from './components/useModalFocus';
 
 type ResizeDir = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw';
 const DIRS: ResizeDir[] = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
@@ -42,6 +43,12 @@ export function ResizableModal({
 
     const boundsRef = useRef(bounds);
     boundsRef.current = bounds;
+
+    // Focus trap + restore + focus-in for every modal built on this wrapper
+    // (script/map editors included). Escape-to-close is intentionally NOT added
+    // here: these modals host editors where Escape has its own meaning and a
+    // surprise close could lose work. The header ✕ is reachable inside the trap.
+    const ref = useModalFocus<HTMLDivElement>(undefined, { autoFocus: true, closeOnEscape: false });
 
     const commit = () => onBoundsChange?.(boundsRef.current);
 
@@ -93,6 +100,10 @@ export function ResizableModal({
 
     return (
         <div
+            ref={ref}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
             className={`resizable-modal${className ? ` ${className}` : ''}`}
             style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height }}
         >
