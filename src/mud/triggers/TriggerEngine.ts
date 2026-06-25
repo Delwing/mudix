@@ -1,4 +1,4 @@
-import PCRE from 'pcre2-wasm-universal';
+import PCRE from './pcre/Pcre2';
 import type { TriggerNode, TriggerPattern } from '../../storage/schema';
 import { buildEffectivelyEnabledIds } from '../../storage/schema';
 
