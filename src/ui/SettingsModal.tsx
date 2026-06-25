@@ -70,6 +70,14 @@ const TABS: { value: SettingsTab; label: string }[] = [
 
 const DEFAULT_COMMAND_SEPARATOR = ';;';
 
+type CaretShortcut = 'none' | 'tab' | 'ctrltab' | 'f6';
+const CARET_SHORTCUT_OPTIONS: { value: CaretShortcut; label: string }[] = [
+    { value: 'none',    label: 'Off' },
+    { value: 'tab',     label: 'Tab' },
+    { value: 'ctrltab', label: 'Ctrl+Tab' },
+    { value: 'f6',      label: 'F6' },
+];
+
 interface SettingsModalProps {
     onClose: () => void;
     /** Active profile id; null on the connection screen (only theme is editable). */
@@ -161,6 +169,12 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     // user's screen reader narrates it. Defaults on (matches Mudlet); the
     // ScreenReaderLog component reads the same key.
     const announceIncomingText = (config?.announceIncomingText as boolean | undefined) ?? true;
+    const enableClosedCaption = (config?.enableClosedCaption as boolean | undefined) ?? false;
+    const rawCaretShortcut = config?.caretShortcut;
+    const caretShortcut: CaretShortcut =
+        rawCaretShortcut === 'tab' || rawCaretShortcut === 'ctrltab' || rawCaretShortcut === 'f6'
+            ? rawCaretShortcut
+            : 'none';
     // showSentText is stored as a mode string; legacy profiles may hold a boolean
     // (false ≙ never, true/unset ≙ script).
     const rawShowSentText = config?.showSentText;
@@ -933,9 +947,52 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     onChange={next => patchConfig({ announceIncomingText: next })}
                                 />
                             </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="caret-shortcut">
+                                    Caret mode shortcut
+                                    <HelpTip label="About caret mode">
+                                        The key that opens a keyboard-navigable review of the
+                                        scrollback (Mudlet's caret mode). In review mode, your
+                                        screen reader reads past output by character, word, and
+                                        line with its own cursor, and you can reach links with
+                                        <code> Ctrl+]</code>/<code>Ctrl+[</code>. Press the same
+                                        key (or <code>Esc</code>) to return to the command line.
+                                        <strong> Off</strong> disables it.
+                                    </HelpTip>
+                                </label>
+                                <select
+                                    id="caret-shortcut"
+                                    className="settings-select"
+                                    value={caretShortcut}
+                                    onChange={e => patchConfig({ caretShortcut: e.target.value as CaretShortcut })}
+                                >
+                                    {CARET_SHORTCUT_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="enable-closed-caption-label">
+                                    Closed captions for media
+                                    <HelpTip label="About closed captions">
+                                        Print a short text line in the output whenever a sound,
+                                        music track, or video starts or stops — e.g.
+                                        <code> [sound "rain.wav" plays]</code> (Mudlet's
+                                        <code> enableClosedCaption</code>). Useful if you can't
+                                        hear game audio. Captions cover audio and video only, not
+                                        images. Off by default.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="enable-closed-caption"
+                                    aria-labelledby="enable-closed-caption-label"
+                                    checked={enableClosedCaption}
+                                    onChange={next => patchConfig({ enableClosedCaption: next })}
+                                />
+                            </div>
                             <p className="settings-hint">
-                                More screen-reader options (keyboard reading cursor, server
-                                advertisement) are coming as those features land.
+                                Server advertisement of screen-reader use is coming as that
+                                feature lands.
                             </p>
                         </section>
                     )}

@@ -20,6 +20,8 @@
 //     same as no audio at all — the samples have to be genuinely non-zero,
 //     just attenuated past the audible floor.
 
+import type { MediaCaptionInfo } from './closedCaption';
+
 type LoaderFn = (path: string) => Promise<ArrayBuffer | null>;
 
 /** Which mute gate a playback belongs to. `api` = triggered by a Lua script
@@ -46,6 +48,10 @@ export interface PlaySoundOptions {
     tag?: string;
     /** Which mute gate governs this playback. Default 'api'. */
     origin?: MediaOrigin;
+    /** Optional closed-caption text (Mudlet's media `caption`). Shown verbatim
+     *  when closed captions are on; absent → a caption is synthesized from the
+     *  kind + filename. */
+    caption?: string;
 }
 
 export interface PlayMusicOptions extends PlaySoundOptions {
@@ -68,6 +74,7 @@ interface ActiveSource {
     key?: string;
     tag?: string;
     origin: MediaOrigin;
+    caption?: string;
     source: AudioBufferSourceNode;
     gain: GainNode;
     fadeout: number;
@@ -209,6 +216,13 @@ export class SoundManager {
      * before stopping, so engine teardown never fires it.
      */
     onMediaFinished?: (name: string, path: string) => void;
+    /**
+     * Raised when a tracked source starts ('plays') or ends ('stops'), so the
+     * engine can print a closed caption (Mudlet's enableClosedCaption). Fires
+     * regardless of the caption setting — the consumer decides whether to show
+     * it. Not fired by `stopAll()` (teardown nulls each onended first).
+     */
+    onMediaCaption?: (info: MediaCaptionInfo) => void;
 
     setLoader(fn: LoaderFn | null): void {
         // Different profiles can resolve the same VFS-relative path (e.g.
@@ -478,6 +492,7 @@ export class SoundManager {
             key: opts.key,
             tag: opts.tag,
             origin,
+            caption: opts.caption,
             source,
             gain,
             fadeout,
@@ -486,10 +501,12 @@ export class SoundManager {
         };
         this.active.set(id, record);
         ensureKeepAlive();
+        this.onMediaCaption?.({ kind, name, key: opts.key, caption: opts.caption, action: 'plays' });
 
         source.onended = () => {
             this.active.delete(id);
             if (kind === 'music') this.updateMediaSessionState();
+            this.onMediaCaption?.({ kind, name, key: opts.key, caption: opts.caption, action: 'stops' });
             // Mudlet's sysMediaFinished args are (name, path). We resolve a path
             // for playback, so split it into the trailing filename and the full
             // path the script passed in.

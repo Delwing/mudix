@@ -3340,6 +3340,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 loops: numOpt(o.loops),
                 key: strOpt(o.key),
                 tag: strOpt(o.tag),
+                caption: strOpt(o.caption),
                 origin: 'api',
             });
             return true;
@@ -3355,6 +3356,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 loops: numOpt(o.loops),
                 key: strOpt(o.key),
                 tag: strOpt(o.tag),
+                caption: strOpt(o.caption),
                 continue: o.continue === true || o['continue'] === true,
                 origin: 'api',
             });
@@ -3431,6 +3433,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 loops: numOpt(o.loops),
                 width: strOpt(o.width),
                 height: strOpt(o.height),
+                caption: strOpt(o.caption),
             });
         });
         // loadVideoFile(name) | ({name=...}) — preload/cache so the first

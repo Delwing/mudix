@@ -14,6 +14,7 @@ import {HyperlinkVisibilityController} from '../mud/text/hyperlinkVisibility';
 import type {MspCommand, MxpLink} from '../mud/protocol';
 import {MxpParser, splitMxpResultLines} from '../mud/protocol';
 import {ScriptingAPI, type InstallOutcome} from './ScriptingAPI';
+import {formatClosedCaption, type MediaCaptionInfo} from '../ui/sound/closedCaption';
 
 /** The fields every tree node (alias/trigger/timer/key/button/script) shares —
  *  enough for the tree-walking APIs (ancestors/findItems/isAncestorsActive/
@@ -291,6 +292,10 @@ export class ScriptingEngine {
             this.raiseEvent('sysMediaFinished', [name, path]);
             this.raiseEvent('sysSoundFinished', [name, path]);
         };
+        // Closed captions (Mudlet enableClosedCaption): print a text line when a
+        // sound/music starts or stops, gated on the setting (decided per-event so
+        // toggling takes effect live).
+        session.sounds.onMediaCaption = (info) => this.printClosedCaption(info);
         // Mudlet fires sysExitEvent as the profile shuts down. The engine is
         // torn down on connection switch/unmount (destroy), but a full page
         // unload skips React cleanup — cover that with a beforeunload hook.
@@ -1002,6 +1007,7 @@ export class ScriptingEngine {
             });
             this.session.videos.setMountPoint(() => this.session.windows.getMainViewportElement());
             this.session.videos.onEnded = (name, path) => this.raiseEvent('sysMediaFinished', [name, path]);
+            this.session.videos.onMediaCaption = (info) => this.printClosedCaption(info);
             this.triggerEngine.setLuaEval((code) => {
                 const lua = this.runtimes.lua;
                 return lua ? lua.evalTriggerPattern(code) : false;
@@ -1132,6 +1138,17 @@ export class ScriptingEngine {
      * (downloading from `U=` on cache miss) and the resulting VFS path is
      * handed to the SoundManager.
      */
+    /**
+     * Print a closed caption for a media play/stop, when `enableClosedCaption`
+     * is on (Mudlet's `TMedia::printClosedCaption`). The line is emitted as
+     * normal main-output text so it renders, is logged, and rides the screen-
+     * reader announce path — exactly as Mudlet's `mpConsole->print()` does.
+     */
+    private printClosedCaption(info: MediaCaptionInfo): void {
+        if (!this.api.getConfig('enableClosedCaption')) return;
+        this.session.events.emit('message', formatClosedCaption(info), 'caption', Date.now());
+    }
+
     private async handleMspCommand(command: MspCommand): Promise<void> {
         const debug = debugMspEnabled();
         // Any tag carrying U= updates the per-kind default base URL.
@@ -2255,6 +2272,8 @@ export class ScriptingEngine {
         this.session.windows.onRaiseEvent = undefined;
         this.session.windows.onFileDrop = undefined;
         this.session.sounds.onMediaFinished = undefined;
+        this.session.sounds.onMediaCaption = undefined;
+        this.session.videos.onMediaCaption = null;
         // Stop everything that can fire a Lua callback BEFORE closing the VM.
         // The timer engine is the only autonomous async caller into Lua (a
         // tempTimer's setTimeout → dispatchCb); line feed and key bindings are

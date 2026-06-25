@@ -8,6 +8,8 @@
 // (or replaces) a single video element keyed by name; pauseVideos pauses all,
 // stopVideos pauses + removes them.
 
+import type { MediaCaptionInfo } from '../sound/closedCaption';
+
 type LoaderFn = (path: string) => Promise<ArrayBuffer | null>;
 
 export interface PlayVideoOptions {
@@ -19,6 +21,8 @@ export interface PlayVideoOptions {
     /** CSS units; default fills the viewport. */
     width?: string;
     height?: string;
+    /** Optional closed-caption text (Mudlet's media `caption`). */
+    caption?: string;
 }
 
 interface ActiveVideo {
@@ -40,6 +44,9 @@ export class VideoManager {
     /** Fires when a video ends naturally or is stopped — mirrors Mudlet's
      *  sysMediaFinished. */
     onEnded: ((name: string, path: string) => void) | null = null;
+    /** Raised when a video starts ('plays') or finishes ('stops') so the engine
+     *  can print a closed caption (Mudlet's enableClosedCaption). */
+    onMediaCaption: ((info: MediaCaptionInfo) => void) | null = null;
 
     setLoader(fn: LoaderFn | null): void {
         this.loader = fn;
@@ -115,10 +122,12 @@ export class VideoManager {
                 }
             }
             this.stopByName(name);
+            this.onMediaCaption?.({ kind: 'video', name, caption: opts.caption, action: 'stops' });
             this.onEnded?.(name, path);
         });
         mount.appendChild(el);
         this.active.set(name, entry);
+        this.onMediaCaption?.({ kind: 'video', name, caption: opts.caption, action: 'plays' });
         try {
             await el.play();
         } catch {
