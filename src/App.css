@@ -3270,7 +3270,13 @@ html, body, #root {
     gap: 2px;
     padding: 0 16px;
     border-bottom: 1px solid var(--border);
+    /* Let the tab strip scroll sideways instead of clipping/squashing when the
+       categories don't fit (narrow desktop modal, and especially phones). */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
 }
+.settings-tabs::-webkit-scrollbar { display: none; }
 
 .settings-tab {
     appearance: none;
@@ -3284,6 +3290,9 @@ html, body, #root {
     font-size: 13px;
     color: var(--text-dim);
     cursor: pointer;
+    /* Keep natural width so the strip scrolls rather than crushing labels. */
+    flex-shrink: 0;
+    white-space: nowrap;
     transition: color 0.1s ease, border-color 0.1s ease;
 }
 
@@ -3630,6 +3639,29 @@ html, body, #root {
 
     /* Quick-open: less top offset so the list isn't pushed down the screen. */
     .qo-overlay { padding-top: 8vh; }
+
+    /* Settings: bigger touch targets on the (now swipeable) tab strip and the
+       close button; let rows wrap so a wide control drops below its label
+       instead of overflowing the screen. */
+    .settings-tab {
+        padding: 13px 16px;
+        font-size: 14px;
+    }
+    .modal-close {
+        padding: 10px 12px;
+        font-size: 18px;
+    }
+    .settings-row {
+        flex-wrap: wrap;
+    }
+    /* A wrapped control spans the row and aligns under the label. */
+    .settings-row > .settings-color-field,
+    .settings-row > .settings-borders,
+    .settings-row > select,
+    .settings-row > input[type="text"],
+    .settings-row > input[type="number"] {
+        flex-basis: 100%;
+    }
 
     /* Command bar: 16px input font prevents iOS Safari focus-zoom; the input,
        its ghost-suggestion overlay, the prompt glyph and the multi-line variant
