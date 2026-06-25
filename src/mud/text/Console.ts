@@ -244,9 +244,13 @@ export class Console {
      * current line into multiple history lines (Mudlet issue #8945): the text up
      * to the first `\n` is inserted at the cursor column, each subsequent `\n`
      * starts a new line, and the remainder of the original line trails the last
-     * inserted segment. The cursor ends just after the inserted text. Returns
-     * false when there's no current line to insert into (caller falls back to an
-     * echo). Mid-buffer multi-line inserts update the buffer model fully; the
+     * inserted segment. For a single-line insert the cursor stays at the
+     * insertion point (Mudlet's `insertText` does not advance `mUserCursor` — the
+     * bundled GUIUtils `xEcho`/`cinsertText` loop advances it explicitly with its
+     * own `moveCursor` after each segment; advancing here too would double-count
+     * and push later color segments past their intended column). Returns false
+     * when there's no current line to insert into (caller falls back to an echo).
+     * Mid-buffer multi-line inserts update the buffer model fully; the
      * incremental renderer redraws the affected line(s) lazily.
      */
     insertText(text: string, state?: FormatStateSnapshot): boolean {
@@ -256,7 +260,7 @@ export class Console {
         const col = Math.max(0, Math.min(this.getCursorColumn(), cur.length));
         cur.insert(col, text, state);
         if (!text.includes('\n')) {
-            this.cursorCol = col + text.length;
+            this.cursorCol = col;
             return true;
         }
         // The current line now carries embedded newlines — split it into separate
