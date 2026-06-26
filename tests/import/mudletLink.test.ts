@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { findNewestCurrentXml, isMudletProfileVfs, type VfsReader } from '../../src/import/mudletLink';
+import { findNewestCurrentXml, isMudletProfileVfs, readNewestParseableXml, type VfsReader } from '../../src/import/mudletLink';
 
 // A minimal in-memory VfsReader. `files` maps a relative path to its mtime (ms);
-// directories are inferred from the path prefixes.
-function mockVfs(files: Record<string, number>): VfsReader {
+// `contents` optionally maps a path to file text. Directories are inferred.
+function mockVfs(files: Record<string, number>, contents: Record<string, string> = {}): VfsReader {
     const paths = Object.keys(files);
     return {
         exists: (p) => paths.includes(p) || paths.some(f => f.startsWith(`${p}/`)),
@@ -12,9 +12,11 @@ function mockVfs(files: Record<string, number>): VfsReader {
             return [...new Set(paths.filter(f => f.startsWith(prefix)).map(f => f.slice(prefix.length).split('/')[0]))];
         },
         stat: (p) => (p in files ? { mtime: new Date(files[p]) } : null),
-        readFile: () => '',
+        readFile: (p) => contents[p] ?? '',
     };
 }
+
+const VALID_XML = '<?xml version="1.0"?><MudletPackage version="1.001"><HostPackage><Host><name>P</name></Host></HostPackage></MudletPackage>';
 
 describe('findNewestCurrentXml', () => {
     it('returns null when there is no current/ directory', () => {
@@ -33,12 +35,14 @@ describe('findNewestCurrentXml', () => {
         expect(isMudletProfileVfs(vfs)).toBe(true);
     });
 
-    it('prefers autosave.xml when mtimes are unavailable', () => {
+    it('deprioritizes autosave.xml in favor of a timestamped save', () => {
+        // autosave is not what Mudlet loads — a real timestamped save wins even
+        // when autosave has the newer mtime.
         const vfs = mockVfs({
-            'current/2026-06-26#11-50-18.xml': 0,
-            'current/autosave.xml': 0,
+            'current/2026-06-26#11-50-18.xml': 1000,
+            'current/autosave.xml': 9000,
         });
-        expect(findNewestCurrentXml(vfs)).toBe('current/autosave.xml');
+        expect(findNewestCurrentXml(vfs)).toBe('current/2026-06-26#11-50-18.xml');
     });
 
     it('falls back to the latest timestamp filename when no mtimes and no autosave', () => {
@@ -52,5 +56,29 @@ describe('findNewestCurrentXml', () => {
     it('ignores non-xml files in current/', () => {
         const vfs = mockVfs({ 'current/notes.txt': 5000, 'current/save.xml': 1000 });
         expect(findNewestCurrentXml(vfs)).toBe('current/save.xml');
+    });
+});
+
+describe('readNewestParseableXml', () => {
+    it('returns the newest save when it parses', () => {
+        const vfs = mockVfs(
+            { 'current/old.xml': 1000, 'current/new.xml': 2000 },
+            { 'current/old.xml': VALID_XML, 'current/new.xml': VALID_XML },
+        );
+        expect(readNewestParseableXml(vfs)?.path).toBe('current/new.xml');
+    });
+
+    it('skips a corrupt newest save and falls back to the newest valid one', () => {
+        const vfs = mockVfs(
+            { 'current/autosave.xml': 3000, 'current/good.xml': 2000 },
+            { 'current/autosave.xml': '<MudletPackage>...broken extra }}', 'current/good.xml': VALID_XML },
+        );
+        // autosave is newest but malformed → fall back to the good timestamped save
+        expect(readNewestParseableXml(vfs)?.path).toBe('current/good.xml');
+    });
+
+    it('returns null when nothing parses', () => {
+        const vfs = mockVfs({ 'current/a.xml': 1000 }, { 'current/a.xml': 'not xml at all <<<' });
+        expect(readNewestParseableXml(vfs)).toBeNull();
     });
 });

@@ -19,36 +19,64 @@ export interface VfsReader {
     readFile(path: string): string;
 }
 
-/** Path (relative to the profile root) of the newest profile save in current/,
- *  or null if the folder isn't a Mudlet profile. Newest is by mtime; if mtimes
- *  are unavailable (all zero) it prefers autosave.xml then the latest filename. */
-export function findNewestCurrentXml(vfs: VfsReader): string | null {
-    if (!vfs.exists('current')) return null;
+/** current/*.xml paths (relative to the profile root) ordered newest-first.
+ *  Order is by mtime; when mtimes are unavailable (all zero) autosave.xml comes
+ *  first, then the latest timestamp filename. Empty when not a Mudlet profile. */
+export function listCurrentXmlsByRecency(vfs: VfsReader): string[] {
+    if (!vfs.exists('current')) return [];
     let names: string[];
     try {
         names = vfs.readdir('current').filter(n => n.toLowerCase().endsWith('.xml'));
     } catch {
-        return null;
+        return [];
     }
-    if (!names.length) return null;
+    return names
+        .map(n => ({ n, m: vfs.stat(`current/${n}`)?.mtime?.getTime() ?? 0 }))
+        .sort((a, b) => {
+            // Mudlet's real saves are the timestamped files; autosave.xml is not
+            // what it loads, so always rank it last (and it's where our earlier
+            // write bug left a corrupt file). Among the timestamped saves, newest
+            // mtime wins, then the latest filename.
+            const aAuto = a.n.toLowerCase() === 'autosave.xml';
+            const bAuto = b.n.toLowerCase() === 'autosave.xml';
+            if (aAuto !== bAuto) return aAuto ? 1 : -1;
+            if (a.m !== b.m) return b.m - a.m;
+            return a.n < b.n ? 1 : -1;
+        })
+        .map(({ n }) => `current/${n}`);
+}
 
-    let best: string | null = null;
-    let bestMtime = -1;
-    for (const n of names) {
-        const m = vfs.stat(`current/${n}`)?.mtime?.getTime() ?? 0;
-        if (m > bestMtime) { bestMtime = m; best = n; }
-    }
-    if (bestMtime <= 0) {
-        best = names.find(n => n.toLowerCase() === 'autosave.xml')
-            ?? [...names].sort().pop()
-            ?? null;
-    }
-    return best ? `current/${best}` : null;
+/** Path of the newest profile save in current/, or null if not a Mudlet profile. */
+export function findNewestCurrentXml(vfs: VfsReader): string | null {
+    return listCurrentXmlsByRecency(vfs)[0] ?? null;
 }
 
 /** Whether a mounted VFS looks like a linked Mudlet profile (has current/*.xml). */
 export function isMudletProfileVfs(vfs: VfsReader): boolean {
     return findNewestCurrentXml(vfs) !== null;
+}
+
+/**
+ * The newest current/*.xml whose content actually parses as a Mudlet profile,
+ * with its text. Skips a corrupt newest save (e.g. a truncated/garbage autosave
+ * from the write bug) and falls back to older saves — so a linked profile still
+ * opens, and write-back can re-heal the bad file from a good base. Null if none
+ * parse.
+ */
+export function readNewestParseableXml(vfs: VfsReader): { path: string; xml: string } | null {
+    for (const path of listCurrentXmlsByRecency(vfs)) {
+        let xml: string;
+        try {
+            xml = vfs.readFile(path);
+        } catch {
+            continue;
+        }
+        const doc = new DOMParser().parseFromString(xml, 'text/xml');
+        if (!doc.getElementsByTagName('parsererror')[0] && doc.getElementsByTagName('MudletPackage')[0]) {
+            return { path, xml };
+        }
+    }
+    return null;
 }
 
 function readSidecar(vfs: VfsReader): Partial<PersistedProfileData> {
@@ -67,10 +95,10 @@ function readSidecar(vfs: VfsReader): Partial<PersistedProfileData> {
  * `installedAt` stamps the package manifests (pass an ISO timestamp).
  */
 export function loadMudletLinkedProfile(vfs: VfsReader, connectionId: string, installedAt: string): boolean {
-    const xmlPath = findNewestCurrentXml(vfs);
-    if (!xmlPath) return false;
+    const found = readNewestParseableXml(vfs);
+    if (!found) return false;
 
-    const data = parseMudletProfile(vfs.readFile(xmlPath));
+    const data = parseMudletProfile(found.xml);
     const packages = buildPackageManifests(data.installedPackages, name => {
         const p = `${name}/config.lua`;
         try { return vfs.exists(p) ? vfs.readFile(p) : undefined; } catch { return undefined; }

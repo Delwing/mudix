@@ -2,13 +2,33 @@ import { useEffect, useRef, useState } from 'react';
 import { ConnectionScreen } from './ui/ConnectionScreen';
 import { SettingsModal } from './ui/SettingsModal';
 import { ProfileBusyScreen } from './ui/ProfileBusyScreen';
+import { FolderPermissionScreen } from './ui/FolderPermissionScreen';
 import { ProfileSession } from './ProfileSession';
 import { acquireProfileLock, isProfileLockHeld } from './utils/profileLock';
 import { ProfileVFS } from './scripting/vfs/ProfileVFS';
 import { registerVfs, unregisterVfs } from './scripting/vfs/vfsBridge';
 import { loadProfileData } from './storage/profileVfsData';
 import { isMudletProfileVfs, loadMudletLinkedProfile } from './import/mudletLink';
+import { loadFolderHandle, checkFolderPermission, requestFolderPermission, clearFolderHandle } from './scripting/vfs/folderHandleStore';
 import { useAppStore, type MudConnection } from './storage';
+
+/**
+ * Best-effort (re)grant of a linked profile's folder permission. Must be called
+ * from within a user gesture (the Open/Connect click) — `requestPermission`
+ * needs transient activation, which the cold-start mount effect doesn't have, so
+ * without this a linked profile silently falls back to IndexedDB and loads empty.
+ * No-ops for non-folder profiles and on the deep-link path (no activation).
+ */
+async function ensureFolderPermission(connectionId: string): Promise<void> {
+    try {
+        const handle = await loadFolderHandle(connectionId);
+        if (!handle) return;
+        if ((await checkFolderPermission(handle)) === 'granted') return;
+        await requestFolderPermission(handle);
+    } catch {
+        /* best-effort — the mount falls back to IDB if it's still not granted */
+    }
+}
 
 export default function App() {
     const [activeConnection, setActiveConnection] = useState<MudConnection | null>(null);
@@ -22,6 +42,14 @@ export default function App() {
     // renders) so per-profile data is available synchronously at first paint.
     // App owns its lifecycle; the engine just consumes it.
     const [profileVfs, setProfileVfs] = useState<ProfileVFS | null>(null);
+    // Linked-folder permission gate: when a Mudlet-linked profile is opened but
+    // the browser hasn't granted folder access (e.g. a fresh deep-link load, no
+    // gesture to prompt with), we block on a decision screen instead of mounting
+    // an empty local copy. `folderGateHandle` is the folder we need access to;
+    // `folderRetry` re-runs the mount effect after the user grants or unlinks.
+    const [folderGateHandle, setFolderGateHandle] = useState<FileSystemDirectoryHandle | null>(null);
+    const [folderRetry, setFolderRetry] = useState(0);
+    const patchConnection = useAppStore(s => s.patchConnection);
 
     const deepLinkProfileId = useRef(new URLSearchParams(window.location.search).get('profile'));
     // `&connect=1` (set by loadProfile in another tab) auto-dials on open instead
@@ -52,8 +80,18 @@ export default function App() {
 
     const openProfile = (connection: MudConnection, withConnect: boolean) => {
         setAutoConnect(withConnect);
-        setActiveConnection(connection);
-        setProfileQuery(connection.id);
+        const proceed = () => {
+            setActiveConnection(connection);
+            setProfileQuery(connection.id);
+        };
+        // Linked Mudlet profile: try to (re)grant folder permission while we still
+        // hold the click's user activation, so the mount uses the folder instead of
+        // silently falling back to IDB. Best-effort — proceed regardless.
+        if (connection.mudletLinked) {
+            void ensureFolderPermission(connection.id).finally(proceed);
+        } else {
+            proceed();
+        }
     };
 
     // Open (but don't dial) when the page is loaded with ?profile=<id>.
@@ -75,19 +113,40 @@ export default function App() {
         setProfileQuery(null);
     };
 
+    // Folder-gate decisions. Grant runs requestPermission directly off the click
+    // (gesture preserved — the handle was loaded when the gate appeared), then
+    // re-runs the mount. Unlink drops the folder link so the profile opens local.
+    const handleGrantFolder = () => {
+        const fh = folderGateHandle;
+        setFolderGateHandle(null);
+        const done = () => setFolderRetry(n => n + 1);
+        if (fh) requestFolderPermission(fh).catch(() => {}).finally(done);
+        else done();
+    };
+    const handleUnlinkFolder = () => {
+        if (activeConnection) {
+            void clearFolderHandle(activeConnection.id).catch(() => {});
+            patchConnection(activeConnection.id, { mudletLinked: undefined });
+        }
+        setFolderGateHandle(null);
+        setFolderRetry(n => n + 1);
+    };
+
     // Hold the profile's cross-tab lock for as long as it's open here. The
     // session below is only rendered once we own it, so its VFS/SQLite/map are
     // never mounted concurrently with another tab's. Releasing on cleanup (and
     // the browser's auto-release on tab close) hands ownership to any tab queued
     // behind us.
     useEffect(() => {
-        if (!activeConnection) { setLockPhase('none'); setProfileVfs(null); return; }
+        if (!activeConnection) { setLockPhase('none'); setProfileVfs(null); setFolderGateHandle(null); return; }
         const id = activeConnection.id;
+        const linked = activeConnection.mudletLinked;
         const ctrl = new AbortController();
         let cancelled = false;
         let mountedVfs: ProfileVFS | null = null;
         setLockPhase('acquiring');
         setProfileVfs(null);
+        setFolderGateHandle(null);
         // Pick the right initial message: if another tab already holds it, show
         // the "waiting" screen rather than a flash of "opening".
         void isProfileLockHeld(id).then(held => {
@@ -95,6 +154,19 @@ export default function App() {
         });
         const handle = acquireProfileLock(id, ctrl.signal);
         handle.acquired.then(async () => {
+            if (cancelled) return;
+            // Linked-folder permission gate: if this is a Mudlet-linked profile and
+            // the folder isn't accessible, block on a decision screen (grant/unlink)
+            // rather than silently mounting an empty local copy. We hold the lock
+            // meanwhile; the user's choice bumps folderRetry to re-run this effect.
+            if (linked) {
+                const fh = await loadFolderHandle(id).catch(() => null);
+                if (fh && (await checkFolderPermission(fh)) !== 'granted') {
+                    if (cancelled) return;
+                    setFolderGateHandle(fh);
+                    return;
+                }
+            }
             if (cancelled) return;
             // Mount the profile's VFS up front, before the session renders, so
             // per-profile data is ready synchronously at first paint. The engine
@@ -138,11 +210,25 @@ export default function App() {
                 void v.flush().finally(() => v.unmount());
             }
         };
-    }, [activeConnection]);
+        // folderRetry re-runs the mount after the user resolves the folder gate.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeConnection, folderRetry]);
 
     const handleToggleSettings = () => setSettingsOpen(v => !v);
 
     if (activeConnection) {
+        // A linked profile whose folder access isn't granted blocks here until the
+        // user grants or unlinks — rather than silently opening an empty copy.
+        if (folderGateHandle) {
+            return (
+                <FolderPermissionScreen
+                    name={activeConnection.name}
+                    onGrant={handleGrantFolder}
+                    onUnlink={handleUnlinkFolder}
+                    onBack={handleCloseProfile}
+                />
+            );
+        }
         // Never mount the session until we own the lock — that's what keeps the
         // profile's on-disk state single-writer across tabs.
         if (lockPhase !== 'held') {

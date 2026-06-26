@@ -156,32 +156,38 @@ interface ExportOptions {
     packageName?: string;
 }
 
+// Mudlet encodes a node's boolean flags as ATTRIBUTES on the <Trigger>/<Alias>/…
+// element (not child elements), and reads them back as attributes — so `attrsFor`
+// supplies the full per-type attribute set. The child elements + their order are
+// emitted by `emitBody`, matching Mudlet's XMLexport.cpp exactly (verified against
+// real Mudlet saves). Getting this wrong makes Mudlet mis-parse and load nothing.
 function emitSubtree<T extends TreeNode>(
     xml: XmlBuilder,
     children: T[] | undefined,
     childMap: Map<string | null, T[]>,
     leafTag: string,
     groupTag: string,
-    emitOne: (xml: XmlBuilder, node: T, isGroup: boolean) => void,
+    attrsFor: (node: T, isGroup: boolean) => Record<string, string>,
+    emitBody: (xml: XmlBuilder, node: T, isGroup: boolean) => void,
 ): void {
     if (!children) return;
     for (const node of children) {
         const tag = node.isGroup ? groupTag : leafTag;
-        xml.open(tag, {
-            isActive:  'yes',
-            isFolder:  node.isGroup ? 'yes' : 'no',
-        });
-        emitOne(xml, node, node.isGroup);
+        xml.open(tag, attrsFor(node, node.isGroup));
+        emitBody(xml, node, node.isGroup);
         // Non-group nodes can still have children (Mudlet allows leaf triggers
-        // to act as chain heads with descendants), so always recurse if any
-        // exist — not just on isGroup.
+        // to act as chain heads with descendants), so always recurse if any exist.
         const grandChildren = childMap.get(node.id);
         if (grandChildren && grandChildren.length > 0) {
-            xml.raw('');
-            emitSubtree(xml, grandChildren, childMap, leafTag, groupTag, emitOne);
+            emitSubtree(xml, grandChildren, childMap, leafTag, groupTag, attrsFor, emitBody);
         }
         xml.close(tag);
     }
+}
+
+/** The isActive/isFolder attributes every node carries (in Mudlet's order). */
+function baseAttrs(enabled: boolean, isGroup: boolean): Record<string, string> {
+    return { isActive: enabled ? 'yes' : 'no', isFolder: isGroup ? 'yes' : 'no' };
 }
 
 /**
@@ -212,18 +218,23 @@ function unwrapPackageRoots<T extends TreeNode & { name: string; packageName?: s
     return out;
 }
 
+// All emit functions below mirror Mudlet's XMLexport.cpp writers exactly —
+// attributes and child-element order verified against real Mudlet profile saves.
+
 function emitScripts(xml: XmlBuilder, nodes: ScriptNode[], opts: ExportOptions): void {
     xml.open('ScriptPackage');
     const childMap = buildChildrenMap(nodes);
     const roots = unwrapPackageRoots(nodes, childMap, opts);
-    emitSubtree(xml, roots, childMap, 'Script', 'ScriptGroup', (xml, n) => {
-        xml.leaf('name', n.name);
-        xml.leaf('packageName', n.packageName ?? '');
-        xml.open('eventHandlerList');
-        for (const e of (n.eventHandlers ?? [])) xml.leaf('string', e);
-        xml.close('eventHandlerList');
-        xml.leaf('script', n.code ?? '');
-    });
+    emitSubtree(xml, roots, childMap, 'Script', 'ScriptGroup',
+        (n, g) => baseAttrs(n.enabled, g),
+        (xml, n) => {
+            xml.leaf('name', n.name);
+            xml.leaf('packageName', n.packageName ?? '');
+            xml.leaf('script', n.code ?? '');
+            xml.open('eventHandlerList');
+            for (const e of (n.eventHandlers ?? [])) xml.leaf('string', e);
+            xml.close('eventHandlerList');
+        });
     xml.close('ScriptPackage');
 }
 
@@ -231,13 +242,15 @@ function emitAliases(xml: XmlBuilder, nodes: AliasNode[], opts: ExportOptions): 
     xml.open('AliasPackage');
     const childMap = buildChildrenMap(nodes);
     const roots = unwrapPackageRoots(nodes, childMap, opts);
-    emitSubtree(xml, roots, childMap, 'Alias', 'AliasGroup', (xml, n) => {
-        xml.leaf('name', n.name);
-        xml.leaf('script', n.code ?? '');
-        xml.leaf('command', n.command ?? '');
-        xml.leaf('packageName', n.packageName ?? '');
-        xml.leaf('regex', n.pattern ?? '');
-    });
+    emitSubtree(xml, roots, childMap, 'Alias', 'AliasGroup',
+        (n, g) => baseAttrs(n.enabled, g),
+        (xml, n) => {
+            xml.leaf('name', n.name);
+            xml.leaf('script', n.code ?? '');
+            xml.leaf('command', n.command ?? '');
+            xml.leaf('packageName', n.packageName ?? '');
+            xml.leaf('regex', n.pattern ?? '');
+        });
     xml.close('AliasPackage');
 }
 
@@ -245,31 +258,39 @@ function emitTriggers(xml: XmlBuilder, nodes: TriggerNode[], opts: ExportOptions
     xml.open('TriggerPackage');
     const childMap = buildChildrenMap(nodes);
     const roots = unwrapPackageRoots(nodes, childMap, opts);
-    emitSubtree(xml, roots, childMap, 'Trigger', 'TriggerGroup', (xml, n) => {
-        xml.leaf('name', n.name);
-        xml.leaf('script', n.code ?? '');
-        xml.leaf('triggerType', '0');
-        xml.leaf('conditonLineDelta', String(n.delta ?? 0));
-        xml.leaf('mStayOpen', String(n.fireLength ?? 0));
-        xml.leaf('mCommand', n.command ?? '');
-        xml.leaf('packageName', n.packageName ?? '');
-        xml.leaf('mFgColor', '#000000');
-        xml.leaf('mBgColor', '#ffffff');
-        xml.leaf('mSoundFile', '');
-        // Booleans encoded as nested attributes per Mudlet's TTrigger XML shape:
-        // attributes on the parent element. We've already emitted opening attrs;
-        // the parser only checks isActive/isFolder, but we add the rest as elements.
-        xml.leaf('isMultiline', n.multiline ? 'yes' : 'no');
-        xml.leaf('isPerlSlashGOption', n.multipleMatches ? 'yes' : 'no');
-        xml.leaf('isFilterTrigger', n.isFilter ? 'yes' : 'no');
-        xml.leaf('isTempTrigger', 'no');
-        xml.open('regexCodeList');
-        for (const p of (n.patterns ?? [])) xml.leaf('string', p.text ?? '');
-        xml.close('regexCodeList');
-        xml.open('regexCodePropertyList');
-        for (const p of (n.patterns ?? [])) xml.leaf('integer', String(patternTypeIndex(p.type)));
-        xml.close('regexCodePropertyList');
-    });
+    emitSubtree(xml, roots, childMap, 'Trigger', 'TriggerGroup',
+        (n, g) => ({
+            ...baseAttrs(n.enabled, g),
+            isTempTrigger: 'no',
+            isMultiline: n.multiline ? 'yes' : 'no',
+            isPerlSlashGOption: n.multipleMatches ? 'yes' : 'no',
+            isColorizerTrigger: n.highlight ? 'yes' : 'no',
+            isFilterTrigger: n.isFilter ? 'yes' : 'no',
+            isSoundTrigger: 'no',
+            isColorTrigger: 'no',
+            isColorTriggerFg: 'no',
+            isColorTriggerBg: 'no',
+        }),
+        (xml, n) => {
+            xml.leaf('name', n.name);
+            xml.leaf('script', n.code ?? '');
+            xml.leaf('triggerType', '0');
+            xml.leaf('conditonLineDelta', String(n.delta ?? 0));
+            xml.leaf('mStayOpen', String(n.fireLength ?? 0));
+            xml.leaf('mCommand', n.command ?? '');
+            xml.leaf('packageName', n.packageName ?? '');
+            xml.leaf('mFgColor', n.highlight?.fg || 'transparent');
+            xml.leaf('mBgColor', n.highlight?.bg || 'transparent');
+            xml.leaf('mSoundFile', '');
+            xml.leaf('colorTriggerFgColor', '#000000');
+            xml.leaf('colorTriggerBgColor', '#000000');
+            xml.open('regexCodeList');
+            for (const p of (n.patterns ?? [])) xml.leaf('string', p.text ?? '');
+            xml.close('regexCodeList');
+            xml.open('regexCodePropertyList');
+            for (const p of (n.patterns ?? [])) xml.leaf('integer', String(patternTypeIndex(p.type)));
+            xml.close('regexCodePropertyList');
+        });
     xml.close('TriggerPackage');
 }
 
@@ -277,14 +298,15 @@ function emitTimers(xml: XmlBuilder, nodes: TimerNode[], opts: ExportOptions): v
     xml.open('TimerPackage');
     const childMap = buildChildrenMap(nodes);
     const roots = unwrapPackageRoots(nodes, childMap, opts);
-    emitSubtree(xml, roots, childMap, 'Timer', 'TimerGroup', (xml, n) => {
-        xml.leaf('name', n.name);
-        xml.leaf('script', n.code ?? '');
-        xml.leaf('command', n.command ?? '');
-        xml.leaf('packageName', n.packageName ?? '');
-        xml.leaf('time', formatTimerSeconds(n.seconds ?? 0));
-        xml.leaf('isTempTimer', 'no');
-    });
+    emitSubtree(xml, roots, childMap, 'Timer', 'TimerGroup',
+        (n, g) => ({ ...baseAttrs(n.enabled, g), isTempTimer: 'no', isOffsetTimer: 'no' }),
+        (xml, n) => {
+            xml.leaf('name', n.name);
+            xml.leaf('script', n.code ?? '');
+            xml.leaf('command', n.command ?? '');
+            xml.leaf('packageName', n.packageName ?? '');
+            xml.leaf('time', formatTimerSeconds(n.seconds ?? 0));
+        });
     xml.close('TimerPackage');
 }
 
@@ -292,14 +314,16 @@ function emitKeys(xml: XmlBuilder, nodes: KeyNode[], opts: ExportOptions): void 
     xml.open('KeyPackage');
     const childMap = buildChildrenMap(nodes);
     const roots = unwrapPackageRoots(nodes, childMap, opts);
-    emitSubtree(xml, roots, childMap, 'Key', 'KeyGroup', (xml, n) => {
-        xml.leaf('name', n.name);
-        xml.leaf('script', n.code ?? '');
-        xml.leaf('command', n.command ?? '');
-        xml.leaf('packageName', n.packageName ?? '');
-        xml.leaf('keyCode', String(CODE_TO_QT_KEY[n.key] ?? 0));
-        xml.leaf('keyModifier', String(modifiersToQt(n.modifiers ?? [], n.key)));
-    });
+    emitSubtree(xml, roots, childMap, 'Key', 'KeyGroup',
+        (n, g) => baseAttrs(n.enabled, g),
+        (xml, n) => {
+            xml.leaf('name', n.name);
+            xml.leaf('packageName', n.packageName ?? '');
+            xml.leaf('script', n.code ?? '');
+            xml.leaf('command', n.command ?? '');
+            xml.leaf('keyCode', String(CODE_TO_QT_KEY[n.key] ?? 0));
+            xml.leaf('keyModifier', String(modifiersToQt(n.modifiers ?? [], n.key)));
+        });
     xml.close('KeyPackage');
 }
 
@@ -307,25 +331,27 @@ function emitButtons(xml: XmlBuilder, nodes: ButtonNode[], opts: ExportOptions):
     xml.open('ActionPackage');
     const childMap = buildChildrenMap(nodes);
     const roots = unwrapPackageRoots(nodes, childMap, opts);
-    emitSubtree(xml, roots, childMap, 'Action', 'ActionGroup', (xml, n) => {
-        xml.leaf('name', n.name);
-        xml.leaf('script', n.code ?? '');
-        xml.leaf('packageName', n.packageName ?? '');
-        xml.leaf('icon', n.icon ?? '');
-        xml.leaf('orientation', String(BUTTON_ORIENTATIONS.indexOf(n.orientation) >= 0 ? BUTTON_ORIENTATIONS.indexOf(n.orientation) : 0));
-        xml.leaf('location', String(BUTTON_LOCATIONS.indexOf(n.location) >= 0 ? BUTTON_LOCATIONS.indexOf(n.location) : 0));
-        xml.leaf('posX', String(n.posX ?? 0));
-        xml.leaf('posY', String(n.posY ?? 0));
-        xml.leaf('sizeX', String(n.sizeX ?? 0));
-        xml.leaf('sizeY', String(n.sizeY ?? 0));
-        xml.leaf('buttonColumn', String(n.columns ?? 0));
-        xml.leaf('mButtonState', n.buttonState ? '2' : '1');
-        xml.leaf('isPushButton', n.isPushDown ? 'yes' : 'no');
-        xml.leaf('tooltipText', n.tooltip ?? '');
-        xml.leaf('commandButtonUp', n.command ?? '');
-        xml.leaf('commandButtonDown', n.commandDown ?? '');
-        if (n.styleSheet != null) xml.leaf('css', n.styleSheet);
-    });
+    const idx = (arr: string[], v: string) => String(Math.max(0, arr.indexOf(v)));
+    emitSubtree(xml, roots, childMap, 'Action', 'ActionGroup',
+        (n, g) => ({ ...baseAttrs(n.enabled, g), isPushButton: n.isPushDown ? 'yes' : 'no', isFlatButton: 'no', useCustomLayout: 'no' }),
+        (xml, n) => {
+            xml.leaf('name', n.name);
+            xml.leaf('packageName', n.packageName ?? '');
+            xml.leaf('script', n.code ?? '');
+            xml.leaf('css', n.styleSheet ?? '');
+            xml.leaf('commandButtonUp', n.command ?? '');
+            xml.leaf('commandButtonDown', n.commandDown ?? '');
+            xml.leaf('icon', n.icon ?? '');
+            xml.leaf('orientation', idx(BUTTON_ORIENTATIONS, n.orientation));
+            xml.leaf('location', idx(BUTTON_LOCATIONS, n.location));
+            xml.leaf('posX', String(n.posX ?? 0));
+            xml.leaf('posY', String(n.posY ?? 0));
+            xml.leaf('mButtonState', n.buttonState ? '2' : '1');
+            xml.leaf('sizeX', String(n.sizeX ?? 0));
+            xml.leaf('sizeY', String(n.sizeY ?? 0));
+            xml.leaf('buttonColumn', String(n.columns ?? 0));
+            xml.leaf('buttonRotation', '0');
+        });
     xml.close('ActionPackage');
 }
 
@@ -352,12 +378,15 @@ export function serializeMudletXml(input: SerializeInput, packageName?: string):
     xml.raw('<?xml version="1.0" encoding="UTF-8"?>\n');
     xml.raw('<!DOCTYPE MudletPackage>\n');
     xml.open('MudletPackage', { version: '1.001' });
-    emitScripts(xml,  input.scripts,  opts);
-    emitAliases(xml,  input.aliases,  opts);
-    emitTimers(xml,   input.timers,   opts);
+    // Package order matches Mudlet's XMLexport (Trigger, Timer, Alias, Action,
+    // Script, Key) so a linked-profile write-back produces a minimal diff against
+    // Mudlet's own saves.
     emitTriggers(xml, input.triggers, opts);
-    emitKeys(xml,     input.keys,     opts);
+    emitTimers(xml,   input.timers,   opts);
+    emitAliases(xml,  input.aliases,  opts);
     emitButtons(xml,  input.buttons,  opts);
+    emitScripts(xml,  input.scripts,  opts);
+    emitKeys(xml,     input.keys,     opts);
     xml.close('MudletPackage');
     return xml.build();
 }

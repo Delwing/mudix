@@ -163,13 +163,28 @@ export class ProfileVFS {
     writeFile(path: string, content: string): void {
         const abs = this.resolvePath(path);
         ensureParentDir(abs);
+        this.clearForOverwrite(abs);
         writeFileSync(abs, content, 'utf8');
     }
 
     writeBinaryFile(path: string, data: Uint8Array): void {
         const abs = this.resolvePath(path);
         ensureParentDir(abs);
+        this.clearForOverwrite(abs);
         writeFileSync(abs, data);
+    }
+
+    /**
+     * The linked-folder (WebAccess / FileSystemDirectoryHandle) backend overwrites
+     * a file from offset 0 but does NOT shrink it, so writing shorter content over
+     * longer leaves stale tail bytes — silently corrupting Lua `table.save` data,
+     * JSON, and the profile XML. Removing the file first forces a fresh,
+     * correctly-sized write. IndexedDB truncates on the `w` flag correctly, so it's
+     * left untouched (no extra op per save).
+     */
+    private clearForOverwrite(abs: string): void {
+        if (this.source !== 'folder') return;
+        try { unlinkSync(abs); } catch { /* nothing to remove */ }
     }
 
     appendFile(path: string, content: string): void {
