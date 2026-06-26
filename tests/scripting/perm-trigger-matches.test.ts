@@ -72,3 +72,39 @@ describe('issue 4 — perm regex trigger matches[1] is the match, not the line',
     );
   });
 });
+
+// setMatches builds matches/multimatches/namedCaptures with raw lua_createtable
+// pushes (≈2.4× cheaper than wasmoon's auto-converting global.set). Lock the full
+// table shape so the optimization can't silently drop the named-capture merge or
+// the multimatches nesting.
+describe('setMatches — raw-stack table shape', () => {
+  let env: TestRuntime;
+  beforeEach(async () => { env = await createTestRuntime(); });
+  afterEach(() => env.dispose());
+
+  it('exposes numeric + named captures on matches, plus namedCaptures and multimatches', () => {
+    env.rt.runWithMatches(
+      'R = { matches[1], matches[2], matches[3], matches.hp, namedCaptures.hp, multimatches[1][2] }',
+      'shape',
+      ['HP 137/200', '137', '200'],   // matches: whole match + 2 captures
+      [['rowFull', 'rowCap']],        // multimatches: one row
+      { hp: '137' },                  // named groups
+    );
+    expect(env.run('return R[1]')).toBe('HP 137/200');
+    expect(env.run('return R[2]')).toBe('137');
+    expect(env.run('return R[3]')).toBe('200');
+    expect(env.run('return R[4]')).toBe('137');   // named merged onto matches
+    expect(env.run('return R[5]')).toBe('137');   // separate namedCaptures table
+    expect(env.run('return R[6]')).toBe('rowCap'); // multimatches[1][2]
+  });
+
+  it('leaves an unmatched optional group as nil (not empty string)', () => {
+    env.rt.runWithMatches(
+      'A = (matches[2] == nil); B = matches[3]',
+      'optional',
+      ['full', undefined, 'third'],
+    );
+    expect(env.run('return A')).toBe(true);
+    expect(env.run('return B')).toBe('third');
+  });
+});

@@ -4340,21 +4340,47 @@ end`,
     // time, so `matches[2]` and `matches.foo` coexist on the Lua side just
     // like in Mudlet.
     private setMatches(matches: (string | undefined)[], multimatches?: (string | undefined)[][], namedGroups?: Record<string, string>): void {
-        const oneIndexed = (arr: (string | undefined)[], named?: Record<string, string>): (string | undefined)[] => {
-            const t: (string | undefined)[] = [];
-            for (let i = 0; i < arr.length; i++) t[i + 1] = arr[i];
-            if (named) {
-                const asRec = t as unknown as Record<string, string>;
-                for (const k in named) asRec[k] = named[k];
+        // Build matches/multimatches with raw lua_createtable pushes instead of
+        // wasmoon's auto-converting global.set — ~2.4× cheaper per fired trigger,
+        // and the matches table is the dominant cost of trigger/alias dispatch.
+        // GMCP/MSDP already build their tables this way (pushJsValue).
+        const api = this.lua.global.luaApi;
+        const L = this.lua.global.address;
+        this.pushMatchesTable(L, matches, namedGroups);
+        api.lua_setglobal(L, 'matches');
+        api.lua_createtable(L, multimatches?.length ?? 0, 0);
+        if (multimatches) {
+            for (let i = 0; i < multimatches.length; i++) {
+                this.pushMatchesTable(L, multimatches[i]);
+                api.lua_rawseti(L, -2, i + 1);
             }
-            return t;
-        };
-        this.lua.global.set('matches', oneIndexed(matches, namedGroups));
-        const mm: (string | undefined)[][] = [];
-        if (multimatches) for (let i = 0; i < multimatches.length; i++) mm[i + 1] = oneIndexed(multimatches[i]);
-        this.lua.global.set('multimatches', mm);
+        }
+        api.lua_setglobal(L, 'multimatches');
         // Mudlet also exposes a separate `namedCaptures` table; keep parity.
-        this.lua.global.set('namedCaptures', namedGroups ?? {});
+        this.pushJsValue(L, namedGroups ?? {});
+        api.lua_setglobal(L, 'namedCaptures');
+    }
+
+    /** Push a 1-indexed Lua table of capture strings (`matches[1]` = whole match),
+     *  optionally merging named captures as string keys (`matches.hp`). Same shape
+     *  the old `oneIndexed()` + `global.set` produced, via raw stack ops. An
+     *  unmatched optional group (`undefined`) is left unset → nil, as before. */
+    private pushMatchesTable(L: LuaState, arr: (string | undefined)[], named?: Record<string, string>): void {
+        const api = this.lua.global.luaApi;
+        api.lua_checkstack(L, 4);
+        api.lua_createtable(L, arr.length, named ? Object.keys(named).length : 0);
+        for (let i = 0; i < arr.length; i++) {
+            const v = arr[i];
+            if (v === undefined) continue;
+            api.lua_pushstring(L, v);
+            api.lua_rawseti(L, -2, i + 1);
+        }
+        if (named) {
+            for (const k in named) {
+                api.lua_pushstring(L, named[k]);
+                api.lua_setfield(L, -2, k);
+            }
+        }
     }
 
     private exec(code: string, name: string): void {
