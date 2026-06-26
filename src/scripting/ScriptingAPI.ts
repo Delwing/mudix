@@ -582,6 +582,7 @@ export class ScriptingAPI {
     private permRegexTriggerCallback: ((name: string, parent: string, regexes: string[], code: string) => number) | null = null;
     private permSubstringTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
     private permBeginOfLineStringTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
+    private permExactMatchTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
     private permPromptTriggerCallback: ((name: string, parent: string, code: string) => number) | null = null;
     private permAliasCallback: ((name: string, parent: string, pattern: string, code: string) => number) | null = null;
     private permTimerCallback: ((name: string, parent: string, delay: number, code: string) => number) | null = null;
@@ -1288,6 +1289,10 @@ export class ScriptingAPI {
         this.permBeginOfLineStringTriggerCallback = fn;
     }
 
+    setPermExactMatchTriggerCallback(fn: ((name: string, parent: string, patterns: string[], code: string) => number) | null): void {
+        this.permExactMatchTriggerCallback = fn;
+    }
+
     setPermPromptTriggerCallback(fn: ((name: string, parent: string, code: string) => number) | null): void {
         this.permPromptTriggerCallback = fn;
     }
@@ -1608,6 +1613,15 @@ export class ScriptingAPI {
      *  trigger group of that name exists. */
     permBeginOfLineStringTrigger(name: string, parent: string, patterns: string[], code: string): number {
         return this.permBeginOfLineStringTriggerCallback?.(name, parent, patterns, code) ?? -1;
+    }
+
+    /** Mudlet `permExactMatchTrigger(name, parent, patterns, luaCode)`. Same
+     *  shape as permSubstringTrigger but each pattern matches only on full-line
+     *  equality. An empty patterns array creates a trigger group. Returns the
+     *  new id, or -1 if `parent` is given but no trigger group of that name
+     *  exists. */
+    permExactMatchTrigger(name: string, parent: string, patterns: string[], code: string): number {
+        return this.permExactMatchTriggerCallback?.(name, parent, patterns, code) ?? -1;
     }
 
     /** Mudlet `permPromptTrigger(name, parent, luaCode)`. Creates a persistent
@@ -3957,6 +3971,60 @@ export class ScriptingAPI {
     /** Mudlet resetBorderColor — clears the override so the border tracks the page background again. */
     resetBorderColor(): void {
         useAppStore.getState().patchConnectionProfile(this.connectionId, { outputBorderColor: undefined });
+    }
+
+    /** Mudlet getBorderColor — RGB of the main console frame border. Returns the
+     *  explicit setBorderColor override when set; otherwise the main window
+     *  background (which the border visually inherits), falling back to black. */
+    getBorderColor(): [number, number, number] {
+        const state = useAppStore.getState();
+        const border = selectProfileField(state, this.connectionId, 'outputBorderColor');
+        if (border) return [border.r, border.g, border.b];
+        const bg = selectProfileField(state, this.connectionId, 'outputBackgroundColor');
+        if (bg) return [bg.r, bg.g, bg.b];
+        return [0, 0, 0];
+    }
+
+    /** Mudlet `getProcessMemoryUsage()` → process RSS in Kb. The browser sandbox
+     *  exposes no whole-process RSS, so this returns the JS heap currently in use
+     *  (`performance.memory`, Chromium only) as the closest analogue, or 0 when
+     *  the API is unavailable (Firefox/Safari). */
+    getProcessMemoryUsage(): number {
+        const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+        return mem ? Math.round(mem.usedJSHeapSize / 1024) : 0;
+    }
+
+    /** Mudlet `getSubsystemMemoryStats()` → a diagnostic table of heap metrics
+     *  plus per-subsystem counts. Browser-adapted: heap figures come from
+     *  `performance.memory` (Chromium; 0 elsewhere); the Lua GC figure
+     *  (`luaMemoryKb`) is added by the Bridge.lua wrapper via
+     *  `collectgarbage("count")`. Counts are best-effort snapshots. */
+    getSubsystemMemoryStats(): Record<string, number> {
+        const mem = (performance as unknown as {
+            memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number };
+        }).memory;
+        const map = this.map;
+        const state = useAppStore.getState();
+        const triggers = state.connectionTriggers[this.connectionId] ?? [];
+        let triggerPatterns = 0;
+        for (const t of triggers) if (!t.isGroup) triggerPatterns += t.patterns?.length ?? 0;
+        const aliasPatterns = (state.connectionAliases[this.connectionId] ?? []).filter(a => !a.isGroup).length;
+        const activeMediaPlayers =
+            this.session.sounds.getPlaying().length +
+            this.session.sounds.getPlaying({}, 'music').length +
+            this.session.videos.getByState(false).length;
+        const loadedFonts = (typeof document !== 'undefined' && document.fonts) ? document.fonts.size : 0;
+        return {
+            heapUsedKb: mem ? Math.round(mem.usedJSHeapSize / 1024) : 0,
+            heapTotalKb: mem ? Math.round(mem.totalJSHeapSize / 1024) : 0,
+            heapLimitKb: mem ? Math.round(mem.jsHeapSizeLimit / 1024) : 0,
+            mapRooms: Object.keys(map.getRooms()).length,
+            mapAreas: Object.keys(map.getAreaTable()).length,
+            activeMediaPlayers,
+            loadedFonts,
+            triggerPatterns,
+            aliasPatterns,
+        };
     }
 
     private patchBorders(side: 'top' | 'right' | 'bottom' | 'left', size: number): void {

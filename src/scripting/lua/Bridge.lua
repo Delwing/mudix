@@ -78,6 +78,22 @@ function getRoomCoordinates(id)
     return false
 end
 
+-- Mudlet getBorderColor() → r, g, b. __getBorderColor returns a JS array
+-- (0-indexed in Lua, as above) that always has three channels.
+function getBorderColor()
+    local t = __getBorderColor()
+    return t[0], t[1], t[2]
+end
+
+-- Mudlet getSubsystemMemoryStats() → table. The JS primitive supplies heap
+-- figures and subsystem counts; collectgarbage("count") (Kb of live Lua data)
+-- is only observable from Lua, so we fold it in here.
+function getSubsystemMemoryStats()
+    local t = __getSubsystemMemoryStats()
+    t.luaMemoryKb = collectgarbage("count")
+    return t
+end
+
 -- Cached so Geyser's reposition cascade — which resolves every percentage
 -- constraint against the root window via getMainWindowSize() — reads a Lua local
 -- instead of crossing into JS (and forcing a getBoundingClientRect) once per
@@ -1739,6 +1755,21 @@ do
     end
 end
 
+-- Mudlet permExactMatchTrigger(name, parent, patterns, luaCode). Same flatten
+-- convention as permSubstringTrigger; each pattern matches only on full-line
+-- equality. An empty patterns table makes a trigger group.
+do
+    local _raw = __mudix_permExactMatchTrigger
+    local SEP = '\1'
+    function permExactMatchTrigger(name, parent, patterns, code)
+        local ps = {}
+        if type(patterns) == 'table' then
+            for _, p in ipairs(patterns) do ps[#ps + 1] = tostring(p) end
+        end
+        return _raw(tostring(name or ""), tostring(parent or ""), table.concat(ps, SEP), tostring(code or ""))
+    end
+end
+
 -- Mudlet permPromptTrigger(name, parent, luaCode). Persistent trigger that
 -- fires on every server prompt line (GA/EOR); no text pattern.
 function permPromptTrigger(name, parent, code)
@@ -2593,4 +2624,56 @@ do
         end
         return v
     end
+end
+
+-- ── MMCP (MudMaster Chat Protocol) ─────────────────────────────────────────
+-- MMCP is peer-to-peer chat over direct TCP between clients: a client both
+-- listens on a port and dials other clients (mmcp.startServer / mmcp.call). A
+-- browser tab can't open raw or listening TCP sockets, nor do peer-to-peer
+-- networking, so MMCP has no implementation here — same constraint as the IRC
+-- client. The mmcp.* table is still bound as warning-emitting no-op stubs so an
+-- imported Mudlet package that references it on load doesn't crash with
+-- "attempt to index a nil value". Each entry warns once and returns the
+-- documented-shape default (false for actions, "" / {} for value getters).
+-- mudlet.supports.mmcp is set false (in Other.lua) so feature-detecting scripts
+-- skip MMCP gracefully.
+do
+    local warned = {}
+    local function stub(name, ret)
+        return function()
+            if not warned[name] then
+                warned[name] = true
+                print("[mudix] mmcp." .. name ..
+                    " is not available in this client (no peer-to-peer TCP in the browser); call ignored.")
+            end
+            if type(ret) == "function" then return ret() end
+            return ret
+        end
+    end
+    local emptyTable = function() return {} end
+    mmcp = {
+        accept            = stub("accept", false),
+        allowSnoop        = stub("allowSnoop", false),
+        call              = stub("call", false),
+        chatAll           = stub("chatAll", false),
+        chatGroup         = stub("chatGroup", false),
+        chatName          = stub("chatName", ""),
+        chatTo            = stub("chatTo", false),
+        deny              = stub("deny", false),
+        disconnect        = stub("disconnect", false),
+        displayClientList = stub("displayClientList", false),
+        emoteAll          = stub("emoteAll", false),
+        getClientFlags    = stub("getClientFlags", emptyTable),
+        ignore            = stub("ignore", false),
+        peek              = stub("peek", false),
+        ping              = stub("ping", false),
+        request           = stub("request", false),
+        sendSideChannel   = stub("sendSideChannel", false),
+        serve             = stub("serve", false),
+        setGroup          = stub("setGroup", false),
+        setPrivate        = stub("setPrivate", false),
+        snoop             = stub("snoop", false),
+        startServer       = stub("startServer", false),
+        stopServer        = stub("stopServer", false),
+    }
 end

@@ -305,6 +305,9 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getNamedEventHandlers()` | ✅ | IDManager.lua |
 | `getNewIDManager()` | ✅ | IDManager.lua factory |
 | `getOS()` | ✅ | Sniffed from user agent → `"windows"`/`"mac"`/`"linux"`/`"freebsd"`/`"openbsd"`/`"netbsd"`/`"unknown"` |
+| `getProcessMemoryUsage()` | ✅ | (Mudlet 4.21) Memory in Kb. Browser-adapted: the JS heap in use (`performance.memory`, Chromium only), else 0 |
+| `getSubsystemMemoryStats()` | ✅ | (Mudlet 4.21) Diagnostic table: `heapUsedKb`/`heapTotalKb`/`heapLimitKb` (`performance.memory`), `luaMemoryKb` (Bridge.lua via `collectgarbage("count")`), and counts `mapRooms`/`mapAreas`/`activeMediaPlayers`/`loadedFonts`/`triggerPatterns`/`aliasPatterns`. Best-effort |
+| `lpeg` (library) | ✅ | (Mudlet 4.21 bundles C lpeg) mudix bundles the pure-Lua **LuLPeg** port at `mudlet-lua/3rdparty/lulpeg.lua`, registered as `package.loaded["lpeg"]` before `LuaGlobal.lua`'s guard publishes the `lpeg` global. Full PEG API (`P`/`R`/`S`/`C`/`Ct`/`match`/…) |
 | `getPackages()` | ✅ | JS-exposed |
 | `getPackageInfo(name [, key])` | ✅ | Merged table: manifest fields (name/title/author/version/description/created/icon/installed) overlaid with `setPackageInfo` overrides; single-key form returns `""` when absent |
 | `getPausedMusic()` / `getPausedSounds()` | ✅ | Always empty — mudix's Web Audio backend stops rather than pauses sources, so nothing sits paused (kept for parity) |
@@ -421,6 +424,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `permRegexTrigger(name, parent, patterns, code)` | ✅ | `patterns` is a table of regex strings (empty table → creates a trigger group). Bridge.lua joins to \x01 and the JS binding splits it back |
 | `permBeginOfLineStringTrigger(name, parent, patterns, code)` | ✅ | Like `permSubstringTrigger` but each literal pattern matches only at the start of the line (`startOfLine` kind). Empty patterns array → trigger group |
 | `permSubstringTrigger(name, parent, patterns, code)` | ✅ | Each pattern is a literal substring. Empty patterns array creates a trigger group |
+| `permExactMatchTrigger(name, parent, patterns, code)` | ✅ | (Mudlet 4.21) Like `permSubstringTrigger` but each pattern matches only on full-line equality (`exactMatch` kind). Empty patterns array → trigger group |
 | `permScript(name, parent, code)` | ✅ | `ScriptingEngine.createPermScript` creates a saved Lua script node under a script group (parent `""` → root). Returns the new id or -1. Bound via `__mudix_permScript` + Bridge.lua wrapper |
 | `permTimer(name, parent, delay, code)` | ✅ | Persistent one-shot timer; returns the new id or -1 |
 | `permKey(name, parent, modifier, key, code)` | ✅ | `modifier` is the Qt::KeyboardModifier int (1=shift, 2=ctrl, 4=alt, 8=meta; -1 → none). `key` accepts a Qt::Key int or a KeyboardEvent.code string |
@@ -484,6 +488,7 @@ mudix-specific extras (not on the wiki): `mudix.windows.write/setTitle/has/focus
 | `getIrcChannels()` / `getIrcConnectedHost()` / `getIrcNick()` / `getIrcServer()` | ❌ stub | No IRC client in mudix; bind as warning-emitting no-op stubs (getters return empty table / `""`) |
 | `getNetworkLatency()` | ✅ | JS-exposed |
 | `openIRC()` / `restartIrc()` / `sendIrc()` / `setIrcChannels()` / `setIrcNick()` / `setIrcServer()` | ❌ stub | No IRC client; bind as warning-emitting no-op stubs |
+| `mmcp.*` (MudMaster Chat Protocol) | ❌ stub | (Mudlet 4.21) Peer-to-peer TCP chat between clients — impossible in a browser (no raw/listening sockets, no P2P). The full `mmcp.*` table (`chatTo`/`chatAll`/`call`/`startServer`/…) is bound as warning-emitting no-op stubs in Bridge.lua; `mudlet.supports.mmcp` is `false` |
 | `openUrl(url)` | ✅ | `window.open(url, '_blank')`; `file:` prefix routes to the VFS file browser |
 | `postHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.postHTTP` |
 | `putHTTP(url, data [, headers])` | ✅ | Bridge.lua → `HttpService.putHTTP` |
@@ -759,6 +764,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setBold([window,] bool)` | ✅ | JS-exposed |
 | `setBorderBottom(px)` / `setBorderTop(px)` / `setBorderLeft(px)` / `setBorderRight(px)` | ✅ | JS-exposed |
 | `setBorderColor(r,g,b)` | ✅ | Also `resetBorderColor` |
+| `getBorderColor()` | ✅ | (Mudlet 4.21) → r, g, b of the main console frame border. Returns the `setBorderColor` override when set, else the main window background, else 0,0,0. Bridge.lua unpacks the 3-channel array |
 | `setBorderSizes(...)` | ✅ | Bulk setter via the four side-specific routines |
 | `setFgColor([window,] r, g, b)` | ✅ | JS-exposed |
 | `setButtonStyleSheet(name, css)` | ✅ | Raw QSS → inline React style. Pseudo-state selectors (`:hover`/`:pressed`) drop through |
@@ -972,6 +978,7 @@ These features have no real implementation in mudix, but to keep imported Mudlet
 |---|---|
 | Discord Rich Presence (`getDiscord*` / `setDiscord*`) | Requires Discord SDK |
 | IRC client (`openIRC`, `sendIrc`, `*IrcChannels`, `*IrcNick`, `*IrcServer`, `restartIrc`, `getIrcConnectedHost`) | Separate external service |
+| MMCP / MudMaster Chat Protocol (`mmcp.*`) | Peer-to-peer chat over direct TCP — no raw/listening sockets or P2P in a browser. `mudlet.supports.mmcp` reports false |
 | In-tab multi-profile switching (loading multiple profiles into one tab) | One profile per tab. (`getProfiles` DOES enumerate every configured profile with cross-tab loaded/connected status, `loadProfile` opens another profile in a new tab, and `raiseGlobalEvent` works *across* tabs — see above) |
 | `spawn(...)` | No subprocess in the browser |
 | Spell-check API (`spellCheckWord`, `spellSuggestWord`, `addWordToDictionary`, `removeWordFromDictionary`, `getDictionaryWordList`) | No Hunspell in browser |

@@ -984,6 +984,7 @@ export class ScriptingEngine {
             this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
             this.api.setPermSubstringTriggerCallback((name, parent, patterns, code) => this.createPermSubstringTrigger(name, parent, patterns, code));
             this.api.setPermBeginOfLineStringTriggerCallback((name, parent, patterns, code) => this.createPermBeginOfLineStringTrigger(name, parent, patterns, code));
+            this.api.setPermExactMatchTriggerCallback((name, parent, patterns, code) => this.createPermExactMatchTrigger(name, parent, patterns, code));
             this.api.setPermPromptTriggerCallback((name, parent, code) => this.createPermPromptTrigger(name, parent, code));
             this.api.setPermAliasCallback((name, parent, pattern, code) => this.createPermAlias(name, parent, pattern, code));
             this.api.setPermTimerCallback((name, parent, delay, code) => this.createPermTimer(name, parent, delay, code));
@@ -1747,6 +1748,15 @@ export class ScriptingEngine {
     }
 
     /**
+     * Mudlet `permExactMatchTrigger(name, parent, patterns, luaCode)`. Same
+     * shape as createPermSubstringTrigger but each pattern matches only on
+     * full-line equality (the temp-trigger `exactMatch` semantics).
+     */
+    createPermExactMatchTrigger(name: string, parent: string, patterns: string[], code: string): number {
+        return this.createPermTrigger(name, parent, patterns, 'exactMatch', code);
+    }
+
+    /**
      * Mudlet `permPromptTrigger(name, parent, luaCode)`. Creates a persistent
      * trigger that fires on every server prompt line (GA/EOR). It carries a
      * single pattern of type 'prompt' with empty text — not a group.
@@ -1759,7 +1769,7 @@ export class ScriptingEngine {
         name: string,
         parent: string,
         patternStrings: string[],
-        kind: 'regex' | 'substring' | 'startOfLine' | 'prompt',
+        kind: 'regex' | 'substring' | 'startOfLine' | 'exactMatch' | 'prompt',
         code: string,
     ): number {
         if (!name) return -1;

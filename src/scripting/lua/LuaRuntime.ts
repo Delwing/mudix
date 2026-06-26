@@ -1137,18 +1137,60 @@ export class LuaRuntime implements IScriptingRuntime {
         // here gives the wrapper something callable so unrelated scripts load,
         // even though the callback itself does nothing yet.
         const stubWarned: Record<string, boolean> = {};
-        const registerStub = (name: string) => {
+        // `result` is the value (or factory, for table returns that need a fresh
+        // instance) handed back to Lua so the stub matches the documented return
+        // of the real Mudlet function.
+        const registerStub = (name: string, result?: unknown) => {
             this.lua.global.set(name, () => {
                 if (!stubWarned[name]) {
                     stubWarned[name] = true;
-                    console.warn(`[mudix] ${name} is not yet implemented; call ignored.`);
+                    console.warn(`[mudix] ${name} is not available in this client; call ignored.`);
                 }
+                return typeof result === 'function' ? (result as () => unknown)() : result;
             });
         };
         // setLabelDoubleClickCallback / setLabelReleaseCallback /
         // setLabelMoveCallback / setLabelWheelCallback / setLabelOnEnter /
         // setLabelOnLeave: real bindings installed in Bridge.lua over the
         // __mudix_setLabel* primitives above.
+
+        // Warning-emitting no-op stubs for Mudlet APIs with no meaningful browser
+        // implementation: Discord Rich Presence (needs the Discord SDK), the IRC
+        // client (a separate external service), process spawning (no subprocess
+        // in the sandbox) and Hunspell spell-check (no dictionary engine). These
+        // must be *bound* — not left nil — so an imported Mudlet package that
+        // touches one on load doesn't die with "attempt to call a nil value".
+        // Each logs once and returns the value the real function would on a
+        // no-op. See MUDLET_API.md "Not Applicable".
+        const emptyTable = () => [] as unknown[];
+        [
+            // Discord Rich Presence — getters return nil, setters/reset no-op.
+            'getDiscordDetail', 'setDiscordDetail',
+            'getDiscordLargeIcon', 'setDiscordLargeIcon',
+            'getDiscordLargeIconText', 'setDiscordLargeIconText',
+            'getDiscordSmallIcon', 'setDiscordSmallIcon',
+            'getDiscordSmallIconText', 'setDiscordSmallIconText',
+            'getDiscordParty', 'setDiscordParty',
+            'getDiscordState', 'setDiscordState',
+            'getDiscordTimeStamps', 'setDiscordElapsedStartTime', 'setDiscordRemainingEndTime',
+            'resetDiscordData',
+            'setDiscordApplicationID', 'setDiscordGame', 'setDiscordGameUrl',
+            'usingMudletsDiscordID',
+            // IRC client actions — no IRC client in mudix.
+            'openIRC', 'restartIrc', 'sendIrc',
+            'setIrcChannels', 'setIrcNick', 'setIrcServer',
+            // Spell-check dictionary mutators — no Hunspell.
+            'addWordToDictionary', 'removeWordFromDictionary',
+        ].forEach(name => registerStub(name));
+        // Stubs whose real counterpart returns a non-nil value.
+        registerStub('spawn', false);
+        registerStub('spellCheckWord', true);          // treat every word as correct
+        registerStub('spellSuggestWord', emptyTable);  // no suggestions
+        registerStub('getDictionaryWordList', emptyTable);
+        registerStub('getIrcChannels', emptyTable);
+        registerStub('getIrcConnectedHost', '');
+        registerStub('getIrcNick', '');
+        registerStub('getIrcServer', '');
 
         // Mudlet setCmdLineAction([cmdLineName,] fn, [args...]). With no
         // cmdLineName (or "main") the binding targets the single main command
@@ -2700,6 +2742,14 @@ export class LuaRuntime implements IScriptingRuntime {
             const patterns = s.length === 0 ? [] : s.split('\x01');
             return this.api.permBeginOfLineStringTrigger(String(name ?? ''), String(parent ?? ''), patterns, String(code ?? ''));
         });
+        // Mudlet permExactMatchTrigger(name, parent, patterns, luaCode). Same
+        // flatten/split convention as permSubstringTrigger; each pattern matches
+        // only on full-line equality. Empty patterns → trigger group.
+        this.lua.global.set('__mudix_permExactMatchTrigger', (name: unknown, parent: unknown, patternsStr: unknown, code: unknown) => {
+            const s = String(patternsStr ?? '');
+            const patterns = s.length === 0 ? [] : s.split('\x01');
+            return this.api.permExactMatchTrigger(String(name ?? ''), String(parent ?? ''), patterns, String(code ?? ''));
+        });
         // Mudlet permPromptTrigger(name, parent, luaCode). Persistent trigger
         // that fires on every server prompt line (GA/EOR); no text pattern.
         this.lua.global.set('__mudix_permPromptTrigger', (name: unknown, parent: unknown, code: unknown) =>
@@ -3688,6 +3738,18 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('resetBorderColor', () => this.api.resetBorderColor());
 
+        // Mudlet getBorderColor() → r, g, b (the main console frame border).
+        // Returns a JS array unpacked to three values by the Bridge.lua wrapper.
+        this.lua.global.set('__getBorderColor', () => this.api.getBorderColor());
+
+        // ── Memory introspection (Mudlet 4.21) ─────────────────────────────────
+        // getProcessMemoryUsage() → Kb. Browser-adapted (JS heap, see ScriptingAPI).
+        this.lua.global.set('getProcessMemoryUsage', () => this.api.getProcessMemoryUsage());
+        // getSubsystemMemoryStats() → table. The JS side returns heap + subsystem
+        // counts as a plain object (→ Lua table); the Bridge.lua wrapper adds the
+        // Lua GC figure (collectgarbage), which is only observable from Lua.
+        this.lua.global.set('__getSubsystemMemoryStats', () => this.api.getSubsystemMemoryStats());
+
         // ── Timers (extended) ─────────────────────────────────────────────────
         // Mudlet remainingTime(idOrName). Numeric arg → tempTimer id; string
         // arg → permanent timer name. -1 when no live timer matches.
@@ -3731,6 +3793,21 @@ export class LuaRuntime implements IScriptingRuntime {
         this.exec(LUASQL_LUA, 'Luasql');
         this.toLuaValue = setupYajl(this.lua).transform;
         this.exec(YAJL_LUA, 'Yajl');
+        // lpeg (Mudlet 4.21 bundles the C library). The browser has no C lpeg, so
+        // we register the pure-Lua LuLPeg port under package.loaded["lpeg"]. This
+        // MUST run before LuaGlobal.lua, whose `if package.loaded["lpeg"] then lpeg
+        // = require "lpeg" end` guard publishes the global. dofile (not require) —
+        // bundled modules sit in the VFS at /lua/... but /lua isn't on package.path
+        // outside busted builds, so LuaGlobal.lua loads its own 3rdparty/* the same
+        // way. pcall-guarded so a load failure leaves lpeg nil (the prior
+        // behaviour) rather than aborting runtime setup.
+        this.exec(
+            `do local ok, mod = pcall(dofile, "/lua/3rdparty/lulpeg.lua")
+                 if ok and mod then package.loaded["lpeg"] = mod
+                 else print("[mudix] lpeg (LuLPeg) failed to load: " .. tostring(mod)) end
+             end`,
+            'lpeg-register',
+        );
         this.exec(LUAGLOBAL, 'LuaGlobal');
         this.setupAnsiColorTable();
 

@@ -5,7 +5,10 @@
 mudlet = mudlet or {}
 mudlet.supports = {
   coroutines = true,
-  mmcp = true,
+  -- MMCP (peer-to-peer chat over direct TCP) can't run in a browser tab — the
+  -- mmcp.* table is bound as no-op stubs (Bridge.lua), but feature-detecting
+  -- scripts must see it as unsupported so they skip it.
+  mmcp = false,
   namedPatterns = true,
   osVersion = true
 }
