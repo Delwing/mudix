@@ -46,9 +46,14 @@ export function TextPanel({ id, title, manager, labels, cmdLines, scrollBoxes, f
         return () => manager.unregister(id);
     }, [manager, id, controls]);
 
+    // Mudlet mini-consoles / user windows default to an OPAQUE BLACK background
+    // (the TConsole default) — not transparent. Without this they'd composite
+    // over whatever's behind them (the page / a parent window), which is wrong
+    // and also makes a map opened into a user window show through. An explicit
+    // setBackgroundColor (any alpha, incl. fully transparent) still wins.
     const background = backgroundColor
         ? `rgba(${backgroundColor.r}, ${backgroundColor.g}, ${backgroundColor.b}, ${backgroundColor.a / 255})`
-        : undefined;
+        : 'rgb(0, 0, 0)';
     const backgroundExtra = backgroundImageStyle(backgroundImage) ?? undefined;
 
     // The viewport div carries the data-mudix-window attribute and is the

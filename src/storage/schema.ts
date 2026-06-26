@@ -291,9 +291,9 @@ export interface MapperSettings {
     borders?: boolean;
     /** renderer.settings.lineWidth — exit/edge stroke width in map units. */
     lineWidth?: number;
-    /** renderer.settings.backgroundColor — hex (#rrggbb). Unset renders a
-     *  transparent canvas (the themed panel background shows through), matching
-     *  Mudlet's no-background maps. */
+    /** renderer.settings.backgroundColor — hex (#rrggbb). Unset defaults to
+     *  opaque black (#000000), matching Mudlet's 2D map; a transparent canvas
+     *  composited over the window/page behind it incorrectly. */
     backgroundColor?: string;
     /** renderer.settings.lineColor — exit color, hex (#rrggbb). */
     lineColor?: string;
@@ -311,7 +311,7 @@ export const MAPPER_DEFAULTS: Required<MapperSettings> = {
     roomShape: 'rectangle',
     borders: true,
     lineWidth: 0.025,
-    backgroundColor: 'transparent',
+    backgroundColor: '#000000',
     lineColor: '#e1ffe1',
     gridEnabled: false,
 };
