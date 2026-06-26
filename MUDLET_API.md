@@ -400,8 +400,8 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getNamedTimers(parent)` | ✅ | IDManager.lua |
 | `getNamedTriggers(parent)` | ✅ | IDManager.lua |
 | `getProfileInformation()` | ✅ | Returns the profile's free-text description (`""` when unset); stored in `ProfileSettings.description` |
-| `getProfileStats()` | ✅ | `{triggers={total,temp,active,patterns={total,active}}, aliases=, timers=, keys=, scripts={total,temp,active}, gifs={total,active}}`. mudix keeps no temp items in the tree (`temp` always 0) and has no gif tracker (`gifs` always 0) |
-| `getProfiles()` | ✅ | Single-connection web app — returns `{getProfileName()}` (1-element list) so callers that iterate profiles still work |
+| `getProfileStats()` | ✅ | `{triggers={total,temp,active,patterns={total,active}}, aliases=, timers=, keys=, scripts={total,temp,active}, gifs={total,active}}`. `temp` counts live session-scoped temp items from the per-family engines (folded into `total`/`active`); scripts have no temp form. No gif tracker, so `gifs` is always 0 |
+| `getProfiles()` | ✅ | Table keyed by profile name, one entry per configured connection: `{ host, port, loaded, connected, description }`. `loaded` (open & editable) is cross-tab via the per-profile Web Lock; `connected` is live for this tab and last-announced for others via a `BroadcastChannel` presence channel (`ProfilesPresence`), forced false when not loaded; `host`/`port` from the connection record; `description` from the connection record (editable on the connection screen) |
 | `getStopWatches()` | ✅ | Re-keys to integer ids → `{ name, isRunning, isPersistent, elapsedTime }` |
 | `getStopWatchTime(id\|name)` | ✅ | Elapsed seconds without stopping |
 | `getStopWatchBrokenDownTime(id\|name)` | ✅ | `{negative, days, hours, minutes, seconds, milliSeconds, decimalSeconds}` off the proxy; `false` on miss |
@@ -414,7 +414,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `killKey(id)` | ✅ | |
 | `killTimer(id)` | ✅ | |
 | `killTrigger(name\|id)` | ✅ | String → name-based delete; numeric → temp-trigger disposer |
-| `loadProfile(name)` | ❌ stub | No multi-profile switching; bind as a warning-emitting no-op stub returning `false` |
+| `loadProfile(name)` | ✅ | Opens the named profile in a NEW browser tab (`?profile=<id>&connect=1`) and connects — each profile lives in its own tab (per-profile lock), so the calling profile stays open alongside, matching Mudlet's multi-profile model. Returns `false` for an unknown name, the profile already open in this tab, or a blocked popup. `window.open` needs a user gesture: works from a key/button/alias, may be blocked from a trigger |
 | `permAlias(name, parent, pattern, code)` | ✅ | Pattern is a single PCRE string (Mudlet TAlias.mRegexCode). Returns the new id, or -1 |
 | `permGroup(name, type [, parent])` | ✅ | Creates a group node in the requested family |
 | `permPromptTrigger(name, parent, code)` | ✅ | Persistent trigger firing on every server prompt (GA/EOR); single `prompt`-type pattern, never a group. Returns the new id or -1 |
@@ -972,6 +972,6 @@ These features have no real implementation in mudix, but to keep imported Mudlet
 |---|---|
 | Discord Rich Presence (`getDiscord*` / `setDiscord*`) | Requires Discord SDK |
 | IRC client (`openIRC`, `sendIrc`, `*IrcChannels`, `*IrcNick`, `*IrcServer`, `restartIrc`, `getIrcConnectedHost`) | Separate external service |
-| In-tab multi-profile switching (`loadProfile`, `getProfiles`) | One profile per tab (but `raiseGlobalEvent` now works *across* tabs — see above) |
+| In-tab multi-profile switching (loading multiple profiles into one tab) | One profile per tab. (`getProfiles` DOES enumerate every configured profile with cross-tab loaded/connected status, `loadProfile` opens another profile in a new tab, and `raiseGlobalEvent` works *across* tabs — see above) |
 | `spawn(...)` | No subprocess in the browser |
 | Spell-check API (`spellCheckWord`, `spellSuggestWord`, `addWordToDictionary`, `removeWordFromDictionary`, `getDictionaryWordList`) | No Hunspell in browser |

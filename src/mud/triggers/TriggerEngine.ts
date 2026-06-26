@@ -363,6 +363,11 @@ export class TriggerEngine {
         return pcreReadyPromise.then(() => undefined);
     }
 
+    /** Number of live session-scoped temp triggers (Mudlet `getProfileStats` temp count). */
+    get tempCount(): number {
+        return this.temp.size;
+    }
+
     /**
      * Register a temp trigger. `kind` selects the match strategy:
      *   - `'regex'`     — PCRE, same syntax as permanent triggers (Mudlet

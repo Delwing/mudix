@@ -53,6 +53,7 @@ export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, 
     const [autoReconnect, setAutoReconnect] = useState(connection?.autoReconnect ?? false);
     const [account, setAccount] = useState(connection?.charLoginAccount ?? '');
     const [password, setPassword] = useState(connection?.charLoginPassword ?? '');
+    const [description, setDescription] = useState(connection?.description ?? '');
 
     const [proxyModalOpen, setProxyModalOpen] = useState(false);
     const [proxyWhyOpen, setProxyWhyOpen] = useState(false);
@@ -74,6 +75,7 @@ export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, 
             icon: connection?.icon,
             charLoginAccount: acct || undefined,
             charLoginPassword: acct && password ? password : undefined,
+            description: description.trim() || undefined,
         };
         if (mode === 'mud') {
             const parsedPort = parseInt(port, 10);
@@ -140,6 +142,18 @@ export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, 
                                 placeholder="My MUD"
                                 spellCheck={false}
                                 noAutofill
+                            />
+                        </FormField>
+
+                        <FormField label="Description" htmlFor="cs-description">
+                            <textarea
+                                id="cs-description"
+                                className="input connection-form-description"
+                                value={description}
+                                onChange={e => setDescription(e.target.value)}
+                                placeholder="Optional notes about this profile"
+                                rows={2}
+                                spellCheck={false}
                             />
                         </FormField>
 

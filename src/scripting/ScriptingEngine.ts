@@ -1642,9 +1642,12 @@ export class ScriptingEngine {
 
     /**
      * Mudlet `getProfileStats()`. Counts of total/active items per family plus
-     * the trigger pattern tally. mudix doesn't keep temporary items (tempTimer
-     * etc.) in the persisted node tree, so `temp` is always 0, and there's no
-     * animated-GIF tracker, so `gifs` is always zero.
+     * the trigger pattern tally. Temporary items (tempTimer/tempAlias/... ) are
+     * not kept in the persisted node tree but live in the per-family engines, so
+     * their counts come from those engines: `temp` is the live temp count and
+     * is folded into `total`/`active` (a live temp is always active), matching
+     * Mudlet's report. Scripts have no temp form. There's no animated-GIF
+     * tracker, so `gifs` is always zero.
      */
     getProfileStats(): Record<string, unknown> {
         const store = useAppStore.getState();
@@ -1655,13 +1658,18 @@ export class ScriptingEngine {
         const keys = store.connectionKeybindings[cid] ?? [];
         const scripts = store.connectionScripts[cid] ?? [];
 
-        const tally = (list: BaseTreeNode[]) => {
+        const tally = (list: BaseTreeNode[], tempCount: number) => {
             const items = list.filter(i => !i.isGroup);
-            return { total: items.length, temp: 0, active: items.filter(i => i.enabled).length };
+            return {
+                total: items.length + tempCount,
+                temp: tempCount,
+                active: items.filter(i => i.enabled).length + tempCount,
+            };
         };
 
-        let patternsTotal = 0;
-        let patternsActive = 0;
+        const tempTriggers = this.triggerEngine.tempCount;
+        let patternsTotal = tempTriggers;
+        let patternsActive = tempTriggers;
         for (const t of triggers) {
             if (t.isGroup) continue;
             const n = Array.isArray(t.patterns) ? t.patterns.length : 0;
@@ -1670,11 +1678,11 @@ export class ScriptingEngine {
         }
 
         return {
-            triggers: { ...tally(triggers), patterns: { total: patternsTotal, active: patternsActive } },
-            aliases: tally(aliases),
-            timers: tally(timers),
-            keys: tally(keys),
-            scripts: tally(scripts),
+            triggers: { ...tally(triggers, tempTriggers), patterns: { total: patternsTotal, active: patternsActive } },
+            aliases: tally(aliases, this.aliasEngine.tempCount),
+            timers: tally(timers, this.timerEngine.tempCount),
+            keys: tally(keys, this.keyEngine.tempCount),
+            scripts: tally(scripts, 0),
             gifs: { total: 0, active: 0 },
         };
     }

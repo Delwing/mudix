@@ -307,6 +307,14 @@ export class LuaRuntime implements IScriptingRuntime {
         );
 
         this.lua.global.set('getProfileName', () => this.api.profileName);
+        // Mudlet getProfiles() — record keyed by profile name, each entry
+        // { host, port, loaded, connected, description }. Bridge.lua rebuilds it
+        // into a clean Lua table (wasmoon hands JS objects over as proxies).
+        this.lua.global.set('__getProfiles', () => this.api.getProfiles());
+        // Mudlet loadProfile(name) — open the named profile in a new tab + connect.
+        this.lua.global.set('loadProfile', (name?: unknown) =>
+            this.api.loadProfile(typeof name === 'string' ? name : ''),
+        );
         // Mudlet getCharacterName() — mudix maps this to the profile name.
         this.lua.global.set('getCharacterName', () => this.api.getCharacterName());
         // Mudlet getMudletInfo() — echoes a diagnostic block, returns nothing.

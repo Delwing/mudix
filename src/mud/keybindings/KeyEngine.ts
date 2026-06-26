@@ -39,6 +39,11 @@ export class KeyEngine {
 
     // ── Temp keybindings (session-scoped, created by scripts) ─────────────────
 
+    /** Number of live session-scoped temp keys (Mudlet `getProfileStats` temp count). */
+    get tempCount(): number {
+        return this.temp.size;
+    }
+
     addTemp(key: string, modifiers: string[], fn: TempFn, qt?: { keyCode: number; modifier: number }): number {
         const id = this.nextId++;
         this.temp.set(id, { key, modifiers, fn, qtKey: qt?.keyCode, qtModifier: qt?.modifier });

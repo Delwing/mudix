@@ -21,13 +21,14 @@ import { flashTitle } from '../utils/documentTitle';
 import { MspParser } from '../mud/protocol';
 import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
 import { getHeldModifiers } from './heldModifiers';
-import { useAppStore, selectProfileField, connectionUrl, PROTOCOL_DEFAULTS, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, type ProtocolSettings, type MapperSettings, type MapInfoBgColor } from '../storage';
+import { useAppStore, selectProfileField, connectionUrl, PROTOCOL_DEFAULTS, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, type ProtocolSettings, type MapperSettings, type MapInfoBgColor, type MudConnection } from '../storage';
 import {
     getUniversalDefaultFonts,
     getRegisteredFontFamilies,
     getCachedLocalFonts,
     primeLocalFontsCache,
 } from '../utils/fontLoader';
+import { ProfilesPresence } from './profilesPresence';
 
 // Mudlet's TChar always carries baked-in fg/bg colors (the rendered pair), so
 // getFgColor/getBgColor never return "no color" for in-bounds positions. mudix
@@ -461,6 +462,22 @@ export interface InstallOutcome {
     error: string | null;
 }
 
+/** The MUD's telnet host/port for a connection — stored directly in mud-mode,
+ *  parsed from the endpoint URL in websocket-mode (port falls back to the ws/wss
+ *  default). Shared by getConnectionInfo() and getProfiles(). */
+function connectionHostPort(conn: MudConnection): { host: string; port: number } {
+    if (conn.mode === 'mud') {
+        return { host: conn.host ?? '', port: conn.port ?? 23 };
+    }
+    if (conn.url) {
+        try {
+            const u = new URL(conn.url);
+            return { host: u.hostname, port: u.port ? Number(u.port) : (u.protocol === 'wss:' ? 443 : 80) };
+        } catch { /* malformed url → defaults below */ }
+    }
+    return { host: '', port: 0 };
+}
+
 export class ScriptingAPI {
     /** OSC 8 selection-group + visited-link state for this connection. */
     private readonly oscLinks = new OscLinkManager();
@@ -478,6 +495,10 @@ export class ScriptingAPI {
     /** Mudlet-compatible stopwatch registry (createStopWatch & friends).
      *  Persistent watches survive reloads via localStorage keyed by connection. */
     readonly stopwatches: StopwatchManager;
+    /** Cross-tab view of open/connected profiles — backs getProfiles(). */
+    private readonly presence: ProfilesPresence;
+    /** Teardown for the session subscriptions wired in the constructor. */
+    private readonly apiUnsubs: Array<() => void> = [];
 
     private readonly mainConsole = new Console();
 
@@ -639,6 +660,13 @@ export class ScriptingAPI {
         this.timers = timerEngine;
         this.keys = keyEngine;
         this.stopwatches = new StopwatchManager(localStorageStopwatchStore(connectionId));
+        this.presence = new ProfilesPresence(connectionId, () => this.session.status === 'connected');
+        // Re-announce this tab's connected state to other tabs on connect/
+        // disconnect (for their getProfiles). Deferred to a microtask so the
+        // session's own status handler has run before we read session.status.
+        const announce = () => { queueMicrotask(() => this.presence.announce()); };
+        this.apiUnsubs.push(session.events.on('client.connect', announce));
+        this.apiUnsubs.push(session.events.on('client.disconnect', announce));
         session.consoles.set('main', this.mainConsole);
         // Mudlet `sysBufferShrinkEvent("main", linesRemoved)` — named user
         // windows have the same hook wired in WindowManager.registerConsole.
@@ -760,6 +788,38 @@ export class ScriptingAPI {
         return this.profileName;
     }
 
+    /**
+     * Mudlet `getProfiles()`. A record keyed by profile name, one entry per
+     * configured connection, each `{ host, port, loaded, connected, description }`:
+     *  - `host`/`port` — the MUD's address (mud-mode: stored host/port; ws-mode:
+     *    parsed from the endpoint URL), available for every profile.
+     *  - `loaded` — the profile is open (in some tab) and editable. Cross-tab via
+     *    the Web Lock each open profile holds.
+     *  - `connected` — the profile is connected to its game. Own tab: live; other
+     *    tabs: their last-announced state (BroadcastChannel presence). Always
+     *    false for a profile that isn't loaded.
+     *  - `description` — the connection record's free-text description.
+     * On a duplicate profile name, last-wins (a Lua table can't hold dup keys).
+     */
+    getProfiles(): Record<string, { host: string; port: number; loaded: boolean; connected: boolean; description: string }> {
+        const loaded = new Set(this.presence.loadedIds());
+        const out: Record<string, { host: string; port: number; loaded: boolean; connected: boolean; description: string }> = {};
+        for (const conn of useAppStore.getState().connections) {
+            const isLoaded = loaded.has(conn.id);
+            const { host, port } = connectionHostPort(conn);
+            out[conn.name] = {
+                host,
+                port,
+                loaded: isLoaded,
+                // Gate connected on loaded so a crashed tab's stale presence can't
+                // outlive its (auto-released) lock.
+                connected: isLoaded && this.presence.isConnected(conn.id),
+                description: conn.description ?? '',
+            };
+        }
+        return out;
+    }
+
     /** Mudlet `getMudletInfo()`. Echoes a short diagnostic block to the main
      *  window. mudix is a browser client with no Qt build, so it reports the
      *  web-client equivalents (profile, server encoding, platform). */
@@ -772,6 +832,34 @@ export class ScriptingAPI {
             `Platform: ${platform}`,
         ];
         for (const line of lines) this.echo(line + '\n');
+    }
+
+    /** Mudlet `loadProfile(name) → bool`. Opens the named profile and connects
+     *  to it. Each profile lives in its own browser tab (the per-profile lock
+     *  keeps it to one tab), so this opens a NEW tab at `?profile=<id>&connect=1`
+     *  rather than switching the current one — the calling profile stays open
+     *  alongside, mirroring Mudlet's multi-profile model. Returns false for an
+     *  unknown name, when targeting the profile already open in this tab, or when
+     *  the browser blocks the popup. NOTE: `window.open` needs a user gesture, so
+     *  this works from a key/button/alias but a browser may block it from a
+     *  trigger (no Mudlet equivalent to that limitation). */
+    loadProfile(name: string): boolean {
+        const target = (name ?? '').trim();
+        if (!target) return false;
+        const conn = useAppStore.getState().connections.find(c => c.name === target);
+        if (!conn) {
+            this.echo(`loadProfile: no profile named "${target}"\n`);
+            return false;
+        }
+        if (conn.id === this.connectionId) {
+            this.echo(`loadProfile: "${target}" is already open in this tab\n`);
+            return false;
+        }
+        const url = new URL(window.location.href);
+        url.searchParams.set('profile', conn.id);
+        url.searchParams.set('connect', '1');
+        const w = window.open(url.toString(), '_blank');
+        return !!w;
     }
 
     /** Mudlet `getCommandSeparator()`. Returns the profile's command separator
@@ -1002,20 +1090,21 @@ export class ScriptingAPI {
      *  description, or "" when unset. (mudix is single-profile, so the optional
      *  profile-name argument is ignored.) */
     getProfileInformation(): string {
-        return selectProfileField(useAppStore.getState(), this.connectionId, 'description') ?? '';
+        return useAppStore.getState().connections.find(c => c.id === this.connectionId)?.description ?? '';
     }
 
     /** Mudlet `setProfileInformation(text)`. Stores the profile's free-text
-     *  description. Always succeeds for the active profile. */
+     *  description on the connection record (also editable from the connection
+     *  screen). Always succeeds for the active profile. */
     setProfileInformation(text: string): boolean {
-        useAppStore.getState().patchConnectionProfile(this.connectionId, { description: String(text ?? '') });
+        useAppStore.getState().patchConnection(this.connectionId, { description: String(text ?? '') });
         return true;
     }
 
     /** Mudlet `clearProfileInformation()`. Resets the profile description to
      *  an empty string. */
     clearProfileInformation(): boolean {
-        useAppStore.getState().patchConnectionProfile(this.connectionId, { description: '' });
+        useAppStore.getState().patchConnection(this.connectionId, { description: '' });
         return true;
     }
 
@@ -3503,20 +3592,7 @@ export class ScriptingAPI {
      */
     getConnectionInfo(): { host: string; port: number; connected: boolean } {
         const conn = useAppStore.getState().connections.find(c => c.id === this.connectionId);
-        let host = '';
-        let port = 0;
-        if (conn) {
-            if (conn.mode === 'mud') {
-                host = conn.host ?? '';
-                port = conn.port ?? 23;
-            } else if (conn.url) {
-                try {
-                    const u = new URL(conn.url);
-                    host = u.hostname;
-                    port = u.port ? Number(u.port) : (u.protocol === 'wss:' ? 443 : 80);
-                } catch { /* malformed url → leave host/port at defaults */ }
-            }
-        }
+        const { host, port } = conn ? connectionHostPort(conn) : { host: '', port: 0 };
         return { host, port, connected: this.session.status === 'connected' };
     }
 
@@ -4024,6 +4100,9 @@ export class ScriptingAPI {
     }
 
     destroy(): void {
+        for (const unsub of this.apiUnsubs) unsub();
+        this.apiUnsubs.length = 0;
+        this.presence.destroy();
         this.flushOutput();
     }
 

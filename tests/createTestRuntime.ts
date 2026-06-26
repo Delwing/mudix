@@ -102,6 +102,11 @@ export async function createTestRuntime(): Promise<TestRuntime> {
     rt,
     run,
     mainOutput,
-    dispose: () => { try { rt.destroy(); } catch { /* teardown best-effort */ } },
+    dispose: () => {
+      // Mirror ScriptingEngine.dispose order: stop the runtime, then the api
+      // (which owns the cross-tab presence channel + its poll interval).
+      try { rt.destroy(); } catch { /* teardown best-effort */ }
+      try { api.destroy(); } catch { /* teardown best-effort */ }
+    },
   };
 }

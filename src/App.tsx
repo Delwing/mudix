@@ -23,6 +23,9 @@ export default function App() {
     const [profileVfs, setProfileVfs] = useState<ProfileVFS | null>(null);
 
     const deepLinkProfileId = useRef(new URLSearchParams(window.location.search).get('profile'));
+    // `&connect=1` (set by loadProfile in another tab) auto-dials on open instead
+    // of just opening the profile. Read once, alongside the profile id.
+    const deepLinkConnect = useRef(new URLSearchParams(window.location.search).get('connect') === '1');
     // Theme is per-profile with a global launcher fallback. While a profile is
     // open (lock held), its own theme override wins; on the connection screen /
     // busy screen we use the launcher theme. Applied in one place so there's a
@@ -60,7 +63,9 @@ export default function App() {
         const conn = connections.find(c => c.id === id);
         if (!conn) return;
         deepLinkProfileId.current = null;
-        openProfile(conn, conn.autoReconnect ?? false);
+        const forceConnect = deepLinkConnect.current;
+        deepLinkConnect.current = false;
+        openProfile(conn, forceConnect || (conn.autoReconnect ?? false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [connections]);
 

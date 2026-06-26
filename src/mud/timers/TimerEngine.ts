@@ -25,6 +25,11 @@ export class TimerEngine {
     private readonly permNameToId = new Map<string, string>();
     private nextId = 1;
 
+    /** Number of live session-scoped temp timers (Mudlet `getProfileStats` temp count). */
+    get tempCount(): number {
+        return this.temp.size;
+    }
+
     addTemp(seconds: number, fn: TempFn, repeat = false): number {
         const id = this.nextId++;
         const intervalMs = seconds * 1000;

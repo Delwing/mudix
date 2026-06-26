@@ -3,6 +3,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestRuntime, type TestRuntime } from '../createTestRuntime';
 import { TriggerEngine } from '../../src/mud/triggers/TriggerEngine';
+import { AliasEngine } from '../../src/mud/aliases/AliasEngine';
+import { TimerEngine } from '../../src/mud/timers/TimerEngine';
+import { KeyEngine } from '../../src/mud/keybindings/KeyEngine';
 import { AnsiAwareBuffer } from '../../src/mud/text/FormatState';
 
 // tempLineTrigger's counting logic lives in TriggerEngine.addTempLine, which is
@@ -1098,9 +1101,12 @@ describe('misc forwarders — appendLog / getProfileTabNumber / getProfiles / io
     expect(env.run('return getProfileTabNumber("anything")')).toBe(1);
   });
 
-  it('getProfiles returns a 1-element list with the active profile name', () => {
-    expect(env.run('return #getProfiles()')).toBe(1);
-    expect(env.run('return getProfiles()[1]')).toBe(env.run('return getProfileName()'));
+  it('getProfiles is keyed by name with a loaded entry for the active profile', () => {
+    // Keyed by connection name ("Test" — the harness's seeded connection), and
+    // the active profile is marked loaded (it holds the current tab). Detailed
+    // field/cross-tab coverage lives in getProfiles.test.ts.
+    expect(env.run('return getProfiles().Test ~= nil')).toBe(true);
+    expect(env.run('return getProfiles().Test.loaded')).toBe(true);
   });
 
   it('appendLog returns false without an active logger', () => {
@@ -1326,5 +1332,51 @@ describe('resetProfile — Lua binding', () => {
   it('is a no-op (no throw) when no callback is wired', () => {
     env.api.setResetProfileCallback(null);
     expect(() => env.run('resetProfile()')).not.toThrow();
+  });
+});
+
+// getProfileStats's `temp` numbers come from these live engine counts (temp
+// items aren't in the persisted tree). ScriptingEngine.getProfileStats folds
+// tempCount into total/active; here we cover the source-of-truth getters.
+describe('engine tempCount — live session-scoped temp items', () => {
+  it('AliasEngine.tempCount tracks addTemp and disposal', () => {
+    const e = new AliasEngine();
+    expect(e.tempCount).toBe(0);
+    const dispose = e.addTemp('^x$', () => {});
+    e.addTemp('^y$', () => {});
+    expect(e.tempCount).toBe(2);
+    dispose();
+    expect(e.tempCount).toBe(1);
+  });
+
+  it('TriggerEngine.tempCount tracks addTemp, addTempLine, and self-expiry', () => {
+    const e = new TriggerEngine();
+    expect(e.tempCount).toBe(0);
+    const dispose = e.addTemp('hit', () => {}, 'substring');
+    e.addTempLine(1, 1, () => {});
+    expect(e.tempCount).toBe(2);
+    dispose();
+    expect(e.tempCount).toBe(1);
+    // The line trigger fires once then self-expires, dropping the count to 0.
+    e.processTemp('any');
+    expect(e.tempCount).toBe(0);
+  });
+
+  it('TimerEngine.tempCount tracks addTemp and killTimer', () => {
+    const e = new TimerEngine();
+    expect(e.tempCount).toBe(0);
+    const id = e.addTemp(100, () => {});
+    expect(e.tempCount).toBe(1);
+    e.killTimer(id);
+    expect(e.tempCount).toBe(0);
+  });
+
+  it('KeyEngine.tempCount tracks addTemp and killKey', () => {
+    const e = new KeyEngine();
+    expect(e.tempCount).toBe(0);
+    const id = e.addTemp('KeyA', [], () => {});
+    expect(e.tempCount).toBe(1);
+    e.killKey(id);
+    expect(e.tempCount).toBe(0);
   });
 });

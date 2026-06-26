@@ -18,6 +18,11 @@ export class PatternEngine<T extends PatternItem> {
     protected nextId = 1;
     protected permCompiled: Array<{ item: T; re: RegExp }> = [];
 
+    /** Number of live session-scoped temp items (Mudlet `getProfileStats` temp count). */
+    get tempCount(): number {
+        return this.temp.size;
+    }
+
     addTemp(pattern: string | RegExp, fn: TempFn): () => void {
         const re = typeof pattern === 'string' ? new RegExp(pattern) : pattern;
         const id = this.nextId++;

@@ -13,8 +13,17 @@
 // no stale locks to clean up — and a second tab that requested the same lock
 // is granted ownership automatically the moment the first releases it.
 
+/** Shared prefix for every per-profile Web Lock name. */
+export const PROFILE_LOCK_PREFIX = 'mudix:profile:';
+
 /** Web Lock name for a profile. */
-export const profileLockName = (connectionId: string) => `mudix:profile:${connectionId}`;
+export const profileLockName = (connectionId: string) => `${PROFILE_LOCK_PREFIX}${connectionId}`;
+
+/** Inverse of {@link profileLockName}: the connectionId encoded in a lock name,
+ *  or null when the name isn't a profile lock. Used to enumerate which profiles
+ *  are open across tabs from `navigator.locks.query()`. */
+export const connectionIdFromLockName = (name: string): string | null =>
+    name.startsWith(PROFILE_LOCK_PREFIX) ? name.slice(PROFILE_LOCK_PREFIX.length) : null;
 
 /** Best-effort check whether some tab currently holds the profile's lock. Used
  *  only to pick the initial "waiting for the other tab" message; the actual

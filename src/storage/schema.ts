@@ -36,6 +36,13 @@ export interface MudConnection {
      *  user explicitly opts in. Convenient for auto-login but not secure on a
      *  shared machine. Never logged; relayed straight to the server on login. */
     charLoginPassword?: string;
+    /** Free-text profile description (Mudlet's profile "description" field, read/
+     *  written by getProfileInformation / setProfileInformation /
+     *  clearProfileInformation). Lives on the connection record — not the VFS-
+     *  backed profile settings — so it's editable from the connection screen and
+     *  visible to `getProfiles()` for every profile (open or not, across tabs via
+     *  the synced connection index) without mounting each profile. */
+    description?: string;
 }
 
 export type Theme = 'dark' | 'light' | 'graylight' | 'amber' | 'sky';
@@ -165,10 +172,6 @@ export interface ProfileSettings {
      *  "command separator", default `;;`). Each split is run through aliases
      *  and sent independently. Empty string disables splitting. */
     commandSeparator?: string;
-    /** Free-text profile description (Mudlet's profile "description" field,
-     *  read/written by getProfileInformation / setProfileInformation /
-     *  clearProfileInformation). Empty/undefined = no description. */
-    description?: string;
     /** Per-profile telnet protocol toggles. Patches merge so flipping one
      *  field doesn't wipe siblings. Missing fields fall through to
      *  PROTOCOL_DEFAULTS. Takes effect on the next connect. */

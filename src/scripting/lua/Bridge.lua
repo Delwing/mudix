@@ -1107,11 +1107,27 @@ function getMapLabel(areaId, key)
     return {}
 end
 
--- Mudlet getProfiles() — list of open profile names. mudix is a single-profile
--- web app, so this is always the one active profile (matching the documented
--- stub: callers that iterate profiles still get a 1-element list).
+-- Mudlet getProfiles() — a table keyed by profile name, one entry per configured
+-- connection: { host, port, loaded, connected, description }. `loaded` means the
+-- profile is open (in some browser tab — each profile lives in its own tab) and
+-- `connected` means it's connected to its game. JS builds the record (Web Locks
+-- for `loaded`, cross-tab presence for `connected`); rebuild it into a clean Lua
+-- table since wasmoon hands JS objects over as proxies.
 function getProfiles()
-    return { getProfileName() }
+    local raw = __getProfiles and __getProfiles() or nil
+    local out = {}
+    if type(raw) == 'table' then
+        for name, info in pairs(raw) do
+            out[name] = {
+                host        = info.host or '',
+                port        = info.port or 0,
+                loaded      = info.loaded and true or false,
+                connected   = info.connected and true or false,
+                description = info.description or '',
+            }
+        end
+    end
+    return out
 end
 
 -- Mudlet auditAreas() — repair area/room membership consistency. mudix returns

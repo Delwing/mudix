@@ -808,6 +808,12 @@ html, body, #root {
     gap: 8px;
 }
 
+.connection-form-description {
+    resize: vertical;
+    min-height: 36px;
+    line-height: 1.4;
+}
+
 .proxy-label-row {
     display: flex;
     align-items: baseline;

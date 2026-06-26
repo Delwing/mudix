@@ -435,7 +435,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('ancestors',        '(id, type) → {{id, name, node, isActive}, ...} | (false, errMsg)', 'Ancestor chain (immediate parent → root) of the item. node is "package"/"group"/"item"; isActive is that ancestor\'s own enabled flag. (false, errMsg) when no item of that type has the id.'),
     fn('findItems',        '(name, type [, exact [, caseSensitive]]) → {id, ...}', 'Numeric ids of every item/group whose name matches. exact (default true) toggles exact vs substring; caseSensitive (default true) toggles case folding. type as for exists.'),
     fn('isAncestorsActive', '(id, type) → bool | (false, errMsg)', 'True when every ancestor group of the item is enabled (the item\'s own state is ignored). (false, errMsg) when no item of that type has the id.'),
-    fn('getProfileStats',  '() → table', 'Per-family counts: {triggers={total,temp,active,patterns={total,active}}, aliases=, timers=, keys=, scripts={total,temp,active}, gifs={total,active}}. mudix keeps no temp items in the tree (temp always 0) and has no gif tracker (gifs always 0).'),
+    fn('getProfileStats',  '() → table', 'Per-family counts: {triggers={total,temp,active,patterns={total,active}}, aliases=, timers=, keys=, scripts={total,temp,active}, gifs={total,active}}. temp counts live session-scoped temp items (folded into total/active); scripts have no temp form; no gif tracker (gifs always 0).'),
     // Cursor / line inspection
     fn('getCurrentLine',  '([window])',    'Get current trigger line text'),
     fn('getLineNumber',   '([window])',    'Get cursor line number'),
@@ -578,7 +578,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('appendLog',          '(text) → bool',             'Append an arbitrary line to the current session log (outside the normal output stream). Returns false when logging is not active.'),
     fn('ioprint',            '(...)',                     'Print to the developer console (Mudlet prints to stdout; in the browser the closest analogue is the devtools console).'),
     fn('getProfileTabNumber', '([name]) → number',        'Tab index of a profile. mudix is a single-profile web app, so this always returns 1.'),
-    fn('getProfiles',         '() → {name}',               'List of open profile names. mudix is single-profile, so this is always a 1-element list with the active profile name.'),
+    fn('getProfiles',         '() → {[name]=info}',        'Table keyed by profile name, one entry per configured connection: { host, port, loaded, connected, description }. loaded = open in some tab (each profile lives in its own browser tab); connected = connected to its game (live for this tab, last-announced for others). Cross-tab via Web Locks + a BroadcastChannel.'),
+    fn('loadProfile',         '(name) → bool',             'Open the named profile in a new browser tab and connect to it (each profile lives in its own tab). The calling profile stays open. Returns false for an unknown name, the already-open profile, or a blocked popup. Needs a user gesture, so it works from a key/button/alias but a browser may block it from a trigger.'),
     fn('loadRawFile',        '(path) → string',    'Read entire file from VFS and return its contents'),
     fn('loadfile',           '(filename)',          'Load a Lua file from VFS'),
     fn('dofile',             '(filename)',          'Load and execute a Lua file from VFS'),
