@@ -3802,7 +3802,11 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__getMousePosition', () => this.api.getMousePosition());
         this.lua.global.set('__getUserWindowSize', (name: unknown) => {
             const n = String(name ?? '');
-            if (!n || !this.api.windows.has(n)) return null;
+            // Mudlet resolves the default/"main" name to the main window, so
+            // Geyser code (e.g. Label:onRightClick) that calls this with a
+            // main-window label's windowname gets the viewport size, not nil.
+            if (!n || n === 'main') return this.api.getMainWindowSize();
+            if (!this.api.windows.has(n)) return null;
             return this.api.getUserWindowSize(n);
         });
 
