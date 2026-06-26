@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react';
+import { FolderSymlink } from 'lucide-react';
 import { Button, useConfirm } from './components';
 import { ConnectionFormModal } from './ConnectionFormModal';
 import { connectionDisplayAddr, type MudConnection } from '../storage';
 import { extractMudletProfileZip, resolveModulesFromTree, addModuleToBundle, type MudletProfileBundle } from '../import/mudletProfileImport';
-import { importMudletProfile, bundleFromDirectory } from '../import/applyMudletProfile';
+import { importMudletProfile, bundleFromDirectory, linkMudletFolder } from '../import/applyMudletProfile';
 import { ModuleResolveModal, type ModuleUpload } from './ModuleResolveModal';
 import type { MudletModuleRef } from '../import/mudletHost';
 
@@ -108,6 +109,13 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         void runImport(async () => beginImport(await bundleFromDirectory(await dirPicker.call(window))));
     };
 
+    // Link (not copy): the folder stays the source of truth; current/*.xml is
+    // re-read on every open.
+    const handleLinkFolder = () => {
+        if (!dirPicker) return;
+        void runImport(async () => { await linkMudletFolder(await dirPicker.call(window)); });
+    };
+
     const handleZipChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         e.target.value = '';
@@ -164,7 +172,18 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                             <div key={c.id} className="connection-card">
                                 <ProfileAvatar name={c.name} icon={c.icon} />
                                 <div className="connection-info">
-                                    <span className="connection-name">{c.name}</span>
+                                    <span className="connection-name" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                        {c.name}
+                                        {c.mudletLinked && (
+                                            <FolderSymlink
+                                                size={13}
+                                                style={{ opacity: 0.65, flexShrink: 0 }}
+                                                aria-label="Linked Mudlet folder"
+                                            >
+                                                <title>Linked Mudlet folder — source of truth on disk</title>
+                                            </FolderSymlink>
+                                        )}
+                                    </span>
                                     <span className="connection-addr">{connectionDisplayAddr(c)}</span>
                                 </div>
                                 <div className="connection-actions">
@@ -219,7 +238,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                     + Add connection
                 </Button>
 
-                <div className="connection-import-row" style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8 }}>
+                <div className="connection-import-row" style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8, flexWrap: 'wrap' }}>
                     {dirPicker && (
                         <Button variant="secondary" size="sm" onClick={handleImportFolder} disabled={connecting || importing}>
                             {importing ? 'Importing…' : 'Import Mudlet folder…'}
@@ -228,6 +247,12 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                     <Button variant="secondary" size="sm" onClick={() => zipInputRef.current?.click()} disabled={connecting || importing}>
                         {importing && !dirPicker ? 'Importing…' : 'Import .zip…'}
                     </Button>
+                    {dirPicker && (
+                        <Button variant="secondary" size="sm" onClick={handleLinkFolder} disabled={connecting || importing}
+                            title="Link a Mudlet profile folder — it stays the source of truth and is re-read from its newest save on every open">
+                            Link Mudlet folder…
+                        </Button>
+                    )}
                 </div>
                 {importError && (
                     <div className="connection-import-error" style={{ color: 'var(--danger, #e06c75)', fontSize: 12, textAlign: 'center', marginTop: 6 }}>

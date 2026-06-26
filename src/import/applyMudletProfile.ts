@@ -2,6 +2,8 @@ import { useAppStore } from '../storage/appStore';
 import { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 import { saveProfileData } from '../storage/profileVfsData';
 import { saveMap } from '../storage/mapStorage';
+import { saveFolderHandle } from '../scripting/vfs/folderHandleStore';
+import { parseMudletProfile } from './mudletHost';
 import { buildMudletProfileBundle, type MudletProfileBundle } from './mudletProfileImport';
 
 // Apply a parsed Mudlet profile bundle (see mudletProfileImport.ts) as a NEW
@@ -121,4 +123,64 @@ export async function bundleFromDirectory(dir: FileSystemDirectoryHandle): Promi
  *  + resolveModulesFromTree first). */
 export async function importMudletProfileFromDirectory(dir: FileSystemDirectoryHandle): Promise<string> {
     return importMudletProfile(await bundleFromDirectory(dir));
+}
+
+// ── link mode ────────────────────────────────────────────────────────────────
+
+/** The newest file (by lastModified) in a subdirectory of `dir` matching `pred`. */
+async function newestFileIn(
+    dir: FileSystemDirectoryHandle,
+    sub: string,
+    pred: (name: string) => boolean,
+): Promise<File | null> {
+    let handle: FileSystemDirectoryHandle;
+    try {
+        handle = await dir.getDirectoryHandle(sub);
+    } catch {
+        return null;
+    }
+    interface DirEntries { entries(): AsyncIterable<[string, FileSystemHandle]>; }
+    let newest: File | null = null;
+    for await (const [name, h] of (handle as unknown as DirEntries).entries()) {
+        if (h.kind !== 'file' || !pred(name)) continue;
+        const file = await (h as FileSystemFileHandle).getFile();
+        if (!newest || file.lastModified > newest.lastModified) newest = file;
+    }
+    return newest;
+}
+
+/**
+ * Link a Mudlet profile *directory* as a new mudix profile (Link mode): the
+ * folder stays the source of truth — its `current/*.xml` is re-read on every
+ * open — rather than being copied in. Reads the connection identity from the
+ * newest save, registers the connection, persists the folder handle so the VFS
+ * mounts it, and copies the current map. Returns the new connection id.
+ */
+export async function linkMudletFolder(dir: FileSystemDirectoryHandle): Promise<string> {
+    const xmlFile = await newestFileIn(dir, 'current', n => n.toLowerCase().endsWith('.xml'));
+    if (!xmlFile) throw new Error('Not a Mudlet profile: no current/*.xml found in the selected folder');
+    const profile = parseMudletProfile(await xmlFile.text());
+
+    const connectionId = useAppStore.getState().addConnection({
+        name: profile.connection.name || dir.name || 'Linked profile',
+        mode: 'mud',
+        host: profile.connection.host ?? '',
+        port: profile.connection.port ?? 23,
+        mudletLinked: true,
+    });
+
+    // Persist the handle so ProfileVFS mounts the folder on open (the page already
+    // holds readwrite permission from the picker gesture).
+    await saveFolderHandle(connectionId, dir);
+
+    const mapFile = await newestFileIn(dir, 'map', () => true);
+    if (mapFile) {
+        try {
+            await saveMap(connectionId, await mapFile.arrayBuffer());
+        } catch (err) {
+            console.warn('[linkMudletFolder] map copy failed', err);
+        }
+    }
+
+    return connectionId;
 }

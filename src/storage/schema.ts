@@ -37,6 +37,11 @@ export interface MudConnection {
      *  user explicitly opts in. Convenient for auto-login but not secure on a
      *  shared machine. Never logged; relayed straight to the server on login. */
     charLoginPassword?: string;
+    /** Set when this profile was created by linking a Mudlet folder (Link mode):
+     *  the folder is the source of truth — its `current/*.xml` is re-read on every
+     *  open and written back on save. Drives the linked badge on the connection
+     *  screen. The folder handle itself lives in folderHandleStore (IndexedDB). */
+    mudletLinked?: boolean;
     /** Free-text profile description (Mudlet's profile "description" field, read/
      *  written by getProfileInformation / setProfileInformation /
      *  clearProfileInformation). Lives on the connection record — not the VFS-

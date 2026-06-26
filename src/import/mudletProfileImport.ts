@@ -74,18 +74,32 @@ function parseConfigLua(src: string): Partial<PackageManifest> {
     return out;
 }
 
-/** Build a manifest per installed package, reading metadata from `<name>/config.lua`
- *  in the profile files when present. `installedAt` is left empty for the importer
- *  to stamp (keeps this pure/deterministic). */
-function buildManifests(names: string[], files: Record<string, Uint8Array>): PackageManifest[] {
-    const byLower = new Map(Object.keys(files).map(k => [k.toLowerCase(), k]));
+/**
+ * Build a manifest per installed package, reading metadata from each package's
+ * config.lua via `readConfig(name)` (returns the file text or undefined).
+ * `installedAt` is left empty for the caller to stamp (keeps this deterministic).
+ * Reusable across the file-map import path and the linked-folder (VFS) path.
+ */
+export function buildPackageManifests(
+    names: string[],
+    readConfig: (name: string) => string | undefined,
+): PackageManifest[] {
     return names.map(name => {
-        const cfgKey = byLower.get(`${name.toLowerCase()}/config.lua`);
         let info: Partial<PackageManifest> = {};
-        if (cfgKey) {
-            try { info = parseConfigLua(strFromU8(files[cfgKey])); } catch { /* leave bare */ }
+        const src = readConfig(name);
+        if (src) {
+            try { info = parseConfigLua(src); } catch { /* leave bare */ }
         }
         return { name, installedAt: '', kind: 'package' as const, ...info };
+    });
+}
+
+/** Build manifests from a profile-root files map (the import path). */
+function buildManifests(names: string[], files: Record<string, Uint8Array>): PackageManifest[] {
+    const byLower = new Map(Object.keys(files).map(k => [k.toLowerCase(), k]));
+    return buildPackageManifests(names, name => {
+        const k = byLower.get(`${name.toLowerCase()}/config.lua`);
+        return k ? strFromU8(files[k]) : undefined;
     });
 }
 

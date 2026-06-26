@@ -7,6 +7,7 @@ import { acquireProfileLock, isProfileLockHeld } from './utils/profileLock';
 import { ProfileVFS } from './scripting/vfs/ProfileVFS';
 import { registerVfs, unregisterVfs } from './scripting/vfs/vfsBridge';
 import { loadProfileData } from './storage/profileVfsData';
+import { isMudletProfileVfs, loadMudletLinkedProfile } from './import/mudletLink';
 import { useAppStore, type MudConnection } from './storage';
 
 export default function App() {
@@ -112,10 +113,17 @@ export default function App() {
             if (vfs) {
                 registerVfs(id, vfs);
                 mountedVfs = vfs;
-                // Seed the store from .mudix/profile.json (and run the one-time
-                // v21 migration) before the session renders, so the profile's
-                // settings/layout/protocols are present for the synchronous reads.
-                loadProfileData(vfs, id);
+                // A linked Mudlet folder (current/*.xml present) is loaded from its
+                // newest save on every open, so Mudlet-side edits show up; the
+                // .mudix sidecar layers mudix-only state on top. Otherwise seed
+                // from .mudix/profile.json (and run the one-time v21 migration)
+                // before the session renders, so the profile's settings/layout/
+                // protocols are present for the synchronous reads.
+                if (isMudletProfileVfs(vfs)) {
+                    loadMudletLinkedProfile(vfs, id, new Date().toISOString());
+                } else {
+                    loadProfileData(vfs, id);
+                }
             }
             setProfileVfs(vfs);
             setLockPhase('held');

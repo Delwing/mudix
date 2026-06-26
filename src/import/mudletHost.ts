@@ -158,6 +158,78 @@ export function parseMudletHostIdentity(host: Element): MudletProfileIdentity {
     return out;
 }
 
+// ── write-back (inverse of parseMudletHost) ──────────────────────────────────
+
+function setHostEl(host: Element, tag: string, value: string): void {
+    let el = host.querySelector(`:scope > ${tag}`);
+    if (!el) {
+        el = host.ownerDocument.createElement(tag);
+        host.appendChild(el);
+    }
+    el.textContent = value;
+}
+
+// Mudlet's mDisplayFont is a serialized QFont: "family,pointSize,<tail>". mudix
+// only models the family + size, so on write-back we replace those two fields and
+// keep the rest of the spec from the existing value (Mudlet's defaults when the
+// Host has none) rather than guessing the ~17 QFont params.
+const DEFAULT_QFONT_TAIL = ['-1', '5', '400', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '1', '', '0', '0'];
+
+/**
+ * Write the modeled ProfileSettings back onto an existing `<Host>` element,
+ * in place — only the fields present in `s` are touched, so unmodeled Host
+ * fields (and the whole rest of the profile) are preserved. The inverse of
+ * {@link parseMudletHost}. The display-font family is only written for a *system*
+ * font (Mudlet can't resolve a url/vfs font name); the size is always synced, and
+ * the rest of the QFont spec is preserved.
+ */
+export function applyProfileSettingsToHost(host: Element, s: Partial<ProfileSettings>): void {
+    if (s.commandSeparator !== undefined) setHostEl(host, 'mCommandSeparator', s.commandSeparator);
+    if (s.autoClearInput !== undefined) host.setAttribute('autoClearCommandLineAfterSend', s.autoClearInput ? 'yes' : 'no');
+    if (s.outputWrapAt !== undefined) setHostEl(host, 'wrapAt', String(s.outputWrapAt));
+    if (s.outputWrapIndent !== undefined) setHostEl(host, 'wrapIndentCount', String(s.outputWrapIndent));
+    if (s.outputWrapHangingIndent !== undefined) setHostEl(host, 'wrapHangingIndentCount', String(s.outputWrapHangingIndent));
+    if (s.outputForeground) setHostEl(host, 'mFgColor', s.outputForeground);
+    if (s.outputBackground) setHostEl(host, 'mBgColor', s.outputBackground);
+    if (s.commandEchoForeground) setHostEl(host, 'mCommandFgColor', s.commandEchoForeground);
+    if (s.commandEchoBackground) setHostEl(host, 'mCommandBgColor', s.commandEchoBackground);
+    if (s.inputForeground) setHostEl(host, 'mCommandLineFgColor', s.inputForeground);
+    if (s.inputBackground) setHostEl(host, 'mCommandLineBgColor', s.inputBackground);
+    if (s.serverRedefineColors !== undefined) host.setAttribute('mServerMayRedefineColors', s.serverRedefineColors ? 'yes' : 'no');
+    if (s.promptTimeoutMs !== undefined) host.setAttribute('NetworkPacketTimeout', String(s.promptTimeoutMs));
+
+    if (s.ansiPalette) {
+        for (const [name, idx] of ANSI_COLOR_INDEX) {
+            const c = s.ansiPalette[idx];
+            if (c) setHostEl(host, name, c);
+        }
+    }
+    if (s.outputBorders) {
+        setHostEl(host, 'borderTopHeight', String(s.outputBorders.top));
+        setHostEl(host, 'borderBottomHeight', String(s.outputBorders.bottom));
+        setHostEl(host, 'borderLeftWidth', String(s.outputBorders.left));
+        setHostEl(host, 'borderRightWidth', String(s.outputBorders.right));
+    }
+    if (s.protocols) {
+        for (const [attr, key] of PROTOCOL_ATTR) {
+            const v = s.protocols[key];
+            if (v !== undefined) host.setAttribute(attr, v ? 'yes' : 'no');
+        }
+    }
+
+    // Font: write the family only for a system font (a url/vfs font name is
+    // meaningless to Mudlet); sync the size regardless; preserve the QFont tail.
+    const systemFamily = s.outputFont?.kind === 'system' ? s.outputFont.family : undefined;
+    if (systemFamily !== undefined || s.fontSize !== undefined) {
+        const existing = host.querySelector(':scope > mDisplayFont')?.textContent ?? '';
+        const parts = existing ? existing.split(',') : [];
+        const family = systemFamily ?? parts[0] ?? '';
+        const size = s.fontSize !== undefined ? String(s.fontSize) : (parts[1] ?? '');
+        const tail = parts.length > 2 ? parts.slice(2) : DEFAULT_QFONT_TAIL;
+        setHostEl(host, 'mDisplayFont', [family, size, ...tail].join(','));
+    }
+}
+
 /** Names from `<Host><mInstalledPackages>` — the packages Mudlet considers
  *  installed for this profile. Mudlet tracks these so package managers (mpkg) and
  *  `getPackageInfo`/`getInstalledPackages` work; mudix registers a manifest per

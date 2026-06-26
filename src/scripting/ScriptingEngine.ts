@@ -36,7 +36,9 @@ import {MapOpenNotifier} from './MapOpenNotifier';
 import {installModuleFromVfsPath, installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
 import {downloadFromUrl, filenameFromUrl, parseClientGuiPayload} from '../import/remotePackageInstall';
 import {ensureDefaultPackages} from '../import/defaultPackages';
-import {serializeMudletXml} from '../import/mudletXmlExport';
+import {serializeMudletXml, type SerializeInput} from '../import/mudletXmlExport';
+import {isMudletProfileVfs, findNewestCurrentXml} from '../import/mudletLink';
+import {buildLinkedWriteback} from '../import/mudletWriteback';
 import type {PackageManifest} from '../storage/schema';
 
 function hexToRgb(hex: string): RgbColor | null {
@@ -557,6 +559,10 @@ export class ScriptingEngine {
         }
         try {
             this.captureSavedVariables();
+            // Linked Mudlet profile: write the live automation + variables back
+            // into the folder's Mudlet save (DOM-preserving) so Mudlet sees mudix
+            // edits. The .mudix sidecar below still carries mudix-only state.
+            if (isMudletProfileVfs(vfs)) this.writeBackLinkedProfile(vfs);
             saveProfileData(vfs, this.connectionId);
             // writeFile only updates the RAM cache; both IDB- and folder-backed
             // mounts persist to the backend on flush(). Drain now so the write is
@@ -602,6 +608,39 @@ export class ScriptingEngine {
             state.setVariableValues(this.connectionId, rt.captureVariables(saveList));
         } catch (err) {
             console.warn('[ScriptingEngine] variable capture failed:', err);
+        }
+    }
+
+    /**
+     * Write the live store state back into a linked Mudlet folder's profile save.
+     * Reads the newest current/*.xml as the base (so external Mudlet edits to
+     * Host/unknown fields are preserved), replaces the automation + variable
+     * packages with mudix's current data, and overwrites `current/autosave.xml`
+     * — Mudlet's own rolling save, which it loads on next open. Overwriting one
+     * file (rather than minting a timestamped save per edit) avoids flooding the
+     * folder on the debounced save cadence.
+     */
+    private writeBackLinkedProfile(vfs: ProfileVFS): void {
+        try {
+            const basePath = findNewestCurrentXml(vfs);
+            if (!basePath) return;
+            const s = useAppStore.getState();
+            const id = this.connectionId;
+            const trees: SerializeInput = {
+                scripts: s.connectionScripts[id] ?? [],
+                aliases: s.connectionAliases[id] ?? [],
+                triggers: s.connectionTriggers[id] ?? [],
+                timers: s.connectionTimers[id] ?? [],
+                keys: s.connectionKeybindings[id] ?? [],
+                buttons: s.connectionButtons[id] ?? [],
+            };
+            const values = s.connectionVariables[id]?.values ?? [];
+            const xml = buildLinkedWriteback(
+                vfs.readFile(basePath), trees, { hidden: [], variables: values }, s.connectionProfile[id],
+            );
+            vfs.writeFile('current/autosave.xml', xml);
+        } catch (err) {
+            console.warn('[ScriptingEngine] Mudlet write-back failed:', err);
         }
     }
 
