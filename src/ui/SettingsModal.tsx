@@ -88,11 +88,17 @@ interface SettingsModalProps {
 
 export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsModalProps) {
     const modalRef = useModalFocus<HTMLDivElement>(onClose);
-    const theme = useAppStore(s => s.client.theme);
-    const allowMudPackageInstall = useAppStore(s => s.client.allowMudPackageInstall);
+    // Theme is per-profile with a launcher fallback: inside a profile the picker
+    // shows/edits that profile's override; on the connection screen it edits the
+    // launcher theme (client.theme).
+    const launcherTheme = useAppStore(s => s.client.theme);
+    const profileThemeOverride = useAppStore(s => (connectionId ? s.connectionProfile[connectionId]?.theme : undefined));
+    const theme = profileThemeOverride ?? launcherTheme;
+    // allowMudPackageInstall is per-profile (the row is hidden on the connection
+    // screen). Default to true when not explicitly disabled.
+    const allowMudPackageInstall = useAppStore(s => (connectionId ? selectProfileField(s, connectionId, 'allowMudPackageInstall') : undefined));
     const notificationsEnabled = useAppStore(s => s.client.notificationsEnabled);
     const patchClient = useAppStore(s => s.patchClient);
-    // Default to true when the user hasn't explicitly disabled it.
     const mudPackageInstallEnabled = allowMudPackageInstall !== false;
     // Notifications are opt-in (default off) and require browser permission.
     const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
@@ -644,13 +650,20 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         id="theme-select"
                                         className="settings-select"
                                         value={theme}
-                                        onChange={e => patchClient({ theme: e.target.value as Theme })}
+                                        onChange={e => {
+                                            const next = e.target.value as Theme;
+                                            // Inside a profile, set its override; on the
+                                            // connection screen, set the launcher theme.
+                                            if (connectionId) patchProfile({ theme: next });
+                                            else patchClient({ theme: next });
+                                        }}
                                     >
                                         {THEME_OPTIONS.map(opt => (
                                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
                                 </div>
+                                {connectionId && (
                                 <div className="settings-row">
                                     <span className="settings-label" id="allow-mud-package-install-label">
                                         Allow package installs from MUDs
@@ -663,9 +676,10 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         id="allow-mud-package-install"
                                         aria-labelledby="allow-mud-package-install-label"
                                         checked={mudPackageInstallEnabled}
-                                        onChange={next => patchClient({ allowMudPackageInstall: next })}
+                                        onChange={next => patchProfile({ allowMudPackageInstall: next })}
                                     />
                                 </div>
+                                )}
                                 <div className="settings-row">
                                     <span className="settings-label" id="notifications-enabled-label">
                                         Desktop notifications
@@ -1249,8 +1263,9 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                 <ColorCell
                                     label="Background"
                                     value={mapperBackgroundColor}
-                                    fallback={MAPPER_DEFAULTS.backgroundColor}
+                                    fallback="#000000"
                                     onChange={v => patchMapper({ backgroundColor: v })}
+                                    onClear={() => patchMapper({ backgroundColor: undefined })}
                                 />
                                 <ColorCell
                                     label="Exit lines"

@@ -43,6 +43,10 @@ interface AppStore extends AppSchema {
      *  immediately attach per-profile data like saved login credentials). */
     addConnection: (data: Omit<MudConnection, 'id'>) => string;
     updateConnection: (id: string, data: Omit<MudConnection, 'id'>) => void;
+    /** Partial update preserving fields the patch doesn't mention. Used for
+     *  surgical edits (icon, login creds) that must not wipe the rest of the
+     *  connection record. Keys set to `undefined` are removed. */
+    patchConnection: (id: string, patch: Partial<Omit<MudConnection, 'id'>>) => void;
     removeConnection: (id: string) => void;
     patchClient: (patch: Partial<ClientSettings>) => void;
     patchConnectionProfile: (connectionId: string, patch: Partial<ProfileSettings>) => void;
@@ -102,20 +106,35 @@ interface PersistedConnectionData {
     keybindings?: KeyNode[];
     buttons?: ButtonNode[];
     packages?: PackageManifest[];
+    // UI / settings / layout slices (one profile's entry from each shared map).
+    // Only applied when present — an absent slice leaves the store value as-is.
+    profile?: Partial<ProfileSettings>;
+    windowHints?: Record<string, WindowOpenOptions>;
+    dockExtents?: Record<string, number>;
+    scriptEditorBounds?: ScriptEditorBounds;
+    modalBounds?: Record<string, ModalBounds>;
+    layoutSnapshot?: WindowLayoutSnapshot;
 }
 
+/** localStorage key + schema version for the persisted store. Exported so the
+ *  cross-tab sync (crossTabSync.ts) can match `storage` events to this store and
+ *  reject writes from a different schema version. */
+export const MUDIX_STORE_NAME = 'mudix_v1';
+export const MUDIX_STORE_VERSION = 21;
+
+/** One-time localStorage key holding pre-v21 per-profile UI/layout/settings
+ *  slices, stashed by the v21 migration so they can be moved into each profile's
+ *  VFS (.mudix/profile.json) the first time it's opened. Kept separate from the
+ *  persisted store blob so editing the connections list (which rewrites the
+ *  blob) can't drop un-migrated profiles' data. Consumed per-profile by
+ *  loadProfileData, then removed when empty. */
+export const MIGRATION_BACKUP_KEY = 'mudix_profile_migration_v21';
+
 /** The subset of AppSchema actually persisted to localStorage (see `partialize`).
- *  The seven automation slices live in each profile's VFS instead. */
-type PersistedAppSchema = Pick<AppSchema,
-    | 'connections'
-    | 'client'
-    | 'connectionProfile'
-    | 'connectionWindowHints'
-    | 'connectionDockExtents'
-    | 'connectionScriptEditorBounds'
-    | 'connectionModalBounds'
-    | 'connectionLayoutSnapshots'
->;
+ *  Only the global index lives here now — the connection list and global client
+ *  settings. Every per-profile slice (automation + UI/settings/layout) lives in
+ *  that profile's VFS instead, so each profile is single-writer across tabs. */
+type PersistedAppSchema = Pick<AppSchema, 'connections' | 'client'>;
 
 export const useAppStore = create<AppStore>()(
     persist(
@@ -128,6 +147,16 @@ export const useAppStore = create<AppStore>()(
             },
             updateConnection: (id, data) => set(s => ({
                 connections: s.connections.map(c => c.id === id ? { ...data, id } : c),
+            })),
+            patchConnection: (id, patch) => set(s => ({
+                connections: s.connections.map(c => {
+                    if (c.id !== id) return c;
+                    const next = { ...c, ...patch };
+                    for (const k of Object.keys(patch) as (keyof Omit<MudConnection, 'id'>)[]) {
+                        if (patch[k] === undefined) delete next[k];
+                    }
+                    return next;
+                }),
             })),
             removeConnection: id => set(s => {
                 // Logs live in their own IndexedDB (like maps). Drop them
@@ -547,34 +576,43 @@ export const useAppStore = create<AppStore>()(
                     connectionPackages:    { ...s.connectionPackages,    [connectionId]: (s.connectionPackages[connectionId] ?? []).filter(p => p.name !== packageName) },
                 };
             }),
-            hydrateConnectionData: (connectionId, data) => set(s => ({
-                connectionScripts:     { ...s.connectionScripts,     [connectionId]: data.scripts     ?? [] },
-                connectionAliases:     { ...s.connectionAliases,     [connectionId]: data.aliases     ?? [] },
-                connectionTriggers:    { ...s.connectionTriggers,    [connectionId]: data.triggers    ?? [] },
-                connectionTimers:      { ...s.connectionTimers,      [connectionId]: data.timers      ?? [] },
-                connectionKeybindings: { ...s.connectionKeybindings, [connectionId]: data.keybindings ?? [] },
-                connectionButtons:     { ...s.connectionButtons,     [connectionId]: data.buttons     ?? [] },
-                connectionPackages:    { ...s.connectionPackages,    [connectionId]: data.packages    ?? [] },
-            })),
+            hydrateConnectionData: (connectionId, data) => set(s => {
+                const patch: Partial<AppSchema> = {
+                    connectionScripts:     { ...s.connectionScripts,     [connectionId]: data.scripts     ?? [] },
+                    connectionAliases:     { ...s.connectionAliases,     [connectionId]: data.aliases     ?? [] },
+                    connectionTriggers:    { ...s.connectionTriggers,    [connectionId]: data.triggers    ?? [] },
+                    connectionTimers:      { ...s.connectionTimers,      [connectionId]: data.timers      ?? [] },
+                    connectionKeybindings: { ...s.connectionKeybindings, [connectionId]: data.keybindings ?? [] },
+                    connectionButtons:     { ...s.connectionButtons,     [connectionId]: data.buttons     ?? [] },
+                    connectionPackages:    { ...s.connectionPackages,    [connectionId]: data.packages    ?? [] },
+                };
+                // UI/settings/layout slices: only set when the loaded data carries
+                // them, so a v1 file (automation only) doesn't wipe live state.
+                if (data.profile !== undefined)            patch.connectionProfile            = { ...s.connectionProfile,            [connectionId]: data.profile };
+                if (data.windowHints !== undefined)        patch.connectionWindowHints        = { ...s.connectionWindowHints,        [connectionId]: data.windowHints };
+                if (data.dockExtents !== undefined)        patch.connectionDockExtents        = { ...s.connectionDockExtents,        [connectionId]: data.dockExtents };
+                if (data.scriptEditorBounds !== undefined) patch.connectionScriptEditorBounds = { ...s.connectionScriptEditorBounds, [connectionId]: data.scriptEditorBounds };
+                if (data.modalBounds !== undefined)        patch.connectionModalBounds        = { ...s.connectionModalBounds,        [connectionId]: data.modalBounds };
+                if (data.layoutSnapshot !== undefined)     patch.connectionLayoutSnapshots    = { ...s.connectionLayoutSnapshots,    [connectionId]: data.layoutSnapshot };
+                return patch;
+            }),
         }),
         {
-            name: 'mudix_v1',
-            version: 20,
+            name: MUDIX_STORE_NAME,
+            version: MUDIX_STORE_VERSION,
             // Coalesce rapid mutations (e.g. an enableTrigger that touches N
             // matching nodes, or a script edit firing on every keystroke) into
             // one JSON.stringify + localStorage write. createJSONStorage runs
             // the stringify before our adapter sees the value, so we implement
             // PersistStorage directly to defer serialization until flush time.
             storage: createDebouncedJsonStorage<PersistedAppSchema>(5000),
-            // v20: the seven automation slices (scripts/aliases/triggers/timers/
-            // keybindings/buttons/packages) are no longer persisted here — they
-            // live in each profile's VFS (.mudix/profile.json, see profileVfsData.ts),
-            // loaded/saved by ScriptingEngine. Only the global index (connections,
-            // client) and the small UI/layout slices that are read synchronously
-            // before the VFS mounts stay in localStorage.
-            partialize: ({ connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScriptEditorBounds, connectionModalBounds, connectionLayoutSnapshots }) => ({
-                connections, client, connectionProfile, connectionWindowHints, connectionDockExtents, connectionScriptEditorBounds, connectionModalBounds, connectionLayoutSnapshots,
-            }),
+            // v21: every per-profile slice now lives in that profile's VFS
+            // (.mudix/profile.json, see profileVfsData.ts) — the automation trees
+            // (since v20) plus the UI/settings/layout slices (new in v21). Only
+            // the global index stays in localStorage: the connection list and
+            // global client settings. The VFS is mounted ahead of the session
+            // render (App), so its data is available before the synchronous reads.
+            partialize: ({ connections, client }) => ({ connections, client }),
             migrate: (saved, version) => {
                 const s = saved as Partial<AppSchema> & { connections?: any[]; ui?: any };
                 type V1Connection = { id: string; name: string; host: string; port: number; ssl: boolean };
@@ -591,7 +629,16 @@ export const useAppStore = create<AppStore>()(
                 // other field is copied verbatim into every existing connection's
                 // override so users don't lose their current font/border/etc. settings.
                 const legacyUi = s.ui ?? {};
-                const client = { theme: (legacyUi.theme ?? APP_DEFAULTS.client.theme) };
+                // Preserve the modern client slice (userProxyUrl, notificationsEnabled);
+                // fall back to the pre-v18 `ui` object only for the theme of very old
+                // saves. allowMudPackageInstall is intentionally dropped here — v21
+                // moves it to per-profile (below).
+                const savedClient = (s.client ?? {}) as Partial<ClientSettings> & { allowMudPackageInstall?: boolean };
+                const client: ClientSettings = {
+                    theme: savedClient.theme ?? legacyUi.theme ?? APP_DEFAULTS.client.theme,
+                    ...(savedClient.userProxyUrl !== undefined ? { userProxyUrl: savedClient.userProxyUrl } : {}),
+                    ...(savedClient.notificationsEnabled !== undefined ? { notificationsEnabled: savedClient.notificationsEnabled } : {}),
+                };
                 const persisted = (s as any).connectionProfile as Record<string, Partial<ProfileSettings>> | undefined;
                 let connectionProfile: Record<string, Partial<ProfileSettings>>;
                 if (persisted) {
@@ -619,6 +666,40 @@ export const useAppStore = create<AppStore>()(
                         prof.mapLastAreaId = legacy.areaId;
                         delete prof.mapViewState;
                     }
+                }
+
+                // v21: per-profile icon + login creds move onto the connection
+                // record (they're read without mounting the profile); the global
+                // package-install flag becomes per-profile; and every per-profile
+                // UI/layout/settings slice moves into the VFS — stashed here in a
+                // one-time backup that loadProfileData drains on first open.
+                if (version < 21) {
+                    for (const c of connections) {
+                        const prof = connectionProfile[c.id] as Record<string, unknown> | undefined;
+                        if (!prof) continue;
+                        if (prof.icon !== undefined)             { c.icon = prof.icon as string;             delete prof.icon; }
+                        if (prof.charLoginAccount !== undefined) { c.charLoginAccount = prof.charLoginAccount as string; delete prof.charLoginAccount; }
+                        if (prof.charLoginPassword !== undefined){ c.charLoginPassword = prof.charLoginPassword as string; delete prof.charLoginPassword; }
+                    }
+                    if (savedClient.allowMudPackageInstall === false) {
+                        for (const c of connections) {
+                            connectionProfile[c.id] = { ...(connectionProfile[c.id] ?? {}), allowMudPackageInstall: false };
+                        }
+                    }
+                    try {
+                        const backup: Record<string, unknown> = {};
+                        for (const c of connections) {
+                            backup[c.id] = {
+                                profile: connectionProfile[c.id],
+                                windowHints: s.connectionWindowHints?.[c.id],
+                                dockExtents: s.connectionDockExtents?.[c.id],
+                                scriptEditorBounds: s.connectionScriptEditorBounds?.[c.id],
+                                modalBounds: s.connectionModalBounds?.[c.id],
+                                layoutSnapshot: s.connectionLayoutSnapshots?.[c.id],
+                            };
+                        }
+                        localStorage.setItem(MIGRATION_BACKUP_KEY, JSON.stringify(backup));
+                    } catch { /* backup is best-effort */ }
                 }
 
                 return {

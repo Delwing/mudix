@@ -5,7 +5,7 @@ import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirro
 import { StreamLanguage, indentUnit, bracketMatching } from '@codemirror/language';
 import { autocompletion, closeBrackets } from '@codemirror/autocomplete';
 import { lua } from '@codemirror/legacy-modes/mode/lua';
-import { useAppStore } from '../../../storage';
+import { useEffectiveTheme } from '../../../storage';
 import { luaCompletionSource, HOVER_MAP, REFERENCE_GROUPS } from '../../../scripting/lua/luaCompletions';
 import { mudixCmTheme, highlightCompartment, highlightFor } from '../../codemirror/theme';
 
@@ -148,7 +148,7 @@ export function LuaEditor({ value, onChange, onSave, gotoLine }: Props) {
     onChangeRef.current = onChange;
     const onSaveRef    = useRef(onSave);
     onSaveRef.current  = onSave;
-    const theme = useAppStore(s => s.client.theme);
+    const theme = useEffectiveTheme();
     const themeRef = useRef(theme);
     themeRef.current = theme;
 

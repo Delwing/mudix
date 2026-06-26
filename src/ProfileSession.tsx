@@ -19,18 +19,22 @@ import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
 import { setBaseTitle, flashTitle, clearTitleFlash } from './utils/documentTitle';
 import { applyAnsiPalette, setServerRedefineColorsAllowed, resetAllPaletteColors } from './mud/text/colors';
 import type { MudSession } from './mud/MudSession';
+import type { ProfileVFS } from './scripting/vfs/ProfileVFS';
 import { MUD_TELNET_SUBPROTOCOL } from './mud/connection/MudClient';
 
 interface Props {
     connection: MudConnection;
     /** If true, dial the WebSocket on mount. Offline mode skips this. */
     autoConnect: boolean;
+    /** The profile's VFS, mounted by App before this renders. Available
+     *  synchronously here (and to children), so first-render reads see it. */
+    vfs: ProfileVFS | null;
     settingsOpen: boolean;
     onToggleSettings: () => void;
     onCloseProfile: () => void;
 }
 
-export function ProfileSession({ connection, autoConnect, settingsOpen, onToggleSettings, onCloseProfile }: Props) {
+export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onToggleSettings, onCloseProfile }: Props) {
     const { session, status, ping, passwordMode, connect, disconnect, send } = useMudSession();
 
     const [command, setCommand] = useState('');
@@ -72,9 +76,11 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     const commandEchoForeground = useAppStore(s => selectProfileField(s, connection.id, 'commandEchoForeground'));
     const commandEchoBackground = useAppStore(s => selectProfileField(s, connection.id, 'commandEchoBackground'));
     // Saved GMCP Char.Login credentials (password is plaintext — opt-in only).
-    const charLoginAccount = useAppStore(s => selectProfileField(s, connection.id, 'charLoginAccount'));
-    const charLoginPassword = useAppStore(s => selectProfileField(s, connection.id, 'charLoginPassword'));
-    const patchProfile = useAppStore(s => s.patchConnectionProfile);
+    // They live on the connection record, not the VFS-backed profile settings,
+    // so the connection editor can read/write them without mounting the profile.
+    const charLoginAccount = useAppStore(s => s.connections.find(c => c.id === connection.id)?.charLoginAccount);
+    const charLoginPassword = useAppStore(s => s.connections.find(c => c.id === connection.id)?.charLoginPassword);
+    const patchConnection = useAppStore(s => s.patchConnection);
     const protocols = useAppStore(s => selectProfileField(s, connection.id, 'protocols'));
     const gmcpEnabled = protocols?.gmcp ?? PROTOCOL_DEFAULTS.gmcp;
     const mttsEnabled = protocols?.mtts ?? PROTOCOL_DEFAULTS.mtts;
@@ -141,7 +147,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // live whenever the config bag changes.
     session.setFixUnnecessaryLinebreaks((profileConfig?.fixUnnecessaryLinebreaks as boolean | undefined) ?? false);
 
-    const { engineRef } = useEngines(session, true, connection);
+    const { engineRef } = useEngines(session, true, connection, vfs);
 
     // Auto-connect on mount. Re-runs if `session` swaps under StrictMode, so the
     // replacement session also dials. Held in a ref so a later prop change to
@@ -291,8 +297,8 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     }, [session]);
 
     useEffect(() => {
-        void applyOutputFont(outputFont, engineRef.current?.currentVFS ?? null);
-    }, [outputFont, engineRef]);
+        void applyOutputFont(outputFont, vfs);
+    }, [outputFont, vfs]);
 
     // Warm the Local Font Access cache once per profile mount so the first
     // call to getAvailableFonts() from Lua sees installed system fonts. Silent
@@ -364,9 +370,9 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             // If credentials are saved, send them straight away — no popup. The
             // guard stops wrong saved credentials from looping; a failure
             // (charLogin.result below) re-opens the popup prefilled for a retry.
-            const st = useAppStore.getState();
-            const account = selectProfileField(st, connection.id, 'charLoginAccount');
-            const password = selectProfileField(st, connection.id, 'charLoginPassword');
+            const conn = useAppStore.getState().connections.find(c => c.id === connection.id);
+            const account = conn?.charLoginAccount;
+            const password = conn?.charLoginPassword;
             if (account && password && !gmcpAutoTried.current) {
                 gmcpAutoTried.current = true;
                 session.sendCharLoginCredentials(account, password);
@@ -391,10 +397,10 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // disconnect, or when GMCP Char.Login takes over (see charLogin.request).
     useEffect(() => {
         const readCreds = () => {
-            const st = useAppStore.getState();
+            const conn = useAppStore.getState().connections.find(c => c.id === connection.id);
             return {
-                account: selectProfileField(st, connection.id, 'charLoginAccount') ?? '',
-                password: selectProfileField(st, connection.id, 'charLoginPassword') ?? '',
+                account: conn?.charLoginAccount ?? '',
+                password: conn?.charLoginPassword ?? '',
             };
         };
         const onConnect = () => {
@@ -443,7 +449,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     // use async write-through; without this, edits made just before close can
     // be lost. visibilitychange fires more reliably on mobile/PWA than unload.
     useEffect(() => {
-        const flush = () => { engineRef.current?.currentVFS?.flush(); };
+        const flush = () => { vfs?.flush(); };
         const onVis = () => { if (document.visibilityState === 'hidden') flush(); };
         window.addEventListener('beforeunload', flush);
         document.addEventListener('visibilitychange', onVis);
@@ -451,7 +457,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             window.removeEventListener('beforeunload', flush);
             document.removeEventListener('visibilitychange', onVis);
         };
-    }, [engineRef]);
+    }, [vfs]);
 
     // Global keydown listener — fires keybindings, but not when focused in a textarea (e.g. script editor).
     useEffect(() => {
@@ -471,7 +477,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
     useEffect(() => {
         const handleQuickOpen = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P')) {
-                if (!engineRef.current?.currentVFS) return;
+                if (!vfs) return;
                 e.preventDefault();
                 e.stopPropagation();
                 setQuickOpenOpen(true);
@@ -479,7 +485,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
         };
         document.addEventListener('keydown', handleQuickOpen, true);
         return () => document.removeEventListener('keydown', handleQuickOpen, true);
-    }, [engineRef]);
+    }, [vfs]);
 
     useEffect(() => {
         session.windows.onWindowHint        = (id, hint) => saveWindowHint(connection.id, id, hint);
@@ -568,7 +574,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                 <SettingsModal
                     onClose={onToggleSettings}
                     connectionId={connection.id}
-                    vfs={engineRef.current?.currentVFS ?? null}
+                    vfs={vfs}
                 />
             )}
             <div className="app-content">
@@ -580,7 +586,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                     commandInputRef={commandInputRef}
                     contextMenuHandlerRef={windowContextMenuHandlerRef}
                     scriptingEngineRef={engineRef}
-                    vfs={engineRef.current?.currentVFS ?? null}
+                    vfs={vfs}
                     commandBar={
                         <CommandBar
                             command={command}
@@ -599,7 +605,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                 <ScriptEditorModal
                     connectionId={connection.id}
                     session={session}
-                    vfs={engineRef.current?.currentVFS ?? null}
+                    vfs={vfs}
                     scriptingEngineRef={engineRef}
                     onClose={() => setScriptsOpen(false)}
                     onOpenVfsFile={handleOpenVfsFile}
@@ -608,7 +614,7 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
             {filesOpen && (
                 <FileBrowserModal
                     connectionId={connection.id}
-                    vfs={engineRef.current?.currentVFS ?? null}
+                    vfs={vfs}
                     initialPath={filesOpen.initialPath ?? null}
                     initialPathTick={filesOpen.pickedAt}
                     initialLine={filesOpen.initialLine}
@@ -628,9 +634,9 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                     onClose={() => setDocsOpen(false)}
                 />
             )}
-            {quickOpenOpen && engineRef.current?.currentVFS && (
+            {quickOpenOpen && vfs && (
                 <QuickOpenPalette
-                    vfs={engineRef.current.currentVFS}
+                    vfs={vfs}
                     onPick={path => handleOpenVfsFile(path)}
                     onClose={() => setQuickOpenOpen(false)}
                 />
@@ -646,8 +652,9 @@ export function ProfileSession({ connection, autoConnect, settingsOpen, onToggle
                         // failure re-opens the popup via the charLogin.result
                         // handler with the server's message.
                         setCharLogin(null);
-                        // Persist (plaintext) or clear the saved credentials.
-                        patchProfile(connection.id, {
+                        // Persist (plaintext) or clear the saved credentials on
+                        // the connection record.
+                        patchConnection(connection.id, {
                             charLoginAccount: remember ? account : undefined,
                             charLoginPassword: remember ? password : undefined,
                         });

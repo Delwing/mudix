@@ -40,12 +40,9 @@ interface Props {
 
 export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, onUpdate, onClose }: Props) {
     const userProxyUrl = useAppStore(s => s.client.userProxyUrl);
-    const profiles = useAppStore(s => s.connectionProfile);
-    const patchConnectionProfile = useAppStore(s => s.patchConnectionProfile);
     const effectiveDefaultProxy = userProxyUrl || DEFAULT_PROXY_URL;
 
     const isEditing = connection !== null;
-    const prof = connection ? profiles[connection.id] : undefined;
 
     const [mode, setMode] = useState<ConnectionMode>(connection ? modeOf(connection) : 'mud');
     const [name, setName] = useState(connection?.name ?? '');
@@ -54,8 +51,8 @@ export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, 
     const [proxyUrl, setProxyUrl] = useState(connection?.proxyUrl ?? '');
     const [url, setUrl] = useState(connection?.url ?? '');
     const [autoReconnect, setAutoReconnect] = useState(connection?.autoReconnect ?? false);
-    const [account, setAccount] = useState(prof?.charLoginAccount ?? '');
-    const [password, setPassword] = useState(prof?.charLoginPassword ?? '');
+    const [account, setAccount] = useState(connection?.charLoginAccount ?? '');
+    const [password, setPassword] = useState(connection?.charLoginPassword ?? '');
 
     const [proxyModalOpen, setProxyModalOpen] = useState(false);
     const [proxyWhyOpen, setProxyWhyOpen] = useState(false);
@@ -67,6 +64,17 @@ export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, 
         : name.trim() !== '' && url.trim() !== '';
 
     const buildData = (): Omit<MudConnection, 'id'> => {
+        const acct = account.trim();
+        // Common fields carried on every connection, incl. the optional login
+        // creds (cleared when the fields are emptied; password in plaintext) and
+        // the icon, which the form doesn't edit but must preserve on update.
+        const common = {
+            proxyUrl: proxyUrl.trim() || undefined,
+            autoReconnect: autoReconnect || undefined,
+            icon: connection?.icon,
+            charLoginAccount: acct || undefined,
+            charLoginPassword: acct && password ? password : undefined,
+        };
         if (mode === 'mud') {
             const parsedPort = parseInt(port, 10);
             return {
@@ -74,30 +82,22 @@ export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, 
                 mode: 'mud',
                 host: host.trim(),
                 port: isNaN(parsedPort) ? 23 : parsedPort,
-                proxyUrl: proxyUrl.trim() || undefined,
-                autoReconnect: autoReconnect || undefined,
+                ...common,
             };
         }
         return {
             name: name.trim(),
             mode: 'websocket',
             url: url.trim(),
-            proxyUrl: proxyUrl.trim() || undefined,
-            autoReconnect: autoReconnect || undefined,
+            ...common,
         };
     };
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!canSubmit) return;
-        const id = isEditing ? (onUpdate(connection.id, buildData()), connection.id) : onAdd(buildData());
-        // Persist the optional login credentials onto the profile (or clear them
-        // when the fields are emptied). Password is stored in plaintext.
-        const acct = account.trim();
-        patchConnectionProfile(id, {
-            charLoginAccount: acct || undefined,
-            charLoginPassword: acct && password ? password : undefined,
-        });
+        if (isEditing) onUpdate(connection.id, buildData());
+        else onAdd(buildData());
         onClose();
     };
 

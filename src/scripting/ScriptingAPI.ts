@@ -1023,7 +1023,7 @@ export class ScriptingAPI {
      *  "" when the profile has no custom icon (the connection screen then shows
      *  the auto-generated name tile). */
     getProfileIcon(): string {
-        return selectProfileField(useAppStore.getState(), this.connectionId, 'icon') ?? '';
+        return useAppStore.getState().connections.find(c => c.id === this.connectionId)?.icon ?? '';
     }
 
     /** Mudlet `setProfileIcon(path)`. The LuaRuntime binding reads the VFS image
@@ -1033,14 +1033,14 @@ export class ScriptingAPI {
     setProfileIcon(icon: string): boolean {
         const v = String(icon ?? '');
         if (!v) return false;
-        useAppStore.getState().patchConnectionProfile(this.connectionId, { icon: v });
+        useAppStore.getState().patchConnection(this.connectionId, { icon: v });
         return true;
     }
 
     /** Mudlet `resetProfileIcon()`. Clears the custom icon so the connection
      *  screen falls back to the auto-generated name tile. */
     resetProfileIcon(): boolean {
-        useAppStore.getState().patchConnectionProfile(this.connectionId, { icon: undefined });
+        useAppStore.getState().patchConnection(this.connectionId, { icon: undefined });
         return true;
     }
 

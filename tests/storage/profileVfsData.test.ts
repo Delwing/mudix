@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useAppStore } from '../../src/storage/appStore';
+import { useAppStore, MIGRATION_BACKUP_KEY } from '../../src/storage/appStore';
 import {
     loadProfileData,
     saveProfileData,
@@ -27,9 +27,10 @@ const CONN = 'test-conn';
 describe('profileVfsData', () => {
     beforeEach(() => {
         useAppStore.getState().hydrateConnectionData(CONN, {});
+        localStorage.removeItem(MIGRATION_BACKUP_KEY);
     });
 
-    it('round-trips automation slices through the profile VFS', () => {
+    it('round-trips automation + UI slices through the profile VFS', () => {
         const vfs = fakeVfs();
         const store = useAppStore.getState();
 
@@ -43,16 +44,25 @@ describe('profileVfsData', () => {
             isPushDown: false, buttonState: false, code: '', language: 'lua',
             command: 'kill rat',
         });
+        // UI/settings/layout slices now live in the same file.
+        store.patchConnectionProfile(CONN, { fontSize: 18, theme: 'amber' });
+        store.saveDockExtents(CONN, { left: 240 });
 
         saveProfileData(vfs, CONN);
         expect(vfs.exists(PROFILE_DATA_PATH)).toBe(true);
         const parsed = JSON.parse(vfs.readFile(PROFILE_DATA_PATH));
-        expect(parsed.version).toBe(1);
+        expect(parsed.version).toBe(2);
         expect(parsed.aliases).toHaveLength(1);
         expect(parsed.buttons).toHaveLength(1);
+        expect(parsed.profile).toMatchObject({ fontSize: 18, theme: 'amber' });
+        expect(parsed.dockExtents).toEqual({ left: 240 });
 
         // Wipe in-memory state, then reload from the VFS.
         useAppStore.getState().hydrateConnectionData(CONN, {});
+        useAppStore.setState(s => ({
+            connectionProfile: { ...s.connectionProfile, [CONN]: {} },
+            connectionDockExtents: { ...s.connectionDockExtents, [CONN]: {} },
+        }));
         expect(useAppStore.getState().connectionAliases[CONN]).toEqual([]);
 
         loadProfileData(vfs, CONN);
@@ -61,6 +71,34 @@ describe('profileVfsData', () => {
         expect(after.connectionAliases[CONN][0].command).toBe('say hello');
         expect(after.connectionButtons[CONN]).toHaveLength(1);
         expect(after.connectionButtons[CONN][0].name).toBe('attack');
+        expect(after.connectionProfile[CONN]).toMatchObject({ fontSize: 18, theme: 'amber' });
+        expect(after.connectionDockExtents[CONN]).toEqual({ left: 240 });
+    });
+
+    it('migrates UI slices from the backup key on first open, then drains it', () => {
+        const vfs = fakeVfs();
+        // A v1-style file (automation only) + a backup entry for this profile.
+        useAppStore.getState().hydrateConnectionData(CONN, {});
+        saveProfileData(vfs, CONN); // writes a file without UI slices...
+        // ...simulate it being a pre-migration file by stripping the UI keys.
+        const bare = JSON.parse(vfs.readFile(PROFILE_DATA_PATH));
+        delete bare.profile; delete bare.dockExtents;
+        vfs.writeFile(PROFILE_DATA_PATH, JSON.stringify(bare));
+        localStorage.setItem(MIGRATION_BACKUP_KEY, JSON.stringify({
+            [CONN]: { profile: { fontSize: 22 }, dockExtents: { right: 300 } },
+        }));
+
+        loadProfileData(vfs, CONN);
+
+        // Backup data is applied...
+        const after = useAppStore.getState();
+        expect(after.connectionProfile[CONN]).toMatchObject({ fontSize: 22 });
+        expect(after.connectionDockExtents[CONN]).toEqual({ right: 300 });
+        // ...written into the VFS file...
+        const reparsed = JSON.parse(vfs.readFile(PROFILE_DATA_PATH));
+        expect(reparsed.profile).toMatchObject({ fontSize: 22 });
+        // ...and the backup entry consumed (last profile → key removed).
+        expect(localStorage.getItem(MIGRATION_BACKUP_KEY)).toBeNull();
     });
 
     it('loadProfileData is a no-op when the file is absent', () => {

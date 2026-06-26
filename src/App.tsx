@@ -4,6 +4,9 @@ import { SettingsModal } from './ui/SettingsModal';
 import { ProfileBusyScreen } from './ui/ProfileBusyScreen';
 import { ProfileSession } from './ProfileSession';
 import { acquireProfileLock, isProfileLockHeld } from './utils/profileLock';
+import { ProfileVFS } from './scripting/vfs/ProfileVFS';
+import { registerVfs, unregisterVfs } from './scripting/vfs/vfsBridge';
+import { loadProfileData } from './storage/profileVfsData';
 import { useAppStore, type MudConnection } from './storage';
 
 export default function App() {
@@ -14,12 +17,22 @@ export default function App() {
     // once we own the lock ('held'); 'acquiring' is the brief wait for a free
     // lock, 'waiting' means another tab currently owns the profile.
     const [lockPhase, setLockPhase] = useState<'none' | 'acquiring' | 'waiting' | 'held'>('none');
+    // The open profile's VFS, mounted here (after the lock, before the session
+    // renders) so per-profile data is available synchronously at first paint.
+    // App owns its lifecycle; the engine just consumes it.
+    const [profileVfs, setProfileVfs] = useState<ProfileVFS | null>(null);
 
     const deepLinkProfileId = useRef(new URLSearchParams(window.location.search).get('profile'));
-    const theme = useAppStore(s => s.client.theme);
+    // Theme is per-profile with a global launcher fallback. While a profile is
+    // open (lock held), its own theme override wins; on the connection screen /
+    // busy screen we use the launcher theme. Applied in one place so there's a
+    // single owner of document.documentElement.dataset.theme.
+    const launcherTheme = useAppStore(s => s.client.theme);
+    const profileTheme = useAppStore(s => (activeConnection ? s.connectionProfile[activeConnection.id]?.theme : undefined));
+    const effectiveTheme = (activeConnection && lockPhase === 'held' && profileTheme) ? profileTheme : launcherTheme;
     useEffect(() => {
-        document.documentElement.dataset.theme = theme;
-    }, [theme]);
+        document.documentElement.dataset.theme = effectiveTheme;
+    }, [effectiveTheme]);
 
     const connections = useAppStore(s => s.connections);
     const addConnection    = useAppStore(s => s.addConnection);
@@ -62,22 +75,55 @@ export default function App() {
     // the browser's auto-release on tab close) hands ownership to any tab queued
     // behind us.
     useEffect(() => {
-        if (!activeConnection) { setLockPhase('none'); return; }
+        if (!activeConnection) { setLockPhase('none'); setProfileVfs(null); return; }
         const id = activeConnection.id;
         const ctrl = new AbortController();
         let cancelled = false;
+        let mountedVfs: ProfileVFS | null = null;
         setLockPhase('acquiring');
+        setProfileVfs(null);
         // Pick the right initial message: if another tab already holds it, show
         // the "waiting" screen rather than a flash of "opening".
         void isProfileLockHeld(id).then(held => {
             if (!cancelled && held) setLockPhase(p => (p === 'held' ? p : 'waiting'));
         });
         const handle = acquireProfileLock(id, ctrl.signal);
-        handle.acquired.then(() => { if (!cancelled) setLockPhase('held'); }).catch(() => { /* aborted */ });
+        handle.acquired.then(async () => {
+            if (cancelled) return;
+            // Mount the profile's VFS up front, before the session renders, so
+            // per-profile data is ready synchronously at first paint. The engine
+            // consumes this instance; App owns register/flush/unmount.
+            let vfs: ProfileVFS | null = null;
+            try {
+                vfs = await ProfileVFS.mount(id);
+            } catch (e) {
+                console.error('[App] profile VFS mount failed:', e);
+            }
+            if (cancelled) {
+                // Acquired + mounted but we're already tearing down — clean up.
+                if (vfs) { const v = vfs; void v.flush().finally(() => v.unmount()); }
+                return;
+            }
+            if (vfs) {
+                registerVfs(id, vfs);
+                mountedVfs = vfs;
+                // Seed the store from .mudix/profile.json (and run the one-time
+                // v21 migration) before the session renders, so the profile's
+                // settings/layout/protocols are present for the synchronous reads.
+                loadProfileData(vfs, id);
+            }
+            setProfileVfs(vfs);
+            setLockPhase('held');
+        }).catch(() => { /* aborted */ });
         return () => {
             cancelled = true;
             ctrl.abort();
             handle.release();
+            if (mountedVfs) {
+                const v = mountedVfs;
+                unregisterVfs(id);
+                void v.flush().finally(() => v.unmount());
+            }
         };
     }, [activeConnection]);
 
@@ -100,6 +146,7 @@ export default function App() {
                 key={activeConnection.id}
                 connection={activeConnection}
                 autoConnect={autoConnect}
+                vfs={profileVfs}
                 settingsOpen={settingsOpen}
                 onToggleSettings={handleToggleSettings}
                 onCloseProfile={handleCloseProfile}

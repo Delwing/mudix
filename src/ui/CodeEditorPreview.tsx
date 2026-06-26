@@ -15,7 +15,7 @@ import { lua } from '@codemirror/legacy-modes/mode/lua';
 import { xml, html } from '@codemirror/legacy-modes/mode/xml';
 import { Save, Undo2 } from 'lucide-react';
 import { mudixCmTheme, highlightCompartment, highlightFor } from './codemirror/theme';
-import { useAppStore } from '../storage';
+import { useEffectiveTheme } from '../storage';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
 function fileExt(filename: string): string {
@@ -63,7 +63,7 @@ export function CodeEditorPreview({ content, filename, path, vfs, onDirtyChange,
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
 
-    const theme = useAppStore(s => s.client.theme);
+    const theme = useEffectiveTheme();
 
     // Latest-callback refs so the editor keymap closure stays stable.
     const onDirtyRef = useRef(onDirtyChange);

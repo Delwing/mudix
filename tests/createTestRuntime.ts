@@ -5,7 +5,10 @@ import { TimerEngine } from '../src/mud/timers/TimerEngine';
 import { KeyEngine } from '../src/mud/keybindings/KeyEngine';
 import { ScriptingAPI } from '../src/scripting/ScriptingAPI';
 import { LuaRuntime } from '../src/scripting/lua/LuaRuntime';
+import { useAppStore } from '../src/storage/appStore';
 import type { AnsiAwareBuffer } from '../src/mud/text/FormatState';
+
+const TEST_CONNECTION_ID = 'test-connection';
 
 export interface TestRuntime {
   session: MudSession;
@@ -56,6 +59,15 @@ export async function createTestRuntime(): Promise<TestRuntime> {
     };
   }
 
+  // Seed a connection record so store actions keyed by connection id (profile
+  // icon, login creds — which live on the connection, not the VFS profile) have
+  // a target. The real app always opens a profile against an existing connection.
+  if (!useAppStore.getState().connections.some(c => c.id === TEST_CONNECTION_ID)) {
+    useAppStore.setState(s => ({
+      connections: [...s.connections, { id: TEST_CONNECTION_ID, name: 'Test', url: 'ws://localhost' }],
+    }));
+  }
+
   const session = new MudSession();
   const api = new ScriptingAPI(
     session,
@@ -63,7 +75,7 @@ export async function createTestRuntime(): Promise<TestRuntime> {
     new TriggerEngine(),
     new TimerEngine(),
     new KeyEngine(),
-    'test-connection',
+    TEST_CONNECTION_ID,
   );
 
   // raiseEvent dispatches through the runtime itself, so events work without

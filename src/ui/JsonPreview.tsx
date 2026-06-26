@@ -6,7 +6,7 @@ import { bracketMatching } from '@codemirror/language';
 import { json } from '@codemirror/lang-json';
 import { CodeEditorPreview } from './CodeEditorPreview';
 import { mudixCmTheme, highlightCompartment, highlightFor } from './codemirror/theme';
-import { useAppStore } from '../storage';
+import { useEffectiveTheme } from '../storage';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
 interface Props {
@@ -37,7 +37,7 @@ function prettyPrint(raw: string): Pretty {
 function JsonReadOnlyView({ text }: { text: string }) {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
-    const theme = useAppStore(s => s.client.theme);
+    const theme = useEffectiveTheme();
 
     useEffect(() => {
         if (!hostRef.current) return;

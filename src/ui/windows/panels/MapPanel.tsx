@@ -16,12 +16,16 @@ import { MapEditorModal } from '../../MapEditorModal';
  * so the renderer's own createSettings() defaults stay in effect.
  */
 function applyMapperSettings(target: MapRendererSettings, mapper: MapperSettings | undefined): void {
+    // Mudlet maps carry no background of their own, so unlike the renderer's
+    // own '#000000' default we leave the canvas transparent — the themed
+    // `.map-panel` background (var(--bg)) shows through. A user-picked colour
+    // in the Mapper tab still wins.
+    target.backgroundColor = mapper?.backgroundColor ?? 'transparent';
     if (!mapper) return;
     if (mapper.roomSize !== undefined) target.roomSize = mapper.roomSize;
     if (mapper.roomShape !== undefined) target.roomShape = mapper.roomShape;
     if (mapper.borders !== undefined) target.borders = mapper.borders;
     if (mapper.lineWidth !== undefined) target.lineWidth = mapper.lineWidth;
-    if (mapper.backgroundColor !== undefined) target.backgroundColor = mapper.backgroundColor;
     if (mapper.lineColor !== undefined) target.lineColor = mapper.lineColor;
     if (mapper.gridEnabled !== undefined) target.gridEnabled = mapper.gridEnabled;
 }

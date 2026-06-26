@@ -3631,6 +3631,14 @@ html, body, #root {
     .toolbar-hamburger {
         display: block;
     }
+    /* The hamburger dropdown is z:100 but bounded by the toolbar's own stacking
+       context (z:10), which sits *below* the label/cmd-line/scrollbox overlay
+       layers (z:30/31/32) — so the menu rendered behind labels. Lift the whole
+       toolbar context above those overlays, while staying under modals and the
+       caret-review panel (both z:40). */
+    .mudix-toolbar {
+        z-index: 35;
+    }
 }
 
 /* ── Mobile (≤ 600px) ───────────────────────────────────────

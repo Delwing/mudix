@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, useConfirm } from './components';
 import { ConnectionFormModal } from './ConnectionFormModal';
-import { connectionDisplayAddr, useAppStore, type MudConnection } from '../storage';
+import { connectionDisplayAddr, type MudConnection } from '../storage';
 
 /** Deterministic background color for a profile's name tile — same name always
  *  yields the same hue, so each profile gets a stable, distinct color. */
@@ -65,7 +65,6 @@ interface Props {
 
 export function ConnectionScreen({ connections, connecting, connectingId, onConnect, onOpen, onAdd, onUpdate, onDelete, onOpenSettings }: Props) {
     const confirm = useConfirm();
-    const profiles = useAppStore(s => s.connectionProfile);
     // null = editor closed; { connection: null } = add a new one; { connection: c } = edit c.
     const [editor, setEditor] = useState<{ connection: MudConnection | null } | null>(null);
 
@@ -103,7 +102,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                     <div className="connection-list">
                         {connections.map(c => (
                             <div key={c.id} className="connection-card">
-                                <ProfileAvatar name={c.name} icon={profiles[c.id]?.icon} />
+                                <ProfileAvatar name={c.name} icon={c.icon} />
                                 <div className="connection-info">
                                     <span className="connection-name">{c.name}</span>
                                     <span className="connection-addr">{connectionDisplayAddr(c)}</span>

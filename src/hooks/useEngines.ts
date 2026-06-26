@@ -7,13 +7,14 @@ import { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import { TimerEngine } from '../mud/timers/TimerEngine';
 import { KeyEngine } from '../mud/keybindings/KeyEngine';
 import { ScriptingEngine } from '../scripting/ScriptingEngine';
+import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 
 /**
  * Creates and tears down all scripting engines tied to a session lifetime.
  * Only ScriptingEngine is exposed — it owns the alias/trigger/timer/key
  * engines internally and subscribes to the appStore to keep them in sync.
  */
-export function useEngines(session: MudSession, active: boolean, connection: MudConnection | null) {
+export function useEngines(session: MudSession, active: boolean, connection: MudConnection | null, vfs: ProfileVFS | null) {
     const engineRef = useRef<ScriptingEngine | null>(null);
 
     useEffect(() => {
@@ -30,7 +31,7 @@ export function useEngines(session: MudSession, active: boolean, connection: Mud
             // Precedence: connection-level proxy > user's deployed proxy > built-in default.
             return c?.proxyUrl?.trim() || state.client.userProxyUrl || DEFAULT_PROXY_URL;
         };
-        const engine = new ScriptingEngine(session, alias, trigger, timer, key, connection.id, connection.name, proxyUrlGetter);
+        const engine = new ScriptingEngine(session, alias, trigger, timer, key, connection.id, connection.name, proxyUrlGetter, vfs);
         engineRef.current = engine;
         return () => {
             engine.destroy();
@@ -40,7 +41,7 @@ export function useEngines(session: MudSession, active: boolean, connection: Mud
             key.destroy();
             engineRef.current = null;
         };
-    }, [session, active, connection]);
+    }, [session, active, connection, vfs]);
 
     return { engineRef };
 }

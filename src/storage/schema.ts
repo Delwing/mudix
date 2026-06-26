@@ -19,6 +19,23 @@ export interface MudConnection {
      *  `undefined`/`false` = open offline (default); the "Connect" button always
      *  dials regardless. */
     autoReconnect?: boolean;
+    /** Profile icon shown on the connection-selection screen (Mudlet's profile
+     *  icon, set by setProfileIcon / read by getProfileIcon / cleared by
+     *  resetProfileIcon). Stored as a self-contained `data:` URI. Lives on the
+     *  connection record (not the VFS-backed profile settings) so the picker
+     *  screen can render it without mounting the profile. Empty/undefined =
+     *  fall back to the auto-generated name tile. */
+    icon?: string;
+    /** GMCP `Char.Login` account/username. Prefills the login popup and the
+     *  connection editor's credential fields. Non-sensitive on its own. Lives on
+     *  the connection record so the editor can read/write it without mounting the
+     *  profile. */
+    charLoginAccount?: string;
+    /** GMCP `Char.Login` password. ⚠ SECURITY: persisted in **plaintext** in
+     *  localStorage (the app store is not encrypted) — only ever written when the
+     *  user explicitly opts in. Convenient for auto-login but not secure on a
+     *  shared machine. Never logged; relayed straight to the server on login. */
+    charLoginPassword?: string;
 }
 
 export type Theme = 'dark' | 'light' | 'graylight' | 'amber' | 'sky';
@@ -37,16 +54,14 @@ export type OutputFontSource =
 
 /** App-wide preferences that apply regardless of which profile is active. */
 export interface ClientSettings {
+    /** Launcher/default theme — used by the connection screen (no profile open)
+     *  and as the fallback when a profile sets no theme of its own. A profile's
+     *  own `ProfileSettings.theme` overrides this while that profile is open. */
     theme: Theme;
     /** The user's own deployed proxy URL (from the deploy wizard). When set,
      *  ConnectionScreen uses this as the placeholder/default instead of
      *  DEFAULT_PROXY_URL, so new connections route through the user's worker. */
     userProxyUrl?: string;
-    /** When true (default), MUDs can request a package install via the
-     *  `Client.GUI` GMCP message — the URL is downloaded and installed
-     *  automatically. Disable to ignore those requests. Treat `undefined` as
-     *  true so existing profiles opt in without a migration. */
-    allowMudPackageInstall?: boolean;
     /** Opt-in to desktop notifications (Mudlet's `showNotification`). `undefined`
      *  / `false` means off — `showNotification` is a no-op until the user enables
      *  this in Settings, which is also where the browser permission prompt is
@@ -59,6 +74,15 @@ export interface ClientSettings {
  *  the in-profile settings modal write here. Each field's value falls through to
  *  PROFILE_DEFAULTS when the profile hasn't overridden it. */
 export interface ProfileSettings {
+    /** Per-profile theme override. Undefined = fall through to the launcher
+     *  theme (`ClientSettings.theme`). Applied to the document while this
+     *  profile is the foreground/open one. */
+    theme?: Theme;
+    /** When true (default — treat `undefined` as true), MUDs may request a
+     *  package install via the `Client.GUI` GMCP message (URL downloaded and
+     *  installed automatically). Disable to ignore those requests. Per-profile
+     *  so each MUD is trusted independently. */
+    allowMudPackageInstall?: boolean;
     showTimestamps: boolean;
     fontSize: number;
     outputBackground: string;
@@ -145,24 +169,10 @@ export interface ProfileSettings {
      *  read/written by getProfileInformation / setProfileInformation /
      *  clearProfileInformation). Empty/undefined = no description. */
     description?: string;
-    /** Profile icon shown on the connection-selection screen (Mudlet's profile
-     *  icon, set by setProfileIcon / read by getProfileIcon / cleared by
-     *  resetProfileIcon). Stored as a self-contained `data:` URI so the picker
-     *  screen can render it without mounting the profile VFS. Empty/undefined =
-     *  fall back to the auto-generated name tile. */
-    icon?: string;
     /** Per-profile telnet protocol toggles. Patches merge so flipping one
      *  field doesn't wipe siblings. Missing fields fall through to
      *  PROTOCOL_DEFAULTS. Takes effect on the next connect. */
     protocols?: ProtocolSettings;
-    /** GMCP `Char.Login` account/username. Prefills the login popup and the
-     *  connection editor's credential fields. Non-sensitive on its own. */
-    charLoginAccount?: string;
-    /** GMCP `Char.Login` password. ⚠ SECURITY: persisted in **plaintext** in
-     *  localStorage (the app store is not encrypted) — only ever written when the
-     *  user explicitly opts in. Convenient for auto-login but not secure on a
-     *  shared machine. Never logged; relayed straight to the server on login. */
-    charLoginPassword?: string;
     /** Catch-all bag for Mudlet `setConfig`/`getConfig` option keys that have no
      *  dedicated structured home above (accessibility, input-line, and other
      *  preferences mudix persists for round-trip fidelity but does not yet act
@@ -272,7 +282,9 @@ export interface MapperSettings {
     borders?: boolean;
     /** renderer.settings.lineWidth — exit/edge stroke width in map units. */
     lineWidth?: number;
-    /** renderer.settings.backgroundColor — hex (#rrggbb). */
+    /** renderer.settings.backgroundColor — hex (#rrggbb). Unset renders a
+     *  transparent canvas (the themed panel background shows through), matching
+     *  Mudlet's no-background maps. */
     backgroundColor?: string;
     /** renderer.settings.lineColor — exit color, hex (#rrggbb). */
     lineColor?: string;
@@ -290,7 +302,7 @@ export const MAPPER_DEFAULTS: Required<MapperSettings> = {
     roomShape: 'rectangle',
     borders: true,
     lineWidth: 0.025,
-    backgroundColor: '#000000',
+    backgroundColor: 'transparent',
     lineColor: '#e1ffe1',
     gridEnabled: false,
 };

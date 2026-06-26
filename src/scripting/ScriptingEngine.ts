@@ -6,7 +6,7 @@ import type {KeyEngine, KeyNode} from '../mud/keybindings/KeyEngine';
 import type {ButtonNode, ScriptNode} from '../storage/schema';
 import {buildEffectivelyEnabledIds, isEffectivelyEnabled} from '../storage/schema';
 import {useAppStore} from '../storage';
-import {loadProfileData, saveProfileData} from '../storage/profileVfsData';
+import {saveProfileData} from '../storage/profileVfsData';
 import type {BufferSegment, FormatColor, FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer, computeTrailingState} from '../mud/text/FormatState';
 import {HyperlinkPresetRegistry} from '../mud/text/hyperlinkConfig';
@@ -31,7 +31,6 @@ type BaseTreeNode = {
 import {LuaRuntime} from './lua/LuaRuntime';
 import type {IScriptingRuntime} from './IScriptingRuntime';
 import {ProfileVFS} from './vfs/ProfileVFS';
-import {registerVfs, unregisterVfs} from './vfs/vfsBridge';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
 import {installModuleFromVfsPath, installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
@@ -283,6 +282,12 @@ export class ScriptingEngine {
         connectionId: string,
         connectionName = '',
         private readonly proxyUrlGetter: () => string | undefined = () => undefined,
+        // The profile's VFS, mounted by the caller (App) before the session
+        // renders so per-profile data is available synchronously at first paint.
+        // The engine consumes it but does not own its lifecycle — App mounts,
+        // registers, flushes, and unmounts it. Null = mount failed/unavailable
+        // (degraded mode: Lua file I/O is disabled).
+        injectedVfs: ProfileVFS | null = null,
     ) {
         this.api = new ScriptingAPI(session, aliasEngine, triggerEngine, timerEngine, keyEngine, connectionId);
         this.api.profileName = connectionName;
@@ -315,7 +320,10 @@ export class ScriptingEngine {
         // unload skips React cleanup — cover that with a beforeunload hook.
         window.addEventListener('beforeunload', this.beforeUnload);
         this.scriptsLoaded = new Promise<void>(resolve => { this.resolveScriptsLoaded = resolve; });
-        this.runtimeReady = this.initRuntime(connectionId);
+        // The VFS is injected already-mounted; the engine builds its runtime over
+        // it but never mounts/unmounts (App owns that lifecycle).
+        this.vfs = injectedVfs;
+        this.runtimeReady = this.initRuntime();
         this.attachToStore(session);
     }
 
@@ -343,15 +351,12 @@ export class ScriptingEngine {
             // but the await is what guarantees this.vfs is non-null below.
             await this.runtimeReady.catch(() => { /* runtime failure already surfaced */ });
 
-            // Seed the store with this profile's automation data (scripts, aliases,
-            // triggers, …) from its VFS (.mudix/profile.json). Runs before the
-            // default-package install and the apply* calls below so the loaded
-            // nodes participate in the very first runtime load. No-op for a fresh
-            // profile (file absent). Happens before the subscription is attached,
-            // so the hydrate itself doesn't trigger a write-back.
-            if (this.vfs) {
-                loadProfileData(this.vfs, this.connectionId);
-            }
+            // The store was already seeded from this profile's VFS
+            // (.mudix/profile.json) by App, before this session rendered — so the
+            // loaded automation + UI data is in place before the default-package
+            // install and apply* calls below, and before any synchronous render
+            // read. The subscription isn't attached yet, so that hydrate didn't
+            // trigger a write-back.
 
             // Install Mudlet's default packages (run-lua-code, …) into fresh profiles.
             // Idempotent: skips packages already in the store, so existing profiles
@@ -426,8 +431,18 @@ export class ScriptingEngine {
                 const automationChanged = scriptsChanged || aliasesChanged || timersChanged
                     || keysChanged || triggersChanged || buttonsChanged || packagesChanged;
 
-                // Persist this profile's automation data to its VFS on any change.
-                if (automationChanged) this.scheduleProfileDataSave();
+                // The per-profile UI/settings/layout slices also live in the VFS
+                // now, so a change to any of them must trigger a profile save too.
+                const uiChanged =
+                       state.connectionProfile[id]            !== prevState.connectionProfile[id]
+                    || state.connectionWindowHints[id]        !== prevState.connectionWindowHints[id]
+                    || state.connectionDockExtents[id]        !== prevState.connectionDockExtents[id]
+                    || state.connectionScriptEditorBounds[id] !== prevState.connectionScriptEditorBounds[id]
+                    || state.connectionModalBounds[id]        !== prevState.connectionModalBounds[id]
+                    || state.connectionLayoutSnapshots[id]    !== prevState.connectionLayoutSnapshots[id];
+
+                // Persist this profile's data to its VFS on any change.
+                if (automationChanged || uiChanged) this.scheduleProfileDataSave();
 
                 // Sync-on-edit for modules: any tagged-node mutation schedules
                 // a debounced XML rewrite for affected modules.
@@ -899,19 +914,9 @@ export class ScriptingEngine {
         return map;
     }
 
-    private initRuntime(connectionId: string): Promise<IScriptingRuntime> {
-        return ProfileVFS.mount(connectionId).then(
-            vfs  => {
-                this.vfs = vfs;
-                registerVfs(connectionId, vfs);
-                return this.createRuntime(vfs);
-            },
-            err  => {
-                console.error('[ScriptingEngine] VFS mount failed:', err);
-                this.api.printError(`[scripting] VFS mount failed: ${err instanceof Error ? err.message : String(err)}`);
-                return this.createRuntime(null);
-            },
-        );
+    private initRuntime(): Promise<IScriptingRuntime> {
+        // VFS is already mounted (injected by App); just build the runtime over it.
+        return this.createRuntime(this.vfs);
     }
 
     private createRuntime(vfs: ProfileVFS | null): Promise<IScriptingRuntime> {
@@ -1294,8 +1299,9 @@ export class ScriptingEngine {
         if (!parsed) return;
         const { url, version } = parsed;
 
-        const client = useAppStore.getState().client;
-        if (client.allowMudPackageInstall === false) {
+        // Per-profile opt-out (undefined/true = allowed).
+        const allowInstall = useAppStore.getState().connectionProfile[this.connectionId]?.allowMudPackageInstall;
+        if (allowInstall === false) {
             this.session.events.emit('message',
                 mudletInfo(`ignored install request for ${url} (disabled in settings)`),
                 'info', Date.now());
@@ -2381,14 +2387,10 @@ export class ScriptingEngine {
         this.session.sounds.stopAll();
         this.session.sounds.setLoader(null);
         this.api.destroy();
-        const oldVfs = this.vfs;
+        // The VFS is owned by App (it mounted/registered it before render and
+        // flushes/unmounts it on profile close) — the engine only drops its
+        // reference here, it does not unmount.
         this.vfs = null;
-        unregisterVfs(this.connectionId);
-        // Drain any pending writes (folder-backed VFS uses async write-through);
-        // the unmount tears down the in-memory cache so stale dirty state would
-        // otherwise be lost. Fire-and-forget — destroy is sync and we don't want
-        // to block teardown on a slow disk write.
-        oldVfs?.flush().finally(() => oldVfs.unmount());
     }
 
     // Tag a Lua error with the source entity (kind + id + name + line) so the
