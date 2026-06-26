@@ -2,6 +2,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestRuntime, type TestRuntime } from '../createTestRuntime';
+import { AnsiAwareBuffer } from '../../src/mud/text/FormatState';
 
 // Coverage for the Mudlet 4.21 parity additions: getBorderColor, the memory
 // introspection pair, the warning-emitting no-op stubs for inapplicable APIs
@@ -80,6 +81,22 @@ describe('Mudlet 4.21 API additions', () => {
       // -1 here because ScriptingEngine's CRUD callback isn't wired in this
       // harness; the point is the Bridge.lua flatten + JS split runs cleanly.
       expect(typeof env.run('return permExactMatchTrigger("t", "", {"exact"}, "")')).toBe('number');
+    });
+  });
+
+  describe('MXP FRAME/DEST consumer (ScriptingAPI)', () => {
+    it('mxpFrame opens a mini-console and ACTION=close removes it', () => {
+      env.api.mxpFrame('StatusBar', { NAME: 'StatusBar', WIDTH: '200', HEIGHT: '80', LEFT: '0', TOP: '0' });
+      expect(env.session.windows.isMiniConsole('StatusBar')).toBe(true);
+      env.api.mxpFrame('StatusBar', { NAME: 'StatusBar', ACTION: 'close' });
+      expect(env.session.windows.isMiniConsole('StatusBar')).toBe(false);
+    });
+
+    it('mxpWriteToFrame: false for a missing frame, true once the frame exists', () => {
+      expect(env.api.mxpWriteToFrame('Nope', new AnsiAwareBuffer('hi'), false)).toBe(false);
+      env.api.mxpFrame('F', { NAME: 'F' });
+      expect(env.api.mxpWriteToFrame('F', new AnsiAwareBuffer('hi'), false)).toBe(true);
+      expect(env.api.mxpWriteToFrame('F', new AnsiAwareBuffer('clear-me'), true)).toBe(true); // eof clears
     });
   });
 

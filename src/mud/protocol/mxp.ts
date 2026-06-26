@@ -45,6 +45,34 @@ export interface MxpLink {
     prompts?: { cmds: string[]; hints: string[] };
 }
 
+/** A `<FRAME>` window-lifecycle command the parser surfaces to the session.
+ *  The parser is session-free, so it only reports the request; the consumer
+ *  (ScriptingEngine) maps it onto a mini-console via the window manager. */
+export interface MxpFrameCommand {
+    /** Frame name (the window id). */
+    name: string;
+    /** Upper-cased attribute keys → raw string values. Flag attributes
+     *  (`INTERNAL`/`EXTERNAL`/`FLOATING`) are present with value `"true"`.
+     *  `ACTION` is `open` (default) / `close` / `redirect`; geometry lives in
+     *  `LEFT`/`TOP`/`WIDTH`/`HEIGHT`. */
+    attrs: Record<string, string>;
+}
+
+/** Text the parser redirected into a named frame via `<DEST>…</DEST>`. */
+export interface MxpRedirect {
+    /** Target frame name (matches an `MxpFrameCommand.name`). */
+    frame: string;
+    /** Styled segments of the redirected text. */
+    segments: BufferSegment[];
+    /** Plain text of the redirected run. */
+    plain: string;
+    /** `EOL` attr (or the network line ended mid-DEST): the write is a complete
+     *  line. */
+    eol: boolean;
+    /** `EOF` attr: clear the frame before writing (status-frame replace). */
+    eof: boolean;
+}
+
 /** The result of parsing one raw MXP line. */
 export interface MxpLineResult {
     /** Styled segments, ready for `new AnsiAwareBuffer(segments)`. */
@@ -56,6 +84,10 @@ export interface MxpLineResult {
     trailingSnapshot?: FormatStateSnapshot;
     /** Clickable regions discovered on this line. */
     links: MxpLink[];
+    /** `<FRAME>` commands seen on this line (window create/close). Omitted when none. */
+    frames?: MxpFrameCommand[];
+    /** Text redirected into frames via `<DEST>` on this line. Omitted when none. */
+    redirects?: MxpRedirect[];
 }
 
 type MxpMode = "open" | "secure" | "locked";
@@ -116,7 +148,8 @@ const OPEN_MODE_TAGS = new Set<string>([
 const SUPPORTED_TAGS = [
     "+b", "+i", "+u", "+s", "+h", "+high", "+strikeout", "+color", "+c", "+font",
     "+send", "+a", "+br", "+sbr", "+nobr", "+p", "+hr", "+var", "+version", "+support",
-    "-image", "-frame", "-dest", "-relocate", "-filter", "-gauge", "-stat", "-music", "-sound",
+    "+frame", "+dest",
+    "-image", "-relocate", "-filter", "-gauge", "-stat", "-music", "-sound",
 ];
 
 /** Built-in XML/HTML entities. User and `<V>`-defined entities augment these via
@@ -150,6 +183,12 @@ export class MxpParser {
     private mxpColorStack: { fg: FormatColor | null; bg: FormatColor | null }[] = [];
     /** Partial tag/entity held from the end of the previous line. */
     private pendingTag = "";
+    /** Active `<DEST>` target frame (persists across lines until `</DEST>`), or
+     *  null when output flows to the main window. While set, appended text and
+     *  flushed runs route to `destOut`/`destPlain` instead of `out`/`plain`. */
+    private destName: string | null = null;
+    private destEol = false;
+    private destEof = false;
     /** OSC 8 preset definitions seen this session (shared with the ANSI path
      *  when the engine supplies a registry). */
     private presets: HyperlinkPresetRegistry;
@@ -160,6 +199,12 @@ export class MxpParser {
     private run = "";
     private plain = "";
     private links: MxpLink[] = [];
+    /** `<FRAME>` commands and `<DEST>` redirects accumulated this line. */
+    private frames: MxpFrameCommand[] = [];
+    private redirects: MxpRedirect[] = [];
+    /** Redirected-text scratch — the current `<DEST>` run's segments/plain. */
+    private destOut: BufferSegment[] = [];
+    private destPlain = "";
 
     constructor(opts: { send: (raw: string) => void; presets?: HyperlinkPresetRegistry }) {
         this.opts = opts;
@@ -177,11 +222,18 @@ export class MxpParser {
         this.stack = [];
         this.mxpColorStack = [];
         this.pendingTag = "";
+        this.destName = null;
+        this.destEol = false;
+        this.destEof = false;
         this.fmt = new FormatState();
         this.out = [];
         this.run = "";
         this.plain = "";
         this.links = [];
+        this.frames = [];
+        this.redirects = [];
+        this.destOut = [];
+        this.destPlain = "";
         this.presets.clear();
     }
 
@@ -197,15 +249,37 @@ export class MxpParser {
         this.run = "";
         this.plain = "";
         this.links = [];
+        this.frames = [];
+        this.redirects = [];
+        // destName/destEol/destEof persist across lines (until </DEST>); only the
+        // per-line accumulators reset.
+        this.destOut = [];
+        this.destPlain = "";
 
         this.parseFragment(input, 0);
         this.flushRun();
+        // A still-open <DEST> at end of line: the network line break is a real
+        // line break inside the frame, so emit this line's redirected run with
+        // eol=true. destName stays set so the next line keeps redirecting.
+        if (this.destName !== null && (this.destOut.length > 0 || this.destPlain.length > 0)) {
+            this.redirects.push({
+                frame: this.destName, segments: this.destOut, plain: this.destPlain,
+                eol: true, eof: this.destEof,
+            });
+            this.destOut = [];
+            this.destPlain = "";
+            // EOF clears once, on the first write of the block.
+            this.destEof = false;
+        }
         // A held partial tag means we're logically mid-line, so the transient
         // line mode (and temp-secure) must survive into the continuation.
         if (this.pendingTag === "") this.resetTransientMode();
 
         const trailing = this.fmt.toSnapshot();
-        return { segments: this.out, plain: this.plain, trailingSnapshot: trailing, links: this.links };
+        const result: MxpLineResult = { segments: this.out, plain: this.plain, trailingSnapshot: trailing, links: this.links };
+        if (this.frames.length > 0) result.frames = this.frames;
+        if (this.redirects.length > 0) result.redirects = this.redirects;
+        return result;
     }
 
     private effectiveMode(): MxpMode {
@@ -231,7 +305,10 @@ export class MxpParser {
     private appendText(s: string): void {
         if (s.length === 0) return;
         this.run += s;
-        this.plain += s;
+        // While a <DEST> is open, plain text accrues to the redirect buffer, not
+        // the main line (so it never reaches the main window or its triggers).
+        if (this.destName === null) this.plain += s;
+        else this.destPlain += s;
     }
 
     private flushRun(): void {
@@ -245,7 +322,9 @@ export class MxpParser {
             if (override.fg) state.foreground = override.fg;
             if (override.bg) state.background = override.bg;
         }
-        this.out.push({ text: this.run, state });
+        // Route the run to the active <DEST> frame, or to the main line.
+        if (this.destName === null) this.out.push({ text: this.run, state });
+        else this.destOut.push({ text: this.run, state });
         this.run = "";
     }
 
@@ -468,17 +547,76 @@ export class MxpParser {
                 this.appendText("\n"); break;
             case "sbr":
                 this.appendText(" "); break;
+            case "frame":
+                this.handleFrameTag(named, positional); break;
+            case "dest":
+                this.handleDestTag(named, positional); break;
             case "support":
                 this.opts.send(`${MXP_SECURE_REPLY_PREFIX}<SUPPORTS ${SUPPORTED_TAGS.join(" ")}>`); break;
             case "version":
                 this.opts.send(`${MXP_SECURE_REPLY_PREFIX}<VERSION MXP="1.0" CLIENT="mudix" VERSION="${CLIENT_VERSION}">`); break;
             default:
                 // Structural no-ops (p, nobr, hr) and discarded heavy tags (image,
-                // frame, gauge, dest, …): consume the tag, render nothing for it.
+                // gauge, relocate, …): consume the tag, render nothing for it.
                 // Any enclosed text still renders since the close handler ignores
                 // unmatched closing tags.
                 break;
         }
+    }
+
+    /** `<FRAME name [action] [internal|external|floating] [left|top|width|height]
+     *  [scrolling] [title]>` — record a window create/close request for the
+     *  consumer. NAME is the first positional or the NAME attribute; valueless
+     *  flags (INTERNAL/EXTERNAL/FLOATING) become `"true"`. */
+    private handleFrameTag(named: Map<string, string>, positional: string[]): void {
+        let name = named.get("name");
+        let flagStart = 0;
+        if (!name) { name = positional[0]; flagStart = 1; }
+        name = (name ?? "").trim();
+        if (name === "") return; // a nameless FRAME is ignored (matches Mudlet)
+        this.flushRun(); // commit any preceding main text before the command
+        const attrs: Record<string, string> = {};
+        for (const [k, v] of named) if (k !== "name") attrs[k.toUpperCase()] = v;
+        for (let i = flagStart; i < positional.length; i++) attrs[positional[i].toUpperCase()] = "true";
+        attrs.NAME = name;
+        this.frames.push({ name, attrs });
+    }
+
+    /** `<DEST name [eol] [eof]>` — start redirecting enclosed text into `name`.
+     *  NAME is the NAME attribute or the first non-flag positional. Persists
+     *  until `</DEST>` (or end of line). A nameless DEST is ignored so its text
+     *  renders inline, matching Mudlet (setMxpDestination fails → not handled). */
+    private handleDestTag(named: Map<string, string>, positional: string[]): void {
+        const flags = new Set(positional.map(p => p.toLowerCase()));
+        let name = named.get("name");
+        if (!name) name = positional.find(p => { const l = p.toLowerCase(); return l !== "eol" && l !== "eof"; });
+        name = (name ?? "").trim();
+        if (name === "") return;
+        // Close any frame already being redirected to (nested/sequential DEST).
+        if (this.destName !== null) this.closeDest(this.destEol);
+        this.flushRun(); // commit preceding main text before switching sink
+        this.destName = name;
+        this.destEol = flags.has("eol") || named.has("eol");
+        this.destEof = flags.has("eof") || named.has("eof");
+        this.destOut = [];
+        this.destPlain = "";
+    }
+
+    /** Finalize the current `<DEST>` run into a redirect and stop redirecting. */
+    private closeDest(eol: boolean): void {
+        if (this.destName === null) return;
+        this.flushRun();
+        if (this.destOut.length > 0 || this.destPlain.length > 0) {
+            this.redirects.push({
+                frame: this.destName, segments: this.destOut, plain: this.destPlain,
+                eol, eof: this.destEof,
+            });
+        }
+        this.destName = null;
+        this.destEol = false;
+        this.destEof = false;
+        this.destOut = [];
+        this.destPlain = "";
     }
 
     private openFormat(name: string, mutate: () => void): void {
@@ -518,6 +656,12 @@ export class MxpParser {
     }
 
     private handleCloseTag(name: string): void {
+        // </DEST> isn't a formatting tag on the stack — it ends text redirection.
+        // eol attr controls whether the frame write is a complete line.
+        if (name === "dest") {
+            if (this.destName !== null) this.closeDest(this.destEol);
+            return;
+        }
         for (let k = this.stack.length - 1; k >= 0; k--) {
             if (this.stack[k].name === name) {
                 this.flushRun();

@@ -2613,6 +2613,18 @@ export class ScriptingEngine {
                                 blankRenders: multiLine ? true : line === '',
                             });
                         }
+                        // MXP <FRAME> creates/closes a mini-console; <DEST> writes
+                        // redirected text into it. A redirect to a frame that
+                        // doesn't exist falls back to inline main rendering (the
+                        // parser already pulled it out of the main line), matching
+                        // Mudlet's degradation when setMxpDestination fails.
+                        if (r.frames) for (const f of r.frames) this.api.mxpFrame(f.name, f.attrs);
+                        if (r.redirects) for (const rd of r.redirects) {
+                            const fbuf = new AnsiAwareBuffer(rd.segments);
+                            if (!this.api.mxpWriteToFrame(rd.frame, fbuf, rd.eof)) {
+                                units.push({ plain: rd.plain, buffer: fbuf, outputLine: rd.plain, blankRenders: rd.plain === '' });
+                            }
+                        }
                     } else {
                         const buffer = new AnsiAwareBuffer(line, carryState, this.osc8Presets);
                         this.wireOsc8Links(buffer);

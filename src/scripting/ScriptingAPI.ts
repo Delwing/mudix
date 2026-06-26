@@ -2962,6 +2962,58 @@ export class ScriptingAPI {
     }
 
     /**
+     * MXP `<FRAME>` (Mudlet 4.21). Maps an MXP frame onto a mini-console — the
+     * browser has no OS-level child/floating windows, so internal, external and
+     * floating frames all become overlay mini-consoles. `attrs` keys are
+     * upper-cased (see `MxpFrameCommand`). `ACTION=close` deletes the frame;
+     * anything else opens it (or repositions it if it already exists). Geometry
+     * (`LEFT`/`TOP`/`WIDTH`/`HEIGHT`) accepts pixels, `N%` of the main window, or
+     * `Nc` character cells.
+     */
+    mxpFrame(name: string, attrs: Record<string, string>): void {
+        if (!name) return;
+        if ((attrs.ACTION ?? '').toLowerCase() === 'close') { this.deleteMiniConsole(name); return; }
+        const [mw, mh] = this.getMainWindowSize();
+        const x = this.parseMxpDim(attrs.LEFT, mw, false) ?? 0;
+        const y = this.parseMxpDim(attrs.TOP, mh, true) ?? 0;
+        const w = this.parseMxpDim(attrs.WIDTH, mw, false) ?? Math.min(400, Math.round(mw * 0.4));
+        const h = this.parseMxpDim(attrs.HEIGHT, mh, true) ?? 120;
+        if (this.session.windows.isMiniConsole(name)) {
+            this.windows.move(name, x, y);
+            this.windows.resize(name, w, h);
+        } else {
+            this.createMiniConsole(name, x, y, w, h);
+        }
+    }
+
+    /**
+     * Write an MXP `<DEST>` redirected line into a frame's mini-console. Returns
+     * false when no mini-console of that name exists (the caller then renders the
+     * text inline in the main window, matching Mudlet). `eof` clears the frame
+     * first — the status-frame "replace contents" idiom.
+     */
+    mxpWriteToFrame(name: string, buffer: AnsiAwareBuffer, eof: boolean): boolean {
+        if (!this.session.windows.isMiniConsole(name)) return false;
+        if (eof) this.clearWindow(name);
+        this.session.windows.pushBuffer(name, buffer);
+        return true;
+    }
+
+    /** Parse an MXP geometry dimension: `N%` → fraction of `ref`, `Nc` → N
+     *  character cells (approximate), bare number → pixels. null when absent. */
+    private parseMxpDim(v: string | undefined, ref: number, vertical: boolean): number | null {
+        if (v == null || v === '') return null;
+        const s = v.trim().toLowerCase();
+        const num = parseFloat(s);
+        if (Number.isNaN(num)) return null;
+        if (s.endsWith('%')) return Math.round((ref * num) / 100);
+        // Character-cell units ('c'); approximate cell metrics good enough for a
+        // status-frame box (mudix doesn't expose the live mono cell size here).
+        if (s.endsWith('c')) return Math.round(num * (vertical ? 16 : 8));
+        return Math.round(num);
+    }
+
+    /**
      * Mudlet `createBuffer(name)`. Registers a named off-screen console for
      * formatting and storing rich text — like a miniconsole, but never shown
      * on screen (no dock panel). echo/cecho/format/selection target it by name;
