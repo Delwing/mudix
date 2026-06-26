@@ -1391,7 +1391,7 @@ end
 --   "table"           → major, minor, revision as 3 separate return values
 --                       (mudlet-lua's mudletOlderThan relies on this)
 do
-    local MAJOR, MINOR, REVISION, BUILD = 4, 20, 0, ""
+    local MAJOR, MINOR, REVISION, BUILD = 4, 21, 0, ""
     function getMudletVersion(mode)
         if mode == nil then
             return { major = MAJOR, minor = MINOR, revision = REVISION, build = BUILD }
