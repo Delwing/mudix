@@ -586,6 +586,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('removeFileWatch',    '(path) → bool',       'Stop watching a path previously registered with addFileWatch. Returns false if the path was not watched.'),
     // Events
     fn('raiseEvent',                    '(name, ...)',       'Fire a named event'),
+    fn('raiseGlobalEvent',              '(name, ...) → true', 'Fire an event in every OTHER open profile (browser tab), not this one. Args: string/number/boolean/nil; the sending profile name is appended as the last argument.'),
     fn('registerAnonymousEventHandler', '(name, fn) → id',  'Register an event handler, returns an ID'),
     fn('killAnonymousEventHandler',     '(id) → bool',       'Remove an event handler by ID'),
     // Formatting

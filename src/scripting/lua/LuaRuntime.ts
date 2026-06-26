@@ -27,6 +27,7 @@ import {qtKeyToDomCode, qtModifiersToList, domCodeToQtKey} from '../../mud/keybi
 import xterm256 from '../../mud/text/xterm256';
 import {HttpService} from '../http/HttpService';
 import {TtsManager} from '../../ui/tts/TtsManager';
+import {GlobalEventChannel} from '../GlobalEventChannel';
 
 // wasmoon doesn't re-export its opaque lua_State pointer type; derive it from
 // the public API so the raw lua_* bindings (see pushJsValue / registerRawGlobal)
@@ -172,6 +173,9 @@ export class LuaRuntime implements IScriptingRuntime {
     // Web Speech text-to-speech backend (Mudlet ttsSpeak/ttsQueue/...). Raises
     // tts* state + change events through emitEvent, same as HttpService.
     private tts!: TtsManager;
+    // Cross-tab transport for raiseGlobalEvent — broadcasts to other profiles'
+    // tabs; incoming events dispatch locally through emitEvent.
+    private globalEvents!: GlobalEventChannel;
     // Set by setupSqlBridge — forces every debounced SQL VFS snapshot to write
     // immediately. Called from saveProfile() so user code can ensure SQL state
     // is durable before the default 500 ms debounce window elapses.
@@ -500,6 +504,21 @@ export class LuaRuntime implements IScriptingRuntime {
             if (typeof event !== 'string' || event.length === 0) return false;
             this.emitEvent(event, args);
             return true;
+        });
+
+        // raiseGlobalEvent fires the event in every OTHER open profile (each in
+        // its own tab) but NOT this one — see GlobalEventChannel. Mudlet appends
+        // the sending profile's name as the final arg; args are limited to
+        // string/number/boolean/nil. Created here so api.profileName is set.
+        this.globalEvents = new GlobalEventChannel(
+            (event, args) => this.emitEvent(event, args),
+            () => this.api.profileName,
+        );
+        this.lua.global.set('raiseGlobalEvent', (event: unknown, ...args: unknown[]) => {
+            if (typeof event !== 'string' || event.length === 0) {
+                throw new Error('raiseGlobalEvent: missing argument #1 (eventName as a string expected!)');
+            }
+            return this.globalEvents.raise(event, args);
         });
 
         // Mudlet `windowType(name)` → kind string. Returns `(nil, errMsg)` when
@@ -4617,6 +4636,7 @@ end`,
     destroy(): void {
         if (this.destroyed) return; // idempotent — a double lua_close corrupts the heap
         this.destroyed = true;
+        this.globalEvents?.close();
         this.tts?.destroy();
         this.api.map.setMapEventDispatcher(null);
         this.api.map.setMapInfoEvaluator(null);

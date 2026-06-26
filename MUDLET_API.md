@@ -426,7 +426,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `permKey(name, parent, modifier, key, code)` | ✅ | `modifier` is the Qt::KeyboardModifier int (1=shift, 2=ctrl, 4=alt, 8=meta; -1 → none). `key` accepts a Qt::Key int or a KeyboardEvent.code string |
 | `printCmdLine([name,] text)` | ✅ | Routes to overlay cmd lines, per-userwindow cmd lines, or the main bar |
 | `raiseEvent(name, ...)` | ✅ | |
-| `raiseGlobalEvent(name, ...)` | ❌ stub | Multi-profile only; stub forwards to local `raiseEvent` so single-profile scripts still see the event |
+| `raiseGlobalEvent(name, ...)` | ✅ | Cross-tab via `BroadcastChannel` (`GlobalEventChannel`). Fires the event in every OTHER open profile (each runs in its own browser tab), never the sender; incoming events dispatch through `emitEvent` so `registerAnonymousEventHandler` handlers fire. Args limited to string/number/boolean/nil (matches Mudlet); the sender's profile name is appended as the last arg. No per-profile opt-in (matches Mudlet's `postInterHostEvent`) |
 | `registerNamedTimer(parent, name, delay, code)` | ✅ | IDManager.lua |
 | `registerNamedTrigger(parent, name, pattern, code)` | ✅ | IDManager.lua |
 | `remainingTime(id)` | ✅ | JS-exposed |
@@ -972,6 +972,6 @@ These features have no real implementation in mudix, but to keep imported Mudlet
 |---|---|
 | Discord Rich Presence (`getDiscord*` / `setDiscord*`) | Requires Discord SDK |
 | IRC client (`openIRC`, `sendIrc`, `*IrcChannels`, `*IrcNick`, `*IrcServer`, `restartIrc`, `getIrcConnectedHost`) | Separate external service |
-| Multi-profile management (`loadProfile`, `getProfiles`, `raiseGlobalEvent`) | Single-connection web app |
+| In-tab multi-profile switching (`loadProfile`, `getProfiles`) | One profile per tab (but `raiseGlobalEvent` now works *across* tabs — see above) |
 | `spawn(...)` | No subprocess in the browser |
 | Spell-check API (`spellCheckWord`, `spellSuggestWord`, `addWordToDictionary`, `removeWordFromDictionary`, `getDictionaryWordList`) | No Hunspell in browser |
