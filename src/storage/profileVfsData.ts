@@ -10,6 +10,7 @@ import type {
     ScriptEditorBounds,
     ModalBounds,
     WindowLayoutSnapshot,
+    ProfileVariables,
 } from './schema';
 import { useAppStore, MIGRATION_BACKUP_KEY } from './appStore';
 import type { WindowOpenOptions } from '../ui/windows/types';
@@ -43,6 +44,9 @@ export interface PersistedProfileData {
     keybindings: KeyNode[];
     buttons: ButtonNode[];
     packages: PackageManifest[];
+    /** Mudlet saved-variables: the save-list + last captured values. Optional so
+     *  older files (no variables) still parse. */
+    variables?: ProfileVariables;
     // UI / settings / layout (one profile's entry from each shared map). Optional
     // so v1 files (automation only) still parse.
     profile?: Partial<ProfileSettings>;
@@ -114,6 +118,7 @@ export function loadProfileData(vfs: ProfileVFS, connectionId: string): void {
         keybindings: fileData.keybindings,
         buttons: fileData.buttons,
         packages: fileData.packages,
+        variables: fileData.variables,
         profile: fileData.profile ?? backup?.profile,
         windowHints: fileData.windowHints ?? backup?.windowHints,
         dockExtents: fileData.dockExtents ?? backup?.dockExtents,
@@ -142,6 +147,7 @@ export function serializeProfileData(connectionId: string): string {
         keybindings: s.connectionKeybindings[connectionId] ?? [],
         buttons: s.connectionButtons[connectionId] ?? [],
         packages: s.connectionPackages[connectionId] ?? [],
+        variables: s.connectionVariables[connectionId],
         profile: s.connectionProfile[connectionId],
         windowHints: s.connectionWindowHints[connectionId],
         dockExtents: s.connectionDockExtents[connectionId],

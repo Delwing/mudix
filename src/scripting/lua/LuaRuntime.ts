@@ -6,7 +6,7 @@ import {Lua} from 'wasmoon-lua5.1';
 // hand back a base-aware same-origin URL we pass as `customWasmUri` below.
 import luaWasmUrl from 'wasmoon-lua5.1/dist/liblua5.1.wasm?url';
 import {unzip, strFromU8} from 'fflate';
-import type {IScriptingRuntime, CaptureSpan} from '../IScriptingRuntime';
+import type {IScriptingRuntime, CaptureSpan, LuaGlobalEntry} from '../IScriptingRuntime';
 import type {ScriptingAPI} from '../ScriptingAPI';
 import type {ProfileVFS} from '../vfs/ProfileVFS';
 import UTF8 from './utf8.lua?raw';
@@ -28,6 +28,7 @@ import xterm256 from '../../mud/text/xterm256';
 import {HttpService} from '../http/HttpService';
 import {TtsManager} from '../../ui/tts/TtsManager';
 import {GlobalEventChannel} from '../GlobalEventChannel';
+import {type MudletVariable, normalizeVariableTree} from '../../import/mudletVariables';
 
 // wasmoon doesn't re-export its opaque lua_State pointer type; derive it from
 // the public API so the raw lua_* bindings (see pushJsValue / registerRawGlobal)
@@ -116,6 +117,178 @@ function bytesToImageDataUrl(bytes: Uint8Array, path: string): string {
     return `data:${imageMimeForPath(path)};base64,${btoa(binary)}`;
 }
 
+
+// Rebuild saved globals (Mudlet <VariablePackage>) into _G. The value tree is
+// constructed on the Lua side so numeric table keys and nested/mixed-key tables
+// keep full fidelity — a JS→Lua object coercion would stringify numeric keys and
+// can't represent a table with both. `__mudix_var_payload` is the descriptor
+// array (set from JS); iterated with pairs() so the 0-indexed table wasmoon makes
+// from a JS array doesn't matter.
+const RESTORE_VARS_LUA = `
+local payload = __mudix_var_payload
+local function build(d)
+  local vt = d.valueType
+  if vt == 'table' then
+    local t = {}
+    local kids = d.children
+    if kids then
+      for _, c in pairs(kids) do
+        local key = c.name
+        if c.keyKind == 'number' then key = tonumber(key) end
+        t[key] = build(c)
+      end
+    end
+    return t
+  elseif vt == 'boolean' then
+    return d.value == 'true'
+  elseif vt == 'number' then
+    return tonumber(d.value)
+  else
+    return d.value
+  end
+end
+if payload then
+  for _, d in pairs(payload) do
+    if d.name ~= nil then _G[d.name] = build(d) end
+  end
+end
+__mudix_var_payload = nil
+`;
+
+// Walk the save-listed globals out of _G into a descriptor tree and hand it back
+// as JSON (via yajl, same Lua→JS path the busted bridge uses). keyType/valueType
+// are read from Lua's own type(), so numeric vs string keys survive. `seen`
+// breaks reference cycles (e.g. a table that points back at an ancestor, or _G
+// itself) — cleared after each branch so a DAG (same table in sibling slots) is
+// still fully captured.
+const CAPTURE_VARS_LUA = `
+local names = __mudix_save_list
+local function capture(v, seen)
+  local t = type(v)
+  if t == 'table' then
+    if seen[v] then return { valueType = 'table', children = {} } end
+    seen[v] = true
+    local children = {}
+    for k, val in pairs(v) do
+      local kt = type(k)
+      if kt == 'string' or kt == 'number' then
+        local child = capture(val, seen)
+        if child then
+          child.name = tostring(k)
+          child.keyKind = kt
+          children[#children + 1] = child
+        end
+      end
+    end
+    seen[v] = nil
+    return { valueType = 'table', children = children }
+  elseif t == 'boolean' then
+    return { valueType = 'boolean', value = tostring(v) }
+  elseif t == 'number' then
+    return { valueType = 'number', value = tostring(v) }
+  elseif t == 'string' then
+    return { valueType = 'string', value = v }
+  else
+    return nil
+  end
+end
+local out = {}
+if names then
+  for _, name in pairs(names) do
+    local d = capture(_G[name], {})
+    if d then
+      d.name = name
+      d.keyKind = 'string'
+      out[#out + 1] = d
+    end
+  end
+end
+__mudix_save_list = nil
+return yajl.to_string(out)
+`;
+
+// Snapshot the set of global names that exist right after the runtime boots —
+// the default Lua + Mudlet API namespace. Stored as a Lua set so listGlobals can
+// flag those as built-ins (hidden by default in the Variables view, matching
+// Mudlet, which only shows user-created variables). Run once at the end of init,
+// before any saved-variable restore or user script adds globals. The set's own
+// name starts with __mudix so it's excluded from the view.
+const CAPTURE_BASELINE_LUA = `
+__mudix_baseline = {}
+for k in pairs(_G) do
+  if type(k) == 'string' then __mudix_baseline[k] = true end
+end
+`;
+
+// Enumerate globals for the Variables view: name, Lua type, a scalar value
+// preview, whether it's a table, and whether it's flaggable to save.
+// Functions/userdata/threads are listed but not saveable (Mudlet greys them).
+// Built-in globals (in __mudix_baseline) are flagged and NOT recursed — only
+// user globals get their table contents walked, so the payload stays small and
+// the view can expand them. `seen` breaks reference cycles.
+const LIST_GLOBALS_LUA = `
+local baseline = __mudix_baseline or {}
+local function describe(v, recurse, seen)
+  local t = type(v)
+  local e = { valueType = t }
+  if t == 'string' or t == 'number' or t == 'boolean' then
+    e.value = tostring(v)
+    e.saveable = true
+  elseif t == 'table' then
+    e.saveable = true
+    e.isTable = true
+    if recurse and not seen[v] then
+      seen[v] = true
+      local kids = {}
+      for k, val in pairs(v) do
+        local kt = type(k)
+        if kt == 'string' or kt == 'number' then
+          local c = describe(val, true, seen)
+          c.name = tostring(k)
+          c.keyKind = kt
+          kids[#kids + 1] = c
+        end
+      end
+      seen[v] = nil
+      e.children = kids
+    end
+  else
+    e.saveable = false
+  end
+  return e
+end
+local out = {}
+for k, v in pairs(_G) do
+  if type(k) == 'string' and k:sub(1, 7) ~= '__mudix' then
+    local isBuiltin = baseline[k] == true
+    local e = describe(v, not isBuiltin, {})
+    e.name = k
+    e.builtin = isBuiltin
+    out[#out + 1] = e
+  end
+end
+return yajl.to_string(out)
+`;
+
+// Coerce a yajl-decoded global entry into a well-formed LuaGlobalEntry. yajl
+// can't tell an empty Lua table from an empty array, so an empty `children`
+// arrives as `{}`; normalise those to arrays (and recurse).
+function normalizeGlobalEntry(raw: unknown): LuaGlobalEntry {
+    const o = (raw ?? {}) as Record<string, unknown>;
+    const entry: LuaGlobalEntry = {
+        name: String(o.name ?? ''),
+        valueType: String(o.valueType ?? 'nil'),
+        saveable: !!o.saveable,
+    };
+    if (o.value !== undefined) entry.value = String(o.value);
+    if (o.isTable) entry.isTable = true;
+    if (o.builtin) entry.builtin = true;
+    if (o.keyKind) entry.keyKind = String(o.keyKind);
+    if (Array.isArray(o.children) && o.children.length) {
+        entry.children = o.children.map(normalizeGlobalEntry);
+    }
+    return entry;
+}
 
 export class LuaRuntime implements IScriptingRuntime {
 
@@ -3810,6 +3983,9 @@ export class LuaRuntime implements IScriptingRuntime {
         );
         this.exec(LUAGLOBAL, 'LuaGlobal');
         this.setupAnsiColorTable();
+        // Record the default namespace so the Variables view can hide built-ins.
+        // Must run after the bundle but before any user global is added.
+        this.exec(CAPTURE_BASELINE_LUA, 'baseline-globals');
 
         if (BUSTED_ENABLED) this.setupBustedBridge();
     }
@@ -4298,6 +4474,49 @@ end`,
 
     run(code: string, name: string): void {
         this.exec(code, name);
+    }
+
+    /**
+     * Restore saved Lua globals (a parsed Mudlet `<VariablePackage>` tree) into
+     * `_G`. Call on profile load, after the bundle is up but before user scripts
+     * run, so handlers see their persisted state. No-op for an empty list.
+     */
+    restoreVariables(vars: MudletVariable[]): void {
+        if (!vars.length) return;
+        this.lua.global.set('__mudix_var_payload', vars);
+        this.exec(RESTORE_VARS_LUA, 'restore-vars');
+    }
+
+    /**
+     * Snapshot the current values of the save-listed globals out of `_G` into a
+     * `MudletVariable[]` tree (for serialization to `<VariablePackage>` / the
+     * profile JSON). `saveList` is the set of top-level global names flagged to
+     * persist (Mudlet's VarUnit::mSaveList). Names that are unset or hold a
+     * non-serializable value (function/userdata/thread) are skipped.
+     */
+    captureVariables(saveList: string[]): MudletVariable[] {
+        if (!saveList.length) return [];
+        this.lua.global.set('__mudix_save_list', saveList);
+        const json = this.execInner(CAPTURE_VARS_LUA, 'capture-vars');
+        if (typeof json !== 'string') return [];
+        try {
+            return normalizeVariableTree(JSON.parse(json));
+        } catch {
+            return [];
+        }
+    }
+
+    /** Enumerate `_G` entries (user globals nested, built-ins flagged) for the
+     *  Variables view. See {@link LuaGlobalEntry}. */
+    listGlobals(): LuaGlobalEntry[] {
+        const json = this.execInner(LIST_GLOBALS_LUA, 'list-globals');
+        if (typeof json !== 'string') return [];
+        try {
+            const parsed = JSON.parse(json);
+            return Array.isArray(parsed) ? parsed.map(normalizeGlobalEntry) : [];
+        } catch {
+            return [];
+        }
     }
 
     runWithMatches(

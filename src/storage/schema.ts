@@ -1,4 +1,5 @@
 import type { WindowOpenOptions } from '../ui/windows/types';
+import type { MudletVariable } from '../import/mudletVariables';
 
 export const DEFAULT_PROXY_URL = 'wss://mudix.delwing.workers.dev';
 
@@ -560,6 +561,20 @@ export interface ScriptEditorBounds extends ModalBounds {
     listWidth?: number;
 }
 
+/**
+ * Mudlet saved-variables state for one profile (its `<VariablePackage>`).
+ * `saveList` is the user-curated set of top-level global names flagged to
+ * persist (Mudlet's VarUnit::mSaveList) — this is the configuration the
+ * Variables view edits. `values` is the last captured snapshot of those
+ * globals' contents, restored into `_G` on the next profile open. Captured
+ * fresh from the live Lua state on each profile save, so it can lag the
+ * running session between saves without harm.
+ */
+export interface ProfileVariables {
+    saveList: string[];
+    values: MudletVariable[];
+}
+
 export interface AppSchema {
     connections: MudConnection[];
     /** App-wide preferences that apply regardless of which profile is active
@@ -586,6 +601,10 @@ export interface AppSchema {
      *  `saveWindowLayout()`, restored by `loadWindowLayout()`. Missing key
      *  means no snapshot exists yet for that connection. */
     connectionLayoutSnapshots: Record<string, WindowLayoutSnapshot>;
+    /** Per-connection Mudlet saved-variables (save-list + last captured values).
+     *  Persisted in the profile VFS like the automation slices, not localStorage.
+     *  Missing key = nothing flagged to save for that profile. */
+    connectionVariables: Record<string, ProfileVariables>;
 }
 
 export const APP_DEFAULTS: AppSchema = {
@@ -604,6 +623,7 @@ export const APP_DEFAULTS: AppSchema = {
     connectionModalBounds: {},
     connectionPackages: {},
     connectionLayoutSnapshots: {},
+    connectionVariables: {},
 };
 
 /**

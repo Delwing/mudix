@@ -29,7 +29,7 @@ type BaseTreeNode = {
     patterns?: unknown[];
 };
 import {LuaRuntime} from './lua/LuaRuntime';
-import type {IScriptingRuntime} from './IScriptingRuntime';
+import type {IScriptingRuntime, LuaGlobalEntry} from './IScriptingRuntime';
 import {ProfileVFS} from './vfs/ProfileVFS';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
@@ -380,6 +380,9 @@ export class ScriptingEngine {
             // user data via getMapUserData are immediately queryable.
             const mapLoaded = await this.session.windows.bootstrapMap();
 
+            // Saved Lua globals go back into _G before any script runs, so script
+            // bodies and sysLoadEvent handlers see their persisted state.
+            this.restoreSavedVariables();
             this.applyScriptsFromStore();
             this.applyAliasesFromStore();
             this.applyTimersFromStore();
@@ -439,7 +442,10 @@ export class ScriptingEngine {
                     || state.connectionDockExtents[id]        !== prevState.connectionDockExtents[id]
                     || state.connectionScriptEditorBounds[id] !== prevState.connectionScriptEditorBounds[id]
                     || state.connectionModalBounds[id]        !== prevState.connectionModalBounds[id]
-                    || state.connectionLayoutSnapshots[id]    !== prevState.connectionLayoutSnapshots[id];
+                    || state.connectionLayoutSnapshots[id]    !== prevState.connectionLayoutSnapshots[id]
+                    // Only the save-list (config) triggers a save; captured values are
+                    // refreshed by the flush itself and must not re-arm it.
+                    || state.connectionVariables[id]?.saveList !== prevState.connectionVariables[id]?.saveList;
 
                 // Persist this profile's data to its VFS on any change.
                 if (automationChanged || uiChanged) this.scheduleProfileDataSave();
@@ -550,6 +556,7 @@ export class ScriptingEngine {
             this.profileDataSaveTimer = null;
         }
         try {
+            this.captureSavedVariables();
             saveProfileData(vfs, this.connectionId);
             // writeFile only updates the RAM cache; both IDB- and folder-backed
             // mounts persist to the backend on flush(). Drain now so the write is
@@ -560,6 +567,47 @@ export class ScriptingEngine {
         } catch (err) {
             console.warn('[ScriptingEngine] profile data save failed:', err);
         }
+    }
+
+    /**
+     * Restore this profile's saved Lua globals (Mudlet `<VariablePackage>`) into
+     * `_G`. Called once before the initial script load so handlers see their
+     * persisted state, and again after a profile reset (fresh global table).
+     */
+    private restoreSavedVariables(): void {
+        const rt = this.runtimes.lua;
+        if (!rt) return;
+        const values = useAppStore.getState().connectionVariables[this.connectionId]?.values;
+        if (!values || values.length === 0) return;
+        try {
+            rt.restoreVariables(values);
+        } catch (err) {
+            console.warn('[ScriptingEngine] variable restore failed:', err);
+        }
+    }
+
+    /**
+     * Snapshot the save-listed globals out of `_G` into the store, just before a
+     * profile-data flush so the values land in `.mudix/profile.json`. Updates
+     * only the values (the save-list array reference is preserved), so the save
+     * subscription — which keys on the save-list — doesn't reschedule a flush.
+     */
+    private captureSavedVariables(): void {
+        const rt = this.runtimes.lua;
+        if (!rt) return;
+        const state = useAppStore.getState();
+        const saveList = state.connectionVariables[this.connectionId]?.saveList;
+        if (!saveList || saveList.length === 0) return;
+        try {
+            state.setVariableValues(this.connectionId, rt.captureVariables(saveList));
+        } catch (err) {
+            console.warn('[ScriptingEngine] variable capture failed:', err);
+        }
+    }
+
+    /** Top-level `_G` entries for the Variables view. Empty until the runtime is up. */
+    listGlobals(): LuaGlobalEntry[] {
+        return this.runtimes.lua?.listGlobals() ?? [];
     }
 
     /**
@@ -2299,6 +2347,7 @@ export class ScriptingEngine {
             //    (every enabled script is treated as new).
             this.prevScripts = [];
             this.triggersReady = true; // PCRE wasm resolved long before any reset
+            this.restoreSavedVariables();
             this.applyScriptsFromStore();
             this.applyAliasesFromStore();
             this.applyTriggersFromStore();

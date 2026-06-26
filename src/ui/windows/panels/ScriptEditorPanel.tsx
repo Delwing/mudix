@@ -1,6 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Clock, Filter, Folder, FolderOpen, FolderPlus, Keyboard, MousePointerClick, Package, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
+import { AlertCircle, Braces, Clock, Filter, Folder, FolderOpen, FolderPlus, Keyboard, MousePointerClick, Package, Shuffle, FileCode2, Trash2, Zap } from 'lucide-react';
 import { Button, Input, ContextMenu, useConfirm } from '../../components';
+import { VariablesView } from './VariablesView';
 import { useAppStore, useProfileField } from '../../../storage';
 import { DEFAULT_ANSI_PALETTE } from '../../../mud/text/colors';
 import type { AliasNode, ButtonLocation, ButtonNode, ButtonOrientation, KeyNode, PackageManifest, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
@@ -18,8 +19,8 @@ import { renderMarkdown } from '../../markdown';
 import xterm256 from '../../../mud/text/xterm256';
 import './ScriptEditorPanel.css';
 
-type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys' | 'buttons' | 'packages' | 'errors';
-type EditCategory = Exclude<Category, 'errors' | 'packages'>;
+type Category = 'scripts' | 'aliases' | 'triggers' | 'timers' | 'keys' | 'buttons' | 'packages' | 'errors' | 'variables';
+type EditCategory = Exclude<Category, 'errors' | 'packages' | 'variables'>;
 type AnyNode = ScriptNode | AliasNode | TriggerNode | TimerNode | KeyNode | ButtonNode;
 
 const EDIT_CATEGORIES: EditCategory[] = ['scripts', 'aliases', 'triggers', 'timers', 'keys', 'buttons'];
@@ -1490,7 +1491,7 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
         setSelectedId(null);
     };
 
-    const isEditCategory = category !== 'errors' && category !== 'packages';
+    const isEditCategory = category !== 'errors' && category !== 'packages' && category !== 'variables';
     const categoryLabel = isEditCategory ? CATEGORY_LABELS[category as EditCategory].toLowerCase() : '';
     const emptyMsg = items.length === 0
         ? `No ${categoryLabel} yet — click "+ New" to create one`
@@ -1513,6 +1514,13 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
                         </button>
                     );
                 })}
+                <button
+                    className={`script-editor__nav-btn script-editor__nav-btn--row${category === 'variables' ? ' script-editor__nav-btn--active' : ''}`}
+                    onClick={() => setCategory('variables')}
+                >
+                    <Braces size={13} strokeWidth={1.6} className="script-editor__nav-icon" />
+                    <span className="script-editor__nav-label">Variables</span>
+                </button>
                 <div className="script-editor__nav-sep" />
                 <button
                     className={`script-editor__nav-btn script-editor__nav-btn--row${category === 'errors' ? ' script-editor__nav-btn--active' : ''}`}
@@ -1637,6 +1645,11 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
                 </div>
             </div>}
             {/* end item list */}
+
+            {/* Variables view — the live _G tree with a save-list checkbox per entry */}
+            {category === 'variables' && (
+                <VariablesView connectionId={connectionId} scriptingEngineRef={scriptingEngineRef} />
+            )}
 
             {/* Packages view */}
             {category === 'packages' && (

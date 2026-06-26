@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type ButtonNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type ClientSettings, type ProfileSettings, type PackageManifest, type WindowLayoutSnapshot } from './schema';
+import { APP_DEFAULTS, type AppSchema, type MudConnection, type AliasNode, type ButtonNode, type KeyNode, type TimerNode, type TriggerNode, type ScriptNode, type ScriptEditorBounds, type ModalBounds, type ClientSettings, type ProfileSettings, type PackageManifest, type WindowLayoutSnapshot, type ProfileVariables } from './schema';
+import type { MudletVariable } from '../import/mudletVariables';
 import type { MudletImportResult } from '../import/mudletXmlImport';
 import type { WindowOpenOptions } from '../ui/windows/types';
 import { createDebouncedJsonStorage } from './debouncedStorage';
@@ -54,6 +55,13 @@ interface AppStore extends AppSchema {
     clearWindowHints: (connectionId: string) => void;
     saveDockExtents: (connectionId: string, extents: Record<string, number>) => void;
     saveLayoutSnapshot: (connectionId: string, snapshot: WindowLayoutSnapshot) => void;
+    /** Replace the set of global names flagged to persist (Mudlet save-list).
+     *  Edited from the Variables view; triggers a profile-data save. */
+    setVariableSaveList: (connectionId: string, saveList: string[]) => void;
+    /** Replace the captured variable values without disturbing the save-list
+     *  reference — so the engine can refresh them on save without re-triggering
+     *  the save subscription (which keys on the save-list, not values). */
+    setVariableValues: (connectionId: string, values: MudletVariable[]) => void;
     addScript: (connectionId: string, data: Omit<ScriptNode, 'id'>) => string;
     updateScript: (connectionId: string, id: string, patch: Partial<Omit<ScriptNode, 'id'>>) => void;
     removeScript: (connectionId: string, id: string) => void;
@@ -114,6 +122,7 @@ interface PersistedConnectionData {
     scriptEditorBounds?: ScriptEditorBounds;
     modalBounds?: Record<string, ModalBounds>;
     layoutSnapshot?: WindowLayoutSnapshot;
+    variables?: ProfileVariables;
 }
 
 /** localStorage key + schema version for the persisted store. Exported so the
@@ -174,6 +183,7 @@ export const useAppStore = create<AppStore>()(
                 const { [id]: _mb, ...restModalBounds } = s.connectionModalBounds;
                 const { [id]: _ui, ...restProfile } = s.connectionProfile;
                 const { [id]: _ls, ...restLayoutSnapshots } = s.connectionLayoutSnapshots;
+                const { [id]: _vr, ...restVariables } = s.connectionVariables;
                 return {
                     connections: s.connections.filter(c => c.id !== id),
                     connectionProfile: restProfile,
@@ -192,6 +202,7 @@ export const useAppStore = create<AppStore>()(
                         return rest;
                     })(),
                     connectionLayoutSnapshots: restLayoutSnapshots,
+                    connectionVariables: restVariables,
                 };
             }),
             patchClient: patch => set(s => ({ client: { ...s.client, ...patch } })),
@@ -576,6 +587,21 @@ export const useAppStore = create<AppStore>()(
                     connectionPackages:    { ...s.connectionPackages,    [connectionId]: (s.connectionPackages[connectionId] ?? []).filter(p => p.name !== packageName) },
                 };
             }),
+            setVariableSaveList: (connectionId, saveList) => set(s => ({
+                connectionVariables: {
+                    ...s.connectionVariables,
+                    [connectionId]: { saveList, values: s.connectionVariables[connectionId]?.values ?? [] },
+                },
+            })),
+            setVariableValues: (connectionId, values) => set(s => ({
+                connectionVariables: {
+                    ...s.connectionVariables,
+                    // Reuse the existing saveList array reference verbatim: the profile-save
+                    // subscription compares saveList by identity, so refreshing values here
+                    // must not mint a new array or it would reschedule a save on every flush.
+                    [connectionId]: { saveList: s.connectionVariables[connectionId]?.saveList ?? [], values },
+                },
+            })),
             hydrateConnectionData: (connectionId, data) => set(s => {
                 const patch: Partial<AppSchema> = {
                     connectionScripts:     { ...s.connectionScripts,     [connectionId]: data.scripts     ?? [] },
@@ -585,6 +611,7 @@ export const useAppStore = create<AppStore>()(
                     connectionKeybindings: { ...s.connectionKeybindings, [connectionId]: data.keybindings ?? [] },
                     connectionButtons:     { ...s.connectionButtons,     [connectionId]: data.buttons     ?? [] },
                     connectionPackages:    { ...s.connectionPackages,    [connectionId]: data.packages    ?? [] },
+                    connectionVariables:   { ...s.connectionVariables,   [connectionId]: data.variables   ?? { saveList: [], values: [] } },
                 };
                 // UI/settings/layout slices: only set when the loaded data carries
                 // them, so a v1 file (automation only) doesn't wipe live state.

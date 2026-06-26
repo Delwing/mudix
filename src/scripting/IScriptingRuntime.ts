@@ -3,7 +3,27 @@
  * capture's byte length. Used by `selectCaptureGroup` to re-select the actual
  * occurrence rather than the first textual match of the captured substring.
  */
+import type { MudletVariable } from '../import/mudletVariables';
+
 export type CaptureSpan = { start: number; length: number };
+
+/** One `_G` entry (or nested table entry), as surfaced to the Variables view.
+ *  `saveable` is false for functions/userdata/threads (shown but not flaggable,
+ *  like Mudlet). `value` is a string preview for scalars; `isTable` marks a
+ *  table; `children` carries its contents (populated for user globals, omitted
+ *  for built-ins). `builtin` flags entries that existed at runtime boot (the
+ *  default Lua + Mudlet API namespace) — hidden by default, like Mudlet.
+ *  `keyKind` ('string' | 'number') distinguishes table keys for nested rows. */
+export interface LuaGlobalEntry {
+    name: string;
+    valueType: string;
+    saveable: boolean;
+    value?: string;
+    isTable?: boolean;
+    children?: LuaGlobalEntry[];
+    builtin?: boolean;
+    keyKind?: string;
+}
 
 export interface IScriptingRuntime {
     load(code: string, name: string): void;
@@ -66,4 +86,10 @@ export interface IScriptingRuntime {
      * (unlike permanent items) don't live in the persisted store.
      */
     tempItemExists(id: number, type: string): boolean;
+    /** Rebuild saved Lua globals (a Mudlet `<VariablePackage>` tree) into `_G`. */
+    restoreVariables(vars: MudletVariable[]): void;
+    /** Snapshot the save-listed globals out of `_G` into a variable tree. */
+    captureVariables(saveList: string[]): MudletVariable[];
+    /** Enumerate the current top-level `_G` entries for the Variables view. */
+    listGlobals(): LuaGlobalEntry[];
 }
