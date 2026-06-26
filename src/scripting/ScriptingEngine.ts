@@ -605,7 +605,8 @@ export class ScriptingEngine {
         }
     }
 
-    /** Top-level `_G` entries for the Variables view. Empty until the runtime is up. */
+    /** `_G` entries for the Variables view (user globals nested, built-ins
+     *  flagged). Empty until the runtime is up. */
     listGlobals(): LuaGlobalEntry[] {
         return this.runtimes.lua?.listGlobals() ?? [];
     }

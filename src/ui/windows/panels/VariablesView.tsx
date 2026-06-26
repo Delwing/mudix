@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { Button, Input } from '../../components';
 import { useAppStore } from '../../../storage/appStore';
 import type { ScriptingEngine } from '../../../scripting/ScriptingEngine';
@@ -29,26 +29,37 @@ function byName(a: LuaGlobalEntry, b: LuaGlobalEntry): number {
  * entry that toggles whether it persists across sessions (the profile's
  * save-list / Mudlet `<VariablePackage>`). Built-in globals — the default Lua +
  * Mudlet API namespace present at runtime boot — are hidden by default (toggle
- * to show), matching Mudlet, so only your own variables appear. Tables expand to
- * browse their contents. Functions/userdata/threads are shown but not flaggable.
- * Save flagging is at top-level granularity (checking a table persists all of
- * it); per-key flagging is a follow-up.
+ * to show), so only your own variables appear. Tables expand to browse their
+ * contents (fetched eagerly, so expansion is instant). Functions/userdata are
+ * shown but not flaggable. Save flagging is top-level granularity (checking a
+ * table persists all of it); per-key flagging is a follow-up.
+ *
+ * Enumerating `_G` runs synchronously on the Lua/main thread, so we defer it a
+ * tick behind a loader: the spinner paints first, then the walk runs, keeping
+ * opening the tab responsive even for a large namespace.
  */
 export function VariablesView({ connectionId, scriptingEngineRef }: VariablesViewProps) {
     const saveList = useAppStore(s => s.connectionVariables[connectionId]?.saveList ?? EMPTY_LIST);
     const setSaveList = useAppStore(s => s.setVariableSaveList);
     const [globals, setGlobals] = useState<LuaGlobalEntry[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [loadToken, setLoadToken] = useState(0);
     const [filter, setFilter] = useState('');
     const [showBuiltins, setShowBuiltins] = useState(false);
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-    const refresh = useCallback(() => {
-        setGlobals(scriptingEngineRef?.current?.listGlobals() ?? []);
-    }, [scriptingEngineRef]);
+    const refresh = useCallback(() => { setLoading(true); setLoadToken(t => t + 1); }, []);
 
-    // Snapshot `_G` when the view opens. It changes as scripts run, so the
-    // Refresh button re-reads on demand rather than polling.
-    useEffect(() => { refresh(); }, [refresh]);
+    // Run the (synchronous) `_G` walk a tick after the loader renders, so the
+    // spinner is visible before the main thread is busy. Re-runs on Refresh.
+    useEffect(() => {
+        let cancelled = false;
+        const id = setTimeout(() => {
+            const g = scriptingEngineRef?.current?.listGlobals() ?? [];
+            if (!cancelled) { setGlobals(g); setLoading(false); }
+        }, 0);
+        return () => { cancelled = true; clearTimeout(id); };
+    }, [loadToken, scriptingEngineRef]);
 
     const savedSet = useMemo(() => new Set(saveList), [saveList]);
 
@@ -144,7 +155,7 @@ export function VariablesView({ connectionId, scriptingEngineRef }: VariablesVie
         <div className="script-editor__error-log-view">
             <div className="script-editor__error-log-header">
                 <span className="script-editor__error-log-title">
-                    {saveList.length} saved · {topRows.length} shown
+                    {saveList.length} saved · {loading ? '…' : topRows.length} shown
                 </span>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer', opacity: 0.85 }}>
@@ -162,11 +173,16 @@ export function VariablesView({ connectionId, scriptingEngineRef }: VariablesVie
                         placeholder="Filter…"
                         style={{ width: 140, height: 26 }}
                     />
-                    <Button variant="secondary" size="sm" onClick={refresh}>Refresh</Button>
+                    <Button variant="secondary" size="sm" onClick={refresh} disabled={loading}>Refresh</Button>
                 </div>
             </div>
             <div style={{ flex: 1, overflow: 'auto', fontSize: 12 }}>
-                {topRows.length === 0 ? (
+                {loading ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 16, opacity: 0.7 }}>
+                        <Loader2 size={15} style={{ animation: 'package-repo-spin 0.9s linear infinite' }} />
+                        <span>Reading variables…</span>
+                    </div>
+                ) : topRows.length === 0 ? (
                     <div style={{ padding: 16, opacity: 0.6 }}>
                         {globals.length === 0
                             ? 'No globals — open/connect the profile so the Lua runtime is running, then Refresh.'

@@ -2740,6 +2740,39 @@ export class ScriptingAPI {
     }
 
     /**
+     * Mudlet getRowCount(name). Reports the displayable row capacity of the
+     * named window (or "main") — how many text lines fit vertically in the
+     * rendered area. Mirrors getColumnCount: measures the live element, and
+     * falls back to a font-derived estimate from the stored window height when
+     * the panel hasn't mounted yet (so resize+busy-loop scripts don't hang).
+     */
+    getRowCount(windowName?: string): number {
+        const isMain = !windowName || windowName === 'main';
+        const el = isMain
+            ? this.session.windows.getElement('main')
+            : this.session.windows.getElement(windowName!);
+
+        const profileFamily = selectProfileField(useAppStore.getState(), this.connectionId, 'outputFont')?.family ?? '';
+        const profileSize   = selectProfileField(useAppStore.getState(), this.connectionId, 'fontSize') ?? 12;
+        const family = (isMain ? null : this.session.windows.getFont(windowName!)) ?? profileFamily;
+        const fontSize = (isMain ? null : this.session.windows.getFontSize(windowName!)) ?? profileSize;
+        const [, cellH] = measureMonospaceCell(family, fontSize);
+        if (cellH <= 0) return 0;
+
+        if (el) {
+            const cs = getComputedStyle(el);
+            const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+            const height = Math.max(0, el.clientHeight - pad);
+            if (height > 0) return Math.floor(height / cellH);
+        }
+        if (isMain) return 0;
+
+        const size = this.session.windows.getSize(windowName!);
+        if (!size || size.height <= 0) return 0;
+        return Math.floor(size.height / cellH);
+    }
+
+    /**
      * Mudlet setWindowWrap(name, charsPerLine). Sets the visual wrap width
      * (in monospace columns) for the named window or "main". 0 clears the
      * setting. Returns false when the named window does not exist; main always
@@ -3787,7 +3820,12 @@ export class ScriptingAPI {
      * window doesn't exist.
      */
     getUserWindowSize(name: string): [number, number] {
-        const size = name ? this.session.windows.getSize(name) : null;
+        // Mudlet resolves the default/"main" name to the main window. The Lua
+        // binding already intercepts that case, but guard here too so any future
+        // internal caller can't reintroduce the nil-size crash (see Geyser
+        // Label:onRightClick).
+        if (!name || name === 'main') return this.getMainWindowSize();
+        const size = this.session.windows.getSize(name);
         if (!size) return [0, 0];
         return [size.width, size.height];
     }
@@ -4229,7 +4267,11 @@ export class ScriptingAPI {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private getConsole(name?: string): Console | null {
-        return this.session.consoles.get(name ?? 'main') ?? null;
+        // Mudlet treats the default/empty/"main" name as the main console. The
+        // `?? 'main'` only catches null/undefined, so map the empty string too —
+        // otherwise getLineNumber(""), getColumnNumber(""), etc. miss the main
+        // buffer and return their not-found sentinels.
+        return this.session.consoles.get(name ? name : 'main') ?? null;
     }
 
     /**

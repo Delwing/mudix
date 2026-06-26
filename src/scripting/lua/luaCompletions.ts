@@ -448,6 +448,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('getLastLineNumber', '([window])',  'Get line number of the last line in the buffer'),
     fn('getColumnNumber', '([window])',    'Get cursor column'),
     fn('getColumnCount',  '([window]) → number', 'Get the displayable column count of a window — how many monospace characters fit horizontally in the rendered area. Unaffected by setWindowWrap.'),
+    fn('getRowCount',     '([window]) → number', 'Get the displayable row count of a window — how many text lines fit vertically in the rendered area.'),
     fn('getMainConsoleWidth', '() → number', 'Pixel width of the main console text area — monospace cell width × (wrap columns + 1). Wrap columns come from setWindowWrap("main", n), else the live measured column count.'),
     fn('setWindowWrap',   '(window, cols) → bool', 'Set the visual line-wrap width (in monospace columns) for a window (use "main" for the main output). Pass 0 to clear.'),
     fn('getWindowWrap',   '(window) → number', 'Get the visual line-wrap width (monospace columns) of a window ("main" for the main output). 0 when unset; -1 when the window does not exist.'),

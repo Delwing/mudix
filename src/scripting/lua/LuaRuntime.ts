@@ -220,12 +220,13 @@ for k in pairs(_G) do
 end
 `;
 
-// Enumerate globals for the Variables view: name, Lua type, a scalar value
-// preview, whether it's a table, and whether it's flaggable to save.
-// Functions/userdata/threads are listed but not saveable (Mudlet greys them).
-// Built-in globals (in __mudix_baseline) are flagged and NOT recursed — only
-// user globals get their table contents walked, so the payload stays small and
-// the view can expand them. `seen` breaks reference cycles.
+// Enumerate globals for the Variables view as a full nested tree: name, Lua
+// type, a scalar value preview, whether it's a table, and whether it's flaggable
+// to save. Functions/userdata/threads are listed but not saveable (Mudlet greys
+// them). Built-in globals (in __mudix_baseline) are flagged and NOT recursed —
+// only user globals get their contents walked, so the payload stays bounded to
+// user data while the view can expand any of it instantly (no re-fetch). `seen`
+// breaks reference cycles.
 const LIST_GLOBALS_LUA = `
 local baseline = __mudix_baseline or {}
 local function describe(v, recurse, seen)
@@ -3137,6 +3138,7 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         this.lua.global.set('getColumnNumber',(win?: string)=> this.api.getColumnNumber(win));
         this.lua.global.set('getColumnCount', (win?: string)=> this.api.getColumnCount(win));
+        this.lua.global.set('getRowCount',    (win?: string)=> this.api.getRowCount(win));
         // setWindowWrap(windowName, charsPerLine) — Mudlet shape. The name arg
         // is required; non-string raises a bad-argument error so scripts that
         // forgot the name (the no-arg "shorthand") see the same failure they
@@ -4510,7 +4512,7 @@ end`,
         }
     }
 
-    /** Enumerate `_G` entries (user globals nested, built-ins flagged) for the
+    /** Enumerate `_G` (user globals as a nested tree, built-ins flagged) for the
      *  Variables view. See {@link LuaGlobalEntry}. */
     listGlobals(): LuaGlobalEntry[] {
         const json = this.execInner(LIST_GLOBALS_LUA, 'list-globals');

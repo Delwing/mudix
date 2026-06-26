@@ -10,10 +10,11 @@ export type CaptureSpan = { start: number; length: number };
 /** One `_G` entry (or nested table entry), as surfaced to the Variables view.
  *  `saveable` is false for functions/userdata/threads (shown but not flaggable,
  *  like Mudlet). `value` is a string preview for scalars; `isTable` marks a
- *  table; `children` carries its contents (populated for user globals, omitted
- *  for built-ins). `builtin` flags entries that existed at runtime boot (the
- *  default Lua + Mudlet API namespace) — hidden by default, like Mudlet.
- *  `keyKind` ('string' | 'number') distinguishes table keys for nested rows. */
+ *  table and `children` carries its contents (populated for user globals,
+ *  omitted for built-ins, which aren't recursed). `builtin` flags entries that
+ *  existed at runtime boot (the default Lua + Mudlet API namespace) — hidden by
+ *  default, like Mudlet. `keyKind` ('string' | 'number') distinguishes table
+ *  keys for nested rows. */
 export interface LuaGlobalEntry {
     name: string;
     valueType: string;
@@ -90,6 +91,7 @@ export interface IScriptingRuntime {
     restoreVariables(vars: MudletVariable[]): void;
     /** Snapshot the save-listed globals out of `_G` into a variable tree. */
     captureVariables(saveList: string[]): MudletVariable[];
-    /** Enumerate the current top-level `_G` entries for the Variables view. */
+    /** Enumerate `_G` for the Variables view: user globals as a full nested tree,
+     *  built-ins flagged (and not recursed). */
     listGlobals(): LuaGlobalEntry[];
 }
