@@ -83,7 +83,7 @@ function parseScripts(els: Element[], parentId: string | null, out: ScriptNode[]
         const eventHandlers = Array.from(handlerListEl?.children ?? [])
             .filter(c => c.tagName === 'string')
             .map(s => s.textContent?.trim() ?? '').filter(Boolean);
-        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), code: getText(el, 'script'), language: 'lua', eventHandlers });
+        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), code: getText(el, 'script'), language: 'lua', eventHandlers, packageName: getText(el, 'packageName') || undefined });
         // Scripts (like triggers) can nest under a NON-folder parent: Mudlet's
         // TScript model lets a script carry both its own body and child scripts,
         // and its export nests the children directly inside the parent <Script>
@@ -100,7 +100,7 @@ function parseAliases(els: Element[], parentId: string | null, out: AliasNode[])
     for (const el of els) {
         const id = crypto.randomUUID();
         const group = isGroup(el);
-        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), pattern: getRawText(el, 'regex'), command: getText(el, 'command'), code: getText(el, 'script'), language: 'lua' });
+        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), pattern: getRawText(el, 'regex'), command: getText(el, 'command'), code: getText(el, 'script'), language: 'lua', packageName: getText(el, 'packageName') || undefined });
         if (group) parseAliases(directChildren(el, 'Alias', 'AliasGroup'), id, out);
     }
 }
@@ -137,6 +137,7 @@ function parseTriggers(els: Element[], parentId: string | null, out: TriggerNode
             multiline: isYes(el, 'isMultiline'),
             delta: parseInt(getText(el, 'conditonLineDelta')) || 0,
             isFilter: isYes(el, 'isFilterTrigger'),
+            packageName: getText(el, 'packageName') || undefined,
         });
         // Triggers (unlike scripts/aliases/timers/keys) can nest under a non-folder
         // parent: Mudlet's chain-trigger model lets any trigger with children act as
@@ -150,7 +151,7 @@ function parseTimers(els: Element[], parentId: string | null, out: TimerNode[]):
         if (isYes(el, 'isTempTimer')) continue;
         const id = crypto.randomUUID();
         const group = isGroup(el);
-        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), seconds: parseTimerTime(getText(el, 'time')), code: getText(el, 'script'), language: 'lua', command: getText(el, 'command'), repeat: true });
+        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), seconds: parseTimerTime(getText(el, 'time')), code: getText(el, 'script'), language: 'lua', command: getText(el, 'command'), repeat: true, packageName: getText(el, 'packageName') || undefined });
         if (group) parseTimers(directChildren(el, 'Timer', 'TimerGroup'), id, out);
     }
 }
@@ -188,6 +189,7 @@ function parseButtons(els: Element[], parentId: string | null, out: ButtonNode[]
             command:     getText(el, 'commandButtonUp')   || undefined,
             commandDown: getText(el, 'commandButtonDown') || undefined,
             styleSheet,
+            packageName: getText(el, 'packageName') || undefined,
         };
         out.push(node);
         if (group) parseButtons(directChildren(el, 'Action', 'ActionGroup'), id, out);
@@ -207,7 +209,7 @@ function parseKeys(els: Element[], parentId: string | null, out: KeyNode[], warn
         if (!group && !key && qtKey !== 0) {
             warnings.push(`Key "${getText(el, 'name')}": unknown Qt key code ${qtKey} — keybinding imported with no key set`);
         }
-        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), key, modifiers: qtModifiersToList(qtMod), code: getText(el, 'script'), language: 'lua', command: getText(el, 'command') });
+        out.push({ id, parentId, isGroup: group, name: getText(el, 'name'), enabled: isYes(el, 'isActive'), key, modifiers: qtModifiersToList(qtMod), code: getText(el, 'script'), language: 'lua', command: getText(el, 'command'), packageName: getText(el, 'packageName') || undefined });
         if (group) parseKeys(directChildren(el, 'Key', 'KeyGroup'), id, out, warnings);
     }
 }

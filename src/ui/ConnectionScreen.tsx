@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Button, useConfirm } from './components';
 import { ConnectionFormModal } from './ConnectionFormModal';
 import { connectionDisplayAddr, type MudConnection } from '../storage';
+import { extractMudletProfileZip, resolveModulesFromTree, addModuleToBundle, type MudletProfileBundle } from '../import/mudletProfileImport';
+import { importMudletProfile, bundleFromDirectory } from '../import/applyMudletProfile';
+import { ModuleResolveModal, type ModuleUpload } from './ModuleResolveModal';
+import type { MudletModuleRef } from '../import/mudletHost';
 
 /** Deterministic background color for a profile's name tile — same name always
  *  yields the same hue, so each profile gets a stable, distinct color. */
@@ -67,6 +71,62 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     const confirm = useConfirm();
     // null = editor closed; { connection: null } = add a new one; { connection: c } = edit c.
     const [editor, setEditor] = useState<{ connection: MudConnection | null } | null>(null);
+    const [importing, setImporting] = useState(false);
+    const [importError, setImportError] = useState<string | null>(null);
+    // Set when an imported profile references modules whose files weren't found —
+    // the modal asks the user to upload or drop each before the import completes.
+    const [pendingImport, setPendingImport] = useState<{ bundle: MudletProfileBundle; unresolved: MudletModuleRef[] } | null>(null);
+    const zipInputRef = useRef<HTMLInputElement>(null);
+    // Directory import needs the File System Access API; fall back to .zip elsewhere.
+    const dirPicker = (window as unknown as { showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker;
+
+    // The new connection lands in the store, so the list re-renders on its own.
+    const runImport = async (fn: () => Promise<void>) => {
+        setImporting(true);
+        setImportError(null);
+        try {
+            await fn();
+        } catch (err) {
+            if ((err as { name?: string })?.name === 'AbortError') return; // user cancelled the picker
+            setImportError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setImporting(false);
+        }
+    };
+
+    // Auto-resolve modules found in the imported tree; defer to the modal for the
+    // rest, otherwise provision the profile immediately.
+    const beginImport = async (bundle: MudletProfileBundle) => {
+        const { resolved, unresolved } = resolveModulesFromTree(bundle);
+        for (const r of resolved) addModuleToBundle(bundle, r.ref.key, r.xmlBytes);
+        if (unresolved.length) { setPendingImport({ bundle, unresolved }); return; }
+        await importMudletProfile(bundle);
+    };
+
+    const handleImportFolder = () => {
+        if (!dirPicker) return;
+        void runImport(async () => beginImport(await bundleFromDirectory(await dirPicker.call(window))));
+    };
+
+    const handleZipChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        void runImport(async () => {
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            return beginImport(extractMudletProfileZip(bytes, file.name.replace(/\.zip$/i, '')));
+        });
+    };
+
+    const finishPendingImport = (uploads: ModuleUpload[]) => {
+        const p = pendingImport;
+        if (!p) return;
+        setPendingImport(null);
+        void runImport(async () => {
+            for (const u of uploads) addModuleToBundle(p.bundle, u.key, u.bytes);
+            await importMudletProfile(p.bundle);
+        });
+    };
 
     const handleDelete = async (c: MudConnection) => {
         const ok = await confirm<boolean>({
@@ -158,6 +218,23 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                 >
                     + Add connection
                 </Button>
+
+                <div className="connection-import-row" style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8 }}>
+                    {dirPicker && (
+                        <Button variant="secondary" size="sm" onClick={handleImportFolder} disabled={connecting || importing}>
+                            {importing ? 'Importing…' : 'Import Mudlet folder…'}
+                        </Button>
+                    )}
+                    <Button variant="secondary" size="sm" onClick={() => zipInputRef.current?.click()} disabled={connecting || importing}>
+                        {importing && !dirPicker ? 'Importing…' : 'Import .zip…'}
+                    </Button>
+                </div>
+                {importError && (
+                    <div className="connection-import-error" style={{ color: 'var(--danger, #e06c75)', fontSize: 12, textAlign: 'center', marginTop: 6 }}>
+                        Import failed: {importError}
+                    </div>
+                )}
+                <input ref={zipInputRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={handleZipChange} />
             </div>
         </div>
         {editor && (
@@ -168,6 +245,13 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                 onAdd={onAdd}
                 onUpdate={onUpdate}
                 onClose={() => setEditor(null)}
+            />
+        )}
+        {pendingImport && (
+            <ModuleResolveModal
+                modules={pendingImport.unresolved}
+                onComplete={finishPendingImport}
+                onCancel={() => setPendingImport(null)}
             />
         )}
         </>
