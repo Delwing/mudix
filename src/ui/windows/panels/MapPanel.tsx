@@ -112,6 +112,10 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         x: number;
         y: number;
         roomId: number;
+        // Whether the cursor was over a real room when the menu opened. False
+        // for a right-click on empty map space, where roomId falls back to the
+        // selection center (or -1) and room-specific built-ins are suppressed.
+        hasRoom: boolean;
         items: MapEventEntry[];
     } | null>(null);
     const [mapInfos, setMapInfos] = useState<MapInfoResult[]>([]);
@@ -483,10 +487,10 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             manager.mapStore.clearMapSelection();
         });
 
-        renderer.backend.events.on('roomcontextmenu', (detail: RoomContextMenuEventDetail) => {
-            // Submenus registered via addMapMenu are pure containers (no event);
-            // surface them as event-shaped nodes so addMapEvent entries whose
-            // `parent` names a menu nest under them. Menus first, then events.
+        // Submenus registered via addMapMenu are pure containers (no event);
+        // surface them as event-shaped nodes so addMapEvent entries whose
+        // `parent` names a menu nest under them. Menus first, then events.
+        const buildMapMenuItems = (): MapEventEntry[] => {
             const menuNodes: MapEventEntry[] = manager.mapStore.getMapMenus().map(m => ({
                 uniqueName: m.name,
                 eventName: '',
@@ -494,15 +498,48 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 displayName: m.displayName,
                 args: [],
             }));
-            const items = [...menuNodes, ...manager.mapStore.getMapEvents()];
+            return [...menuNodes, ...manager.mapStore.getMapEvents()];
+        };
+
+        renderer.backend.events.on('roomcontextmenu', (detail: RoomContextMenuEventDetail) => {
             const rect = containerRef.current?.getBoundingClientRect();
             setContextMenu({
                 x: (rect?.left ?? 0) + detail.position.x,
                 y: (rect?.top ?? 0) + detail.position.y,
                 roomId: detail.roomId,
-                items,
+                hasRoom: true,
+                items: buildMapMenuItems(),
             });
         });
+
+        // Right-click on empty map space (not a room). The renderer's own
+        // contextmenu listener only preventDefault()s + emits roomcontextmenu
+        // when the cursor is over a room; on empty space it leaves the event
+        // alone, so the browser's native menu would show. Mudlet surfaces the
+        // map's addMapMenu/addMapEvent entries on a right-click anywhere on the
+        // 2D map, so mirror that. This listener is on the same element as the
+        // renderer's and is registered after it, so it runs second — bail when
+        // the renderer already claimed the event (a room hit set defaultPrevented).
+        const onMapContextMenu = (e: MouseEvent) => {
+            if (e.defaultPrevented) return;
+            const items = buildMapMenuItems();
+            // Always suppress the native menu over the map canvas, even when no
+            // custom entries are registered (nothing to show then — the menu
+            // component renders null without a room or items).
+            e.preventDefault();
+            if (items.length === 0) return;
+            setContextMenu({
+                x: e.clientX,
+                y: e.clientY,
+                // No room under the cursor: fall back to the current selection
+                // center so dispatched events still target a sensible room
+                // (Mudlet operates on the selection here), else -1 = none.
+                roomId: manager.mapStore.getSelectionCenter() ?? -1,
+                hasRoom: false,
+                items,
+            });
+        };
+        mapContainer?.addEventListener('contextmenu', onMapContextMenu);
 
         // Mudlet `sysMapWindowMousePressEvent(button, x, y)` — fired on every
         // mouse press inside the map widget. Mudlet's button mapping mirrors
@@ -589,6 +626,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             renderer.events.off('zoom', onZoom);
             panelEl?.removeEventListener('wheel', onWheelCapture, { capture: true });
             mapContainer?.removeEventListener('mousedown', onMapMouseDown);
+            mapContainer?.removeEventListener('contextmenu', onMapContextMenu);
             mapContainer?.removeEventListener('mousedown', onClickCapture, { capture: true });
             renderer.camera.off('change', onCameraChange);
             renderer.destroy();
@@ -1325,7 +1363,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                     y={contextMenu.y}
                     roomId={contextMenu.roomId}
                     items={contextMenu.items}
-                    builtinItems={[
+                    builtinItems={contextMenu.hasRoom ? [
                         {
                             label: 'Set player location',
                             onClick: () => {
@@ -1346,7 +1384,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                                 setContextMenu(null);
                             },
                         },
-                    ]}
+                    ] : []}
                     onClose={() => setContextMenu(null)}
                     onSelect={(uniqueName) => {
                         manager.mapStore.dispatchMapEvent(uniqueName, contextMenu.roomId);
