@@ -2319,6 +2319,12 @@ export class ScriptingEngine {
         this.api.setLoggingToggler(fn);
     }
 
+    /** Mudlet's "Show errors in main console" — when on, script errors are also
+     *  echoed (in red) into the main output window, not just the Errors tab. */
+    setShowErrorsInMainWindow(enabled: boolean): void {
+        this.api.showErrorsInMainWindow = enabled;
+    }
+
     /** Mudlet `appendLog(text)` — forward to the active SessionLogger. */
     setLogAppender(fn: ((text: string) => void) | null): void {
         this.api.setLogAppender(fn);

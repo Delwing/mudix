@@ -490,6 +490,10 @@ export class ScriptingAPI {
     readonly aliases: AliasEngine;
     readonly triggers: TriggerEngine;
     profileName = '';
+    /** When true, errors routed through {@link printError} are also echoed into
+     *  the main output window (Mudlet's "Show errors in main console"). Wired
+     *  from ProfileSettings.showErrorsInMainWindow in ProfileSession. */
+    showErrorsInMainWindow = false;
     readonly timers: TimerEngine;
     readonly keys: KeyEngine;
     /** Mudlet-compatible stopwatch registry (createStopWatch & friends).
@@ -4255,6 +4259,9 @@ export class ScriptingAPI {
 
     printError(text: string, source?: ScriptLogSource): void {
         this.session.events.emit('script.log', text, 'error', source);
+        if (this.showErrorsInMainWindow) {
+            this.session.events.emit('message', text, 'error', Date.now());
+        }
     }
 
     destroy(): void {

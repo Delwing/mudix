@@ -99,6 +99,9 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // Flash the tab title when server data arrives while the tab is unfocused
     // (Mudlet's "notify on new data" / taskbar blink). Off unless explicitly on.
     const notifyOnNewData = useAppStore(s => selectProfileField(s, connection.id, 'notifyOnNewData')) === true;
+    // Mudlet's "Show errors in main console": mirror script errors into the main
+    // output window (red), not just the script editor's Errors tab. Off by default.
+    const showErrorsInMainWindow = useAppStore(s => selectProfileField(s, connection.id, 'showErrorsInMainWindow')) === true;
     // Mudlet's `showTabConnectionIndicators` (config bag). Defaults to true; when
     // on, the window title is prefixed with a connection-status dot. mudix has no
     // tab strip, so the indicator (and always the profile name) live in the title.
@@ -207,6 +210,12 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
         session.events.on('flushLines', onData);
         return () => session.events.off('flushLines', onData);
     }, [notifyOnNewData, session]);
+
+    // Push the "show errors in main console" preference into the scripting
+    // engine so printError can mirror errors to the main window when enabled.
+    useEffect(() => {
+        engineRef.current?.setShowErrorsInMainWindow(showErrorsInMainWindow);
+    }, [showErrorsInMainWindow, connection.id, engineRef]);
 
     // Color for the local echo of sent commands (Settings → Colors). Empty
     // foreground falls back to Mudlet's olive; empty background = none.

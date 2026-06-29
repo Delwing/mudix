@@ -165,6 +165,10 @@ export interface ProfileSettings {
      *  server data arrives while the mudix tab/window is unfocused. Off unless
      *  explicitly set to true. */
     notifyOnNewData?: boolean;
+    /** Mirror script/trigger/alias/timer errors into the main output window (in
+     *  red), in addition to the script editor's Errors tab. Mudlet's "Show
+     *  errors in main console" preference. Off unless explicitly set to true. */
+    showErrorsInMainWindow?: boolean;
     /** User-tunable subset of mudlet-map-renderer's Settings object. Fields
      *  are forwarded onto the live renderer.settings on mount and whenever
      *  the user changes them in the Mapper tab. Missing fields fall through
