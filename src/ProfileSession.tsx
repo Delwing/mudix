@@ -136,9 +136,13 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // synchronously during render (matching the seededFor pattern); user-driven
     // toggles after the first connect take effect on the next reconnect.
     // Advertise the configured WebSocket subprotocols (see
-    // ProtocolSettings.wsSubprotocols). Defaults to ['binary'] — the raw telnet
-    // stream mudix decodes; the server picks one it knows, or none.
-    const subprotocols = [...wsSubprotocols];
+    // ProtocolSettings.wsSubprotocols) — but only for direct websocket-mode
+    // connections. Proxy (`mud`) mode dials the telnet→WS proxy, which speaks a
+    // raw telnet byte stream over binary frames negotiated out of band; it does
+    // not select a subprotocol, and advertising one breaks proxies that don't
+    // echo it back in the 101 (e.g. a Cloudflare Worker). Default ['binary']
+    // otherwise — the raw telnet stream mudix decodes.
+    const subprotocols = connection.mode === 'mud' ? [] : [...wsSubprotocols];
     // The NEW-ENVIRON TLS variable describes the game-facing link: a direct
     // wss:// connection is TLS, but proxy mode is plaintext upstream regardless
     // of the proxy URL scheme (see connectionSecureTransport).
