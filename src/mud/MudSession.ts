@@ -97,8 +97,18 @@ export class MudSession {
 
     private readonly options: MudSessionOptions;
 
+    /** Warn before the tab closes while a connection is live. Owned here rather
+     *  than by MudClient — a fresh client is created on every connect(), so a
+     *  per-client listener would accumulate one leaked closure per reconnect. */
+    private readonly beforeUnload = (event: Event) => {
+        if (this.client?.isSocketOpen()) event.preventDefault();
+    };
+
     constructor(options: MudSessionOptions = {}) {
         this.options = { ...options };
+        if (typeof window !== 'undefined') {
+            window.addEventListener('beforeunload', this.beforeUnload);
+        }
         this.windows.setConsoleRegistry(this.consoles);
         // The main output area reports its character grid here on every resize;
         // forward it to the client so NAWS (window size) stays in sync.
@@ -351,6 +361,9 @@ export class MudSession {
     destroy(): void {
         if (this._destroyed) return;
         this._destroyed = true;
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('beforeunload', this.beforeUnload);
+        }
         // Persist any pending map view changes (e.g. a just-changed per-area
         // zoom) before tearing down. The save is async but the worker + IDB
         // outlive this instance, so an in-app close still completes it.
