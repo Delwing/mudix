@@ -100,6 +100,7 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // Mudlet's "Show errors in main console": mirror script errors into the main
     // output window (red), not just the script editor's Errors tab. Off by default.
     const showErrorsInMainWindow = useAppStore(s => selectProfileField(s, connection.id, 'showErrorsInMainWindow')) === true;
+    const fullscreen = useAppStore(s => selectProfileField(s, connection.id, 'fullscreen')) === true;
     // Mudlet's `showTabConnectionIndicators` (config bag). Defaults to true; when
     // on, the window title is prefixed with a connection-status dot. mudix has no
     // tab strip, so the indicator (and always the profile name) live in the title.
@@ -562,7 +563,8 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
 
     return (
         <ConnectionIdContext.Provider value={connection.id}>
-        <div className="app">
+        <div className={fullscreen ? 'app app--fullscreen' : 'app'}>
+            {fullscreen && <div className="app-topbar-hover-zone" aria-hidden="true" />}
             <Toolbar
                 connectionName={connection.name}
                 status={status}

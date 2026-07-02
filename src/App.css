@@ -204,6 +204,37 @@ html, body, #root {
     z-index: 10;
 }
 
+/* ── Fullscreen mode ───────────────────────────────────────────
+   The toolbar is lifted out of the flex column and floats over the
+   output, hidden above the top edge. It slides down when the pointer
+   enters the top hover zone, hovers the bar itself, or the bar takes
+   keyboard focus — so the output area gets the full window height. */
+.app--fullscreen > .mudix-toolbar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    transform: translateY(-100%);
+    transition: transform 0.18s ease;
+    z-index: 60;
+    will-change: transform;
+}
+.app-topbar-hover-zone {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    /* Thin catch strip along the top edge; sits above the output so a
+       pointer approaching the top reveals the bar. */
+    height: 10px;
+    z-index: 55;
+}
+.app-topbar-hover-zone:hover ~ .mudix-toolbar,
+.app--fullscreen > .mudix-toolbar:hover,
+.app--fullscreen > .mudix-toolbar:focus-within {
+    transform: translateY(0);
+}
+
 .brand {
     font-family: var(--font-ui), sans-serif;
     font-weight: 700;
@@ -489,10 +520,22 @@ html, body, #root {
     padding: 24px 16px;
 }
 
-.connection-settings-btn {
+/* About + settings buttons, anchored to the top-right of the central panel
+   (not the viewport) so they stay near the content on wide screens. */
+.connection-panel-tools {
     position: absolute;
-    top: 12px;
-    right: 14px;
+    top: 0;
+    right: 0;
+    display: flex;
+    gap: 8px;
+    z-index: 1;
+}
+
+.connection-settings-btn,
+.connection-about-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: none;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -500,11 +543,12 @@ html, body, #root {
     cursor: pointer;
     font-size: 16px;
     line-height: 1;
-    padding: 5px 8px;
+    padding: 6px 8px;
     transition: color 0.1s, border-color 0.1s;
 }
 
-.connection-settings-btn:hover {
+.connection-settings-btn:hover,
+.connection-about-btn:hover {
     color: var(--text);
     border-color: var(--accent-dim);
 }
@@ -547,8 +591,9 @@ html, body, #root {
 }
 
 .connection-panel {
+    position: relative;
     width: 100%;
-    max-width: 600px;
+    max-width: 880px;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -661,6 +706,214 @@ html, body, #root {
     display: flex;
     gap: 6px;
     flex-shrink: 0;
+}
+
+/* ── Tiled connection cards (drag-to-rearrange grid) ─────────────── */
+.connection-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.connection-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--bg-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    box-shadow: inset 0 1px 0 var(--border-hi);
+    border-radius: var(--radius);
+    padding: 12px;
+    cursor: grab;
+    transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s, opacity 0.12s;
+}
+
+.connection-tile:hover {
+    border-color: color-mix(in srgb, var(--accent-dim) 50%, var(--border));
+    box-shadow: inset 0 1px 0 var(--border-hi), var(--shadow-card);
+}
+
+.connection-tile:active {
+    cursor: grabbing;
+}
+
+/* The tile being dragged fades out; its drop target grows an accent outline. */
+.connection-tile.is-dragging {
+    opacity: 0.4;
+}
+
+.connection-tile.is-over {
+    border-color: var(--accent);
+    box-shadow: inset 0 1px 0 var(--border-hi), 0 0 0 2px var(--accent-glow);
+    transform: translateY(-1px);
+}
+
+.connection-tile.connection-card--editing {
+    border-color: var(--accent-dim);
+    box-shadow: inset 0 1px 0 var(--border-hi), 0 0 0 1px var(--accent-dim);
+}
+
+/* Header row: the native-size 120×30 avatar on the left, the Connect button
+   filling the space to its right, and a drag handle pinned to the right edge.
+   Custom icons are authored for that exact box, so the avatar is never scaled up. */
+.connection-tile__header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* Name + address sit full-width below the header so long addresses wrap onto a
+   second line instead of being truncated. */
+.connection-tile__body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.connection-tile__name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+}
+
+.connection-tile__body .connection-addr {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+}
+
+/* Separates the destructive edit/delete icons (pushed right) from Open. */
+.connection-tile__actions-spacer {
+    flex: 1;
+}
+
+.connection-tile__name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.connection-tile__actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: auto;
+}
+
+/* Connect is the primary action — it fills the gutter beside the avatar. */
+.connection-tile__connect {
+    flex: 1;
+    justify-content: center;
+}
+
+/* Ghost "add connection" tile that closes out the grid. Dashed outline and
+   centered plus keep it visually distinct from the real profile tiles. */
+.connection-tile--add {
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 120px;
+    background: none;
+    border-style: dashed;
+    color: var(--text-dim);
+    font-family: var(--font-ui), sans-serif;
+    cursor: pointer;
+}
+
+.connection-tile--add:hover {
+    border-color: var(--accent-dim);
+    color: var(--accent);
+    box-shadow: inset 0 1px 0 var(--border-hi), var(--shadow-card);
+}
+
+.connection-tile--add:disabled {
+    opacity: 0.5;
+    cursor: default;
+    border-color: var(--border);
+    color: var(--text-dim);
+    box-shadow: inset 0 1px 0 var(--border-hi);
+}
+
+.connection-tile__add-plus {
+    font-size: 28px;
+    font-weight: 300;
+    line-height: 1;
+}
+
+.connection-tile__add-label {
+    font-size: 13px;
+    font-weight: 500;
+}
+
+/* ── About modal ────────────────────────────────────────────────── */
+.about-modal {
+    width: min(440px, 92vw);
+}
+
+.about-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    text-align: center;
+    align-items: center;
+}
+
+.about-wordmark {
+    font-family: var(--font-ui), sans-serif;
+    font-weight: 700;
+    font-size: 34px;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+}
+
+.about-tagline {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    margin: -6px 0 0;
+}
+
+.about-text {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-dim);
+    max-width: 380px;
+    margin: 0;
+}
+
+.about-gh {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-ui), sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+
+.about-gh:hover {
+    border-color: var(--accent-dim);
+    background: var(--hover-bg);
+    color: var(--accent);
+}
+
+.about-version {
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    color: var(--text-dim);
 }
 
 .connection-form {

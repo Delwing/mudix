@@ -152,6 +152,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const loggingOn = loggingEnabled !== false;
     const notifyOnNewData = useAppStore(s => selectProfileField(s, connectionId, 'notifyOnNewData')) === true;
     const showErrorsInMainWindow = useAppStore(s => selectProfileField(s, connectionId, 'showErrorsInMainWindow')) === true;
+    const fullscreen = useAppStore(s => selectProfileField(s, connectionId, 'fullscreen')) === true;
     const outputBorders = useAppStore(s => selectProfileField(s, connectionId, 'outputBorders'));
     const borders = outputBorders ?? EMPTY_BORDERS;
     const autoClearInput = useAppStore(s => selectProfileField(s, connectionId, 'autoClearInput')) === true;
@@ -809,6 +810,21 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                         aria-labelledby="show-errors-main-window-label"
                                         checked={showErrorsInMainWindow}
                                         onChange={next => patchProfile({ showErrorsInMainWindow: next })}
+                                    />
+                                </div>
+                                <div className="settings-row">
+                                    <span className="settings-label" id="fullscreen-mode-label">
+                                        Fullscreen mode
+                                        <HelpTip label="About fullscreen mode">
+                                            Hide the top toolbar so the output area fills the whole window. Move
+                                            the pointer to the top edge (or tab into the bar) to reveal it.
+                                        </HelpTip>
+                                    </span>
+                                    <Toggle
+                                        id="fullscreen-mode"
+                                        aria-labelledby="fullscreen-mode-label"
+                                        checked={fullscreen}
+                                        onChange={next => patchProfile({ fullscreen: next })}
                                     />
                                 </div>
                                 <div className="settings-row">

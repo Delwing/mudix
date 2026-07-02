@@ -49,6 +49,11 @@ interface AppStore extends AppSchema {
      *  connection record. Keys set to `undefined` are removed. */
     patchConnection: (id: string, patch: Partial<Omit<MudConnection, 'id'>>) => void;
     removeConnection: (id: string) => void;
+    /** Reorder the profile list to match `orderedIds`. Ids not present in the
+     *  list are ignored; any existing connection missing from `orderedIds` is
+     *  appended in its current relative order (so a stale list can't drop
+     *  profiles). Backs drag-to-rearrange on the connection screen. */
+    reorderConnections: (orderedIds: string[]) => void;
     patchClient: (patch: Partial<ClientSettings>) => void;
     patchConnectionProfile: (connectionId: string, patch: Partial<ProfileSettings>) => void;
     saveWindowHint: (connectionId: string, panelId: string, hint: WindowOpenOptions) => void;
@@ -157,6 +162,18 @@ export const useAppStore = create<AppStore>()(
             updateConnection: (id, data) => set(s => ({
                 connections: s.connections.map(c => c.id === id ? { ...data, id } : c),
             })),
+            reorderConnections: orderedIds => set(s => {
+                const byId = new Map(s.connections.map(c => [c.id, c]));
+                const seen = new Set<string>();
+                const next: MudConnection[] = [];
+                for (const id of orderedIds) {
+                    const c = byId.get(id);
+                    if (c && !seen.has(id)) { next.push(c); seen.add(id); }
+                }
+                // Preserve any connection the caller's list forgot about.
+                for (const c of s.connections) if (!seen.has(c.id)) next.push(c);
+                return { connections: next };
+            }),
             patchConnection: (id, patch) => set(s => ({
                 connections: s.connections.map(c => {
                     if (c.id !== id) return c;

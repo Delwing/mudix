@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
-import { FolderSymlink } from 'lucide-react';
+import { FolderSymlink, Info, Trash2 } from 'lucide-react';
 import { Button, useConfirm } from './components';
 import { ConnectionFormModal } from './ConnectionFormModal';
-import { connectionDisplayAddr, type MudConnection } from '../storage';
+import { AboutModal } from './AboutModal';
+import { connectionDisplayAddr, useAppStore, type MudConnection } from '../storage';
 import { extractMudletProfileZip, resolveModulesFromTree, addModuleToBundle, type MudletProfileBundle } from '../import/mudletProfileImport';
 import { importMudletProfile, bundleFromDirectory, linkMudletFolder } from '../import/applyMudletProfile';
 import { ModuleResolveModal, type ModuleUpload } from './ModuleResolveModal';
@@ -70,10 +71,16 @@ interface Props {
 
 export function ConnectionScreen({ connections, connecting, connectingId, onConnect, onOpen, onAdd, onUpdate, onDelete, onOpenSettings }: Props) {
     const confirm = useConfirm();
+    const reorderConnections = useAppStore(s => s.reorderConnections);
     // null = editor closed; { connection: null } = add a new one; { connection: c } = edit c.
     const [editor, setEditor] = useState<{ connection: MudConnection | null } | null>(null);
+    const [aboutOpen, setAboutOpen] = useState(false);
     const [importing, setImporting] = useState(false);
     const [importError, setImportError] = useState<string | null>(null);
+    // Drag-to-rearrange state: `dragId` is the tile being dragged, `overId` the
+    // tile it's currently hovering (drawn with a drop indicator).
+    const [dragId, setDragId] = useState<string | null>(null);
+    const [overId, setOverId] = useState<string | null>(null);
     // Set when an imported profile references modules whose files weren't found —
     // the modal asks the user to upload or drop each before the import completes.
     const [pendingImport, setPendingImport] = useState<{ bundle: MudletProfileBundle; unresolved: MudletModuleRef[] } | null>(null);
@@ -157,22 +164,79 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         onDelete(c.id);
     };
 
+    // ── Drag-to-rearrange (native HTML5 DnD) ──────────────────────────────
+    const handleDragStart = (id: string) => (e: React.DragEvent) => {
+        setDragId(id);
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox requires data to be set for the drag to fire at all.
+        e.dataTransfer.setData('text/plain', id);
+    };
+    const handleDragOver = (id: string) => (e: React.DragEvent) => {
+        if (!dragId || dragId === id) return;
+        e.preventDefault(); // allow drop
+        e.dataTransfer.dropEffect = 'move';
+        if (overId !== id) setOverId(id);
+    };
+    const handleDrop = (targetId: string) => (e: React.DragEvent) => {
+        e.preventDefault();
+        const sourceId = dragId;
+        setDragId(null);
+        setOverId(null);
+        if (!sourceId || sourceId === targetId) return;
+        const ids = connections.map(c => c.id);
+        const from = ids.indexOf(sourceId);
+        const to = ids.indexOf(targetId);
+        if (from < 0 || to < 0) return;
+        ids.splice(from, 1);
+        ids.splice(ids.indexOf(targetId) + (to > from ? 1 : 0), 0, sourceId);
+        reorderConnections(ids);
+    };
+    const handleDragEnd = () => { setDragId(null); setOverId(null); };
+
     return (
         <>
         <div className="connection-screen">
-            <button className="connection-settings-btn" onClick={onOpenSettings} type="button" aria-label="Settings">
-                ⚙
-            </button>
             <div className="connection-panel">
+                <div className="connection-panel-tools">
+                    <button className="connection-settings-btn" onClick={onOpenSettings} type="button" aria-label="Settings">
+                        ⚙
+                    </button>
+                    <button className="connection-about-btn" onClick={() => setAboutOpen(true)} type="button" aria-label="About mudix">
+                        <Info size={16} />
+                    </button>
+                </div>
                 <div className="connection-brand">mudix</div>
 
-                {connections.length > 0 && (
-                    <div className="connection-list">
+                <div className="connection-grid" role="list">
                         {connections.map(c => (
-                            <div key={c.id} className="connection-card">
-                                <ProfileAvatar name={c.name} icon={c.icon} />
-                                <div className="connection-info">
-                                    <span className="connection-name" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            <div
+                                key={c.id}
+                                role="listitem"
+                                className={
+                                    'connection-tile' +
+                                    (dragId === c.id ? ' is-dragging' : '') +
+                                    (overId === c.id && dragId !== c.id ? ' is-over' : '') +
+                                    (editor?.connection?.id === c.id ? ' connection-card--editing' : '')
+                                }
+                                draggable={!connecting}
+                                onDragStart={handleDragStart(c.id)}
+                                onDragOver={handleDragOver(c.id)}
+                                onDrop={handleDrop(c.id)}
+                                onDragEnd={handleDragEnd}
+                            >
+                                <div className="connection-tile__header">
+                                    <ProfileAvatar name={c.name} icon={c.icon} />
+                                    <Button
+                                        variant="primary"
+                                        className="connection-tile__connect"
+                                        onClick={() => onConnect(c)}
+                                        disabled={connecting}
+                                    >
+                                        {connectingId === c.id ? 'Connecting…' : 'Connect'}
+                                    </Button>
+                                </div>
+                                <div className="connection-tile__body">
+                                    <span className="connection-name connection-tile__name">
                                         {c.name}
                                         {c.mudletLinked && (
                                             <FolderSymlink
@@ -186,23 +250,17 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                     </span>
                                     <span className="connection-addr">{connectionDisplayAddr(c)}</span>
                                 </div>
-                                <div className="connection-actions">
-                                    <Button
-                                        variant="primary"
-                                        onClick={() => onConnect(c)}
-                                        disabled={connecting}
-                                    >
-                                        {connectingId === c.id ? 'Connecting…' : 'Connect'}
-                                    </Button>
+                                <div className="connection-tile__actions">
                                     <Button
                                         variant="secondary"
-                                        size="md"
+                                        size="sm"
                                         onClick={() => onOpen(c)}
                                         disabled={connecting}
                                         title="Open profile offline"
                                     >
                                         Open
                                     </Button>
+                                    <span className="connection-tile__actions-spacer" />
                                     <Button
                                         variant="icon"
                                         size="sm"
@@ -221,22 +279,21 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                                         aria-label="Delete connection"
                                         title="Delete"
                                     >
-                                        ×
+                                        <Trash2 size={14} />
                                     </Button>
                                 </div>
                             </div>
                         ))}
-                    </div>
-                )}
-
-                <Button
-                    variant="secondary"
-                    className="connection-add-btn"
-                    onClick={() => setEditor({ connection: null })}
-                    disabled={connecting}
-                >
-                    + Add connection
-                </Button>
+                        <button
+                            type="button"
+                            className="connection-tile connection-tile--add"
+                            onClick={() => setEditor({ connection: null })}
+                            disabled={connecting}
+                        >
+                            <span className="connection-tile__add-plus" aria-hidden="true">+</span>
+                            <span className="connection-tile__add-label">Add connection</span>
+                        </button>
+                </div>
 
                 <div className="connection-import-row" style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8, flexWrap: 'wrap' }}>
                     {dirPicker && (
@@ -279,6 +336,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                 onCancel={() => setPendingImport(null)}
             />
         )}
+        {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
         </>
     );
 }
