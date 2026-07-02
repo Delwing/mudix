@@ -20,8 +20,6 @@ import { setBaseTitle, flashTitle, clearTitleFlash } from './utils/documentTitle
 import { applyAnsiPalette, setServerRedefineColorsAllowed, resetAllPaletteColors } from './mud/text/colors';
 import type { MudSession } from './mud/MudSession';
 import type { ProfileVFS } from './scripting/vfs/ProfileVFS';
-import { MUD_TELNET_SUBPROTOCOL } from './mud/connection/MudClient';
-
 interface Props {
     connection: MudConnection;
     /** If true, dial the WebSocket on mount. Offline mode skips this. */
@@ -93,7 +91,7 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
     const newEnvironEnabled = protocols?.newEnviron ?? PROTOCOL_DEFAULTS.newEnviron;
     const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
-    const wsTelnetSubprotocol = protocols?.wsTelnetSubprotocol ?? PROTOCOL_DEFAULTS.wsTelnetSubprotocol;
+    const wsSubprotocols = protocols?.wsSubprotocols ?? PROTOCOL_DEFAULTS.wsSubprotocols;
     // Undefined defaults to enabled (see ProfileSettings.loggingEnabled).
     const loggingEnabled = useAppStore(s => selectProfileField(s, connection.id, 'loggingEnabled')) !== false;
     // Flash the tab title when server data arrives while the tab is unfocused
@@ -136,9 +134,10 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // autoConnect effect dials — the MudClient reads them at construction. Set
     // synchronously during render (matching the seededFor pattern); user-driven
     // toggles after the first connect take effect on the next reconnect.
-    // Advertise the mudstandards.org telnet WebSocket profile only when the
-    // profile opts in (see ProtocolSettings.wsTelnetSubprotocol).
-    const subprotocols = wsTelnetSubprotocol ? [MUD_TELNET_SUBPROTOCOL] : [];
+    // Advertise the configured WebSocket subprotocols (see
+    // ProtocolSettings.wsSubprotocols). Defaults to ['binary'] — the raw telnet
+    // stream mudix decodes; the server picks one it knows, or none.
+    const subprotocols = [...wsSubprotocols];
     // The NEW-ENVIRON TLS variable describes the game-facing link: a direct
     // wss:// connection is TLS, but proxy mode is plaintext upstream regardless
     // of the proxy URL scheme (see connectionSecureTransport).

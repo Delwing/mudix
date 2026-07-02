@@ -249,14 +249,15 @@ export interface ProtocolSettings {
      *  (columns × rows) to the server, re-sending it on every resize. On by
      *  default — servers use it for word-wrap and pagination. */
     naws?: boolean;
-    /** Advertise the `telnet.mudstandards.org` WebSocket subprotocol in the
-     *  opening handshake (the mudstandards.org WebSocket proposal). mudix already
-     *  speaks that profile — a full telnet stream over binary frames — this flag
-     *  just announces it via `Sec-WebSocket-Protocol`. Off by default: RFC 6455
-     *  permits a server to reject the handshake on an unrecognized subprotocol,
-     *  so only enable it for servers known to implement the proposal. Applies to
-     *  direct `websocket`-mode connections; the bundled telnet proxy ignores it. */
-    wsTelnetSubprotocol?: boolean;
+    /** WebSocket subprotocols to advertise in the opening handshake's
+     *  `Sec-WebSocket-Protocol` header (RFC 6455), in preference order — the
+     *  server selects at most one. These are mutually-exclusive stream *modes*,
+     *  not layers (see {@link WS_SUBPROTOCOL_CHOICES}). Defaults to `['binary']`:
+     *  the raw telnet stream over binary frames is exactly what mudix decodes,
+     *  and `binary` is accepted by both FluffOS and servers like last-outpost.com.
+     *  An empty list opens a bare socket (no header). Applies to direct
+     *  `websocket`-mode connections; the bundled telnet proxy ignores it. */
+    wsSubprotocols?: string[];
 }
 
 /** Defaults used when a protocol field is undefined. Off-by-default for MSDP
@@ -278,8 +279,32 @@ export const PROTOCOL_DEFAULTS: Required<ProtocolSettings> = {
     mnes: false,
     newEnviron: true,
     naws: true,
-    wsTelnetSubprotocol: false,
+    wsSubprotocols: ['binary'],
 };
+
+/** The WebSocket subprotocol names mudix can advertise, in canonical preference
+ *  order. Mutually-exclusive stream modes the server picks *one* of — not
+ *  layers that stack:
+ *  - `binary`  — raw telnet byte stream over WebSocket binary frames. Every byte
+ *                (IAC, GMCP/MSDP, MCCP, high-bit charset) survives; this is the
+ *                only mode mudix's binary-frame decoder actually consumes.
+ *  - `telnet`  — FluffOS binds this to the same telnet handler as `binary`; an
+ *                alternate name some servers register instead of `binary`.
+ *  - `telnet.mudstandards.org` — the mudstandards.org WebSocket proposal, same
+ *                on-the-wire profile under the standardised name.
+ *  (`ascii` — text frames with telnet stripped — is deliberately omitted: it's a
+ *  dumb-terminal mode mudix can't decode.) The Settings UI renders one checkbox
+ *  per entry; the selection is passed to MudClient in this order so the server
+ *  sees `binary` first. */
+export const WS_SUBPROTOCOL_CHOICES = ['binary', 'telnet', 'telnet.mudstandards.org'] as const;
+
+/** The boolean-valued protocol toggles — every {@link ProtocolSettings} field
+ *  except the `string[]` {@link ProtocolSettings.wsSubprotocols}. Helpers that
+ *  flip a single on/off protocol (Lua's `enableProtocol`, Mudlet `<Host>`
+ *  import) key off this so they never touch the list-valued field. */
+export type BooleanProtocolKey = {
+    [K in keyof ProtocolSettings]-?: NonNullable<ProtocolSettings[K]> extends boolean ? K : never;
+}[keyof ProtocolSettings];
 
 /** User-tunable subset of the map renderer's Settings. Add new entries here
  *  (and a matching control in the Settings modal + a wire-up in MapPanel) as

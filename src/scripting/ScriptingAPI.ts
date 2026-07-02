@@ -21,7 +21,7 @@ import { flashTitle } from '../utils/documentTitle';
 import { MspParser } from '../mud/protocol';
 import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
 import { getHeldModifiers } from './heldModifiers';
-import { useAppStore, selectProfileField, connectionUrl, PROTOCOL_DEFAULTS, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, type ProtocolSettings, type MapperSettings, type MapInfoBgColor, type MudConnection } from '../storage';
+import { useAppStore, selectProfileField, connectionUrl, PROTOCOL_DEFAULTS, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, type ProtocolSettings, type BooleanProtocolKey, type MapperSettings, type MapInfoBgColor, type MudConnection } from '../storage';
 import {
     getUniversalDefaultFonts,
     getRegisteredFontFamilies,
@@ -898,12 +898,12 @@ export class ScriptingAPI {
         useAppStore.getState().patchConnectionProfile(this.connectionId, { config: { ...prev, [key]: value } });
     }
 
-    private getProtocol(key: keyof ProtocolSettings): boolean {
+    private getProtocol(key: BooleanProtocolKey): boolean {
         const p = useAppStore.getState().connectionProfile[this.connectionId]?.protocols;
         return p?.[key] ?? PROTOCOL_DEFAULTS[key];
     }
 
-    private setProtocol(key: keyof ProtocolSettings, value: boolean): void {
+    private setProtocol(key: BooleanProtocolKey, value: boolean): void {
         const prev = useAppStore.getState().connectionProfile[this.connectionId]?.protocols ?? {};
         useAppStore.getState().patchConnectionProfile(this.connectionId, { protocols: { ...prev, [key]: value } });
     }

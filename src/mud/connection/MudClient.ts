@@ -156,14 +156,16 @@ export interface MudClientOptions {
      *  `cTelnet::gotPrompt`. See {@link stripLeadingPromptNewline}. */
     fixUnnecessaryLinebreaks?: boolean;
     /** WebSocket subprotocols to advertise in the opening handshake's
-     *  `Sec-WebSocket-Protocol` header (RFC 6455). Empty by default — we open a
-     *  bare socket, which every server accepts. Set e.g.
-     *  `['telnet.mudstandards.org']` to announce the mudstandards.org WebSocket
-     *  profile we already speak (full telnet stream over BINARY frames). Opt-in
-     *  because RFC 6455 lets a server *fail the handshake* on an unrecognized
-     *  subprotocol — many existing MUD WebSocket endpoints ignore the header, but
-     *  stricter ones reject it. The server's selection is read back from
-     *  `socket.protocol` on open and emitted via `client.subprotocol`. */
+     *  `Sec-WebSocket-Protocol` header (RFC 6455), in preference order — the
+     *  server selects at most one. Mutually-exclusive stream *modes*, not layers:
+     *  `binary` (raw telnet over binary frames — the mode mudix decodes),
+     *  `telnet` (FluffOS's equivalent name), `telnet.mudstandards.org` (the
+     *  mudstandards.org proposal). Empty means open a bare socket. Advertising is
+     *  a trade-off: some servers (FluffOS) route a *no-subprotocol* upgrade to a
+     *  non-MUD handler and never send data, while others (e.g. last-outpost.com)
+     *  *reject* an unrecognized subprotocol with HTTP 400 — hence the per-profile
+     *  choice. The server's selection is read back from `socket.protocol` on open
+     *  and emitted via `client.subprotocol`. */
     subprotocols?: string[];
 }
 

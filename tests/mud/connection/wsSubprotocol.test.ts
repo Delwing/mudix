@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MudClient, MUD_TELNET_SUBPROTOCOL } from '../../../src/mud/connection/MudClient';
+import { PROTOCOL_DEFAULTS, WS_SUBPROTOCOL_CHOICES } from '../../../src/storage/schema';
 import { EventBus } from '../../../src/core/EventBus';
 import type { MudClientEvents } from '../../../src/mud/events';
 
@@ -57,6 +58,31 @@ describe('WebSocket subprotocol advertisement', () => {
     );
     client.connect();
     expect(MockWebSocket.instances[0].requestedProtocols).toEqual([MUD_TELNET_SUBPROTOCOL]);
+  });
+
+  it("defaults to advertising ['binary'] — the mode mudix decodes", () => {
+    // ProfileSession feeds PROTOCOL_DEFAULTS.wsSubprotocols straight through when
+    // a profile hasn't overridden it.
+    expect(PROTOCOL_DEFAULTS.wsSubprotocols).toEqual(['binary']);
+    const client = new MudClient(
+      { url: 'ws://test.invalid', subprotocols: [...PROTOCOL_DEFAULTS.wsSubprotocols] },
+      new EventBus<MudClientEvents>(),
+    );
+    client.connect();
+    expect(MockWebSocket.instances[0].requestedProtocols).toEqual(['binary']);
+  });
+
+  it('advertises multiple checked subprotocols in canonical order', () => {
+    // The Settings UI stores the selection filtered through WS_SUBPROTOCOL_CHOICES,
+    // so `binary` is always offered before `telnet` regardless of click order.
+    const client = new MudClient(
+      { url: 'ws://test.invalid', subprotocols: [...WS_SUBPROTOCOL_CHOICES] },
+      new EventBus<MudClientEvents>(),
+    );
+    client.connect();
+    expect(MockWebSocket.instances[0].requestedProtocols).toEqual(
+      ['binary', 'telnet', 'telnet.mudstandards.org'],
+    );
   });
 
   it('emits client.subprotocol with the server selection on open', () => {

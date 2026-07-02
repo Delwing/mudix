@@ -1,4 +1,4 @@
-import type { ProfileSettings, ProtocolSettings } from '../storage/schema';
+import type { ProfileSettings, ProtocolSettings, BooleanProtocolKey } from '../storage/schema';
 import { parseMudletXml, type MudletImportResult } from './mudletXmlImport';
 import { parseVariablePackageXml, type MudletVariablePackage } from './mudletVariables';
 
@@ -39,7 +39,7 @@ const ANSI_COLOR_INDEX: ReadonlyArray<readonly [string, number]> = [
 ];
 
 // Mudlet's `<Host mEnableX>` attribute → mudix ProtocolSettings field.
-const PROTOCOL_ATTR: ReadonlyArray<readonly [string, keyof ProtocolSettings]> = [
+const PROTOCOL_ATTR: ReadonlyArray<readonly [string, BooleanProtocolKey]> = [
     ['mEnableGMCP', 'gmcp'], ['mEnableMSDP', 'msdp'], ['mEnableMSSP', 'mssp'],
     ['mEnableMSP', 'msp'], ['mEnableMTTS', 'mtts'], ['mEnableMNES', 'mnes'],
     ['mEnableMXP', 'mxp'], ['mEnableNAWS', 'naws'], ['mEnableCHARSET', 'charset'],

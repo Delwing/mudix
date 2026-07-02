@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react';
-import { useAppStore, selectProfileField, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, PROTOCOL_DEFAULTS, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings, type MapInfoBgColor, type ProtocolSettings } from '../storage';
+import { useAppStore, selectProfileField, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, PROTOCOL_DEFAULTS, WS_SUBPROTOCOL_CHOICES, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings, type MapInfoBgColor, type ProtocolSettings } from '../storage';
 import { Input, FontPicker, Toggle, HelpTip, Button } from './components';
 import { useModalFocus } from './components/useModalFocus';
 import { DEFAULT_ANSI_PALETTE } from '../mud/text/colors';
@@ -70,6 +70,15 @@ const TABS: { value: SettingsTab; label: string }[] = [
 ];
 
 const DEFAULT_COMMAND_SEPARATOR = ';;';
+
+// Per-name blurb for the WebSocket subprotocol checkboxes. Keyed by the wire
+// name in WS_SUBPROTOCOL_CHOICES; the server selects at most one of the checked
+// names (they're alternative stream modes, not layers).
+const WS_SUBPROTOCOL_HINTS: Record<string, string> = {
+    'binary': 'Raw telnet stream over binary frames — the mode mudix decodes. Accepted by FluffOS and last-outpost.com.',
+    'telnet': "FluffOS's telnet handler (same wire format as binary, different name). Some servers reject it — e.g. last-outpost.com returns HTTP 400.",
+    'telnet.mudstandards.org': 'The mudstandards.org WebSocket proposal — the same profile under the standardised name.',
+};
 
 type CaretShortcut = 'none' | 'tab' | 'ctrltab' | 'f6';
 const CARET_SHORTCUT_OPTIONS: { value: CaretShortcut; label: string }[] = [
@@ -159,7 +168,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const mnesEnabled = protocols?.mnes ?? PROTOCOL_DEFAULTS.mnes;
     const newEnvironEnabled = protocols?.newEnviron ?? PROTOCOL_DEFAULTS.newEnviron;
     const nawsEnabled = protocols?.naws ?? PROTOCOL_DEFAULTS.naws;
-    const wsTelnetSubprotocol = protocols?.wsTelnetSubprotocol ?? PROTOCOL_DEFAULTS.wsTelnetSubprotocol;
+    const wsSubprotocols = protocols?.wsSubprotocols ?? PROTOCOL_DEFAULTS.wsSubprotocols;
     const mapper = useAppStore(s => selectProfileField(s, connectionId, 'mapper'));
     const mapperRoomSize = mapper?.roomSize ?? MAPPER_DEFAULTS.roomSize;
     const mapperRoomShape = mapper?.roomShape ?? MAPPER_DEFAULTS.roomShape;
@@ -617,25 +626,45 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                 />
                             </div>
                             <div className="settings-row">
-                                <span className="settings-label" id="protocol-ws-telnet-label">
+                                <span className="settings-label" id="protocol-ws-subprotocols-label">
                                     WebSocket subprotocol
-                                    <HelpTip label="About the telnet.mudstandards.org subprotocol">
-                                        Advertises <code>telnet.mudstandards.org</code> in the
-                                        WebSocket opening handshake (the mudstandards.org WebSocket
-                                        proposal). mudix already speaks that profile — a full telnet
-                                        stream over binary frames — this just announces it so a
-                                        conforming server can confirm the dialect. Off by default:
-                                        some servers reject an unrecognized subprotocol, so enable it
-                                        only for servers known to implement the proposal. Applies to
-                                        direct WebSocket connections, not the telnet proxy.
+                                    <HelpTip label="About WebSocket subprotocols">
+                                        The subprotocol names offered in the WebSocket opening
+                                        handshake (<code>Sec-WebSocket-Protocol</code>). The server
+                                        selects at most one of the checked names — these are
+                                        mutually-exclusive stream modes, not layers. Leave{' '}
+                                        <code>binary</code> checked in almost all cases: it's the raw
+                                        telnet stream mudix decodes, and it's accepted the most
+                                        widely. Some servers (FluffOS) route a no-subprotocol
+                                        connection to a non-MUD handler and send no data, so an empty
+                                        selection can leave the terminal blank; others reject an
+                                        unrecognized name with HTTP 400. Applies to direct WebSocket
+                                        connections, not the telnet proxy.
                                     </HelpTip>
                                 </span>
-                                <Toggle
-                                    id="protocol-ws-telnet"
-                                    aria-labelledby="protocol-ws-telnet-label"
-                                    checked={wsTelnetSubprotocol}
-                                    onChange={next => patchProtocols({ wsTelnetSubprotocol: next })}
-                                />
+                                <div
+                                    className="settings-checkbox-group"
+                                    role="group"
+                                    aria-labelledby="protocol-ws-subprotocols-label"
+                                >
+                                    {WS_SUBPROTOCOL_CHOICES.map(name => (
+                                        <label key={name} className="settings-checkbox" title={WS_SUBPROTOCOL_HINTS[name]}>
+                                            <input
+                                                type="checkbox"
+                                                checked={wsSubprotocols.includes(name)}
+                                                onChange={e => {
+                                                    const set = new Set(wsSubprotocols);
+                                                    if (e.target.checked) set.add(name);
+                                                    else set.delete(name);
+                                                    patchProtocols({
+                                                        wsSubprotocols: WS_SUBPROTOCOL_CHOICES.filter(n => set.has(n)),
+                                                    });
+                                                }}
+                                            />
+                                            <code>{name}</code>
+                                        </label>
+                                    ))}
+                                </div>
                             </div>
                             <p className="settings-hint">
                                 Protocol changes take effect the next time you connect.
