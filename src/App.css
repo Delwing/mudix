@@ -735,19 +735,39 @@ html, body, #root {
     box-shadow: inset 0 1px 0 var(--border-hi), var(--shadow-card);
 }
 
-.connection-tile:active {
+/* While a drag is active, everything shows the grabbing cursor and text
+   selection is suppressed. */
+body.is-sorting {
     cursor: grabbing;
+    user-select: none;
 }
 
-/* The tile being dragged fades out; its drop target grows an accent outline. */
-.connection-tile.is-dragging {
-    opacity: 0.4;
+/* The dragged tile's original slot becomes a dashed placeholder that opens a
+   gap at the current drop target — its content lives in the floating clone. */
+.connection-tile--placeholder {
+    background: none;
+    border-style: dashed;
+    border-color: var(--accent-dim);
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+.connection-tile--placeholder > * {
+    visibility: hidden;
 }
 
-.connection-tile.is-over {
+/* The lifted clone that tracks the cursor. Positioned via inline left/top; the
+   transform just adds the "picked up" tilt and lift. */
+.connection-tile--clone {
+    position: fixed;
+    z-index: 1000;
+    margin: 0;
+    pointer-events: none;
+    cursor: grabbing;
     border-color: var(--accent);
-    box-shadow: inset 0 1px 0 var(--border-hi), 0 0 0 2px var(--accent-glow);
-    transform: translateY(-1px);
+    box-shadow: var(--shadow-float);
+    transform: rotate(1.5deg) scale(1.03);
+    transition: none;
 }
 
 .connection-tile.connection-card--editing {

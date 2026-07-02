@@ -1,61 +1,14 @@
 import { useRef, useState } from 'react';
-import { FolderSymlink, Info, Trash2 } from 'lucide-react';
+import { Info } from 'lucide-react';
 import { Button, useConfirm } from './components';
 import { ConnectionFormModal } from './ConnectionFormModal';
+import { ConnectionGrid } from './ConnectionGrid';
 import { AboutModal } from './AboutModal';
-import { connectionDisplayAddr, useAppStore, type MudConnection } from '../storage';
+import { useAppStore, type MudConnection } from '../storage';
 import { extractMudletProfileZip, resolveModulesFromTree, addModuleToBundle, type MudletProfileBundle } from '../import/mudletProfileImport';
 import { importMudletProfile, bundleFromDirectory, linkMudletFolder } from '../import/applyMudletProfile';
 import { ModuleResolveModal, type ModuleUpload } from './ModuleResolveModal';
 import type { MudletModuleRef } from '../import/mudletHost';
-
-/** Deterministic background color for a profile's name tile — same name always
- *  yields the same hue, so each profile gets a stable, distinct color. */
-function avatarColor(name: string): string {
-    let h = 0;
-    for (let i = 0; i < name.length; i++) h = (Math.imul(h, 31) + name.charCodeAt(i)) | 0;
-    return `hsl(${Math.abs(h) % 360} 42% 38%)`;
-}
-
-/** Shared canvas 2D context for measuring text width when fitting a name into
- *  the icon tile. Created lazily, reused across calls. */
-let measureCtx: CanvasRenderingContext2D | null = null;
-
-/** Largest font (px) at which `name` fits the tile on one line — mirrors
- *  Mudlet's customIcon(), which starts large and shrinks to a floor until the
- *  profile name fits the 120×30 box. */
-function fitNameFontSize(name: string): number {
-    const MAX = 18, MIN = 7, MAX_W = 110; // tile is 120px wide, minus padding
-    if (typeof document === 'undefined') return 12;
-    if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
-    if (!measureCtx) return 12;
-    for (let size = MAX; size > MIN; size--) {
-        measureCtx.font = `600 ${size}px sans-serif`;
-        if (measureCtx.measureText(name).width <= MAX_W) return size;
-    }
-    return MIN;
-}
-
-/** Mudlet-style profile icon. Renders the custom icon when one is set
- *  (setProfileIcon), otherwise a colored tile with the profile name — matching
- *  Mudlet's behaviour of drawing the name onto profiles without an icon. */
-function ProfileAvatar({ name, icon }: { name: string; icon?: string }) {
-    if (icon) {
-        return <img className="connection-avatar" src={icon} alt="" aria-hidden="true" />;
-    }
-    const label = name || '?';
-    return (
-        <span
-            className="connection-avatar connection-avatar--name"
-            style={{ backgroundColor: avatarColor(name) }}
-            aria-hidden="true"
-        >
-            <span className="connection-avatar-text" style={{ fontSize: `${fitNameFontSize(label)}px` }}>
-                {label}
-            </span>
-        </span>
-    );
-}
 
 interface Props {
     connections: MudConnection[];
@@ -77,10 +30,6 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     const [aboutOpen, setAboutOpen] = useState(false);
     const [importing, setImporting] = useState(false);
     const [importError, setImportError] = useState<string | null>(null);
-    // Drag-to-rearrange state: `dragId` is the tile being dragged, `overId` the
-    // tile it's currently hovering (drawn with a drop indicator).
-    const [dragId, setDragId] = useState<string | null>(null);
-    const [overId, setOverId] = useState<string | null>(null);
     // Set when an imported profile references modules whose files weren't found —
     // the modal asks the user to upload or drop each before the import completes.
     const [pendingImport, setPendingImport] = useState<{ bundle: MudletProfileBundle; unresolved: MudletModuleRef[] } | null>(null);
@@ -164,35 +113,6 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         onDelete(c.id);
     };
 
-    // ── Drag-to-rearrange (native HTML5 DnD) ──────────────────────────────
-    const handleDragStart = (id: string) => (e: React.DragEvent) => {
-        setDragId(id);
-        e.dataTransfer.effectAllowed = 'move';
-        // Firefox requires data to be set for the drag to fire at all.
-        e.dataTransfer.setData('text/plain', id);
-    };
-    const handleDragOver = (id: string) => (e: React.DragEvent) => {
-        if (!dragId || dragId === id) return;
-        e.preventDefault(); // allow drop
-        e.dataTransfer.dropEffect = 'move';
-        if (overId !== id) setOverId(id);
-    };
-    const handleDrop = (targetId: string) => (e: React.DragEvent) => {
-        e.preventDefault();
-        const sourceId = dragId;
-        setDragId(null);
-        setOverId(null);
-        if (!sourceId || sourceId === targetId) return;
-        const ids = connections.map(c => c.id);
-        const from = ids.indexOf(sourceId);
-        const to = ids.indexOf(targetId);
-        if (from < 0 || to < 0) return;
-        ids.splice(from, 1);
-        ids.splice(ids.indexOf(targetId) + (to > from ? 1 : 0), 0, sourceId);
-        reorderConnections(ids);
-    };
-    const handleDragEnd = () => { setDragId(null); setOverId(null); };
-
     return (
         <>
         <div className="connection-screen">
@@ -207,93 +127,18 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                 </div>
                 <div className="connection-brand">mudix</div>
 
-                <div className="connection-grid" role="list">
-                        {connections.map(c => (
-                            <div
-                                key={c.id}
-                                role="listitem"
-                                className={
-                                    'connection-tile' +
-                                    (dragId === c.id ? ' is-dragging' : '') +
-                                    (overId === c.id && dragId !== c.id ? ' is-over' : '') +
-                                    (editor?.connection?.id === c.id ? ' connection-card--editing' : '')
-                                }
-                                draggable={!connecting}
-                                onDragStart={handleDragStart(c.id)}
-                                onDragOver={handleDragOver(c.id)}
-                                onDrop={handleDrop(c.id)}
-                                onDragEnd={handleDragEnd}
-                            >
-                                <div className="connection-tile__header">
-                                    <ProfileAvatar name={c.name} icon={c.icon} />
-                                    <Button
-                                        variant="primary"
-                                        className="connection-tile__connect"
-                                        onClick={() => onConnect(c)}
-                                        disabled={connecting}
-                                    >
-                                        {connectingId === c.id ? 'Connecting…' : 'Connect'}
-                                    </Button>
-                                </div>
-                                <div className="connection-tile__body">
-                                    <span className="connection-name connection-tile__name">
-                                        {c.name}
-                                        {c.mudletLinked && (
-                                            <FolderSymlink
-                                                size={13}
-                                                style={{ opacity: 0.65, flexShrink: 0 }}
-                                                aria-label="Linked Mudlet folder"
-                                            >
-                                                <title>Linked Mudlet folder — source of truth on disk</title>
-                                            </FolderSymlink>
-                                        )}
-                                    </span>
-                                    <span className="connection-addr">{connectionDisplayAddr(c)}</span>
-                                </div>
-                                <div className="connection-tile__actions">
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        onClick={() => onOpen(c)}
-                                        disabled={connecting}
-                                        title="Open profile offline"
-                                    >
-                                        Open
-                                    </Button>
-                                    <span className="connection-tile__actions-spacer" />
-                                    <Button
-                                        variant="icon"
-                                        size="sm"
-                                        onClick={() => setEditor({ connection: c })}
-                                        disabled={connecting}
-                                        aria-label="Edit connection"
-                                        title="Edit"
-                                    >
-                                        ✎
-                                    </Button>
-                                    <Button
-                                        variant="icon"
-                                        size="sm"
-                                        onClick={() => { void handleDelete(c); }}
-                                        disabled={connecting}
-                                        aria-label="Delete connection"
-                                        title="Delete"
-                                    >
-                                        <Trash2 size={14} />
-                                    </Button>
-                                </div>
-                            </div>
-                        ))}
-                        <button
-                            type="button"
-                            className="connection-tile connection-tile--add"
-                            onClick={() => setEditor({ connection: null })}
-                            disabled={connecting}
-                        >
-                            <span className="connection-tile__add-plus" aria-hidden="true">+</span>
-                            <span className="connection-tile__add-label">Add connection</span>
-                        </button>
-                </div>
+                <ConnectionGrid
+                    connections={connections}
+                    connecting={connecting}
+                    connectingId={connectingId}
+                    editingId={editor?.connection?.id ?? null}
+                    onConnect={onConnect}
+                    onOpen={onOpen}
+                    onEdit={(c) => setEditor({ connection: c })}
+                    onDelete={(c) => { void handleDelete(c); }}
+                    onReorder={reorderConnections}
+                    onAddClick={() => setEditor({ connection: null })}
+                />
 
                 <div className="connection-import-row" style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8, flexWrap: 'wrap' }}>
                     {dirPicker && (
