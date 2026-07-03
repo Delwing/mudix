@@ -1,0 +1,26 @@
+{
+  "name": "mudix",
+  "short_name": "mudix",
+  "description": "A web-based MUD client with Mudlet-compatible Lua scripting, ANSI rendering, and full telnet/GMCP/MSDP support.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#090909",
+  "theme_color": "#090909",
+  "categories": ["games", "utilities"],
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

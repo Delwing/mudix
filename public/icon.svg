@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Transparent background: a rounded terminal frame with a ">_" prompt in the mudix teal -->
+  <defs>
+    <linearGradient id="stroke" x1="96" y1="96" x2="416" y2="416" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7ee0cc"/>
+      <stop offset="1" stop-color="#4ec9b0"/>
+    </linearGradient>
+  </defs>
+  <rect x="72" y="104" width="368" height="304" rx="64" fill="none"
+        stroke="url(#stroke)" stroke-width="28"/>
+  <path d="M170 214 L226 256 L170 298" fill="none" stroke="url(#stroke)" stroke-width="30"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="258" y="285" width="104" height="26" rx="13" fill="url(#stroke)"/>
+</svg>
