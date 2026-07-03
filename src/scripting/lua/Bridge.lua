@@ -1689,11 +1689,25 @@ do
     -- Mudlet tempKey([modifier,] keyCode, fn). The 2-arg form omits the
     -- modifier (no Ctrl/Shift/Alt/Meta required); we substitute 0 to keep
     -- the JS binding signature uniform.
-    function tempKey(a, b, c)
-        if c == nil then
-            return _raw(0, a, __mudix_register_cb(__mudix_to_fn(b, "tempKey", 2)))
+    -- Source of the caller (script name + line), so a browser-reserved-key
+    -- warning can point at what registered the binding. debug.getinfo(2) is the
+    -- function that called tempKey; short_src is the chunk name mudix loads the
+    -- script under (see LuaRuntime.exec → loadString('@'..name)).
+    local function _callerSource()
+        local info = debug.getinfo(3, "Sl")
+        if not info then return nil end
+        local src = info.short_src or "?"
+        if info.currentline and info.currentline > 0 then
+            return src .. ":" .. info.currentline
         end
-        return _raw(a, b, __mudix_register_cb(__mudix_to_fn(c, "tempKey", 3)))
+        return src
+    end
+    function tempKey(a, b, c)
+        local src = _callerSource()
+        if c == nil then
+            return _raw(0, a, __mudix_register_cb(__mudix_to_fn(b, "tempKey", 2)), src)
+        end
+        return _raw(a, b, __mudix_register_cb(__mudix_to_fn(c, "tempKey", 3)), src)
     end
 end
 

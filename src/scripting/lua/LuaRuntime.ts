@@ -3412,12 +3412,13 @@ export class LuaRuntime implements IScriptingRuntime {
         // boardModifier bitmask (default 0 = no modifier); keyCode is a
         // Qt::Key int. The Bridge.lua wrapper resolves the optional-modifier
         // overload before passing here.
-        this.lua.global.set('__mudix_tempKey', (modifier: number, key: string | number, cbId: number) => {
+        this.lua.global.set('__mudix_tempKey', (modifier: number, key: string | number, cbId: number, source?: string) => {
             const mods = qtModifiersToList(modifier);
             const keyCode = qtKeyToDomCode(key, modifier);
             // Keep the raw Qt key/modifier so getKeyCode() can report them back
             // unchanged (the Qt→DOM translation above is lossy).
             const qtKey = typeof key === 'number' ? key : (domCodeToQtKey(key) ?? 0);
+            this.api.warnReservedTempKey(keyCode, mods, typeof source === 'string' && source ? source : undefined);
             return this.api.keys.addTemp(keyCode, mods, () => {
                 dispatchCb(cbId, 'tempKey');
             }, { keyCode: qtKey, modifier });

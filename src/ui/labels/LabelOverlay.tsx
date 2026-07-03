@@ -238,12 +238,24 @@ function Label({ l }: { l: LabelState }) {
         }
         : undefined;
 
+    // Mudlet labels are Qt widgets — a right-click is delivered to the label's
+    // own callback (see the RightButton branch in Adjustable.Container:onClick),
+    // never to a native context menu. In the browser the default contextmenu
+    // would pop up on top of, and obscure, the widget's own right-click menu
+    // (issue #7). Suppress it on interactive labels so only the Geyser menu shows.
+    // Skipped for non-interactive labels so plain text/link labels keep the
+    // native menu (copy / open-link).
+    const onContextMenu = hasPress
+        ? (e: React.MouseEvent<HTMLDivElement>) => e.preventDefault()
+        : undefined;
+
     return (
         <div
             className="label"
             style={style}
             data-mudix-label={l.name}
             title={l.tooltip}
+            onContextMenu={onContextMenu}
             onPointerDown={onPointerDown}
             onPointerUp={onPointerUp}
             onPointerMove={onPointerMove}

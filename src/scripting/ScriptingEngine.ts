@@ -3,6 +3,7 @@ import type {AliasEngine, AliasNode} from '../mud/aliases/AliasEngine';
 import {TriggerEngine, type TriggerNode} from '../mud/triggers/TriggerEngine';
 import type {TimerEngine} from '../mud/timers/TimerEngine';
 import type {KeyEngine, KeyNode} from '../mud/keybindings/KeyEngine';
+import {findReservedKeybindings, reservedKeyNote} from '../mud/keybindings/browserReservedKeys';
 import type {ButtonNode, ScriptNode} from '../storage/schema';
 import {buildEffectivelyEnabledIds, isEffectivelyEnabled} from '../storage/schema';
 import {useAppStore} from '../storage';
@@ -102,6 +103,12 @@ const FILTER_ANSI_ONLY_LINES = true;
 // postMessage(); the two-space-dash separator is part of Mudlet's convention.
 function mudletInfo(message: string): string {
     return `\x1b[33m[ INFO ]\x1b[32m  - ${message}\x1b[0m`;
+}
+
+// Mudlet-style WARN prefix: yellow "[ WARN ]" then a yellow body. Used for advisory
+// notices (e.g. browser-reserved keybindings) that aren't script errors.
+function mudletWarn(message: string): string {
+    return `\x1b[33m[ WARN ]  - ${message}\x1b[0m`;
 }
 
 /** Mudlet `permKey`/`tempKey` modifier int → KeyNode.modifiers string array.
@@ -399,6 +406,7 @@ export class ScriptingEngine {
             this.applyAliasesFromStore();
             this.applyTimersFromStore();
             this.applyKeybindingsFromStore();
+            this.warnBrowserReservedKeybindings();
             // sysLoadEvent fires once after the initial script load.
             // sysMapLoadEvent follows when a persisted map was ingested, so
             // scripts can register a sysMapLoadEvent handler during sysLoadEvent
@@ -969,6 +977,39 @@ export class ScriptingEngine {
     private applyKeybindingsFromStore(): void {
         const keys = useAppStore.getState().connectionKeybindings[this.connectionId] ?? [];
         this.keyEngine.loadPerm(keys);
+    }
+
+    /**
+     * On profile open, warn about enabled keybindings the browser intercepts
+     * above the page (Ctrl+T new tab, Ctrl+W close tab, F12 devtools, …). Native
+     * Mudlet packages bind these freely, but in a browser they can never reach
+     * mudix — the warning explains why they "do nothing". Page-level shortcuts
+     * mudix can still capture (Ctrl+R, Ctrl+S, F5, …) are intentionally not
+     * flagged: they work while the client is focused, same as in Mudlet.
+     * Fired once at load (not on every store change) so it can't spam the output.
+     */
+    private warnBrowserReservedKeybindings(): void {
+        const keys = useAppStore.getState().connectionKeybindings[this.connectionId] ?? [];
+        const enabledIds = buildEffectivelyEnabledIds(keys);
+        const enabled = keys.filter(k => enabledIds.has(k.id));
+        const reserved = findReservedKeybindings(enabled);
+        if (reserved.length === 0) return;
+
+        const plural = reserved.length === 1 ? '' : 's';
+        this.session.events.emit('message',
+            mudletWarn(`${reserved.length} keybinding${plural} may be intercepted by your browser:`),
+            'info', Date.now());
+        for (const r of reserved) {
+            // Point at which keybinding is affected: its editor name and, when it
+            // came from an installed package, the package it belongs to.
+            const tags: string[] = [];
+            if (r.node.name) tags.push(`"${r.node.name}"`);
+            if (r.node.packageName) tags.push(`pkg: ${r.node.packageName}`);
+            const where = tags.length ? ` (${tags.join(', ')})` : '';
+            this.session.events.emit('message',
+                mudletWarn(`  • ${r.combo}${where} — ${reservedKeyNote(r.action)}`),
+                'info', Date.now());
+        }
     }
 
     private applyScriptsFromStore(): void {

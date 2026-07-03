@@ -3,6 +3,7 @@ import type { AliasEngine } from '../mud/aliases/AliasEngine';
 import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine } from '../mud/timers/TimerEngine';
 import type { KeyEngine } from '../mud/keybindings/KeyEngine';
+import { classifyReservedKey, formatKeyCombo, reservedKeyNote } from '../mud/keybindings/browserReservedKeys';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
 import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
@@ -21,7 +22,7 @@ import { flashTitle } from '../utils/documentTitle';
 import { MspParser } from '../mud/protocol';
 import { StopwatchManager, localStorageStopwatchStore } from './StopwatchManager';
 import { getHeldModifiers } from './heldModifiers';
-import { useAppStore, selectProfileField, connectionUrl, PROTOCOL_DEFAULTS, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, type ProtocolSettings, type BooleanProtocolKey, type MapperSettings, type MapInfoBgColor, type MudConnection } from '../storage';
+import { useAppStore, selectProfileField, connectionUrl, PROTOCOL_DEFAULTS, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, type BooleanProtocolKey, type MapperSettings, type MapInfoBgColor, type MudConnection } from '../storage';
 import {
     getUniversalDefaultFonts,
     getRegisteredFontFamilies,
@@ -1660,6 +1661,33 @@ export class ScriptingAPI {
      *  `permGroup("name","key")`). */
     permKey(name: string, parent: string, modifier: number, key: string, code: string): number {
         return this.permKeyCallback?.(name, parent, modifier, key, code) ?? -1;
+    }
+
+    // Combos already warned about via warnReservedTempKey — a script may re-register
+    // the same tempKey on every sysLoadEvent (or in a loop), so we warn once each.
+    private readonly warnedReservedTempKeys = new Set<string>();
+
+    /**
+     * Warn (once per unique combo + call site, for this runtime) when a script
+     * binds a browser-reserved key via `tempKey`. The profile-load scan covers
+     * permanent keybindings, but temp keys are created at runtime and never hit
+     * the store, so the check has to happen here at registration time. `key` is a
+     * DOM `KeyboardEvent.code`; `modifiers` the {ctrl,shift,alt,meta} subset;
+     * `source` is the caller's "script:line" captured by the Lua wrapper.
+     */
+    warnReservedTempKey(key: string, modifiers: string[], source?: string): void {
+        const action = classifyReservedKey({ key, modifiers });
+        if (!action) return;
+        const combo = formatKeyCombo({ key, modifiers });
+        // Dedup per combo AND call site: a loop re-binding from one line warns
+        // once, but two different scripts binding the same combo each warn.
+        const dedupKey = `${combo} ${source ?? ''}`;
+        if (this.warnedReservedTempKeys.has(dedupKey)) return;
+        this.warnedReservedTempKeys.add(dedupKey);
+        const where = source ? ` (from ${source})` : '';
+        this.session.events.emit('message',
+            `\x1b[33m[ WARN ]  - tempKey ${combo}${where}: ${reservedKeyNote(action)}\x1b[0m`,
+            'info', Date.now());
     }
 
     /** Mudlet `tempButton(toolbarName, name, code [, orientation])`. Appends a

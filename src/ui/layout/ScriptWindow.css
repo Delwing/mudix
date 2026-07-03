@@ -11,9 +11,22 @@
 }
 
 /* Nested variant: portaled into a parent userwindow viewport for parent-anchored
- * miniconsoles. position:absolute so absolute child coords are parent-relative. */
+ * miniconsoles. position:absolute so absolute child coords are parent-relative.
+ *
+ * The explicit z-index is load-bearing: when this root is portaled into the MAIN
+ * output viewport (.output-area-content, which has z-index:auto), it shares that
+ * element's stacking context with the sibling .label-overlay (z:30). Each nested
+ * miniconsole carries an ever-growing inline z-index (WindowManager.nextZ), so
+ * once enough windows are created/raised its value climbs past 30 and the console
+ * paints OVER the label overlay — burying a Geyser widget's right-click menu and
+ * tab-bar labels behind its own content (issue #7). Giving the root its own
+ * stacking context (any z-index on a positioned element) traps those inline
+ * z-indexes inside it; a value below the overlay band (labels 30 / cmd-line 31 /
+ * scrollbox 32) keeps parented console content beneath the widget chrome, while
+ * still sitting above the main gameplay output (z:auto) it's layered on top of. */
 .floating-window-root--nested {
     position: absolute;
+    z-index: 5;
 }
 
 .script-window {
