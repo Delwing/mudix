@@ -148,27 +148,37 @@ export function ConnectionGrid({
         else tileEls.current.delete(id);
     };
 
-    // Reorder so the dragged id lands next to whichever tile the pointer is over.
+    // Reorder so the dragged id takes the slot of whichever tile the pointer is
+    // over (the hovered tile and everything between shift toward the vacated
+    // slot). Stable with uniform tiles: after the move the pointer rests on the
+    // dragged tile's own slot, so hovering there is a no-op.
+    //
+    // Targets are resolved against the true layout slot rects (prevRects, which
+    // the FLIP effect refreshes with transforms cleared after every reorder) —
+    // NOT elementFromPoint. Mid-tween a displaced tile still visually covers
+    // its old slot, so live hit-testing would re-hit it and oscillate.
     const updateTarget = (px: number, py: number) => {
         const id = dragRef.current?.id;
         if (!id) return;
-        const hit = document.elementFromPoint(px, py) as HTMLElement | null;
-        if (!hit) return;
         const cur = orderRef.current;
         let next: string[] | null = null;
-        const over = hit.closest('[data-sortable-id]') as HTMLElement | null;
-        if (over) {
-            const overId = over.dataset.sortableId!;
-            if (overId === id) return;
-            const r = over.getBoundingClientRect();
-            const cx = r.left + r.width / 2;
-            const cy = r.top + r.height / 2;
-            const after = py > cy + r.height / 2 ? true : py < cy - r.height / 2 ? false : px > cx;
-            const without = cur.filter(x => x !== id);
-            const pos = without.indexOf(overId) + (after ? 1 : 0);
-            without.splice(pos, 0, id);
-            next = without;
-        } else if (hit.closest('.connection-tile--add')) {
+        let overId: string | null = null;
+        for (const [tid, r] of prevRects.current) {
+            if (px >= r.left && px < r.right && py >= r.top && py < r.bottom) {
+                overId = tid;
+                break;
+            }
+        }
+        if (overId === id) return;
+        if (overId) {
+            const from = cur.indexOf(id);
+            const to = cur.indexOf(overId);
+            if (from < 0 || to < 0) return;
+            const moved = [...cur];
+            moved.splice(from, 1);
+            moved.splice(to, 0, id);
+            next = moved;
+        } else if ((document.elementFromPoint(px, py) as HTMLElement | null)?.closest('.connection-tile--add')) {
             // Dropped past the last profile — send it to the end.
             const without = cur.filter(x => x !== id);
             without.push(id);
