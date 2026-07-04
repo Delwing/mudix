@@ -775,9 +775,9 @@ body.is-sorting {
     box-shadow: inset 0 1px 0 var(--border-hi), 0 0 0 1px var(--accent-dim);
 }
 
-/* Header row: the native-size 120×30 avatar on the left, the Connect button
-   filling the space to its right, and a drag handle pinned to the right edge.
-   Custom icons are authored for that exact box, so the avatar is never scaled up. */
+/* Header row: the native-size 120×30 avatar on the left and the Connect button
+   pinned to the right edge. Custom icons are authored for that exact box, so
+   the avatar is never scaled up. */
 .connection-tile__header {
     display: flex;
     align-items: center;
@@ -826,9 +826,12 @@ body.is-sorting {
     margin-top: auto;
 }
 
-/* Connect is the primary action — it fills the gutter beside the avatar. */
+/* Connect is the primary action. Kept at its natural width and pushed to the
+   right edge so it doesn't read as a second colored tile next to the avatar
+   (which is also a colored rounded box with text on it). */
 .connection-tile__connect {
-    flex: 1;
+    margin-left: auto;
+    min-width: 72px;
     justify-content: center;
 }
 
