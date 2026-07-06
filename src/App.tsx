@@ -12,7 +12,7 @@ import { loadProfileData } from './storage/profileVfsData';
 import { isMudletProfileVfs, loadMudletLinkedProfile } from './import/mudletLink';
 import { loadFolderHandle, checkFolderPermission, requestFolderPermission, clearFolderHandle } from './scripting/vfs/folderHandleStore';
 import { useAppStore, type MudConnection } from './storage';
-import { getBrand, brandConnectionData, matchBrandProfile } from './branding';
+import { getBrand, isBrandedMode, brandConnectionData, matchBrandProfile } from './branding';
 
 /**
  * Best-effort (re)grant of a linked profile's folder permission. Must be called
@@ -88,6 +88,11 @@ export default function App() {
     }, []);
 
     const setProfileQuery = (id: string | null) => {
+        // Branded builds keep the URL clean — no ?profile= is written (a
+        // reload lands on the login form anyway, since credentials are never
+        // persisted). Deep links are still honored when present, and closing
+        // a profile still cleans one up.
+        if (id && isBrandedMode()) return;
         const url = new URL(window.location.href);
         if (id) url.searchParams.set('profile', id);
         else url.searchParams.delete('profile');
