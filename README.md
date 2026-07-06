@@ -133,7 +133,9 @@ When adding a Mudlet API function, implement the JS-side method in `ScriptingAPI
 
 ## License
 
-No license has been specified yet. Until one is added, all rights are reserved by the authors — open an issue if you'd like to use or distribute mudix.
+mudix is licensed under the **GNU General Public License, version 2 or (at your option) any later version** — see [LICENSE](./LICENSE). This matches [Mudlet](https://github.com/Mudlet/Mudlet)'s license (GPL-2.0-or-later): mudix bundles Mudlet's Lua runtime files (`src/scripting/lua/mudlet-lua/` — LuaGlobal, Geyser, the generic mapper, DB utilities, and more), copyright the Mudlet contributors, so every mudix distribution is a combined work with that GPL code.
+
+Lua scripts and packages that mudix merely *runs* (your profile scripts, installed `.mpackage`s, branded-build packages) are separate works and are not required to be GPL — the same way the Mudlet ecosystem treats its packages.
 
 <div align="center">
 <sub>Built with React, TypeScript, and a lot of WebAssembly. Happy MUDding. 🐉</sub>

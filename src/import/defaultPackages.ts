@@ -2,6 +2,9 @@ import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 import { useAppStore } from '../storage/appStore';
 import { getBrand } from '../branding';
 import { installPackageFromBytes } from './packageInstaller';
+// In the library build this import is external (vite.lib.config.ts) and the
+// file ships in dist-lib, so the consumer's Vite emits it as a real asset —
+// otherwise lib mode would inline it as a ~150 kB base64 data URI.
 import runLuaCodeUrl from './defaults/run-lua-code.mpackage?url';
 
 interface DefaultPackage {
