@@ -3,6 +3,7 @@ import { EditorView } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
 import { tags as t } from '@lezer/highlight';
+import { isLightTheme } from '../../branding';
 
 // Chrome (background, gutter, autocomplete, scrollbar) using app CSS vars so
 // the editor adopts the active theme. Syntax highlighting is swapped via the
@@ -118,7 +119,7 @@ const oneLightHighlightStyle = HighlightStyle.define([
 export const highlightCompartment = new Compartment();
 
 export function highlightFor(theme: string): ReturnType<typeof syntaxHighlighting> {
-    return theme === 'light' || theme === 'graylight'
+    return isLightTheme(theme)
         ? syntaxHighlighting(oneLightHighlightStyle)
         : syntaxHighlighting(oneDarkHighlightStyle);
 }

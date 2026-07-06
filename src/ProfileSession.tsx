@@ -573,6 +573,14 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
         }
     };
 
+    // Capabilities handed to brand-defined toolbar buttons: send a command as
+    // if typed, or raise a Mudlet event for the profile's script handlers.
+    const brandToolbarContext = {
+        connectionId: connection.id,
+        send: (text: string) => send(text),
+        raiseEvent: (event: string, ...args: unknown[]) => engineRef.current?.raiseEvent(event, args),
+    };
+
     return (
         <ConnectionIdContext.Provider value={connection.id}>
         <div className={fullscreen ? 'app app--fullscreen' : 'app'}>
@@ -581,6 +589,7 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                 connectionName={connection.name}
                 status={status}
                 ping={ping}
+                brandContext={brandToolbarContext}
                 onDisconnect={handleDisconnect}
                 onReconnect={handleReconnect}
                 onNewConnection={onCloseProfile}

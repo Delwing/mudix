@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react';
 import { useAppStore, selectProfileField, MAPPER_DEFAULTS, MAP_INFO_BG_DEFAULT, PROTOCOL_DEFAULTS, WS_SUBPROTOCOL_CHOICES, type Theme, type OutputFontSource, type ProfileSettings, type MapperSettings, type MapInfoBgColor, type ProtocolSettings } from '../storage';
 import { Input, FontPicker, Toggle, HelpTip, Button } from './components';
+import { getThemeChoices } from '../branding';
 import { useModalFocus } from './components/useModalFocus';
 import { DEFAULT_ANSI_PALETTE } from '../mud/text/colors';
 import { DEFAULT_HISTORY_SAVE_SIZE, MAX_HISTORY } from './commandHistory';
@@ -49,13 +50,8 @@ function hexToRgb(s: string): { r: number; g: number; b: number } | null {
     return { r: parseInt(s.slice(1, 3), 16), g: parseInt(s.slice(3, 5), 16), b: parseInt(s.slice(5, 7), 16) };
 }
 
-const THEME_OPTIONS: { value: Theme; label: string }[] = [
-    { value: 'dark',  label: 'Dark (Teal)' },
-    { value: 'amber', label: 'Dark (Amber)' },
-    { value: 'sky',   label: 'Dark (Sky Blue)' },
-    { value: 'light', label: 'Light (Qt)' },
-    { value: 'graylight', label: 'Light (Gray)' },
-];
+// Theme options come from the active brand (stock themes plus/minus the
+// brand's own — see getThemeChoices), so they're resolved at render time.
 
 type SettingsTab = 'general' | 'appearance' | 'input' | 'accessibility' | 'colors' | 'network' | 'mapper';
 
@@ -689,7 +685,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                             else patchClient({ theme: next });
                                         }}
                                     >
-                                        {THEME_OPTIONS.map(opt => (
+                                        {getThemeChoices().map(opt => (
                                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>

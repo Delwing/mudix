@@ -12,10 +12,18 @@ export {
     getBrand,
     isBrandedMode,
     isPackageRemovable,
+    getThemeChoices,
+    isLightTheme,
     DEFAULT_BRAND,
+    STOCK_THEMES,
     type BrandConfig,
     type BrandMudTarget,
     type BrandPackage,
+    type BrandTheme,
+    type BrandToolbarButton,
+    type BrandToolbarConfig,
+    type BrandToolbarContext,
+    type StockToolbarButton,
     type LandingProps,
 } from "./branding";
 export { BrandLoginScreen } from "./ui/BrandLoginScreen";

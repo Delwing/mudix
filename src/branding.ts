@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import type { ConnectionMode, MudConnection } from './storage/schema';
 
 /**
@@ -42,6 +42,70 @@ export interface BrandPackage {
      *  and it reinstalls on the next profile open even if removed by other
      *  means. A removable package the user uninstalls stays uninstalled. */
     removable?: boolean;
+}
+
+/** A brand-defined color theme. Rendered as a `:root[data-theme=<id>]` CSS
+ *  rule injected at startup, after the bundled stylesheets — so unset
+ *  variables inherit the dark base (`:root` in App.css), and a theme reusing
+ *  a stock id (`dark`, `light`, …) overrides that stock theme's values. */
+export interface BrandTheme {
+    /** Theme id stored in settings and stamped on `data-theme`. */
+    id: string;
+    /** Name shown in the theme picker. */
+    label: string;
+    /** CSS custom properties, e.g. `{ '--accent': '#c09648' }`. See the
+     *  `:root` block in App.css for the full token list; anything unset
+     *  falls through to the dark base. */
+    variables: Record<string, string>;
+    /** `'light'` also switches the browser's `color-scheme` (native form
+     *  controls, scrollbars) and the script editor's syntax colors. */
+    colorScheme?: 'dark' | 'light';
+}
+
+/** Stock built-in themes, as shown in the settings picker. */
+export const STOCK_THEMES: { value: string; label: string }[] = [
+    { value: 'dark', label: 'Dark (Teal)' },
+    { value: 'amber', label: 'Dark (Amber)' },
+    { value: 'sky', label: 'Dark (Sky Blue)' },
+    { value: 'light', label: 'Light (Qt)' },
+    { value: 'graylight', label: 'Light (Gray)' },
+];
+
+/** Ids of the stock toolbar buttons, for `BrandToolbarConfig.hide`.
+ *  `connection` is the Reconnect/Disconnect pair; `close` closes the profile. */
+export type StockToolbarButton =
+    | 'scripts' | 'files' | 'map' | 'logs' | 'docs' | 'reportBug' | 'settings'
+    | 'connection' | 'close';
+
+/** What a brand toolbar button can do when clicked. */
+export interface BrandToolbarContext {
+    connectionId: string;
+    /** Send a command as if the user typed it (echoed, alias-processed). */
+    send(text: string): void;
+    /** Raise a Mudlet event in the profile's Lua runtime — script handlers
+     *  registered via registerAnonymousEventHandler etc. receive it. */
+    raiseEvent(event: string, ...args: unknown[]): void;
+}
+
+export interface BrandToolbarButton {
+    /** Stable id (also the React key). */
+    id: string;
+    label: string;
+    /** Optional icon node rendered before the label. */
+    icon?: ReactNode;
+    /** Tooltip. */
+    title?: string;
+    onClick(ctx: BrandToolbarContext): void;
+}
+
+export interface BrandToolbarConfig {
+    /** Stock buttons to remove. */
+    hide?: StockToolbarButton[];
+    /** Brand buttons, appended after the stock app buttons. */
+    buttons?: BrandToolbarButton[];
+    /** Extra class on the toolbar root (`.mudix-toolbar`) so brand CSS can
+     *  restyle it. */
+    className?: string;
 }
 
 /** Contract for a brand-supplied landing screen, rendered instead of the stock
@@ -90,6 +154,19 @@ export interface BrandConfig {
      *  (default true). Set false for a brand that fully controls the package
      *  set via `packages`. */
     stockPackages?: boolean;
+    /** Brand-defined themes, offered in the picker alongside (or instead of)
+     *  the stock ones. A theme reusing a stock id overrides it. */
+    themes?: BrandTheme[];
+    /** Theme ids offered in the settings picker, in this order. Unset = all
+     *  stock themes plus every brand theme. Use to trim the choice down
+     *  (e.g. `['puszcza', 'dark']`) — ids may be stock or brand-defined. */
+    availableThemes?: string[];
+    /** Theme active on first launch (before the user ever picks one). Also
+     *  the fallback when the current theme isn't in `availableThemes`. */
+    defaultTheme?: string;
+    /** Toolbar customization: hide stock buttons, add brand buttons (which
+     *  can send commands or raise script events), restyle via className. */
+    toolbar?: BrandToolbarConfig;
     /** Custom landing screen replacing the stock connection picker. */
     Landing?: ComponentType<LandingProps>;
 }
@@ -127,6 +204,39 @@ export function isBrandedMode(): boolean {
  *  defaults included — is removable. */
 export function isPackageRemovable(name: string): boolean {
     return current.packages?.find(p => p.name === name)?.removable !== false;
+}
+
+/** Theme options for the settings picker: brand themes first (one overriding
+ *  a stock id replaces it in place), narrowed and ordered by
+ *  `availableThemes` when set. */
+export function getThemeChoices(): { value: string; label: string }[] {
+    const brandThemes = (current.themes ?? []).map(t => ({ value: t.id, label: t.label }));
+    const merged = [
+        ...brandThemes,
+        ...STOCK_THEMES.filter(s => !brandThemes.some(b => b.value === s.value)),
+    ];
+    if (!current.availableThemes) return merged;
+    return current.availableThemes
+        .map(id => merged.find(m => m.value === id))
+        .filter((m): m is { value: string; label: string } => !!m);
+}
+
+/** Whether a theme id renders on a light base — drives `color-scheme` and the
+ *  script editor's syntax palette. Brand themes declare it via `colorScheme`. */
+export function isLightTheme(id: string): boolean {
+    const brand = current.themes?.find(t => t.id === id);
+    if (brand) return brand.colorScheme === 'light';
+    return id === 'light' || id === 'graylight';
+}
+
+/** Stylesheet text for the brand's themes — one `:root[data-theme=<id>]` rule
+ *  each. Injected after the bundled CSS so it wins ties (see MudixApp). */
+export function brandThemesCss(): string {
+    return (current.themes ?? []).map(t => {
+        const scheme = t.colorScheme ? `color-scheme: ${t.colorScheme};\n    ` : '';
+        const vars = Object.entries(t.variables).map(([k, v]) => `${k}: ${v};`).join('\n    ');
+        return `:root[data-theme="${t.id}"] {\n    ${scheme}${vars}\n}`;
+    }).join('\n');
 }
 
 /** Connection-record seed for the brand's MUD, or null when the brand doesn't

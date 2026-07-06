@@ -52,7 +52,10 @@ export interface MudConnection {
     description?: string;
 }
 
-export type Theme = 'dark' | 'light' | 'graylight' | 'amber' | 'sky';
+/** Stock theme ids plus any brand-defined theme id (`BrandConfig.themes`) —
+ *  the `(string & {})` arm admits custom ids while keeping autocomplete for
+ *  the stock ones. */
+export type Theme = 'dark' | 'light' | 'graylight' | 'amber' | 'sky' | (string & {});
 
 /**
  * Where the output font came from. `system` is the default — a name typed by

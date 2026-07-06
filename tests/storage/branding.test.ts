@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { setBrand, getBrand, isBrandedMode, isPackageRemovable, brandConnectionData, matchBrandProfile, DEFAULT_BRAND } from '../../src/branding';
+import { setBrand, getBrand, isBrandedMode, isPackageRemovable, getThemeChoices, isLightTheme, brandThemesCss, brandConnectionData, matchBrandProfile, DEFAULT_BRAND, STOCK_THEMES } from '../../src/branding';
 import { connectionUrl, DEFAULT_PROXY_URL, type MudConnection } from '../../src/storage/schema';
 
 const conn = (c: Partial<MudConnection>): MudConnection => ({ id: 'x', name: 'x', ...c });
@@ -139,5 +139,44 @@ describe('isPackageRemovable', () => {
 
     it('treats everything as removable with no brand packages', () => {
         expect(isPackageRemovable('run-lua-code')).toBe(true);
+    });
+});
+
+describe('brand theming', () => {
+    const puszcza = { id: 'puszcza', label: 'Puszcza', variables: { '--accent': '#c09648' } };
+
+    it('offers the stock themes by default', () => {
+        expect(getThemeChoices()).toEqual(STOCK_THEMES);
+    });
+
+    it('lists brand themes first and lets one override a stock id', () => {
+        setBrand({ themes: [puszcza, { id: 'dark', label: 'Ciemny', variables: {} }] });
+        const choices = getThemeChoices();
+        expect(choices[0]).toEqual({ value: 'puszcza', label: 'Puszcza' });
+        expect(choices.filter(c => c.value === 'dark')).toEqual([{ value: 'dark', label: 'Ciemny' }]);
+        expect(choices).toHaveLength(STOCK_THEMES.length + 1);
+    });
+
+    it('narrows and orders the picker via availableThemes', () => {
+        setBrand({ themes: [puszcza], availableThemes: ['puszcza', 'dark', 'no-such-theme'] });
+        expect(getThemeChoices().map(c => c.value)).toEqual(['puszcza', 'dark']);
+    });
+
+    it('classifies light themes, including brand-declared ones', () => {
+        expect(isLightTheme('light')).toBe(true);
+        expect(isLightTheme('graylight')).toBe(true);
+        expect(isLightTheme('dark')).toBe(false);
+        setBrand({ themes: [{ id: 'pergamin', label: 'Pergamin', variables: {}, colorScheme: 'light' }, puszcza] });
+        expect(isLightTheme('pergamin')).toBe(true);
+        expect(isLightTheme('puszcza')).toBe(false);
+    });
+
+    it('renders theme CSS as :root[data-theme] rules', () => {
+        setBrand({ themes: [{ ...puszcza, colorScheme: 'dark' }] });
+        expect(brandThemesCss()).toBe(
+            ':root[data-theme="puszcza"] {\n    color-scheme: dark;\n    --accent: #c09648;\n}',
+        );
+        setBrand();
+        expect(brandThemesCss()).toBe('');
     });
 });

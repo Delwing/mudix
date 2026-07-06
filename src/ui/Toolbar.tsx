@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from './components';
-import { getBrand } from '../branding';
+import { getBrand, type BrandToolbarContext, type StockToolbarButton } from '../branding';
 import type { SessionStatus } from '../mud/events';
 
 interface ToolbarProps {
@@ -17,6 +17,8 @@ interface ToolbarProps {
     onOpenDocs: () => void;
     onOpenSettings: () => void;
     onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
+    /** Capabilities handed to brand toolbar buttons (send / raiseEvent). */
+    brandContext?: BrandToolbarContext;
 }
 
 function Icon({ children }: { children: ReactNode }) {
@@ -49,9 +51,14 @@ const IconReconnect = () => <Icon><polyline points="23 4 23 10 17 10" /><path d=
 const IconDisconnect = () => <Icon><path d="M18.36 6.64a9 9 0 1 1-12.73 0" /><line x1="12" y1="2" x2="12" y2="12" /></Icon>;
 const IconCloseProfile = () => <Icon><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></Icon>;
 
-export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenFiles, onOpenLogs, onOpenDocs, onOpenSettings, onContextMenu }: ToolbarProps) {
+export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenFiles, onOpenLogs, onOpenDocs, onOpenSettings, onContextMenu, brandContext }: ToolbarProps) {
     const [menuOpen, setMenuOpen] = useState(false);
     const hamburgerRef = useRef<HTMLDivElement>(null);
+
+    // Brand toolbar config: hide stock buttons, append brand buttons, restyle.
+    const toolbarCfg = getBrand().toolbar;
+    const hidden = new Set<StockToolbarButton>(toolbarCfg?.hide ?? []);
+    const show = (id: StockToolbarButton) => !hidden.has(id);
 
     useEffect(() => {
         if (!menuOpen) return;
@@ -76,24 +83,29 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
 
     const actions = (
         <>
-            <Button variant="ghost" onClick={fire(onOpenScripts)}><IconScripts />Scripts</Button>
-            <Button variant="ghost" onClick={fire(onOpenFiles)}><IconFiles />Files</Button>
-            <Button variant="ghost" onClick={fire(onOpenMap)}><IconMap />Map</Button>
-            <Button variant="ghost" onClick={fire(onOpenLogs)}><IconLogs />Logs</Button>
-            <Button variant="ghost" onClick={fire(onOpenDocs)}><IconDocs />Docs</Button>
-            <Button variant="ghost" onClick={fire(onReportBug)}><IconBug />Report Bug</Button>
-            <Button variant="ghost" onClick={fire(onOpenSettings)}><IconSettings />Settings</Button>
+            {show('scripts') && <Button variant="ghost" onClick={fire(onOpenScripts)}><IconScripts />Scripts</Button>}
+            {show('files') && <Button variant="ghost" onClick={fire(onOpenFiles)}><IconFiles />Files</Button>}
+            {show('map') && <Button variant="ghost" onClick={fire(onOpenMap)}><IconMap />Map</Button>}
+            {show('logs') && <Button variant="ghost" onClick={fire(onOpenLogs)}><IconLogs />Logs</Button>}
+            {show('docs') && <Button variant="ghost" onClick={fire(onOpenDocs)}><IconDocs />Docs</Button>}
+            {show('reportBug') && <Button variant="ghost" onClick={fire(onReportBug)}><IconBug />Report Bug</Button>}
+            {show('settings') && <Button variant="ghost" onClick={fire(onOpenSettings)}><IconSettings />Settings</Button>}
+            {brandContext && toolbarCfg?.buttons?.map(b => (
+                <Button key={b.id} variant="ghost" title={b.title} onClick={fire(() => b.onClick(brandContext))}>
+                    {b.icon}{b.label}
+                </Button>
+            ))}
             <span className="toolbar-sep" aria-hidden="true" />
-            {isLive
+            {show('connection') && (isLive
                 ? <Button variant="ghost" className="toolbar-conn-btn" onClick={fire(onDisconnect)}><IconDisconnect />Disconnect</Button>
                 : <Button variant="ghost" className="toolbar-conn-btn" onClick={fire(onReconnect)}><IconReconnect />Reconnect</Button>
-            }
-            <Button variant="ghost" onClick={fire(handleCloseProfile)}><IconCloseProfile />Close</Button>
+            )}
+            {show('close') && <Button variant="ghost" onClick={fire(handleCloseProfile)}><IconCloseProfile />Close</Button>}
         </>
     );
 
     return (
-        <div className="mudix-toolbar" onContextMenu={onContextMenu}>
+        <div className={`mudix-toolbar${toolbarCfg?.className ? ` ${toolbarCfg.className}` : ''}`} onContextMenu={onContextMenu}>
             <span className="brand">{getBrand().appName}</span>
             <span className="toolbar-connection-name">{connectionName}</span>
             <span
