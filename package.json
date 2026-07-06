@@ -2,9 +2,26 @@
   "name": "mudix",
   "version": "0.1.0",
   "type": "module",
+  "description": "Web-based MUD client with Mudlet-compatible Lua scripting — usable standalone or as a library for branded builds",
+  "repository": {
+    "url": "git+https://github.com/Delwing/mudix.git"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist-lib/index.d.ts",
+      "import": "./dist-lib/index.js"
+    },
+    "./styles.css": "./dist-lib/styles.css"
+  },
+  "main": "./dist-lib/index.js",
+  "types": "./dist-lib/index.d.ts",
+  "files": [
+    "dist-lib"
+  ],
   "scripts": {
     "dev": "vite --host",
     "build": "tsc && vite build",
+    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",

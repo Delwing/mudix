@@ -1,3 +1,11 @@
+// Library entry point for branded builds (`import { MudixApp } from 'mudix'`).
+// The standalone app (`main.tsx`) renders the same `MudixApp` with no brand.
+// The CSS side-effect import makes the lib build emit the full stylesheet as
+// `styles.css` (consumers `import 'mudix/styles.css'`); the './styles.css'
+// specifier survives into index.d.ts, where it resolves against the emitted
+// file of the same name.
+import './styles.css';
+
 // App root + branding (white-label builds)
 export { MudixApp } from "./MudixApp";
 export {

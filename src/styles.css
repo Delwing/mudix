@@ -1,0 +1,7 @@
+/* Aggregate stylesheet for the library build. The lib entry imports this file
+ * (and only this file) so the emitted bundle is `dist-lib/styles.css` — the
+ * same relative path the generated `index.d.ts` carries, keeping the CSS
+ * side-effect import resolvable for consumers (mirrors mudlet-map-editor).
+ * Vite inlines the @imports at build time. */
+@import './App.css';
+@import './ui/components/components.css';
