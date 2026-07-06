@@ -102,7 +102,18 @@ export default function mudix(): PluginOption[] {
             name: 'mudix:config',
             config: () => ({
                 optimizeDeps: {
-                    exclude: ['pcre2-wasm-universal'],
+                    // 'mudix': the library entry carries relative `?url` asset
+                    // imports (external in the lib build); the dep optimizer's
+                    // scanner treats the query as part of a filesystem path and
+                    // dies on Windows (os error 123). Excluded, mudix is served
+                    // through Vite's transform pipeline in dev, where `?url`
+                    // works. Harmless in mudix's own repo (not a dep there).
+                    exclude: ['pcre2-wasm-universal', 'mudix'],
+                    // CJS deps reached from the excluded mudix entry must be
+                    // pre-bundled explicitly (Vite doesn't interop CJS served
+                    // raw). Extend this list if dev mode reports "does not
+                    // provide an export named ..." for another dependency.
+                    include: ['eventemitter3', '@zenfs/core > readable-stream'],
                 },
                 // Workers don't inherit `plugins`; re-declare nodePolyfills so
                 // the map parser worker (Buffer) gets the same shim it gets on
