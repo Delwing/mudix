@@ -113,7 +113,7 @@ export default function mudix(): PluginOption[] {
                     // pre-bundled explicitly (Vite doesn't interop CJS served
                     // raw). Extend this list if dev mode reports "does not
                     // provide an export named ..." for another dependency.
-                    include: ['eventemitter3', '@zenfs/core > readable-stream'],
+                    include: ['eventemitter3', 'wasmoon-lua5.1', '@zenfs/core > readable-stream'],
                 },
                 // Workers don't inherit `plugins`; re-declare nodePolyfills so
                 // the map parser worker (Buffer) gets the same shim it gets on
