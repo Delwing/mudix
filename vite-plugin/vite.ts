@@ -1,0 +1,133 @@
+import { readFileSync, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import type { Plugin, PluginOption } from 'vite';
+import { nodePolyfills } from 'vite-plugin-node-polyfills';
+
+/**
+ * The `mudix/vite` companion plugin. mudix (the library) leaves all of its
+ * heavyweight dependencies external, so the consumer's Vite processes them —
+ * and needs the same handling mudix's own app build has: the pcre2 WASM file
+ * at the site root, node polyfills on the main thread and in workers, and the
+ * VFS service worker emitted into the output. One plugin call supplies all of
+ * it:
+ *
+ *     import mudix from 'mudix/vite';
+ *     export default defineConfig({ plugins: [mudix(), react()] });
+ *
+ * mudix's own vite.config.ts uses this plugin too (imported from source), so
+ * the app build and consumer builds can't drift apart.
+ */
+
+const require = createRequire(import.meta.url);
+
+const POLYFILLS: ('buffer' | 'stream' | 'events' | 'util')[] = ['buffer', 'stream', 'events', 'util'];
+
+/** vfs-sw.js ships next to the compiled plugin in dist-lib (consumers) and in
+ *  public/ when running from the mudix repo itself (source import). */
+function resolveVfsSwPath(): string | null {
+    for (const rel of ['./vfs-sw.js', '../public/vfs-sw.js']) {
+        const p = fileURLToPath(new URL(rel, import.meta.url));
+        if (existsSync(p)) return p;
+    }
+    return null;
+}
+
+/** Serves libpcre2.wasm at the root URL in dev (where emscripten looks for it
+ *  when document.currentScript is null) and emits it to the build output.
+ *  Resolved from wherever pcre2-wasm-universal lives relative to mudix. */
+function pcre2WasmPlugin(): Plugin {
+    // The wasm file isn't in the package's exports map — resolve the exported
+    // ./libpcre2 entry (dist/libpcre2.js) and take its sibling.
+    const wasmPath = join(dirname(require.resolve('pcre2-wasm-universal/libpcre2')), 'libpcre2.wasm');
+    return {
+        name: 'mudix:pcre2-wasm',
+        configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+                if (req.url === '/libpcre2.wasm') {
+                    res.setHeader('Content-Type', 'application/wasm');
+                    res.end(readFileSync(wasmPath));
+                    return;
+                }
+                next();
+            });
+        },
+        generateBundle() {
+            this.emitFile({
+                type: 'asset',
+                fileName: 'libpcre2.wasm',
+                source: readFileSync(wasmPath),
+            });
+        },
+    };
+}
+
+/** Serves/emits the VFS service worker at the site root so
+ *  `registerVfsServiceWorker()` (called by MudixApp) finds it. Skipped when
+ *  the consumer already ships its own copy in public/ — as the standalone
+ *  mudix app does. */
+function vfsServiceWorkerPlugin(): Plugin {
+    const swPath = resolveVfsSwPath();
+    let skip = false;
+    return {
+        name: 'mudix:vfs-sw',
+        configResolved(config) {
+            skip = !swPath || (!!config.publicDir && existsSync(join(config.publicDir, 'vfs-sw.js')));
+        },
+        configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+                if (!skip && swPath && req.url?.split('?')[0] === '/vfs-sw.js') {
+                    res.setHeader('Content-Type', 'text/javascript');
+                    res.end(readFileSync(swPath));
+                    return;
+                }
+                next();
+            });
+        },
+        generateBundle() {
+            if (skip || !swPath) return;
+            this.emitFile({
+                type: 'asset',
+                fileName: 'vfs-sw.js',
+                source: readFileSync(swPath, 'utf8'),
+            });
+        },
+    };
+}
+
+export default function mudix(): PluginOption[] {
+    return [
+        {
+            name: 'mudix:config',
+            config: () => ({
+                optimizeDeps: {
+                    exclude: ['pcre2-wasm-universal'],
+                },
+                // Workers don't inherit `plugins`; re-declare nodePolyfills so
+                // the map parser worker (Buffer) gets the same shim it gets on
+                // the main thread.
+                worker: {
+                    format: 'es' as const,
+                    plugins: () => [nodePolyfills({ include: POLYFILLS })],
+                },
+                build: {
+                    rollupOptions: {
+                        onwarn(warning, defaultHandler) {
+                            if (
+                                warning.code === 'COMMONJS_VARIABLE_IN_ESM' &&
+                                warning.id?.includes('pcre2-wasm-universal')
+                            ) {
+                                return;
+                            }
+                            defaultHandler(warning);
+                        },
+                    },
+                },
+            }),
+        },
+        nodePolyfills({ include: POLYFILLS }),
+        pcre2WasmPlugin(),
+        vfsServiceWorkerPlugin(),
+    ];
+}

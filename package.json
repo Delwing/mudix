@@ -11,6 +11,10 @@
       "types": "./dist-lib/index.d.ts",
       "import": "./dist-lib/index.js"
     },
+    "./vite": {
+      "types": "./dist-lib/vite.d.ts",
+      "import": "./dist-lib/vite.js"
+    },
     "./styles.css": "./dist-lib/styles.css"
   },
   "main": "./dist-lib/index.js",
@@ -21,7 +25,7 @@
   "scripts": {
     "dev": "vite --host",
     "build": "tsc && vite build",
-    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
+    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json && tsc -p tsconfig.vite-plugin.json && node -e \"require('fs').copyFileSync('public/vfs-sw.js','dist-lib/vfs-sw.js')\"",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
@@ -55,11 +59,13 @@
     "pcre2-wasm-universal": "^1.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "vite-plugin-node-polyfills": "^0.26.0",
     "wasmoon-lua5.1": "^1.18.10",
     "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@types/node": "^25.6.0",
     "@types/pako": "^2.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
@@ -67,7 +73,6 @@
     "happy-dom": "^20.9.0",
     "typescript": "^5.0.0",
     "vite": "8.0.5",
-    "vite-plugin-node-polyfills": "^0.26.0",
     "vitest": "^4.1.7"
   }
 }
