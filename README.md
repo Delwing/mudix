@@ -53,15 +53,15 @@ If you have Mudlet scripts, triggers, aliases, or maps, mudix aims to run them u
 ## 🚀 Getting Started
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) 20+ and npm (or yarn).
+- [Node.js](https://nodejs.org/) 20+ and [yarn](https://yarnpkg.com/).
 
 ### Run the client
 
 ```bash
 git clone <repo-url> mudix
 cd mudix
-npm install
-npm run dev
+yarn
+yarn dev
 ```
 
 Open the printed local URL (usually `http://localhost:5173`) in your browser, then create a connection on the start screen.
@@ -72,7 +72,7 @@ The browser cannot open raw TCP sockets, so connecting to a classic telnet MUD n
 
 ```bash
 cd proxy
-yarn          # or: npm install
+yarn
 yarn start    # listens on ws://localhost:3001 by default
 ```
 
@@ -81,12 +81,12 @@ Then choose **MUD (host:port)** mode when creating a connection. Servers that ex
 ## 🛠️ Development
 
 ```bash
-npm run dev         # Start the Vite dev server
-npm run build       # Type-check + production build
-npm run preview     # Preview the production build
-npm run typecheck   # Type-check only (src + tests)
-npm test            # Run the Vitest suite
-npm run test:watch  # Vitest in watch mode
+yarn dev         # Start the Vite dev server
+yarn build       # Type-check + production build
+yarn preview     # Preview the production build
+yarn typecheck   # Type-check only (src + tests)
+yarn test        # Run the Vitest suite
+yarn test:watch  # Vitest in watch mode
 ```
 
 Production builds deploy to **GitHub Pages** automatically on push to `master`.
@@ -129,7 +129,7 @@ mudix runs inside a browser sandbox, which trades some of Mudlet's native reach 
 
 ## 🤝 Contributing
 
-When adding a Mudlet API function, implement the JS-side method in `ScriptingAPI`, bind the Lua global in `LuaRuntime`, and add the autocomplete entry in `luaCompletions.ts`. Run `npm run typecheck` and `npm test` before opening a PR.
+When adding a Mudlet API function, implement the JS-side method in `ScriptingAPI`, bind the Lua global in `LuaRuntime`, and add the autocomplete entry in `luaCompletions.ts`. Run `yarn typecheck` and `yarn test` before opening a PR.
 
 ## License
 

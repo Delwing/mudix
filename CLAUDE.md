@@ -5,12 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev         # Start Vite dev server
-npm run build       # TypeScript check + production build (tsc && vite build)
-npm run preview     # Preview production build
-npm run typecheck   # Type-check (tsc -p tsconfig.test.json — covers src + tests)
-npm test            # Run the Vitest suite once
-npm run test:watch  # Vitest in watch mode
+yarn dev         # Start Vite dev server
+yarn build       # TypeScript check + production build (tsc && vite build)
+yarn preview     # Preview production build
+yarn typecheck   # Type-check (tsc -p tsconfig.test.json — covers src + tests)
+yarn test        # Run the Vitest suite once
+yarn test:watch  # Vitest in watch mode
 ```
 
 Tests live in `tests/` and run through Vite (so `?raw` Lua imports, `import.meta.glob`, and
