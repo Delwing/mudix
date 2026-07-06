@@ -17,6 +17,8 @@ import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, co
 import { DEFAULT_STICKY_LINES } from './hooks/useOutput';
 import { applyOutputFont, primeLocalFontsCache } from './utils/fontLoader';
 import { setBaseTitle, flashTitle, clearTitleFlash } from './utils/documentTitle';
+import { getBrand, isBrandedMode } from './branding';
+import { getSessionCredentials, setSessionCredentials } from './utils/sessionCredentials';
 import { applyAnsiPalette, setServerRedefineColorsAllowed, resetAllPaletteColors } from './mud/text/colors';
 import type { MudSession } from './mud/MudSession';
 import type { ProfileVFS } from './scripting/vfs/ProfileVFS';
@@ -198,11 +200,11 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // instead of overwriting it.
     useEffect(() => {
         const dot = status === 'connected' ? '🟢' : status === 'connecting' ? '🟡' : '🔴';
-        setBaseTitle(`${connection.name} — mudix`, showConnectionIndicator ? dot : '');
+        setBaseTitle(`${connection.name} — ${getBrand().appName}`, showConnectionIndicator ? dot : '');
     }, [connection.name, status, showConnectionIndicator]);
 
     // Restore the bare app title (and stop any flash) when the profile closes.
-    useEffect(() => () => { clearTitleFlash(); setBaseTitle('mudix'); }, []);
+    useEffect(() => () => { clearTitleFlash(); setBaseTitle(getBrand().appName); }, []);
 
     // "Notify on new data": flash the title whenever the server flushes lines
     // while the tab is unfocused. flushLines is the server-only data path
@@ -383,9 +385,12 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
             // If credentials are saved, send them straight away — no popup. The
             // guard stops wrong saved credentials from looping; a failure
             // (charLogin.result below) re-opens the popup prefilled for a retry.
+            // In-memory credentials (branded login form) win over the stored
+            // per-profile ones; branded builds never store any.
+            const mem = getSessionCredentials(connection.id);
             const conn = useAppStore.getState().connections.find(c => c.id === connection.id);
-            const account = conn?.charLoginAccount;
-            const password = conn?.charLoginPassword;
+            const account = mem ? mem.account : conn?.charLoginAccount;
+            const password = mem ? mem.password : conn?.charLoginPassword;
             if (account && password && !gmcpAutoTried.current) {
                 gmcpAutoTried.current = true;
                 session.sendCharLoginCredentials(account, password);
@@ -410,6 +415,9 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // disconnect, or when GMCP Char.Login takes over (see charLogin.request).
     useEffect(() => {
         const readCreds = () => {
+            // In-memory credentials (branded login form) win over stored ones.
+            const mem = getSessionCredentials(connection.id);
+            if (mem) return mem;
             const conn = useAppStore.getState().connections.find(c => c.id === connection.id);
             return {
                 account: conn?.charLoginAccount ?? '',
@@ -659,19 +667,26 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                 <CharLoginModal
                     connectionName={connection.name}
                     error={charLogin.error}
-                    initialAccount={charLoginAccount}
-                    initialPassword={charLoginPassword}
+                    initialAccount={getSessionCredentials(connection.id)?.account ?? charLoginAccount}
+                    initialPassword={getSessionCredentials(connection.id)?.password ?? charLoginPassword}
+                    allowRemember={!isBrandedMode()}
                     onSubmit={(account, password, remember) => {
                         // Optimistic close: most servers proceed on success. A
                         // failure re-opens the popup via the charLogin.result
                         // handler with the server's message.
                         setCharLogin(null);
-                        // Persist (plaintext) or clear the saved credentials on
-                        // the connection record.
-                        patchConnection(connection.id, {
-                            charLoginAccount: remember ? account : undefined,
-                            charLoginPassword: remember ? password : undefined,
-                        });
+                        if (isBrandedMode()) {
+                            // Branded builds never persist credentials — keep
+                            // them in memory for this page's reconnects only.
+                            setSessionCredentials(connection.id, { account, password });
+                        } else {
+                            // Persist (plaintext) or clear the saved
+                            // credentials on the connection record.
+                            patchConnection(connection.id, {
+                                charLoginAccount: remember ? account : undefined,
+                                charLoginPassword: remember ? password : undefined,
+                            });
+                        }
                         session.sendCharLoginCredentials(account, password);
                     }}
                     onCancel={() => {

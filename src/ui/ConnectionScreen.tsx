@@ -5,6 +5,7 @@ import { ConnectionFormModal } from './ConnectionFormModal';
 import { ConnectionGrid } from './ConnectionGrid';
 import { AboutModal } from './AboutModal';
 import { useAppStore, type MudConnection } from '../storage';
+import { getBrand } from '../branding';
 import { extractMudletProfileZip, resolveModulesFromTree, addModuleToBundle, type MudletProfileBundle } from '../import/mudletProfileImport';
 import { importMudletProfile, bundleFromDirectory, linkMudletFolder } from '../import/applyMudletProfile';
 import { ModuleResolveModal, type ModuleUpload } from './ModuleResolveModal';
@@ -25,6 +26,7 @@ interface Props {
 export function ConnectionScreen({ connections, connecting, connectingId, onConnect, onOpen, onAdd, onUpdate, onDelete, onOpenSettings }: Props) {
     const confirm = useConfirm();
     const reorderConnections = useAppStore(s => s.reorderConnections);
+    const brand = getBrand();
     // null = editor closed; { connection: null } = add a new one; { connection: c } = edit c.
     const [editor, setEditor] = useState<{ connection: MudConnection | null } | null>(null);
     const [aboutOpen, setAboutOpen] = useState(false);
@@ -121,11 +123,11 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                     <button className="connection-settings-btn" onClick={onOpenSettings} type="button" aria-label="Settings">
                         ⚙
                     </button>
-                    <button className="connection-about-btn" onClick={() => setAboutOpen(true)} type="button" aria-label="About mudix">
+                    <button className="connection-about-btn" onClick={() => setAboutOpen(true)} type="button" aria-label={`About ${brand.appName}`}>
                         <Info size={16} />
                     </button>
                 </div>
-                <div className="connection-brand">mudix</div>
+                <div className="connection-brand">{brand.appName}</div>
 
                 <ConnectionGrid
                     connections={connections}

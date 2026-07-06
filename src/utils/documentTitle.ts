@@ -19,9 +19,13 @@
  * - A flash is a no-op while the tab is already focused, matching Mudlet.
  */
 
+import { getBrand } from '../branding';
+
 /** Leading status glyph (e.g. '🟢'), or '' when the indicator is off. */
 let statusDot = '';
-let label = 'mudix';
+/** Profile label; null = no profile open yet → fall back to the brand's app
+ *  name (read lazily, since the brand is installed after module load). */
+let label: string | null = null;
 let flashing = false;
 let blinkOn = false;
 let intervalId: number | null = null;
@@ -37,7 +41,8 @@ function render(): void {
     let dot: string;
     if (flashing) dot = blinkOn ? (statusDot || '🟢') : '⚪';
     else dot = statusDot;
-    document.title = dot ? `${dot} ${label}` : label;
+    const text = label ?? getBrand().appName;
+    document.title = dot ? `${dot} ${text}` : text;
 }
 
 function stopFlash(): void {

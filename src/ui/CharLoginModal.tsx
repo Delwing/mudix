@@ -14,6 +14,10 @@ interface CharLoginModalProps {
     initialPassword?: string;
     /** Initial state of the "remember on this device" checkbox. */
     initialRemember?: boolean;
+    /** Show the "remember on this device" checkbox (default true). Branded
+     *  builds hide it — credentials are never persisted there, so `onSubmit`
+     *  always receives `remember=false`. */
+    allowRemember?: boolean;
     /** Send `account` + `password` to the server (Char.Login.Credentials).
      *  `remember` tells the caller whether to persist them for next time. */
     onSubmit: (account: string, password: string, remember: boolean) => void;
@@ -36,12 +40,13 @@ export function CharLoginModal({
     initialAccount,
     initialPassword,
     initialRemember,
+    allowRemember = true,
     onSubmit,
     onCancel,
 }: CharLoginModalProps) {
     const [account, setAccount] = useState(initialAccount ?? '');
     const [password, setPassword] = useState(initialPassword ?? '');
-    const [remember, setRemember] = useState(initialRemember ?? !!initialPassword);
+    const [remember, setRemember] = useState(allowRemember && (initialRemember ?? !!initialPassword));
     const accountRef = useRef<HTMLInputElement>(null);
     const passwordRef = useRef<HTMLInputElement>(null);
     // Trap + restore only; this modal keeps its own Escape (window) and its own
@@ -122,14 +127,16 @@ export function CharLoginModal({
                                 placeholder="password"
                             />
                         </label>
-                        <label className="char-login-remember">
-                            <input
-                                type="checkbox"
-                                checked={remember}
-                                onChange={e => setRemember(e.target.checked)}
-                            />
-                            <span>Remember on this device</span>
-                        </label>
+                        {allowRemember && (
+                            <label className="char-login-remember">
+                                <input
+                                    type="checkbox"
+                                    checked={remember}
+                                    onChange={e => setRemember(e.target.checked)}
+                                />
+                                <span>Remember on this device</span>
+                            </label>
+                        )}
                         {remember && (
                             <p className="cred-warning" role="note">
                                 ⚠ Saves unencrypted in your browser's storage. Any script running on

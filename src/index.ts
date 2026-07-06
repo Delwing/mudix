@@ -1,3 +1,18 @@
+// App root + branding (white-label builds)
+export { MudixApp } from "./MudixApp";
+export {
+    getBrand,
+    isBrandedMode,
+    DEFAULT_BRAND,
+    type BrandConfig,
+    type BrandMudTarget,
+    type BrandPackage,
+    type LandingProps,
+} from "./branding";
+export { BrandLoginScreen } from "./ui/BrandLoginScreen";
+export { setSessionCredentials, getSessionCredentials, type SessionCredentials } from "./utils/sessionCredentials";
+export type { MudConnection, ConnectionMode } from "./storage/schema";
+
 // Core
 export { EventBus } from "./core/EventBus";
 

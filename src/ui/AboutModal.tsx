@@ -1,6 +1,6 @@
 import { useModalFocus } from './components/useModalFocus';
+import { getBrand } from '../branding';
 
-const REPO_URL = 'https://github.com/Delwing/mudix';
 // Bumped alongside package.json on release — the About dialog is the only reader.
 const APP_VERSION = '0.1.0';
 
@@ -17,31 +17,31 @@ interface Props {
     onClose: () => void;
 }
 
-/** Small "About mudix" dialog reachable from the connection screen — a couple of
- *  sentences on what mudix is plus a link to the source repository. */
+/** Small "About" dialog reachable from the connection screen — wordmark,
+ *  tagline and description come from the active brand (stock mudix by
+ *  default) plus a link to the source repository when the brand sets one. */
 export function AboutModal({ onClose }: Props) {
     const ref = useModalFocus<HTMLDivElement>(onClose);
+    const brand = getBrand();
 
     return (
         <>
             <div className="modal-overlay" onClick={onClose} />
-            <div ref={ref} className="modal about-modal" role="dialog" aria-modal="true" aria-label="About mudix">
+            <div ref={ref} className="modal about-modal" role="dialog" aria-modal="true" aria-label={`About ${brand.appName}`}>
                 <div className="modal-header">
-                    <span className="modal-title">About mudix</span>
+                    <span className="modal-title">About {brand.appName}</span>
                     <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
                 </div>
                 <div className="modal-body about-body">
-                    <div className="about-wordmark">mudix</div>
-                    <p className="about-tagline">A modern, web-based MUD client.</p>
-                    <p className="about-text">
-                        mudix connects to MUD servers over WebSocket with full telnet, GMCP and MSDP support,
-                        renders ANSI output, and runs Mudlet-compatible Lua scripting right in your browser —
-                        aiming for drop-in compatibility with Mudlet packages, maps and profiles.
-                    </p>
-                    <a className="about-gh" href={REPO_URL} target="_blank" rel="noreferrer">
-                        <GithubMark />
-                        <span>View source on GitHub</span>
-                    </a>
+                    <div className="about-wordmark">{brand.appName}</div>
+                    {brand.tagline && <p className="about-tagline">{brand.tagline}</p>}
+                    {brand.aboutText && <p className="about-text">{brand.aboutText}</p>}
+                    {brand.repoUrl && (
+                        <a className="about-gh" href={brand.repoUrl} target="_blank" rel="noreferrer">
+                            <GithubMark />
+                            <span>View source on GitHub</span>
+                        </a>
+                    )}
                     <div className="about-version">Version {APP_VERSION}</div>
                 </div>
             </div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ConnectionScreen } from './ui/ConnectionScreen';
+import { BrandLoginScreen } from './ui/BrandLoginScreen';
 import { SettingsModal } from './ui/SettingsModal';
 import { ProfileBusyScreen } from './ui/ProfileBusyScreen';
 import { FolderPermissionScreen } from './ui/FolderPermissionScreen';
@@ -11,6 +12,7 @@ import { loadProfileData } from './storage/profileVfsData';
 import { isMudletProfileVfs, loadMudletLinkedProfile } from './import/mudletLink';
 import { loadFolderHandle, checkFolderPermission, requestFolderPermission, clearFolderHandle } from './scripting/vfs/folderHandleStore';
 import { useAppStore, type MudConnection } from './storage';
+import { getBrand, brandConnectionData, matchBrandProfile } from './branding';
 
 /**
  * Best-effort (re)grant of a linked profile's folder permission. Must be called
@@ -71,6 +73,20 @@ export default function App() {
     const updateConnection = useAppStore(s => s.updateConnection);
     const removeConnection = useAppStore(s => s.removeConnection);
 
+    const brand = getBrand();
+
+    // Branded single-profile builds seed the managed profile on first launch
+    // (per-login profiles are created at login time instead). Idempotent via
+    // the store state, so StrictMode's double effect run and every later
+    // launch are no-ops.
+    useEffect(() => {
+        if (brand.profileMode === 'perLogin') return;
+        const seed = brandConnectionData(brand);
+        if (!seed || useAppStore.getState().connections.length > 0) return;
+        addConnection(seed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     const setProfileQuery = (id: string | null) => {
         const url = new URL(window.location.href);
         if (id) url.searchParams.set('profile', id);
@@ -107,6 +123,7 @@ export default function App() {
         openProfile(conn, forceConnect || (conn.autoReconnect ?? false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [connections]);
+
 
     const handleCloseProfile = () => {
         setActiveConnection(null);
@@ -253,8 +270,36 @@ export default function App() {
         );
     }
 
+    // Landing contract for a brand-supplied screen: open a profile by id, and
+    // find-or-create the brand's managed profile (patching e.g. login creds
+    // first). Reads fresh store state so an ensure → open sequence works
+    // within one event handler.
+    const openProfileById = (id: string, connect: boolean) => {
+        const conn = useAppStore.getState().connections.find(c => c.id === id);
+        if (conn) openProfile(conn, connect);
+    };
+    const ensureBrandProfile = (account?: string): string => {
+        const existing = matchBrandProfile(useAppStore.getState().connections, brand, account);
+        if (existing) return existing.id;
+        const seed = brandConnectionData(brand, brand.profileMode === 'perLogin' ? account : undefined);
+        if (!seed) throw new Error('ensureBrandProfile: the brand does not configure a MUD target');
+        return addConnection(seed);
+    };
+    // Branded mode never shows profile creation/selection: the landing is a
+    // login form — the brand's own Landing when provided, else the built-in
+    // one. Stock builds keep the connection picker.
+    const Landing = brand.Landing ?? (brand.mud ? BrandLoginScreen : undefined);
+
     return (
         <div className="app">
+            {Landing ? (
+                <Landing
+                    connections={connections}
+                    openProfile={openProfileById}
+                    ensureBrandProfile={ensureBrandProfile}
+                    openSettings={handleToggleSettings}
+                />
+            ) : (
             <ConnectionScreen
                 connections={connections}
                 connecting={false}
@@ -266,6 +311,7 @@ export default function App() {
                 onDelete={removeConnection}
                 onOpenSettings={handleToggleSettings}
             />
+            )}
             {settingsOpen && (
                 <SettingsModal
                     onClose={handleToggleSettings}

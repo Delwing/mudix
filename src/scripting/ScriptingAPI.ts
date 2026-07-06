@@ -4,6 +4,7 @@ import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine } from '../mud/timers/TimerEngine';
 import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import { classifyReservedKey, formatKeyCombo, reservedKeyNote } from '../mud/keybindings/browserReservedKeys';
+import { getBrand } from '../branding';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
 import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
@@ -832,7 +833,7 @@ export class ScriptingAPI {
     getMudletInfo(): void {
         const platform = typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown';
         const lines = [
-            'mudix — web-based MUD client (Mudlet-compatible Lua API)',
+            `${getBrand().appName} — web-based MUD client (Mudlet-compatible Lua API)`,
             `Profile: ${this.profileName || '(none)'}`,
             `Server encoding: ${this.session.getServerEncoding()}`,
             `Platform: ${platform}`,

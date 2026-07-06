@@ -1,5 +1,6 @@
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 import { useAppStore } from '../storage/appStore';
+import { getBrand } from '../branding';
 import { installPackageFromBytes } from './packageInstaller';
 import runLuaCodeUrl from './defaults/run-lua-code.mpackage?url';
 
@@ -40,8 +41,11 @@ export async function ensureDefaultPackages(connectionId: string, vfs: ProfileVF
     const installed = new Set(
         (useAppStore.getState().connectionPackages[connectionId] ?? []).map(p => p.name),
     );
+    // Brand-bundled packages install through the same pipeline, after the
+    // stock defaults (BrandPackage is shape-compatible with DefaultPackage).
+    const defaults = [...DEFAULTS, ...(getBrand().packages ?? [])];
     let installedAny = false;
-    for (const def of DEFAULTS) {
+    for (const def of defaults) {
         if (installed.has(def.name)) continue;
         try {
             const res = await fetch(def.url);

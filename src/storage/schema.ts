@@ -1,5 +1,6 @@
 import type { WindowOpenOptions } from '../ui/windows/types';
 import type { MudletVariable } from '../import/mudletVariables';
+import { getBrand } from '../branding';
 
 export const DEFAULT_PROXY_URL = 'wss://mudix.delwing.workers.dev';
 
@@ -684,8 +685,9 @@ export function selectProfileField<K extends keyof ProfileSettings>(
 
 export function connectionUrl(c: MudConnection, userProxyUrl?: string): string {
     if (c.mode === 'mud') {
-        // Precedence: connection-level proxy > user's deployed proxy > built-in default.
-        const base = (c.proxyUrl?.trim() || userProxyUrl || DEFAULT_PROXY_URL).replace(/\/$/, '');
+        // Precedence: connection-level proxy > user's deployed proxy > brand
+        // proxy (white-label builds) > built-in default.
+        const base = (c.proxyUrl?.trim() || userProxyUrl || getBrand().proxyUrl || DEFAULT_PROXY_URL).replace(/\/$/, '');
         return `${base}?host=${encodeURIComponent(c.host ?? '')}&port=${c.port ?? 23}`;
     }
     return c.url ?? '';

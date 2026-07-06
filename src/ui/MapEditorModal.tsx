@@ -2,6 +2,7 @@ import { Suspense, lazy, useMemo } from 'react';
 import type { EditorPlugin } from 'mudlet-map-editor';
 import { ResizableModal } from './ResizableModal';
 import { useAppStore } from '../storage';
+import { getBrand } from '../branding';
 import { loadMap as loadMapBytes } from '../storage/mapStorage';
 import type { WindowManager } from './windows/WindowManager';
 
@@ -52,7 +53,7 @@ export function MapEditorModal({ connectionId, connectionName, manager, onClose 
             // overrides the brand class's own `var(--font-ui)` so the
             // wordmark uses the editor's Montserrat-style font and
             // baseline-aligns with the editor's h1 title beside it.
-            renderLogo: () => <span className="brand" style={{ fontFamily: 'inherit' }}>mudix</span>,
+            renderLogo: () => <span className="brand" style={{ fontFamily: 'inherit' }}>{getBrand().appName}</span>,
             // The map under edit was seeded from mudix's IndexedDB in
             // onAppReady, so the URL-load action has no role here — drop
             // it. We also swap "save"'s onClick: the editor's default

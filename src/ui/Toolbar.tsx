@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from './components';
+import { getBrand } from '../branding';
 import type { SessionStatus } from '../mud/events';
 
 interface ToolbarProps {
@@ -93,7 +94,7 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
 
     return (
         <div className="mudix-toolbar" onContextMenu={onContextMenu}>
-            <span className="brand">mudix</span>
+            <span className="brand">{getBrand().appName}</span>
             <span className="toolbar-connection-name">{connectionName}</span>
             <span
                 className={`status-dot status-${status}`}
