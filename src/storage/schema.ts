@@ -191,6 +191,13 @@ export interface ProfileSettings {
      *  field doesn't wipe siblings. Missing fields fall through to
      *  PROTOCOL_DEFAULTS. Takes effect on the next connect. */
     protocols?: ProtocolSettings;
+    /** Names of packages the user explicitly uninstalled. Consulted by
+     *  `ensureDefaultPackages` so a deleted default/brand package stays
+     *  deleted instead of reinstalling on the next profile open (Mudlet's
+     *  `deletedDefaultMuds` equivalent). A name is removed again when the
+     *  package is (re)installed. Recorded for every uninstall — non-default
+     *  names are inert. */
+    uninstalledPackages?: string[];
     /** Catch-all bag for Mudlet `setConfig`/`getConfig` option keys that have no
      *  dedicated structured home above (accessibility, input-line, and other
      *  preferences mudix persists for round-trip fidelity but does not yet act

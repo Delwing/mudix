@@ -29,27 +29,35 @@ const DEFAULTS: DefaultPackage[] = [
 /**
  * Install any default packages the profile doesn't already have. Idempotent:
  * a package is skipped if its manifest name is already in `connectionPackages`
- * — so existing profiles also pick up newly-added defaults on next open, and
- * a user who deleted a default keeps it deleted (next call sees it missing in
- * the store and would reinstall — see Note).
+ * — so existing profiles also pick up newly-added defaults on next open.
+ *
+ * A default the user explicitly uninstalled stays uninstalled: the store's
+ * `uninstallPackage` tombstones the name in the profile's
+ * `uninstalledPackages` (Mudlet's `deletedDefaultMuds` equivalent), and this
+ * skips tombstoned names — except brand packages marked `removable: false`,
+ * which always come back.
  *
  * Failures are logged and swallowed: a broken default must never block the
  * profile from opening.
- *
- * Note on user deletes: today this reinstalls a default the user explicitly
- * removed. If that becomes a problem, track removed-default names in a
- * persisted set (mirroring Mudlet's `deletedDefaultMuds` settings key).
  */
 export async function ensureDefaultPackages(connectionId: string, vfs: ProfileVFS): Promise<void> {
+    const state = useAppStore.getState();
     const installed = new Set(
-        (useAppStore.getState().connectionPackages[connectionId] ?? []).map(p => p.name),
+        (state.connectionPackages[connectionId] ?? []).map(p => p.name),
     );
+    const removedByUser = new Set(state.connectionProfile[connectionId]?.uninstalledPackages ?? []);
     // Brand-bundled packages install through the same pipeline, after the
-    // stock defaults (BrandPackage is shape-compatible with DefaultPackage).
-    const defaults = [...DEFAULTS, ...(getBrand().packages ?? [])];
+    // stock defaults (BrandPackage is shape-compatible with DefaultPackage);
+    // a brand can drop the stock set entirely via `stockPackages: false`.
+    const brand = getBrand();
+    const defaults: (DefaultPackage & { removable?: boolean })[] = [
+        ...(brand.stockPackages === false ? [] : DEFAULTS),
+        ...(brand.packages ?? []),
+    ];
     let installedAny = false;
     for (const def of defaults) {
         if (installed.has(def.name)) continue;
+        if (def.removable !== false && removedByUser.has(def.name)) continue;
         try {
             const res = await fetch(def.url);
             if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${def.url}`);

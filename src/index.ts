@@ -11,6 +11,7 @@ export { MudixApp } from "./MudixApp";
 export {
     getBrand,
     isBrandedMode,
+    isPackageRemovable,
     DEFAULT_BRAND,
     type BrandConfig,
     type BrandMudTarget,

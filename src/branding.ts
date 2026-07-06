@@ -37,6 +37,11 @@ export interface BrandPackage {
     filename: string;
     /** Resolved URL to the asset (e.g. an `?url` import in the brand's repo). */
     url: string;
+    /** Whether the user may uninstall this package (default true). When false
+     *  the uninstall control is hidden, Lua `uninstallPackage()` refuses it,
+     *  and it reinstalls on the next profile open even if removed by other
+     *  means. A removable package the user uninstalls stays uninstalled. */
+    removable?: boolean;
 }
 
 /** Contract for a brand-supplied landing screen, rendered instead of the stock
@@ -81,6 +86,10 @@ export interface BrandConfig {
     profileMode?: 'single' | 'perLogin';
     /** Packages preinstalled into every profile on first open. */
     packages?: BrandPackage[];
+    /** Whether mudix's own stock default packages (run-lua-code) install too
+     *  (default true). Set false for a brand that fully controls the package
+     *  set via `packages`. */
+    stockPackages?: boolean;
     /** Custom landing screen replacing the stock connection picker. */
     Landing?: ComponentType<LandingProps>;
 }
@@ -111,6 +120,13 @@ export function getBrand(): BrandConfig {
  *  (single profile, login-form landing, no persisted credentials). */
 export function isBrandedMode(): boolean {
     return !!current.mud;
+}
+
+/** Whether the user may uninstall the named package. Only brand-bundled
+ *  packages marked `removable: false` are locked; everything else — stock
+ *  defaults included — is removable. */
+export function isPackageRemovable(name: string): boolean {
+    return current.packages?.find(p => p.name === name)?.removable !== false;
 }
 
 /** Connection-record seed for the brand's MUD, or null when the brand doesn't

@@ -3,6 +3,7 @@ import { AlertCircle, Braces, Clock, Filter, Folder, FolderOpen, FolderPlus, Key
 import { Button, Input, ContextMenu, useConfirm } from '../../components';
 import { VariablesView } from './VariablesView';
 import { useAppStore, useProfileField } from '../../../storage';
+import { isPackageRemovable } from '../../../branding';
 import { DEFAULT_ANSI_PALETTE } from '../../../mud/text/colors';
 import type { AliasNode, ButtonLocation, ButtonNode, ButtonOrientation, KeyNode, PackageManifest, ScriptNode, TimerNode, TriggerNode, TriggerPattern, TriggerPatternType } from '../../../storage/schema';
 import { isEffectivelyEnabled } from '../../../storage/schema';
@@ -1716,6 +1717,7 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
                                                     {pkg.author && <><span className="script-editor__pkg-byline-sep">·</span><span>{pkg.author}</span></>}
                                                 </div>
                                             </div>
+                                            {isPackageRemovable(pkg.name) && (
                                             <button
                                                 className="script-editor__error-log-clear"
                                                 onClick={async () => {
@@ -1746,6 +1748,7 @@ export const ScriptEditorPanel = forwardRef<ScriptEditorPanelHandle, ScriptEdito
                                             >
                                                 Uninstall
                                             </button>
+                                            )}
                                         </div>
                                         {pkg.description && <PackageDescription text={pkg.description} />}
                                         <div className="script-editor__pkg-footer">

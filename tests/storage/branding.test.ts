@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { setBrand, getBrand, isBrandedMode, brandConnectionData, matchBrandProfile, DEFAULT_BRAND } from '../../src/branding';
+import { setBrand, getBrand, isBrandedMode, isPackageRemovable, brandConnectionData, matchBrandProfile, DEFAULT_BRAND } from '../../src/branding';
 import { connectionUrl, DEFAULT_PROXY_URL, type MudConnection } from '../../src/storage/schema';
 
 const conn = (c: Partial<MudConnection>): MudConnection => ({ id: 'x', name: 'x', ...c });
@@ -120,5 +120,24 @@ describe('matchBrandProfile', () => {
         expect(matchBrandProfile(profiles, getBrand(), '')?.id).toBe('a');
         setBrand({ mud });
         expect(matchBrandProfile(profiles, getBrand(), 'Frodo')?.id).toBe('a');
+    });
+});
+
+describe('isPackageRemovable', () => {
+    it('locks only brand packages marked removable: false', () => {
+        setBrand({
+            packages: [
+                { name: 'locked-ui', filename: 'locked-ui.mpackage', url: 'u', removable: false },
+                { name: 'optional-pack', filename: 'optional-pack.mpackage', url: 'u' },
+            ],
+        });
+        expect(isPackageRemovable('locked-ui')).toBe(false);
+        expect(isPackageRemovable('optional-pack')).toBe(true);
+        // Stock defaults and unknown packages are always removable.
+        expect(isPackageRemovable('run-lua-code')).toBe(true);
+    });
+
+    it('treats everything as removable with no brand packages', () => {
+        expect(isPackageRemovable('run-lua-code')).toBe(true);
     });
 });

@@ -573,7 +573,18 @@ export const useAppStore = create<AppStore>()(
                 const prior = (s.connectionPackages[connectionId] ?? []).filter(p => p.name !== manifest.name);
                 const stripPkg = <T extends { packageName?: string }>(arr: T[]): T[] =>
                     arr.filter(n => n.packageName !== manifest.name);
+                // Installing clears the uninstall tombstone (see uninstallPackage),
+                // so default-package seeding treats it as present again.
+                const prevProfile = s.connectionProfile[connectionId] ?? {};
+                const removed = prevProfile.uninstalledPackages ?? [];
+                const connectionProfile = removed.includes(manifest.name)
+                    ? {
+                        ...s.connectionProfile,
+                        [connectionId]: { ...prevProfile, uninstalledPackages: removed.filter(n => n !== manifest.name) },
+                    }
+                    : s.connectionProfile;
                 return {
+                    connectionProfile,
                     connectionScripts:     { ...s.connectionScripts,     [connectionId]: [...stripPkg(s.connectionScripts[connectionId]     ?? []), ...data.scripts]  },
                     connectionAliases:     { ...s.connectionAliases,     [connectionId]: [...stripPkg(s.connectionAliases[connectionId]     ?? []), ...data.aliases]  },
                     connectionTriggers:    { ...s.connectionTriggers,    [connectionId]: [...stripPkg(s.connectionTriggers[connectionId]    ?? []), ...data.triggers] },
@@ -594,7 +605,20 @@ export const useAppStore = create<AppStore>()(
             uninstallPackage: (connectionId, packageName) => set(s => {
                 const stripPkg = <T extends { packageName?: string }>(arr: T[]): T[] =>
                     arr.filter(n => n.packageName !== packageName);
+                // Tombstone the name so ensureDefaultPackages won't reinstall a
+                // default the user deleted. Recorded unconditionally — names
+                // that aren't defaults are inert, and this action is the choke
+                // point every uninstall path (UI, Lua, GMCP) goes through.
+                const prevProfile = s.connectionProfile[connectionId] ?? {};
+                const removed = prevProfile.uninstalledPackages ?? [];
+                const connectionProfile = removed.includes(packageName)
+                    ? s.connectionProfile
+                    : {
+                        ...s.connectionProfile,
+                        [connectionId]: { ...prevProfile, uninstalledPackages: [...removed, packageName] },
+                    };
                 return {
+                    connectionProfile,
                     connectionScripts:     { ...s.connectionScripts,     [connectionId]: stripPkg(s.connectionScripts[connectionId]     ?? []) },
                     connectionAliases:     { ...s.connectionAliases,     [connectionId]: stripPkg(s.connectionAliases[connectionId]     ?? []) },
                     connectionTriggers:    { ...s.connectionTriggers,    [connectionId]: stripPkg(s.connectionTriggers[connectionId]    ?? []) },

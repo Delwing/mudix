@@ -7,6 +7,7 @@ import {findReservedKeybindings, reservedKeyNote} from '../mud/keybindings/brows
 import type {ButtonNode, ScriptNode} from '../storage/schema';
 import {buildEffectivelyEnabledIds, isEffectivelyEnabled} from '../storage/schema';
 import {useAppStore} from '../storage';
+import {isPackageRemovable} from '../branding';
 import {saveProfileData} from '../storage/profileVfsData';
 import type {BufferSegment, FormatColor, FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
 import {AnsiAwareBuffer, computeTrailingState} from '../mud/text/FormatState';
@@ -1514,6 +1515,9 @@ export class ScriptingEngine {
             // Mudlet silently no-ops when the package isn't installed.
             return false;
         }
+        // Brand-bundled packages marked removable:false can't be uninstalled
+        // (and would reinstall on next open anyway).
+        if (!isPackageRemovable(packageName)) return false;
         this.notifyPackageUninstalled(packageName);
         useAppStore.getState().uninstallPackage(this.connectionId, packageName);
         if (this.vfs) {
