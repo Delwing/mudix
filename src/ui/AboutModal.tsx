@@ -2,7 +2,7 @@ import { useModalFocus } from './components/useModalFocus';
 import { getBrand } from '../branding';
 
 // Bumped alongside package.json on release — the About dialog is the only reader.
-const APP_VERSION = '0.2.3';
+const APP_VERSION = '0.0.1';
 
 /** GitHub mark — lucide dropped brand icons, so it's inlined here. */
 function GithubMark() {
