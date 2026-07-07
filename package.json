@@ -4,6 +4,15 @@
   "type": "module",
   "description": "Web-based MUD client with Mudlet-compatible Lua scripting — usable standalone or as a library for branded builds",
   "license": "GPL-2.0-or-later",
+  "keywords": [
+    "mud",
+    "mudlet",
+    "mud-client",
+    "telnet",
+    "lua",
+    "game"
+  ],
+  "homepage": "https://github.com/Delwing/mudix",
   "repository": {
     "url": "git+https://github.com/Delwing/mudix.git"
   },
@@ -27,6 +36,7 @@
     "dev": "vite --host",
     "build": "tsc && vite build",
     "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json && tsc -p tsconfig.vite-plugin.json && node scripts/copy-lib-assets.mjs",
+    "prepublishOnly": "yarn build:lib",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",

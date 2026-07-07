@@ -1,0 +1,30 @@
+# Publishes mudix to npm when a version tag (v*) is pushed.
+# Requires the NPM_TOKEN repository secret (npmjs.com → Access Tokens →
+# Granular, with read/write on the mudix package). `--provenance` attaches a
+# verifiable build attestation linking the package to this workflow run.
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: yarn install --frozen-lockfile
+      - run: yarn test
+      # prepublishOnly runs build:lib, so dist-lib is always freshly built.
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
