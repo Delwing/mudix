@@ -217,7 +217,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `highlightRoom(roomID, …)` | ✅ | JS-exposed — color1/color2 + radius + alpha |
 | `killMapInfo(label)` | ✅ | Removes a contributor entirely |
 | `loadJsonMap(path)` | ✅ | JS-exposed via `MapStore.loadFromJsonString`; raises `sysMapLoadEvent` on success |
-| `loadMap(path)` | ✅ | JS-exposed |
+| `loadMap(path)` | ✅ | JS-exposed. Binary `.dat` maps, plus IRE-style XML maps when the path ends in `.xml` (Mudlet's XMLimport::readMap) |
 | `lockExit(roomID, dir, bool)` | ✅ | `MapStore.lockExit` mutates `room.exitLocks`, which `__getPath` reads — locks set from Lua are honoured by pathfinding |
 | `hasExitLock(roomID, dir)` | ✅ | `MapStore.hasExitLock`; reads `room.exitLocks` directly. Direction accepts the 1-12 int or names ("north"/"n"/…) |
 | `lockRoom(roomID, bool)` | ✅ | JS-exposed; honoured by pathfinding |
@@ -903,7 +903,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `mapModeChangeEvent` | ✅ | View↔edit transitions (`setMapMode`/`getMapMode`) — arg: "viewing"/"editing" |
 | `sysManualLocationSetEvent` | ✅ | `MapPanel`'s right-click "Set player location" — arg: roomID |
 | `sysMapAreaChanged` | ✅ | Whenever the displayed area changes — args: newAreaID, prevAreaID (-1 on initial transition) |
-| `sysMapDownloadEvent` | 🚧 | No MMP map-protocol support (mudix uses binary maps + `downloadFile`) |
+| `sysMapDownloadEvent` | ✅ | GMCP `Client.Map` records the game's MMP map URL; the map panel then offers "Download map from game" (hamburger menu + empty-state overlay). Fires after the downloaded map parses and loads. Both binary `.dat` and IRE-style `.xml` maps are supported |
 | `sysMapWindowMousePressEvent` | ✅ | args: button (1=left, 2=right, 3=middle), x, y |
 
 **Windows / UI elements**

@@ -3647,6 +3647,12 @@ export class ScriptingAPI {
         return buf ? new Uint8Array(buf) : null;
     }
 
+    /** Mudlet `loadMap("...xml")` backbone — import an IRE-style XML map
+     *  (XMLimport::readMap) and replace the current map. The Lua binding
+     *  reads the VFS file before calling here. Returns false when the text
+     *  is not a well-formed XML map. */
+    loadMapXml(xmlText: string): boolean { return this.session.windows.loadMapXml(xmlText); }
+
     /** Mudlet `saveJsonMap(path)` backbone — serialises the current MapStore
      *  as JSON. The Lua binding writes the result to the supplied VFS path. */
     saveJsonMap(): string { return this.session.windows.saveJsonMap(); }

@@ -95,7 +95,7 @@ const HIDDEN_FALLBACK_KEY = 'system.fallback_hidden';
 // other area user-data entry; getAreaZoom/setAreaZoom are just typed accessors.
 const AREA_ZOOM_KEY = 'system.2DMapZoom';
 
-const DEFAULT_FONT: MudletFont = {
+export const DEFAULT_FONT: MudletFont = {
     family: 'Bitstream Vera Sans Mono', style: 'Normal',
     pointSize: 8, pixelSize: -1, styleHint: 5, styleStrategy: 1,
     weight: 50, fontBits: 0, stretch: 100, extendedFontBits: 0,
@@ -105,7 +105,7 @@ const DEFAULT_FONT: MudletFont = {
     ignorePitch: false, letterSpacingIsAbsolute: false,
 };
 
-function makeRoom(areaId: number): MudletRoom {
+export function makeRoom(areaId: number): MudletRoom {
     return {
         area: areaId, x: 0, y: 0, z: 0,
         north: -1, northeast: -1, northwest: -1, east: -1, west: -1,
@@ -119,7 +119,7 @@ function makeRoom(areaId: number): MudletRoom {
     };
 }
 
-function makeArea(): MudletArea {
+export function makeArea(): MudletArea {
     return {
         rooms: [], zLevels: [], mAreaExits: {}, gridMode: false,
         max_x: 0, max_y: 0, max_z: 0, min_x: 0, min_y: 0, min_z: 0,

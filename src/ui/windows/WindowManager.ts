@@ -3,6 +3,7 @@ import type { Console } from '../../mud/text/Console';
 import type { AnsiAwareBuffer } from '../../mud/text/FormatState';
 import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
 import { MapStore } from '../../map/MapStore';
+import { parseXmlMap } from '../../map/xmlMapImport';
 import { saveMap as saveMapToStorage, loadMap as loadMapFromStorage } from '../../storage/mapStorage';
 import { readMapFromBuffer, writeMapToBuffer } from 'mudlet-map-binary-reader';
 import { parseMapInWorker, serializeMapInWorker } from '../../map/mapParserClient';
@@ -129,6 +130,10 @@ export class WindowManager {
     // flushMapSave() drains a pending save on session close.
     private mapSaveTimer: ReturnType<typeof setTimeout> | null = null;
     private mapSavePending = false;
+    /** MMP map URL announced by the game via GMCP `Client.Map` (Mudlet
+     *  TMap::mMmpMapLocation). Lives here rather than on ScriptingEngine so it
+     *  survives script reloads, like Mudlet's TMap does. */
+    private _mmpMapLocation = '';
     private _connectionId = '';
     /** Names of windows created by Lua createMiniConsole — distinguishes them
      *  from openUserWindow panels for windowType() reporting. */
@@ -162,6 +167,24 @@ export class WindowManager {
      *  sysConsoleSizeChanged) so window-size reporting doesn't depend on the
      *  scripting layer being attached. */
     onMainConsoleResize?: (cols: number, rows: number) => void;
+    /** Set by MapPanel — mirrors Mudlet's signal_mmpMapLocationChanged, which
+     *  drives the mapper's "download map" affordance appearing/disappearing. */
+    onMmpMapLocationChanged?: (url: string) => void;
+    /** Bridge to ScriptingEngine.downloadMap — the map UI's "download map from
+     *  game" action (Mudlet dlgMapper's Download button). */
+    onDownloadMap?:       () => void;
+
+    /** The MMP map URL from GMCP `Client.Map`, or '' when none announced. */
+    get mmpMapLocation(): string {
+        return this._mmpMapLocation;
+    }
+
+    /** Record the game-announced map URL (Mudlet TMap::setMmpMapLocation). */
+    setMmpMapLocation(url: string): void {
+        if (this._mmpMapLocation === url) return;
+        this._mmpMapLocation = url;
+        this.onMmpMapLocationChanged?.(url);
+    }
 
     setConsoleRegistry(registry: Map<string, Console>): void {
         this.consoleRegistry = registry;
@@ -975,6 +998,24 @@ export class WindowManager {
      */
     loadJsonMap(json: string): boolean {
         if (!this.mapStore.loadFromJsonString(json)) return false;
+        this.mapLoadCallback?.();
+        this.onRaiseEvent?.('sysMapLoadEvent', []);
+        return true;
+    }
+
+    /**
+     * Import an IRE-style XML map (Mudlet TConsole::importMap →
+     * XMLimport::readMap) — the format `loadMap("...xml")` and MMP map
+     * downloads deliver. Replaces the MapStore contents, persists in the
+     * canonical binary form so the next session bootstraps it from IndexedDB,
+     * and asks any open MapPanel to re-render. Returns false when the text is
+     * not a well-formed XML map.
+     */
+    loadMapXml(xmlText: string): boolean {
+        const map = parseXmlMap(xmlText);
+        if (!map) return false;
+        this.mapStore.loadFromBinary(map);
+        this.scheduleMapSave(0);
         this.mapLoadCallback?.();
         this.onRaiseEvent?.('sysMapLoadEvent', []);
         return true;

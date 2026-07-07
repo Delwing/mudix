@@ -120,6 +120,9 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     } | null>(null);
     const [mapInfos, setMapInfos] = useState<MapInfoResult[]>([]);
     const [editorOpen, setEditorOpen] = useState(false);
+    // The GMCP Client.Map (MMP) map URL — gates the "download map from game"
+    // affordances, like Mudlet's mapper Download button (dlgMapper::canDownload).
+    const [mmpMapUrl, setMmpMapUrl] = useState(() => manager.mmpMapLocation);
     // Snapshot of the registered map-info contributors (built-in "Short"/"Full"
     // plus any script-registered ones) backing the hamburger-menu toggle list.
     const [infoContributors, setInfoContributors] = useState<MapInfoContributor[]>([]);
@@ -1096,16 +1099,28 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         return () => manager.unregisterMapControl(id);
     }, [id, manager]);
 
+    // Track the game-announced map URL — Client.Map can arrive any time after
+    // mount, and the download affordances should appear when it does (Mudlet's
+    // dlgMapper listens to signal_mmpMapLocationChanged for the same purpose).
+    useEffect(() => {
+        setMmpMapUrl(manager.mmpMapLocation);
+        manager.onMmpMapLocationChanged = setMmpMapUrl;
+        return () => { manager.onMmpMapLocationChanged = undefined; };
+    }, [manager]);
+
     const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
         setStatus('loading');
         try {
-            const buf = await file.arrayBuffer();
             // Routes through WindowManager: persists to IndexedDB, parses into
             // MapStore, raises sysMapLoadEvent, and the store's notify drives
             // the panel back to status='ready' via the subscribe handler.
-            if (!manager.loadMap(buf)) {
+            // `.xml` files take the IRE-style XML importer, like Mudlet.
+            const ok = file.name.toLowerCase().endsWith('.xml')
+                ? manager.loadMapXml(await file.text())
+                : manager.loadMap(await file.arrayBuffer());
+            if (!ok) {
                 setErrorMsg('Failed to parse map file');
                 setStatus('error');
             }
@@ -1199,7 +1214,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                     ))}
                 </div>
             )}
-            <input ref={fileInputRef} type="file" accept=".dat" onChange={handleFileChange} hidden />
+            <input ref={fileInputRef} type="file" accept=".dat,.xml" onChange={handleFileChange} hidden />
             <div className="map-panel-toolbar">
                 {status === 'ready' && areas.length > 1 && (
                     <div className="map-area-dropdown" ref={dropdownRef}>
@@ -1284,6 +1299,14 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                             >
                                 Load map…
                             </button>
+                            {mmpMapUrl && (
+                                <button
+                                    className="map-hamburger-item"
+                                    onMouseDown={() => { setMenuOpen(false); manager.onDownloadMap?.(); }}
+                                >
+                                    Download map from game
+                                </button>
+                            )}
                             <button
                                 className="map-hamburger-item"
                                 onMouseDown={() => { setMenuOpen(false); setEditorOpen(true); }}
@@ -1343,8 +1366,13 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 <div className="map-overlay">
                     <label className="map-load-btn">
                         Load Mudlet Map
-                        <input type="file" accept=".dat" onChange={handleFileChange} hidden />
+                        <input type="file" accept=".dat,.xml" onChange={handleFileChange} hidden />
                     </label>
+                    {mmpMapUrl && (
+                        <button className="map-load-btn" onClick={() => manager.onDownloadMap?.()}>
+                            Download map from game
+                        </button>
+                    )}
                     <span className="map-overlay-hint">…or run your mapper script to add rooms</span>
                 </div>
             )}
@@ -1353,7 +1381,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                     <span>Failed to load map: {errorMsg}</span>
                     <label className="map-load-btn">
                         Try another file
-                        <input type="file" accept=".dat" onChange={handleFileChange} hidden />
+                        <input type="file" accept=".dat,.xml" onChange={handleFileChange} hidden />
                     </label>
                 </div>
             )}

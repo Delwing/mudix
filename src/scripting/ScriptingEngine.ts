@@ -36,7 +36,7 @@ import {ProfileVFS} from './vfs/ProfileVFS';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
 import {installModuleFromVfsPath, installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
-import {downloadFromUrl, filenameFromUrl, parseClientGuiPayload} from '../import/remotePackageInstall';
+import {downloadFromUrl, filenameFromUrl, parseClientGuiPayload, parseClientMapPayload} from '../import/remotePackageInstall';
 import {ensureDefaultPackages} from '../import/defaultPackages';
 import {serializeMudletXml, type SerializeInput} from '../import/mudletXmlExport';
 import {isMudletProfileVfs, readNewestParseableXml} from '../import/mudletLink';
@@ -320,6 +320,8 @@ export class ScriptingEngine {
         // Let WindowManager raise system events (e.g. sysUserWindowResizeEvent)
         // through the same path as everything else.
         session.windows.onRaiseEvent = (event, args) => this.raiseEvent(event, args);
+        // Map UI "download map from game" → the Client.Map/MMP download flow.
+        session.windows.onDownloadMap = () => void this.downloadMap();
         // A File dropped on a window can't be installed from its name alone, so
         // stage its bytes in the profile VFS and then raise sysDropEvent with a
         // path the bundled packageDrop handler can read.
@@ -1503,6 +1505,66 @@ export class ScriptingEngine {
         }
     }
 
+    /** Guards against overlapping downloads — Mudlet TMap::mImportRunning. */
+    private mapDownloadRunning = false;
+
+    /**
+     * Mudlet TMap::downloadMap + slot_replyFinished: fetch the map the game
+     * published (GMCP `Client.Map` MMP location, or an explicit URL), load it
+     * into the map store, and raise `sysMapDownloadEvent` once it has parsed
+     * successfully. Like Mudlet, `.xml` locations go through the XML map
+     * importer and everything else through the binary `.dat` reader.
+     */
+    async downloadMap(remoteUrl?: string): Promise<boolean> {
+        if (this.mapDownloadRunning) {
+            this.session.events.emit('message',
+                mudletWarn('a map download is already in progress — wait for it to complete before retrying'),
+                'info', Date.now());
+            return false;
+        }
+        const url = remoteUrl || this.session.windows.mmpMapLocation;
+        if (!url) {
+            this.api.printError('[downloadMap] no map URL known — the game has not sent a GMCP Client.Map location');
+            return false;
+        }
+        let pathname = url;
+        try { pathname = new URL(url).pathname; } catch { /* keep raw url for the extension check */ }
+        const isXml = pathname.toLowerCase().endsWith('.xml');
+        this.mapDownloadRunning = true;
+        try {
+            this.session.events.emit('message',
+                mudletInfo('Map download initiated, please wait...'), 'info', Date.now());
+            let bytes: Uint8Array;
+            try {
+                bytes = await downloadFromUrl(url, this.proxyUrlGetter());
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                this.api.printError(`[downloadMap] download failed: ${msg}`);
+                return false;
+            }
+            this.session.events.emit('message',
+                mudletInfo('... map downloaded and stored, now parsing it...'), 'info', Date.now());
+            let ok: boolean;
+            if (isXml) {
+                ok = this.session.windows.loadMapXml(new TextDecoder().decode(bytes));
+            } else {
+                // Copy into a standalone ArrayBuffer — the download may be a view
+                // into a larger buffer, and loadMap's parser mutates its input.
+                const buf = new ArrayBuffer(bytes.byteLength);
+                new Uint8Array(buf).set(bytes);
+                ok = this.session.windows.loadMap(buf);
+            }
+            if (!ok) {
+                this.api.printError(`[downloadMap] failure in parsing downloaded map from ${url}`);
+                return false;
+            }
+            this.raiseEvent('sysMapDownloadEvent');
+            return true;
+        } finally {
+            this.mapDownloadRunning = false;
+        }
+    }
+
     /**
      * Uninstall a previously installed package by name. Raises sysUninstallPackage
      * before the store removal so the package's own handlers can still run.
@@ -2537,6 +2599,7 @@ export class ScriptingEngine {
         for (const unsub of this.unsubs) unsub();
         this.unsubs.length = 0;
         this.session.windows.onRaiseEvent = undefined;
+        this.session.windows.onDownloadMap = undefined;
         this.session.windows.onFileDrop = undefined;
         this.session.sounds.onMediaFinished = undefined;
         this.session.sounds.onMediaCaption = undefined;
@@ -3062,6 +3125,14 @@ export class ScriptingEngine {
                 // pre-empt by clearing) the payload before we act on it.
                 if (path.toLowerCase() === 'client.gui') {
                     void this.handleClientGuiInstall(value);
+                }
+                // Built-in Client.Map handler — Mudlet Host::setMmpMapLocation.
+                // Records the game's published map URL; the actual download is
+                // user-triggered from the map panel (Mudlet parity: dlgMapper's
+                // Download button only enables once this location is known).
+                if (path.toLowerCase() === 'client.map') {
+                    const url = parseClientMapPayload(value);
+                    if (url) this.session.windows.setMmpMapLocation(url);
                 }
             }),
             // MSDP finished negotiating (server WILL → client DO). Mirrors the

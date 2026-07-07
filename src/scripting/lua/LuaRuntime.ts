@@ -1479,14 +1479,22 @@ export class LuaRuntime implements IScriptingRuntime {
         // Bridge.lua unpacks the multi-return.
         this.lua.global.set('__getRoomHashByID', (id: number)            => this.api.map.getRoomHashByID(id) ?? null);
 
-        // Mudlet loadMap([location]). With a path, reads the binary `.dat` map
-        // from VFS and hands the bytes to the panel for re-render and IDB
-        // persistence. Without a path the panel reloads from already-stored
-        // bytes. Returns true on success, false if the file is missing,
-        // unreadable, or fails to parse.
+        // Mudlet loadMap([location]). With a path, reads the map from VFS —
+        // an `.xml` path goes through the IRE-style XML importer (Mudlet
+        // TConsole::importMap), anything else through the binary `.dat`
+        // reader — and hands it over for re-render and IDB persistence.
+        // Without a path the panel reloads from already-stored bytes. Returns
+        // true on success, false if the file is missing, unreadable, or fails
+        // to parse.
         this.lua.global.set('loadMap', (location?: unknown) => {
             if (typeof location === 'string' && location.length > 0) {
                 if (!this.vfs) return false;
+                if (location.toLowerCase().endsWith('.xml')) {
+                    let text: string;
+                    try { text = this.vfs.readFile(location); }
+                    catch { return false; }
+                    return this.api.loadMapXml(text);
+                }
                 let bytes: Uint8Array;
                 try { bytes = this.vfs.readBinaryFile(location); }
                 catch { return false; }

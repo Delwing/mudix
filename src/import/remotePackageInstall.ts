@@ -59,6 +59,19 @@ export interface ClientGuiPayload {
 }
 
 /**
+ * Decode a `Client.Map` GMCP payload (the MMP map-location announcement).
+ * Mudlet (Host::setMmpMapLocation) only accepts a JSON object with a valid
+ * `url`; anything else is silently ignored. Returns null on that same basis.
+ */
+export function parseClientMapPayload(value: unknown): string | null {
+    if (!value || typeof value !== 'object') return null;
+    const url = (value as { url?: unknown }).url;
+    if (typeof url !== 'string' || url.length === 0) return null;
+    try { new URL(url); } catch { return null; }
+    return url;
+}
+
+/**
  * Decode a `Client.GUI` GMCP payload. Mudlet historically supports two shapes:
  *   - a `{ url, version }` JSON object (current MMP-style format)
  *   - a string `"<url>\n<version>"` (legacy)
