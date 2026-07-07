@@ -1473,7 +1473,10 @@ end
 -- event-dispatch loops below wherever plain pcall would sit between the JS
 -- entry point and user code.
 function __mudix_pcall_co(fn, ...)
-    local co = coroutine.create(fn)
+    -- coroutine.create rejects C functions (JS-bound API globals). Those can't
+    -- yield across the C boundary anyway, so plain pcall is equivalent.
+    local okc, co = pcall(coroutine.create, fn)
+    if not okc then return pcall(fn, ...) end
     local function step(ok, ...)
         if not ok then return false, ... end
         if coroutine.status(co) == 'suspended' then
@@ -1612,8 +1615,12 @@ function __mudix_dispatch_event()
     end
     -- __mudix_pcall_co, not pcall: handlers may suspend via invokeFileDialog,
     -- which needs a pure-Lua path down to the JS resume boundary.
-    if type(_G[event]) == 'function' then
-        local ok, err = __mudix_pcall_co(_G[event], unpack(args))
+    -- Lua functions only: event names can collide with JS-bound API globals
+    -- (event "disconnect" vs the disconnect() API) and those must not be
+    -- treated as handlers.
+    local handler = _G[event]
+    if type(handler) == 'function' and debug.getinfo(handler, 'S').what ~= 'C' then
+        local ok, err = __mudix_pcall_co(handler, unpack(args))
         if not ok and type(showHandlerError) == 'function' then showHandlerError(event, err) end
     end
     -- Native handlers registered before Other.lua overrode registerAnonymousEventHandler.

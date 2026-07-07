@@ -219,6 +219,13 @@ describe('__mudix_pcall_co — yield-transparent pcall', () => {
     expect(t.run(`local ok, s = __mudix_pcall_co(function(a, b) return a .. b end, 'x', 'y') return s`)).toBe('xy');
   });
 
+  it('falls back to plain pcall for C functions (coroutine.create rejects them)', () => {
+    // JS-bound API globals are C functions to Lua; they can't run on a
+    // coroutine but must still get pcall semantics instead of erroring.
+    expect(t.run(`local ok, s = __mudix_pcall_co(string.rep, 'ab', 2) return ok and s`)).toBe('abab');
+    expect(t.run(`local ok = __mudix_pcall_co(error, 'from C') return ok`)).toBe(false);
+  });
+
   it('forwards a nested yield outward and feeds the resume value back in', () => {
     // Simulate the JS boundary with a plain coroutine wrapping the trampoline.
     const result = t.run(`
