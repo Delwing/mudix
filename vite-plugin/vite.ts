@@ -13,7 +13,7 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
  * VFS service worker emitted into the output. One plugin call supplies all of
  * it:
  *
- *     import mudix from 'mudix/vite';
+ *     import mudix from '@delwing/mudix/vite';
  *     export default defineConfig({ plugins: [mudix(), react()] });
  *
  * mudix's own vite.config.ts uses this plugin too (imported from source), so
@@ -108,7 +108,7 @@ export default function mudix(): PluginOption[] {
                     // dies on Windows (os error 123). Excluded, mudix is served
                     // through Vite's transform pipeline in dev, where `?url`
                     // works. Harmless in mudix's own repo (not a dep there).
-                    exclude: ['pcre2-wasm-universal', 'mudix'],
+                    exclude: ['pcre2-wasm-universal', '@delwing/mudix'],
                     // CJS deps reached from the excluded mudix entry must be
                     // pre-bundled explicitly (Vite doesn't interop CJS served
                     // raw). Extend this list if dev mode reports "does not

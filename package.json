@@ -1,5 +1,5 @@
 {
-  "name": "mudix",
+  "name": "@delwing/mudix",
   "version": "0.0.1",
   "type": "module",
   "description": "Web-based MUD client with Mudlet-compatible Lua scripting — usable standalone or as a library for branded builds",
