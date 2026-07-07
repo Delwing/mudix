@@ -306,6 +306,10 @@ class ScriptingWindowsAPI {
         this.session.windows.setPosition(id, x, y);
     }
 
+    setParent(id: string, parent?: string): boolean {
+        return this.session.windows.setParent(id, parent);
+    }
+
     bringToFront(id: string): void {
         this.session.windows.bringToFront(id);
     }
@@ -388,6 +392,9 @@ class ScriptingLabelsAPI {
     destroy(name: string): boolean { return this.manager.destroy(name); }
     move(name: string, x: number, y: number): boolean {
         return this.manager.move(name, x, y);
+    }
+    setParent(name: string, parent: string): boolean {
+        return this.manager.setParent(name, parent);
     }
     resize(name: string, width: number, height: number): boolean {
         return this.manager.resize(name, width, height);
@@ -3181,6 +3188,57 @@ export class ScriptingAPI {
         wm.setPosition(id, Math.round(x), Math.round(y));
         wm.setSize(id, Math.round(width), Math.round(height));
         return true;
+    }
+
+    /**
+     * Mudlet `setWindow(windowName, name[, x, y, show])` — move an element
+     * (label, overlay command line, text edit, scroll box, or a miniconsole /
+     * mapper panel) into another parent window: `main`, a userwindow /
+     * miniconsole, or a scroll box. Mirrors Qt's reparenting semantics: the
+     * element lands at (x, y) in the new parent and is only visible when
+     * `show` is true. Userwindow bases themselves can't be moved (as in
+     * Mudlet, where they anchor a dock widget).
+     */
+    setWindow(windowName: string, name: string, x = 0, y = 0, show = true): boolean {
+        const wm = this.session.windows;
+        if (windowName !== 'main' && !wm.has(windowName) && !this.scrollBoxes.has(windowName)) {
+            return false;
+        }
+        // Same routing precedence as the hide/show/move/resizeWindow bindings.
+        if (this.labels.has(name)) {
+            this.labels.setParent(name, windowName);
+            this.labels.move(name, x, y);
+            return show ? this.labels.show(name) : this.labels.hide(name);
+        }
+        if (this.cmdLines.has(name)) {
+            this.cmdLines.setParent(name, windowName);
+            this.cmdLines.move(name, x, y);
+            return show ? this.cmdLines.show(name) : this.cmdLines.hide(name);
+        }
+        if (this.textEdits.has(name)) {
+            this.textEdits.setParent(name, windowName);
+            this.textEdits.move(name, x, y);
+            return show ? this.textEdits.show(name) : this.textEdits.hide(name);
+        }
+        if (this.scrollBoxes.has(name)) {
+            // Refuse cycles — parenting a scroll box into itself or one of its
+            // descendants would recurse forever in ScrollBoxOverlay.
+            for (let p: string | undefined = windowName; p && p !== 'main';
+                 p = this.scrollBoxes.get(p)?.parent) {
+                if (p === name) return false;
+            }
+            this.scrollBoxes.setParent(name, windowName);
+            this.scrollBoxes.move(name, x, y);
+            return show ? this.scrollBoxes.show(name) : this.scrollBoxes.hide(name);
+        }
+        if (wm.has(name)) {
+            if (!wm.isMiniConsole(name)) return false;
+            wm.setParent(name, windowName === 'main' ? undefined : windowName);
+            wm.setPosition(name, Math.round(x), Math.round(y));
+            if (show) wm.show(name); else wm.hide(name);
+            return true;
+        }
+        return false;
     }
 
     /**

@@ -297,6 +297,7 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('showWindow',      '(name)',        'Show a userwindow or label'),
     fn('moveWindow',      '(name, x, y)',  'Move a userwindow or label to a pixel position'),
     fn('resizeWindow',    '(name, w, h)',  'Resize a userwindow or label'),
+    fn('setWindow',       '(windowName, name [, x, y, show]) → bool', 'Move an element (label, miniconsole, cmdline, scroll box) into another window — "main", a userwindow, or a scroll box'),
     fn('setBackgroundColor', '([name,] r, g, b [, a])', 'Set a window background color (rgba 0..255). No name targets the main window. A name targets a userwindow, miniconsole, or label (labels also implicitly enable fillBackground).'),
     fn('getBackgroundColor', '([name]) → r, g, b, a', 'Get a window background color (rgba 0..255). No name returns the main window color; otherwise targets a userwindow, miniconsole, or label. Returns 0,0,0,255 when no color is set.'),
     fn('setHexFgColor',      '([window,] hexString)',   'Set foreground color from a hex string (e.g. "FF8800")'),

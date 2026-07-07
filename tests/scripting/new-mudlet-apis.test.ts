@@ -159,3 +159,60 @@ describe('receiveMSP', () => {
     expect(rt.run('return receiveMSP("just some text")')).toBe(false);
   });
 });
+
+describe('setWindow (element reparenting)', () => {
+  let rt: TestRuntime;
+  beforeAll(async () => { rt = await createTestRuntime(); });
+  afterAll(() => rt.dispose());
+
+  it('moves a label into a userwindow at the given position, and back to main', () => {
+    rt.run('openUserWindow("sw_uw")');
+    rt.run('createLabel("sw_lbl", 5, 5, 50, 50, 1)');
+    expect(rt.run('return setWindow("sw_uw", "sw_lbl", 10, 20, true)')).toBe(true);
+
+    const inWin = rt.session.labels.list('sw_uw');
+    expect(inWin.map(l => l.name)).toContain('sw_lbl');
+    expect(inWin[0].x).toBe(10);
+    expect(inWin[0].y).toBe(20);
+    expect(rt.session.labels.list('main').map(l => l.name)).not.toContain('sw_lbl');
+
+    // x/y/show are optional (default 0, 0, true)
+    expect(rt.run('return setWindow("main", "sw_lbl")')).toBe(true);
+    expect(rt.session.labels.list('main').map(l => l.name)).toContain('sw_lbl');
+    expect(rt.session.labels.list('sw_uw')).toHaveLength(0);
+  });
+
+  it('show=false keeps the element hidden after the move', () => {
+    rt.run('createLabel("sw_hidden", 0, 0, 10, 10, 1)');
+    expect(rt.run('return setWindow("sw_uw", "sw_hidden", 0, 0, false)')).toBe(true);
+    const lbl = rt.session.labels.list('sw_uw').find(l => l.name === 'sw_hidden');
+    expect(lbl?.visible).toBe(false);
+  });
+
+  it('rejects an unknown target window and an unknown element', () => {
+    expect(rt.run('return setWindow("sw_nope", "sw_lbl")')).toBe(false);
+    expect(rt.run('return setWindow("sw_uw", "sw_no_such_element")')).toBe(false);
+  });
+
+  it('reparents a miniconsole but refuses a userwindow base', () => {
+    rt.run('createMiniConsole("sw_mini", 0, 0, 100, 100)');
+    expect(rt.run('return setWindow("sw_uw", "sw_mini", 3, 4, true)')).toBe(true);
+    expect(rt.run('return setWindow("main", "sw_uw")')).toBe(false);
+  });
+
+  it('reparents an overlay command line', () => {
+    rt.run('createCommandLine("sw_cl", 0, 0, 100, 20)');
+    expect(rt.run('return setWindow("sw_uw", "sw_cl", 1, 2, true)')).toBe(true);
+    expect(rt.session.cmdLines.list('sw_uw').map(c => c.name)).toContain('sw_cl');
+  });
+
+  it('reparents a scroll box but refuses a cycle', () => {
+    rt.run('createScrollBox("sw_outer", 0, 0, 100, 100)');
+    rt.run('createScrollBox("sw_outer", "sw_inner", 0, 0, 50, 50)');
+    // inner -> uw is fine; outer -> inner would make outer its own ancestor
+    expect(rt.run('return setWindow("sw_uw", "sw_inner")')).toBe(true);
+    expect(rt.run('return setWindow("sw_inner", "sw_inner")')).toBe(false);
+    rt.run('return setWindow("sw_outer", "sw_inner")'); // restore nesting
+    expect(rt.run('return setWindow("sw_inner", "sw_outer")')).toBe(false);
+  });
+});

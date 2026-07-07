@@ -157,6 +157,21 @@ export class LabelManager {
         return true;
     }
 
+    /** Mudlet setWindow — reparent a label into another window's overlay
+     *  ('main', a userwindow / miniconsole id, or a scroll box name). Both
+     *  the old and the new parent's overlays re-render. */
+    setParent(name: string, parent: string): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        if (lbl.parent !== parent) {
+            const old = lbl.parent;
+            lbl.parent = parent;
+            this.notify(old);
+            this.notify(parent);
+        }
+        return true;
+    }
+
     /** Mudlet `getLabelSizeHint(name)` → the label's preferred `{width,height}`.
      *  Mudlet returns the QLabel sizeHint (the size its content wants); the
      *  browser analogue is the rendered node's content extent

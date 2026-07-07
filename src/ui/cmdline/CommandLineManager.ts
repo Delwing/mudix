@@ -109,6 +109,20 @@ export class CommandLineManager {
         return true;
     }
 
+    /** Mudlet setWindow — reparent a command line into another window's
+     *  overlay. Both the old and the new parent's overlays re-render. */
+    setParent(name: string, parent: string): boolean {
+        const cl = this.cmdLines.get(name);
+        if (!cl) return false;
+        if (cl.parent !== parent) {
+            const old = cl.parent;
+            cl.parent = parent;
+            this.notify(old);
+            this.notify(parent);
+        }
+        return true;
+    }
+
     show(name: string): boolean {
         const cl = this.cmdLines.get(name);
         if (!cl) return false;

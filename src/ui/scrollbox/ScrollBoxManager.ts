@@ -93,6 +93,21 @@ export class ScrollBoxManager {
         return true;
     }
 
+    /** Mudlet setWindow — reparent a scroll box into another window's
+     *  overlay. Both the old and the new parent's overlays re-render.
+     *  Cycle prevention is the caller's job (ScriptingAPI.setWindow). */
+    setParent(name: string, parent: string): boolean {
+        const sb = this.boxes.get(name);
+        if (!sb) return false;
+        if (sb.parent !== parent) {
+            const old = sb.parent;
+            sb.parent = parent;
+            this.notify(old);
+            this.notify(parent);
+        }
+        return true;
+    }
+
     show(name: string): boolean {
         const sb = this.boxes.get(name);
         if (!sb) return false;

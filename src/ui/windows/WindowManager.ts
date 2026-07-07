@@ -1003,6 +1003,20 @@ export class WindowManager {
         this.saveHint(id, win);
     }
 
+    /** Mudlet setWindow for miniconsole / mapper panels — re-portal the panel
+     *  into another window's viewport; `undefined` re-attaches it to the main
+     *  viewport. Parent is runtime-only state (deliberately not part of the
+     *  saved hint): scripts re-establish it on every load, matching Mudlet. */
+    setParent(id: string, parent?: string): boolean {
+        const win = this.windows.get(id);
+        if (!win) return false;
+        if (win.parent !== parent) {
+            win.parent = parent;
+            this.notify();
+        }
+        return true;
+    }
+
     /** Mudlet setFontSize for a userwindow / miniconsole. Returns false if the
      *  window doesn't exist. Mudlet clamps font size between 1 and 99. */
     setFontSize(id: string, size: number): boolean {

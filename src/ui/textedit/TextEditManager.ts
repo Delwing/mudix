@@ -137,6 +137,14 @@ export class TextEditManager {
         return true;
     }
 
+    /** Mudlet setWindow — reparent a text edit into another window. */
+    setParent(name: string, parent: string): boolean {
+        const e = this.edits.get(name);
+        if (!e) return false;
+        e.parent = parent;
+        return true;
+    }
+
     resize(name: string, width: number, height: number): boolean {
         const e = this.edits.get(name);
         if (!e) return false;

@@ -1005,6 +1005,18 @@ export class LuaRuntime implements IScriptingRuntime {
             else if (this.api.scrollBoxes.has(name)) this.api.scrollBoxes.resize(name, wn, hn);
             else if (this.api.windows.has(name)) this.api.windows.resize(name, wn, hn);
         });
+        // Mudlet setWindow(windowName, name[, x, y, show]) → bool. Reparents a
+        // label / cmdline / scroll box / miniconsole into another window
+        // ('main', a userwindow, or a scroll box). Geyser's setContainerWindow
+        // and GUIUtils' setGaugeWindow drive this.
+        this.lua.global.set('setWindow', (windowName: unknown, name: unknown, x?: unknown, y?: unknown, show?: unknown) => {
+            if (typeof windowName !== 'string' || typeof name !== 'string') return false;
+            return this.api.setWindow(
+                windowName, name,
+                Number(x ?? 0), Number(y ?? 0),
+                show === undefined ? true : !!show,
+            );
+        });
         // Mudlet setUserWindowTitle(name, [title]) → bool. Empty/missing title
         // resets to the window's id; missing window returns false.
         this.lua.global.set('setUserWindowTitle', (name: unknown, title?: unknown) => {

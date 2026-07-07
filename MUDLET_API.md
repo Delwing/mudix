@@ -804,7 +804,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setUnderline([window,] bool)` | ✅ | JS-exposed |
 | `setUserWindowTitle(name, title)` | ✅ | JS-exposed |
 | `setUserWindowStyleSheet(name, css)` | ✅ | JS-exposed |
-| `setWindow(...)` | 🚧 | Geyser/window parent reparenting |
+| `setWindow(windowName, name[, x, y, show])` | ✅ | Reparents a label / overlay cmdline / text edit / scroll box (manager `setParent`, notifies old + new parent overlays) or a miniconsole / mapper panel (`WindowManager.setParent` re-portals it) into `main`, a userwindow, or a scroll box. `show=false` keeps it hidden after the move (Qt reparent semantics). Userwindow bases refuse to move; scroll-box cycles refused |
 | `setWindowWrap(name, col)` | ✅ | JS-exposed. "main" stores `ProfileSettings.outputWrapAt`; `col = 0` clears it (wrap off, the default). Also settable from the Settings → Appearance UI |
 | `setWindowWrapHangingIndent(name, n)` | ✅ | Indent (chars) of wrapped continuation lines. Stored on `ProfileSettings.outputWrapHangingIndent` ("main") or the `WindowManager` hint (named windows); `StickyOutputPanel` applies it as the `--wrap-hanging` CSS var (`.output-msg-content` `padding-left`). 0 clears |
 | `setWindowWrapIndent(name, n)` | ✅ | Indent (chars) of newline-started lines. Stored on `ProfileSettings.outputWrapIndent` ("main") or the `WindowManager` hint; applied via the `--wrap-indent` CSS var (`text-indent`, relative to the hanging indent). 0 clears |
