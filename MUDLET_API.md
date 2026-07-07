@@ -9,7 +9,7 @@ Status legend:
 - ❌ N/A — fundamentally inapplicable (multi-profile, Qt-specific, Discord SDK, etc.). **These should still be bound as warning-emitting no-op stubs** so imported Mudlet scripts that reference them don't crash; the stub logs once per call site and returns a sensible default (`nil`/`false`/empty table).
 
 Known blockers:
-- Browser file-picker async/sync mismatch — blocks `invokeFileDialog`.
+- (none currently — `invokeFileDialog`'s sync/async mismatch was solved by parking the calling coroutine; see the row in Mudlet Object Functions)
 
 ---
 
@@ -409,7 +409,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getStopWatchTime(id\|name)` | ✅ | Elapsed seconds without stopping |
 | `getStopWatchBrokenDownTime(id\|name)` | ✅ | `{negative, days, hours, minutes, seconds, milliSeconds, decimalSeconds}` off the proxy; `false` on miss |
 | `getScript(name [, pos])` | ✅ | → `code, count` for the pos-th (1-indexed) script named `name`; ("", 0) on miss. Bridge.lua unpacks the `{code,count}` from `__getScript`. Unblocks `appendScript`'s code-preserving path (Other.lua) |
-| `invokeFileDialog(type, title)` | 🚧 | Blocked on a sync/async design decision — browser pickers are async; Mudlet's `local p = invokeFileDialog(...)` is synchronous |
+| `invokeFileDialog(fileOrFolder, title [, location])` | ✅ | Synchronous from the script's view: the handler's coroutine parks at the JS resume boundary while an in-app picker browses the profile VFS, then resumes with the picked path ('' on cancel). The client keeps running meanwhile — matching Mudlet's nested QFileDialog event loop. Caveat: can't be called inside a user `pcall` (Lua 5.1 can't yield across C frames); `__exec`/event dispatch use the yield-transparent `__mudix_pcall_co` instead |
 | `isActive(name, type [, checkAncestors])` | ✅ | Count active items by name/id |
 | `isAncestorsActive(id, type)` | ✅ | True when every ancestor group of the item is enabled (item's own state ignored). `(false, errMsg)` when no item of that type has the id |
 | `isPrompt()` | ✅ | True when the current trigger fired against a prompt line |

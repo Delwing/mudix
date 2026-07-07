@@ -581,7 +581,7 @@ function getPreviewStrategy(filename: string): FilePreviewStrategy {
 
 // ─── VFS Tree ──────────────────────────────────────────────────────────────
 
-interface VFSNode {
+export interface VFSNode {
     name: string;
     path: string;
     type: 'file' | 'dir';
@@ -589,7 +589,8 @@ interface VFSNode {
     size?: number;
 }
 
-function buildTree(vfs: ProfileVFS, dirPath: string, depth = 0): VFSNode[] {
+// Shared with FilePickerModal (the invokeFileDialog picker).
+export function buildTree(vfs: ProfileVFS, dirPath: string, depth = 0): VFSNode[] {
     if (depth > 12) return [];
     try {
         const entries = vfs.readdir(dirPath);

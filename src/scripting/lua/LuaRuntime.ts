@@ -1,4 +1,4 @@
-import {Lua} from 'wasmoon-lua5.1';
+import {Lua, LuaReturn, LUA_REGISTRYINDEX, type LuaThread} from 'wasmoon-lua5.1';
 // Self-host the Lua interpreter WASM as a build asset. Without this, wasmoon
 // fetches liblua5.1.wasm from unpkg.com at runtime (its hardcoded default) —
 // a third-party supply-chain + availability risk for the executable that runs
@@ -34,6 +34,19 @@ import {type MudletVariable, normalizeVariableTree} from '../../import/mudletVar
 // the public API so the raw lua_* bindings (see pushJsValue / registerRawGlobal)
 // can be typed without reaching into the package internals.
 type LuaState = Lua['global']['address'];
+
+// A handler suspended mid-invokeFileDialog (see parkDialogThread). The thread
+// is anchored in the Lua registry via `ref` so it survives being popped off
+// the global stack while the picker is open.
+interface ParkedDialogThread {
+    thread: LuaThread;
+    /** Registry ref (luaL_ref) keeping the suspended thread alive. */
+    ref: number;
+    label: string;
+    /** 'exec' threads finish with __exec's (err, result) tuple on their stack;
+     *  'chunk' threads (dispatch chunks) return nothing meaningful. */
+    kind: 'exec' | 'chunk';
+}
 
 // All *.lua and *.json files under mudlet-lua/ are served via the VFS at
 // /lua/<relative-path>. Adding a new file to the directory tree automatically
@@ -4632,6 +4645,13 @@ end`,
             t.pushValue(code);
             t.pushValue(name);
             const res = t.resume(2);
+            if (res.result === LuaReturn.Yield) {
+                // invokeFileDialog suspended the handler; resumeDialogThread
+                // finishes it later and reports its errors. There is no result
+                // to hand back synchronously.
+                this.parkDialogThread(t, name, 'exec', threadIndex);
+                return undefined;
+            }
             t.assertOk(res.result);
             const top = t.getTop();
             const err = top >= 1 ? t.getValue(1) : null;
@@ -4653,11 +4673,109 @@ end`,
         try {
             t.loadString(chunk, '@' + label);
             const res = t.resume(0);
+            if (res.result === LuaReturn.Yield) {
+                this.parkDialogThread(t, label, 'chunk', threadIndex);
+                return;
+            }
             t.assertOk(res.result);
         } catch (e) {
             this.api.printError(`[${label}] ${e instanceof Error ? e.message : String(e)}`);
         } finally {
             g.remove(threadIndex);
+        }
+    }
+
+    // ── invokeFileDialog park/resume ──────────────────────────────────────
+    // Mudlet's invokeFileDialog blocks the calling script until the user picks
+    // a file. A browser can't block, but every JS→Lua entry above runs on its
+    // own coroutine, so the Lua wrapper (Bridge.lua) yields a sentinel plus
+    // the request args up to the resume boundary here. We anchor the suspended
+    // thread in the registry, show the in-app VFS picker, and resume the
+    // thread with the picked path ('' on cancel). From the script's view the
+    // call is synchronous; the client keeps running meanwhile — matching
+    // Mudlet, where QFileDialog spins a nested event loop and triggers/timers
+    // keep firing while the dialog is open.
+    private static readonly FILE_DIALOG_SENTINEL = '\x01__mudix_file_dialog';
+
+    /** Threads suspended in invokeFileDialog, tracked so destroy() forgets
+     *  them (their registry refs die with the closed Lua state). */
+    private readonly parkedDialogs = new Set<ParkedDialogThread>();
+
+    /**
+     * A thread resume returned LUA_YIELD. If it is invokeFileDialog's yield
+     * (sentinel first), read the request off the thread stack, anchor the
+     * thread, and open the picker — returns true. Any other yield reaching
+     * the handler boundary is a script bug (stock Lua 5.1 errors with
+     * "attempt to yield from outside a coroutine" there): report and abandon
+     * the thread — returns false.
+     *
+     * First park: the thread still sits at `threadIndex` on the global stack
+     * (the caller's finally pops it), so take a registry ref now. Re-park
+     * (`existingRef` set): the previous ref already anchors this thread.
+     */
+    private parkDialogThread(t: LuaThread, label: string, kind: 'exec' | 'chunk', threadIndex?: number, existingRef?: number): boolean {
+        const top = t.getTop();
+        const sentinel = top >= 1 ? t.getValue(1) : null;
+        if (sentinel !== LuaRuntime.FILE_DIALOG_SENTINEL) {
+            if (top > 0) t.pop(top);
+            this.api.printError(
+                `[${label}] coroutine.yield reached the top of the handler — the handler was abandoned ` +
+                `(yielding to the client is only supported via invokeFileDialog)`);
+            return false;
+        }
+        const fileMode = t.getValue(2) === true;
+        const rawTitle = top >= 3 ? t.getValue(3) : '';
+        const rawLocation = top >= 4 ? t.getValue(4) : '';
+        t.pop(top);
+        let ref = existingRef;
+        if (ref === undefined) {
+            const api = this.lua.global.luaApi;
+            api.lua_pushvalue(this.lua.global.address, threadIndex!);
+            ref = api.luaL_ref(this.lua.global.address, LUA_REGISTRYINDEX);
+        }
+        const park: ParkedDialogThread = {thread: t, ref, label, kind};
+        this.parkedDialogs.add(park);
+        this.api.invokeFileDialog(
+            {
+                mode: fileMode ? 'file' : 'folder',
+                title: typeof rawTitle === 'string' ? rawTitle : '',
+                location: typeof rawLocation === 'string' ? rawLocation : '',
+            },
+            path => this.resumeDialogThread(park, path),
+        );
+        return true;
+    }
+
+    /** Continue a parked handler with the picked VFS path ('' = cancelled). */
+    private resumeDialogThread(park: ParkedDialogThread, path: string): void {
+        this.parkedDialogs.delete(park);
+        // After lua_close the thread died with the state — touching it (or
+        // unreffing) would poke freed WASM memory.
+        if (this.destroyed) return;
+        const t = park.thread;
+        let reparked = false;
+        try {
+            t.pushValue(typeof path === 'string' ? path : '');
+            const res = t.resume(1);
+            if (res.result === LuaReturn.Yield) {
+                // The handler called invokeFileDialog again.
+                reparked = this.parkDialogThread(t, park.label, park.kind, undefined, park.ref);
+            } else {
+                t.assertOk(res.result);
+                if (park.kind === 'exec') {
+                    // __exec finished after the original exec() caller already
+                    // returned — route its (err, result) tuple's error here.
+                    const err = t.getTop() >= 1 ? t.getValue(1) : null;
+                    if (err != null) this.api.printError(`[${park.label}] ${String(err)}`);
+                }
+            }
+        } catch (e) {
+            this.api.printError(`[${park.label}] ${e instanceof Error ? e.message : String(e)}`);
+        } finally {
+            if (!reparked) {
+                this.lua.global.luaApi.luaL_unref(this.lua.global.address, LUA_REGISTRYINDEX, park.ref);
+            }
+            this.api.flushOutput();
         }
     }
 
@@ -4973,6 +5091,9 @@ end`,
     destroy(): void {
         if (this.destroyed) return; // idempotent — a double lua_close corrupts the heap
         this.destroyed = true;
+        // Parked invokeFileDialog threads (and their registry refs) die with
+        // the state below; a picker resolving later hits the destroyed guard.
+        this.parkedDialogs.clear();
         this.globalEvents?.close();
         this.tts?.destroy();
         this.api.map.setMapEventDispatcher(null);

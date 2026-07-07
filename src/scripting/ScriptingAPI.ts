@@ -3346,6 +3346,25 @@ export class ScriptingAPI {
         return !!w;
     }
 
+    /**
+     * Mudlet `invokeFileDialog(fileOrFolder, title[, location])` — UI side.
+     * Emits a `script.filedialog` request; ProfileSession shows the in-app VFS
+     * picker and resolves it. The calling Lua handler is parked on its
+     * coroutine until `onPick` runs (see LuaRuntime.parkDialogThread), so if
+     * nothing is listening (headless runtime, tests) the request is cancelled
+     * immediately — a handler must never stay suspended forever.
+     */
+    invokeFileDialog(request: { mode: 'file' | 'folder'; title: string; location: string }, onPick: (path: string) => void): void {
+        let resolved = false;
+        const once = (path: string) => {
+            if (resolved) return;
+            resolved = true;
+            onPick(typeof path === 'string' ? path : '');
+        };
+        const listeners = this.session.events.emit('script.filedialog', { ...request, onPick: once });
+        if (listeners === 0) once('');
+    }
+
     // ── Command-line action (Mudlet setCmdLineAction) ─────────────────────────
     // When set, the action receives every Enter-submitted line *before* alias
     // matching and the MUD send. The script fully owns the command bar — it

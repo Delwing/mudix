@@ -1463,6 +1463,56 @@ function __mudix_dispatch_cb_arg(id)
     if fn then return fn(__mudix_cb_arg) end
 end
 
+-- Yield-transparent pcall. Runs `fn` on a private coroutine so a runtime
+-- error is caught like pcall, but a coroutine.yield inside `fn` (that is:
+-- invokeFileDialog) is forwarded outward to the JS resume boundary instead of
+-- erroring — in Lua 5.1 pcall is a C frame and yielding across it raises
+-- "attempt to yield across metamethod/C-call boundary". Values fed back by
+-- the next outer resume are passed straight into the inner coroutine, so `fn`
+-- observes a plain yield/resume round trip. Used by __exec (Exec.lua) and the
+-- event-dispatch loops below wherever plain pcall would sit between the JS
+-- entry point and user code.
+function __mudix_pcall_co(fn, ...)
+    local co = coroutine.create(fn)
+    local function step(ok, ...)
+        if not ok then return false, ... end
+        if coroutine.status(co) == 'suspended' then
+            return step(coroutine.resume(co, coroutine.yield(...)))
+        end
+        return true, ...
+    end
+    return step(coroutine.resume(co, ...))
+end
+
+-- Mudlet invokeFileDialog(fileOrFolder, dialogTitle[, dialogLocation]).
+-- fileOrFolder = true → pick a file, false → pick a folder (Mudlet's arg
+-- shape: QFileDialog::getOpenFileName vs getExistingDirectory). The picker
+-- browses the profile VFS — Mudlet's default dialog location is the profile
+-- home dir, which is exactly getMudletHomeDir() here, and a native OS path
+-- would be useless to the VFS-backed io.*/lfs anyway. Returns the picked
+-- absolute VFS path, or '' when cancelled (Mudlet returns '' too).
+--
+-- Mudlet blocks inside QFileDialog; a browser can't block, but every JS→Lua
+-- entry runs on its own coroutine (execInner/runChunk in LuaRuntime.ts), so
+-- we yield a sentinel plus the request args to the JS resume boundary. JS
+-- parks this thread, shows the picker, and resumes it with the chosen path —
+-- from the calling script's perspective the function simply returns it.
+-- matches/multimatches/namedCaptures are globals shared with any trigger that
+-- fires while the picker is open, so snapshot and restore them around the
+-- suspension.
+do
+    local SENTINEL = '\1__mudix_file_dialog'
+    function invokeFileDialog(fileOrFolder, dialogTitle, dialogLocation)
+        local m, mm, nc = matches, multimatches, namedCaptures
+        local path = coroutine.yield(SENTINEL,
+            fileOrFolder and true or false,
+            dialogTitle == nil and '' or tostring(dialogTitle),
+            dialogLocation == nil and '' or tostring(dialogLocation))
+        matches, multimatches, namedCaptures = m, mm, nc
+        return type(path) == 'string' and path or ''
+    end
+end
+
 -- Mirrors Mudlet's TLuaInterpreter::parseJSON gmcp-table walk: descend
 -- gmcp.<part1>.<part2>... creating intermediate tables on demand and
 -- replace only the leaf, so siblings under the same parent survive.
@@ -1560,8 +1610,10 @@ function __mudix_dispatch_event()
         -- Fall back to ipairs in case wasmoon ever pushes 1-indexed.
         if #args == 0 then for _, v in ipairs(raw) do args[#args + 1] = v end end
     end
+    -- __mudix_pcall_co, not pcall: handlers may suspend via invokeFileDialog,
+    -- which needs a pure-Lua path down to the JS resume boundary.
     if type(_G[event]) == 'function' then
-        local ok, err = pcall(_G[event], unpack(args))
+        local ok, err = __mudix_pcall_co(_G[event], unpack(args))
         if not ok and type(showHandlerError) == 'function' then showHandlerError(event, err) end
     end
     -- Native handlers registered before Other.lua overrode registerAnonymousEventHandler.
@@ -1571,7 +1623,7 @@ function __mudix_dispatch_event()
         for _, funcName in ipairs(nativeList) do
             local f = _G[funcName]
             if type(f) == 'function' then
-                local ok, err = pcall(f, event, unpack(args))
+                local ok, err = __mudix_pcall_co(f, event, unpack(args))
                 if not ok and type(showHandlerError) == 'function' then showHandlerError(event, err) end
             end
         end

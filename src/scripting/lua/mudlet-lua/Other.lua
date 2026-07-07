@@ -927,16 +927,19 @@ do
   -- The order of registered events is not preserved.
   -- name: The name of the event that was fired.
   -- ...:  All arguments passed to the raised event.
+  -- mudix: __mudix_pcall_co (Bridge.lua) instead of pcall so handlers can
+  -- suspend via invokeFileDialog — Lua 5.1 can't yield across pcall's C frame.
   function dispatchEventToFunctions(event, ...)
+    local protect = __mudix_pcall_co or pcall
     if handlers[event] then
       for _, func in pairs(handlers[event]) do
-        local success, error = pcall(func, event, ...)
+        local success, error = protect(func, event, ...)
         if not success then showHandlerError(event, error) end
       end
     end
     if handlers["*"] then
       for _, func in pairs(handlers["*"]) do
-        local success, error = pcall(func, event, ...)
+        local success, error = protect(func, event, ...)
         if not success then showHandlerError(event, error) end
       end
     end

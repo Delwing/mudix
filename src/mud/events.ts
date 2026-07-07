@@ -4,6 +4,21 @@ import type { ScriptLogSource } from './MudSession';
 
 export type SessionStatus = 'disconnected' | 'connecting' | 'connected';
 
+/** A pending Mudlet `invokeFileDialog(...)` request. The Lua handler that
+ *  called it is suspended (parked coroutine) until `onPick` fires, so the UI
+ *  must always resolve it eventually — pass the picked VFS path, or '' for
+ *  cancel (Mudlet returns '' when the native dialog is dismissed too). */
+export interface FileDialogRequest {
+    /** What the script asked to pick: a file or a directory. */
+    mode: 'file' | 'folder';
+    /** Dialog title supplied by the script (may be ''). */
+    title: string;
+    /** VFS path to start browsing at; '' means the profile root. */
+    location: string;
+    /** Resolve the dialog. Must be called exactly once. */
+    onPick: (path: string) => void;
+}
+
 export type MudClientEvents = {
     'open': [event: Event];
     'close': [event: CloseEvent];
@@ -96,6 +111,10 @@ export type MudEvents = MudClientEvents & {
     'script.selectcmd': void;
     'script.cmdlinesuggestions': [items: string[]];
     'script.openvfs': [path: string];
+    /** Fired by ScriptingAPI when Lua calls `invokeFileDialog(...)`. The UI
+     *  (ProfileSession) shows the in-app VFS picker and resolves the request
+     *  via `request.onPick`. See {@link FileDialogRequest}. */
+    'script.filedialog': [request: FileDialogRequest];
     'prompt': void;
     'script.movecursorup': void;
     'script.movecursordown': void;

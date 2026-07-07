@@ -21,6 +21,8 @@ import { getBrand, isBrandedMode } from './branding';
 import { getSessionCredentials, setSessionCredentials } from './utils/sessionCredentials';
 import { applyAnsiPalette, setServerRedefineColorsAllowed, resetAllPaletteColors } from './mud/text/colors';
 import type { MudSession } from './mud/MudSession';
+import type { FileDialogRequest } from './mud/events';
+import { FilePickerModal } from './ui/FilePickerModal';
 import type { ProfileVFS } from './scripting/vfs/ProfileVFS';
 interface Props {
     connection: MudConnection;
@@ -46,6 +48,9 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // GMCP Char.Login credentials popup. Non-null while the server is waiting on
     // a Char.Login.Default reply; `error` carries a previous attempt's failure.
     const [charLogin, setCharLogin] = useState<{ error?: string } | null>(null);
+    // Pending Lua invokeFileDialog requests. Each parks a Lua handler until its
+    // onPick fires, so requests queue up and resolve strictly one at a time.
+    const [fileDialogs, setFileDialogs] = useState<FileDialogRequest[]>([]);
     const [cmdLineSuggestions, setCmdLineSuggestions] = useState<string[]>([]);
     const [bufferWords, setBufferWords] = useState<BufferWordIndex | null>(null);
     const commandInputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
@@ -405,7 +410,12 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
         });
         // A reconnect/disconnect invalidates any pending login prompt.
         const unsub9 = session.events.on('client.disconnect', () => setCharLogin(null));
-        return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
+        // Lua invokeFileDialog: queue the request; the FilePickerModal below
+        // shows the head of the queue and resolves it via onPick.
+        const unsub10 = session.events.on('script.filedialog', (request: FileDialogRequest) => {
+            setFileDialogs(prev => [...prev, request]);
+        });
+        return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); };
     }, [session]);
 
     // Text-login auto-fill for MUDs without GMCP login. When the profile has
@@ -663,6 +673,20 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                 <ScriptingDocsModal
                     connectionId={connection.id}
                     onClose={() => setDocsOpen(false)}
+                />
+            )}
+            {fileDialogs.length > 0 && (
+                <FilePickerModal
+                    key={fileDialogs.length /* remount per request so tree/selection reset */}
+                    vfs={vfs}
+                    mode={fileDialogs[0].mode}
+                    title={fileDialogs[0].title}
+                    location={fileDialogs[0].location}
+                    onDone={path => {
+                        const req = fileDialogs[0];
+                        setFileDialogs(prev => prev.slice(1));
+                        req.onPick(path);
+                    }}
                 />
             )}
             {quickOpenOpen && vfs && (
