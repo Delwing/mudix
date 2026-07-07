@@ -37,6 +37,11 @@ export interface BrandPackage {
     filename: string;
     /** Resolved URL to the asset (e.g. an `?url` import in the brand's repo). */
     url: string;
+    /** Package version. When set, a profile whose installed copy has a
+     *  different manifest version reinstalls fresh on the next open — bump it
+     *  (together with the package's config.lua) to ship updates to players.
+     *  Unset = install once, never touch again. */
+    version?: string;
     /** Whether the user may uninstall this package (default true). When false
      *  the uninstall control is hidden, Lua `uninstallPackage()` refuses it,
      *  and it reinstalls on the next profile open even if removed by other

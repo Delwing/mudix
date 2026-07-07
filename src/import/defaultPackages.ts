@@ -14,6 +14,9 @@ interface DefaultPackage {
     filename: string;
     /** Vite-resolved URL to the bundled asset. */
     url: string;
+    /** When set, an installed copy with a different manifest version is
+     *  reinstalled fresh — how brands ship package updates to players. */
+    version?: string;
 }
 
 /**
@@ -42,9 +45,7 @@ const DEFAULTS: DefaultPackage[] = [
  */
 export async function ensureDefaultPackages(connectionId: string, vfs: ProfileVFS): Promise<void> {
     const state = useAppStore.getState();
-    const installed = new Set(
-        (state.connectionPackages[connectionId] ?? []).map(p => p.name),
-    );
+    const installedPackages = state.connectionPackages[connectionId] ?? [];
     const removedByUser = new Set(state.connectionProfile[connectionId]?.uninstalledPackages ?? []);
     // Brand-bundled packages install through the same pipeline, after the
     // stock defaults (BrandPackage is shape-compatible with DefaultPackage);
@@ -56,8 +57,12 @@ export async function ensureDefaultPackages(connectionId: string, vfs: ProfileVF
     ];
     let installedAny = false;
     for (const def of defaults) {
-        if (installed.has(def.name)) continue;
-        if (def.removable !== false && removedByUser.has(def.name)) continue;
+        const current = installedPackages.find(p => p.name === def.name);
+        // Installed and current (no declared version, or versions match) —
+        // leave it alone. A version mismatch falls through to a clean
+        // reinstall: how brands ship package updates to players.
+        if (current && (!def.version || current.version === def.version)) continue;
+        if (!current && def.removable !== false && removedByUser.has(def.name)) continue;
         try {
             const res = await fetch(def.url);
             if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${def.url}`);
