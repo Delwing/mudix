@@ -35,3 +35,15 @@
     align-items: stretch;
     box-sizing: border-box;
 }
+
+/* Wrapper around a label's echoed HTML. Qt renders QLabel rich text through a
+   QTextDocument whose default documentMargin is 4px, inside the QSS padding —
+   without it, top/left-aligned label text sits 4px closer to the edge than
+   Mudlet draws it (e.g. Adjustable.Container titles). Kept on an inner element
+   so stylesheet padding (inline on .label) adds to it rather than replacing
+   it. box-sizing must stay content-box-agnostic: the wrapper is a stretched
+   flex item, so padding just insets its children. */
+.label-doc {
+    padding: 4px;
+    box-sizing: border-box;
+}

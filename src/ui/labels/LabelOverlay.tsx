@@ -279,9 +279,15 @@ function Label({ l }: { l: LabelState }) {
             onMouseEnter={l.onMouseEnter && (e => ref.current.onMouseEnter?.(buildMouseEvent(e)))}
             onMouseLeave={l.onMouseLeave && (e => ref.current.onMouseLeave?.(buildMouseEvent(e)))}
             onWheel={l.onWheel && (e => ref.current.onWheel?.(buildWheelEvent(e)))}
-            {...(movie ? {} : { dangerouslySetInnerHTML: { __html: l.html } })}
         >
-            {movie ? <MovieCanvas player={movie} /> : undefined}
+            {movie
+                ? <MovieCanvas player={movie} />
+                // Qt lays label rich text out in a QTextDocument whose default
+                // documentMargin is 4px, *inside* the QSS padding — every
+                // Mudlet label:echo() renders with that inset. The wrapper
+                // carries it so a stylesheet padding (applied inline on the
+                // outer div) adds to it instead of replacing it.
+                : <div className="label-doc" dangerouslySetInnerHTML={{ __html: l.html }} />}
         </div>
     );
 }
