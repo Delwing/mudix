@@ -77,10 +77,11 @@ export const STOCK_THEMES: { value: string; label: string }[] = [
 ];
 
 /** Ids of the stock toolbar buttons, for `BrandToolbarConfig.hide`.
- *  `connection` is the Reconnect/Disconnect pair; `close` closes the profile. */
+ *  `connection` is the Reconnect/Disconnect pair; `close` closes the profile;
+ *  `record` toggles Mudlet-format replay recording. */
 export type StockToolbarButton =
     | 'scripts' | 'files' | 'map' | 'logs' | 'docs' | 'reportBug' | 'settings'
-    | 'connection' | 'close';
+    | 'record' | 'connection' | 'close';
 
 /** What a brand toolbar button can do when clicked. */
 export interface BrandToolbarContext {

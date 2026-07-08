@@ -2582,6 +2582,21 @@ export class LuaRuntime implements IScriptingRuntime {
         // Mudlet `feedTelnet(data)`: inject raw server bytes into the inbound
         // pipeline as if received from the MUD.
         this.lua.global.set('feedTelnet', (data: unknown) => { this.api.feedTelnet(String(data ?? '')); });
+        // Mudlet `loadReplay(fileName)` — play back a binary replay (.dat) from
+        // the profile VFS. The format parse + chunk scheduling live in
+        // MudSession; this binding just reads the bytes. Returns an
+        // [ok, errMsg] tuple that Bridge.lua reshapes into Mudlet's documented
+        // `true` / `(nil, errMsg)` multi-return.
+        this.lua.global.set('__mudix_loadReplay', (path: unknown): [boolean, string] => {
+            const p = typeof path === 'string' ? path : '';
+            if (!p) return [false, 'a blank string is not a valid replay file name'];
+            if (!this.vfs) return [false, 'no profile filesystem available'];
+            let bytes: Uint8Array;
+            try { bytes = this.vfs.readBinaryFile(p); }
+            catch { return [false, `cannot read file "${p}"`]; }
+            const err = this.api.loadReplay(bytes);
+            return err ? [false, `unable to start replay, reason: '${err}'`] : [true, ''];
+        });
         // Mudlet `receiveMSP(text)`: parse an MSP payload and dispatch its
         // sound/music commands as if the server had sent them.
         this.lua.global.set('receiveMSP', (data: unknown) => this.api.receiveMSP(String(data ?? '')));
@@ -4293,12 +4308,57 @@ end`,
         interface Handle {
             path: string;
             mode: string;
+            /** File body as a Latin-1 byte-string (charCode === byte), so
+             *  positions are true byte offsets and binary content survives. */
             content: string;
             pos: number;
             dirty: boolean;
         }
 
         const handles = new Map<number, Handle>();
+
+        // ── Binary armoring across the wasmoon bridge ─────────────────────────
+        // wasmoon marshals strings between Lua and JS with emscripten's
+        // UTF8ToString / stringToUTF8: Lua→JS stops at the first NUL byte and
+        // UTF-8-*decodes* the rest, JS→Lua re-encodes chars ≥ 0x80 as multi-byte
+        // UTF-8. Fine for text, silently corrupting for binary (a replay file's
+        // int32 headers lost every \0). So every io payload crosses the bridge
+        // "armored" as pure ASCII: a marker char (\2 = raw, \1 = encoded) plus
+        // the payload with NUL / '%' / 0x80–0xFF bytes as %XX escapes. VFS.lua
+        // mirrors the scheme (_armor/_unarmor) on the Lua side.
+        const VFS_RAW = 2;
+        const NEEDS_ARMOR = /[\x00%\x80-\xff]/;
+        const armor = (s: string): string => {
+            if (!NEEDS_ARMOR.test(s)) return '\x02' + s;
+            return '\x01' + s.replace(/[\x00%\x80-\xff]/g,
+                c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+        };
+        const unarmor = (s: string): string => {
+            const payload = s.substring(1);
+            if (s.charCodeAt(0) === VFS_RAW) return payload;
+            return payload.replace(/%([0-9A-Fa-f]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
+        };
+
+        // Byte-string ↔ bytes for the storage boundary. Chunked to stay within
+        // String.fromCharCode's argument limit on large files.
+        const bytesToLatin1 = (bytes: Uint8Array): string => {
+            let out = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) {
+                out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+            }
+            return out;
+        };
+        const latin1ToBytes = (s: string): Uint8Array => {
+            const bytes = new Uint8Array(s.length);
+            for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i) & 0xff;
+            return bytes;
+        };
+        /** Read a file's raw bytes as a Latin-1 byte-string. Builtins are JS
+         *  text — take their UTF-8 bytes so Lua sees what a file would hold. */
+        const readAsLatin1 = (filename: string): string =>
+            builtins.has(filename)
+                ? bytesToLatin1(new TextEncoder().encode(builtins.get(filename)!))
+                : bytesToLatin1(vfs!.readBinaryFile(filename));
 
         this.lua.global.set('__vfs_err__', () => lastError);
         this.lua.global.set('__vfs_exists__', (path: string) =>
@@ -4314,7 +4374,7 @@ end`,
 
                 if (builtins.has(filename)) {
                     if (m !== 'r') { lastError = `cannot open '${filename}': read-only`; return null; }
-                    content = builtins.get(filename)!;
+                    content = readAsLatin1(filename);
                 } else if (vfs) {
                     resolvedPath = vfs.resolvePath(filename);
                     if (m === 'r' || m === 'r+') {
@@ -4322,9 +4382,9 @@ end`,
                             lastError = `cannot open '${filename}': No such file or directory`;
                             return null;
                         }
-                        content = vfs.readFile(filename);
+                        content = readAsLatin1(filename);
                     } else if (m === 'a' || m === 'a+') {
-                        if (vfs.exists(filename)) content = vfs.readFile(filename);
+                        if (vfs.exists(filename)) content = readAsLatin1(filename);
                     }
                     dirty = m === 'w' || m === 'w+';
                 } else {
@@ -4353,11 +4413,11 @@ end`,
             if (h.mode === 'w' || h.mode === 'a') { lastError = 'file is write-only'; return null; }
 
             if (typeof fmt === 'number') {
-                if (fmt === 0) return '';
+                if (fmt === 0) return armor('');
                 const chunk = h.content.substring(h.pos, h.pos + fmt);
                 if (chunk.length === 0) return null;
                 h.pos += chunk.length;
-                return chunk;
+                return armor(chunk);
             }
 
             // Lua 5.1's liolib only inspects the character after '*', so '*all'
@@ -4371,16 +4431,16 @@ end`,
                 if (nl === -1) {
                     const line = h.content.substring(h.pos);
                     h.pos = h.content.length;
-                    return f === 'L' ? line + '\n' : line;
+                    return armor(f === 'L' ? line + '\n' : line);
                 }
                 const line = h.content.substring(h.pos, nl);
                 h.pos = nl + 1;
-                return f === 'L' ? line + '\n' : line;
+                return armor(f === 'L' ? line + '\n' : line);
             }
             if (f === 'a') {
                 const rest = h.content.substring(h.pos);
                 h.pos = h.content.length;
-                return rest;
+                return armor(rest);
             }
             if (f === 'n') {
                 const m = h.content.substring(h.pos).match(/^\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/);
@@ -4391,10 +4451,11 @@ end`,
             return null;
         });
 
-        this.lua.global.set('__vfs_io_write__', (id: number, data: string): string | null => {
+        this.lua.global.set('__vfs_io_write__', (id: number, armored: string): string | null => {
             const h = handles.get(id);
             if (!h) return 'invalid file handle';
             if (h.mode === 'r') return 'file is read-only';
+            const data = unarmor(armored);
             if (h.mode === 'a' || h.mode === 'a+') {
                 h.content += data;
             } else {
@@ -4423,7 +4484,7 @@ end`,
             if (!h) return 'invalid file handle';
             try {
                 if (h.dirty && vfs) {
-                    vfs.writeFile(h.path, h.content);
+                    vfs.writeBinaryFile(h.path, latin1ToBytes(h.content));
                     this.notifyVfsPathChange(h.path);
                 }
                 handles.delete(id);

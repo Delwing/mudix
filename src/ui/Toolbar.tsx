@@ -16,6 +16,14 @@ interface ToolbarProps {
     onOpenLogs: () => void;
     onOpenDocs: () => void;
     onOpenSettings: () => void;
+    /** Mudlet-format replay recording toggle state + handler. */
+    replayRecording: boolean;
+    onToggleReplayRecording: () => void;
+    /** Playback speed of the active replay, or null when none is playing —
+     *  the speed/stop controls only render mid-replay. */
+    replaySpeed: number | null;
+    onReplaySpeedChange: (direction: 1 | -1) => void;
+    onReplayStop: () => void;
     onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
     /** Capabilities handed to brand toolbar buttons (send / raiseEvent). */
     brandContext?: BrandToolbarContext;
@@ -50,8 +58,10 @@ const IconBug = () => <Icon><path d="M8 2l1.88 1.88" /><path d="M14.12 3.88L16 2
 const IconReconnect = () => <Icon><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></Icon>;
 const IconDisconnect = () => <Icon><path d="M18.36 6.64a9 9 0 1 1-12.73 0" /><line x1="12" y1="2" x2="12" y2="12" /></Icon>;
 const IconCloseProfile = () => <Icon><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></Icon>;
+const IconRecord = () => <Icon><circle cx="12" cy="12" r="6" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="9" /></Icon>;
+const IconStopReplay = () => <Icon><rect x="7" y="7" width="10" height="10" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="9" /></Icon>;
 
-export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenFiles, onOpenLogs, onOpenDocs, onOpenSettings, onContextMenu, brandContext }: ToolbarProps) {
+export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnect, onNewConnection, onOpenMap, onOpenScripts, onOpenFiles, onOpenLogs, onOpenDocs, onOpenSettings, replayRecording, onToggleReplayRecording, replaySpeed, onReplaySpeedChange, onReplayStop, onContextMenu, brandContext }: ToolbarProps) {
     const [menuOpen, setMenuOpen] = useState(false);
     const hamburgerRef = useRef<HTMLDivElement>(null);
 
@@ -87,6 +97,24 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
             {show('files') && <Button variant="ghost" onClick={fire(onOpenFiles)}><IconFiles />Files</Button>}
             {show('map') && <Button variant="ghost" onClick={fire(onOpenMap)}><IconMap />Map</Button>}
             {show('logs') && <Button variant="ghost" onClick={fire(onOpenLogs)}><IconLogs />Logs</Button>}
+            {show('record') && (
+                <Button
+                    variant="ghost"
+                    className={replayRecording ? 'toolbar-record--on' : undefined}
+                    title={replayRecording ? 'Stop recording of replay' : 'Start recording of replay (Mudlet .dat format, saved to the profile log folder)'}
+                    onClick={fire(onToggleReplayRecording)}
+                >
+                    <IconRecord />{replayRecording ? 'Recording' : 'Record'}
+                </Button>
+            )}
+            {replaySpeed !== null && (
+                <span className="toolbar-replay-controls">
+                    <Button variant="ghost" title="Slow down replay" onClick={() => onReplaySpeedChange(-1)}>−</Button>
+                    <span className="toolbar-replay-speed" title="Replay speed">×{replaySpeed}</span>
+                    <Button variant="ghost" title="Speed up replay" onClick={() => onReplaySpeedChange(1)}>+</Button>
+                    <Button variant="ghost" title="Stop replay" onClick={fire(onReplayStop)}><IconStopReplay />Stop replay</Button>
+                </span>
+            )}
             {show('docs') && <Button variant="ghost" onClick={fire(onOpenDocs)}><IconDocs />Docs</Button>}
             {show('reportBug') && <Button variant="ghost" onClick={fire(onReportBug)}><IconBug />Report Bug</Button>}
             {show('settings') && <Button variant="ghost" onClick={fire(onOpenSettings)}><IconSettings />Settings</Button>}

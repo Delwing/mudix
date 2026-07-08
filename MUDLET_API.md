@@ -487,6 +487,8 @@ mudix-specific extras (not on the wiki): `mudix.windows.write/setTitle/has/focus
 | `getHTTP(url [, headers])` | ✅ | Bridge.lua → `HttpService.getHTTP`; fires `sysGetHttpDone`/`sysGetHttpError` |
 | `getIrcChannels()` / `getIrcConnectedHost()` / `getIrcNick()` / `getIrcServer()` | ❌ stub | No IRC client in mudix; bind as warning-emitting no-op stubs (getters return empty table / `""`) |
 | `getNetworkLatency()` | ✅ | JS-exposed |
+| `loadReplay(fileName)` | ✅ | Plays a Mudlet binary replay (`.dat`) from the profile VFS on its recorded timeline (`src/mud/replay/`). Reads both Mudlet layouts (original 4-byte + PR-#4400 8-byte offsets). Toolbar Record button writes recordings to `log/` in Mudlet's own format |
+| `loadRawFile(fileName)` | ✅ | Legacy alias of `loadReplay` (matches Mudlet's dual registration) |
 | `openIRC()` / `restartIrc()` / `sendIrc()` / `setIrcChannels()` / `setIrcNick()` / `setIrcServer()` | ❌ stub | No IRC client; bind as warning-emitting no-op stubs |
 | `mmcp.*` (MudMaster Chat Protocol) | ❌ stub | (Mudlet 4.21) Peer-to-peer TCP chat between clients — impossible in a browser (no raw/listening sockets, no P2P). The full `mmcp.*` table (`chatTo`/`chatAll`/`call`/`startServer`/…) is bound as warning-emitting no-op stubs in Bridge.lua; `mudlet.supports.mmcp` is `false` |
 | `openUrl(url)` | ✅ | `window.open(url, '_blank')`; `file:` prefix routes to the VFS file browser |

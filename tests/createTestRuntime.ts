@@ -41,7 +41,13 @@ export interface TestRuntime {
  * `tempTimer` won't tick. Testing those needs the full ScriptingEngine wiring —
  * a follow-up if/when trigger coverage is wanted.
  */
-export async function createTestRuntime(): Promise<TestRuntime> {
+export interface TestRuntimeOptions {
+  /** Optional (stub) ProfileVFS handed to the LuaRuntime so io/lfs tests can
+   *  exercise the real wasmoon↔VFS bridge without an IndexedDB mount. */
+  vfs?: import('../src/scripting/vfs/ProfileVFS').ProfileVFS | null;
+}
+
+export async function createTestRuntime(options: TestRuntimeOptions = {}): Promise<TestRuntime> {
   // Define a minimal `window` now — NOT at import time. By this point pcre2's
   // PCRE.init() has already run (during module import, while window was absent)
   // and picked node-mode WASM loading. wasmoon tolerates a window that lacks
@@ -82,7 +88,7 @@ export async function createTestRuntime(): Promise<TestRuntime> {
   // extra wiring; link clicks / expandAlias aren't exercised here. The real
   // wasmoon (Lua) + pcre2 (PCRE) WASM load from the filesystem because tests
   // using this helper run in the node environment (no browser globals).
-  const rt = await LuaRuntime.create(api, null, () => undefined);
+  const rt = await LuaRuntime.create(api, options.vfs ?? null, () => undefined);
 
   // The wasmoon engine is private; a test helper legitimately reaches in to
   // eval Lua and read return values.

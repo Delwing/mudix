@@ -311,6 +311,36 @@ html, body, #root {
     justify-content: flex-start;
 }
 
+/* Replay recording toggle (Toolbar): red pulsing dot while recording runs. */
+.toolbar-record--on,
+.toolbar-record--on:hover {
+    color: var(--danger);
+}
+
+.toolbar-record--on .toolbar-icon {
+    opacity: 1;
+    animation: toolbar-record-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes toolbar-record-pulse {
+    50% { opacity: 0.35; }
+}
+
+/* Replay playback controls (speed −/＋ and Stop), shown only mid-replay. */
+.toolbar-replay-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.toolbar-replay-speed {
+    font-size: 12px;
+    color: var(--text-dim);
+    min-width: 28px;
+    text-align: center;
+}
+
 .toolbar-hamburger-menu .toolbar-sep {
     width: auto;
     height: 1px;

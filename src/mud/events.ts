@@ -118,4 +118,13 @@ export type MudEvents = MudClientEvents & {
     'prompt': void;
     'script.movecursorup': void;
     'script.movecursordown': void;
+    /** A Mudlet-format replay started playing. Payload is the recording's
+     *  total duration in milliseconds (sum of chunk offsets, at 1× speed). */
+    'replay.start': [durationMs: number];
+    /** The active replay finished or was aborted. */
+    'replay.over': void;
+    /** Replay recording was toggled on/off (the toolbar Record button state). */
+    'replay.recording': [recording: boolean];
+    /** The replay playback speed divisor changed (1..1024). */
+    'replay.speed': [speed: number];
 };

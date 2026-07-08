@@ -747,6 +747,13 @@ export class ScriptingAPI {
         this.session.feedTelnet(data);
     }
 
+    /** Mudlet `loadReplay(fileName)` core. Starts playback of a Mudlet binary
+     *  replay (.dat). The LuaRuntime binding reads the bytes from the VFS
+     *  before calling here. Returns null on success or the failure reason. */
+    loadReplay(bytes: Uint8Array): string | null {
+        return this.session.loadReplayData(bytes);
+    }
+
     /** Mudlet `receiveMSP(text)`. Parses an MSP payload (`!!SOUND(...)` /
      *  `!!MUSIC(...)` tags) as if the server had sent it and dispatches the
      *  resulting sound/music commands through the normal `msp` event path

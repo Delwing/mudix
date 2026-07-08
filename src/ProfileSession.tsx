@@ -22,6 +22,7 @@ import { getSessionCredentials, setSessionCredentials } from './utils/sessionCre
 import { applyAnsiPalette, setServerRedefineColorsAllowed, resetAllPaletteColors } from './mud/text/colors';
 import type { MudSession } from './mud/MudSession';
 import type { FileDialogRequest } from './mud/events';
+import { replayFileName } from './mud/replay/replayFormat';
 import { FilePickerModal } from './ui/FilePickerModal';
 import type { ProfileVFS } from './scripting/vfs/ProfileVFS';
 interface Props {
@@ -53,6 +54,10 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     const [fileDialogs, setFileDialogs] = useState<FileDialogRequest[]>([]);
     const [cmdLineSuggestions, setCmdLineSuggestions] = useState<string[]>([]);
     const [bufferWords, setBufferWords] = useState<BufferWordIndex | null>(null);
+    // Mudlet-format replay: Record button state + the active playback's speed
+    // (null while nothing is playing — the toolbar controls only render then).
+    const [replayRecording, setReplayRecording] = useState(false);
+    const [replaySpeed, setReplaySpeed] = useState<number | null>(null);
     const commandInputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
     const windowContextMenuHandlerRef = useRef<((e: React.MouseEvent) => void) | null>(null);
 
@@ -418,6 +423,74 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
         return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); };
     }, [session]);
 
+    // Replay state → toolbar. Playback can start outside the UI too (Lua
+    // loadReplay), so both controls track the session's events rather than
+    // local click handlers.
+    useEffect(() => {
+        const u1 = session.events.on('replay.recording', (recording: boolean) => setReplayRecording(recording));
+        const u2 = session.events.on('replay.start', () => setReplaySpeed(session.replaySpeed));
+        const u3 = session.events.on('replay.over', () => setReplaySpeed(null));
+        const u4 = session.events.on('replay.speed', (speed: number) => setReplaySpeed(prev => (prev === null ? null : speed)));
+        return () => { u1(); u2(); u3(); u4(); };
+    }, [session]);
+
+    const postReplayMessage = (text: string, isError = false) => {
+        session.events.emit(
+            'message',
+            isError ? `\x1b[31m[ WARN ]\x1b[0m  - ${text}` : `\x1b[36m[ INFO ]\x1b[0m  - ${text}`,
+            'script',
+            Date.now(),
+        );
+    };
+
+    const handleToggleReplayRecording = () => {
+        if (!session.isReplayRecording) {
+            session.startReplayRecording();
+            return;
+        }
+        const bytes = session.stopReplayRecording();
+        if (!bytes) return;
+        const name = replayFileName(new Date());
+        // Absolute path — the Lua runtime may have chdir()ed the VFS cwd.
+        const vfsPath = vfs ? `${vfs.profilePath}/log/${name}` : null;
+        if (vfs && vfsPath) {
+            try {
+                vfs.writeBinaryFile(vfsPath, bytes);
+                postReplayMessage(`Replay recording saved. Play it back with loadReplay(getMudletHomeDir() .. "/log/${name}") or from Files → log.`);
+                return;
+            } catch (err) {
+                console.error('Failed to save replay to VFS:', err);
+            }
+        }
+        // No profile filesystem (or the write failed) — hand the file to the
+        // browser as a download so the recording isn't lost.
+        const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(url);
+        postReplayMessage(`Replay recording downloaded as ${name}.`);
+    };
+
+    const handlePlayReplay = (path: string) => {
+        if (!vfs) return;
+        let bytes: Uint8Array;
+        try {
+            bytes = vfs.readBinaryFile(path);
+        } catch {
+            postReplayMessage(`Cannot read replay file "${path}".`, true);
+            return;
+        }
+        const error = session.loadReplayData(bytes);
+        if (error) {
+            postReplayMessage(`Cannot start replay: ${error}.`, true);
+        } else {
+            setFilesOpen(false);
+        }
+    };
+
     // Text-login auto-fill for MUDs without GMCP login. When the profile has
     // saved credentials, send the account at the first server prompt and the
     // password when the server switches to password mode (IAC ECHO off) —
@@ -609,6 +682,11 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                 onOpenLogs={() => setLogsOpen(true)}
                 onOpenDocs={() => setDocsOpen(true)}
                 onOpenSettings={onToggleSettings}
+                replayRecording={replayRecording}
+                onToggleReplayRecording={handleToggleReplayRecording}
+                replaySpeed={replaySpeed}
+                onReplaySpeedChange={dir => session.setReplaySpeed(dir > 0 ? session.replaySpeed * 2 : session.replaySpeed / 2)}
+                onReplayStop={() => session.abortReplay()}
                 onContextMenu={e => windowContextMenuHandlerRef.current?.(e)}
             />
             {settingsOpen && (
@@ -660,6 +738,7 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                     initialPathTick={filesOpen.pickedAt}
                     initialLine={filesOpen.initialLine}
                     onClose={() => setFilesOpen(false)}
+                    onPlayReplay={handlePlayReplay}
                 />
             )}
             {logsOpen && (

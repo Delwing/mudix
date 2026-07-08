@@ -189,6 +189,8 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('reconnect',    '() → bool', 'Disconnect and redial the last-connected URL. False when no connection has been made yet.'),
     fn('sendSocket',   '(data)',           'Send literal bytes over the socket (no telnet/encoding processing)'),
     fn('feedTelnet',   '(data)',           'Inject raw server bytes into the inbound pipeline as if received from the MUD'),
+    fn('loadReplay',   '(fileName) → true | nil,err', 'Play back a Mudlet binary replay (.dat) from the profile filesystem on its recorded timeline (e.g. loadReplay(getMudletHomeDir().."/log/rec.dat")).'),
+    fn('loadRawFile',  '(fileName) → true | nil,err', 'Legacy alias of loadReplay.'),
     fn('receiveMSP',   '(text) → bool',    'Parse an MSP payload (!!SOUND/!!MUSIC tags) as if sent by the server and play the resulting sounds. True when a command was parsed.'),
     fn('disconnect',   '()',               'Drop the current connection'),
     fn('closeMudlet',  '()',               'Close the active profile: disconnect and return to the connection screen (mudix maps Mudlet\'s closeMudlet to closing the open profile).'),

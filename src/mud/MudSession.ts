@@ -9,6 +9,9 @@ import { CmdLineMenuRegistry } from '../ui/CmdLineMenuRegistry';
 import { MouseEventRegistry } from '../ui/MouseEventRegistry';
 import { MudClient, type MudClientOptions, SUPPORTED_SERVER_ENCODINGS } from './connection/MudClient';
 import { PingTracker } from './connection/PingTracker';
+import { ReplayPlayer } from './replay/ReplayPlayer';
+import { ReplayRecorder } from './replay/ReplayRecorder';
+import { parseReplay, replayDurationMs } from './replay/replayFormat';
 import { type MudClientEvents, type MudEvents, type SessionStatus } from './events';
 import type { Console } from './text/Console';
 import { mxpColor } from './text/colorParsers';
@@ -71,6 +74,16 @@ export class MudSession {
      *  and forwarded to the live client for NAWS (telnet option 31). */
     private windowSize: { cols: number; rows: number } | null = null;
 
+    /** Active Mudlet-format replay recording, or null. Fed from the
+     *  `socket.incoming` tap in the constructor — the post-MCCP,
+     *  pre-telnet-parsing stream, the same point Mudlet records at. */
+    private replayRecorder: ReplayRecorder | null = null;
+    /** Active replay playback, or null. */
+    private replayPlayer: ReplayPlayer | null = null;
+    /** Playback speed divisor (1..1024). Read per-chunk, so changing it
+     *  mid-replay affects the remaining chunks — matching Mudlet. */
+    private _replaySpeed = 1;
+
     /** Colors for the local echo of sent commands. Re-applied from the active
      *  profile by ProfileSession. `fg` defaults to Mudlet's olive; `bg` empty =
      *  no background. Consumed by echoCommand() to wrap the echo in ANSI. */
@@ -113,6 +126,10 @@ export class MudSession {
         // The main output area reports its character grid here on every resize;
         // forward it to the client so NAWS (window size) stays in sync.
         this.windows.onMainConsoleResize = (cols, rows) => this.setWindowSize(cols, rows);
+        // Replay recording tap. `socket.incoming` carries the post-MCCP data
+        // of every real network frame (and only real frames — replayed data is
+        // injected below that emit, so a running replay is never re-recorded).
+        this.events.on('socket.incoming', (data) => this.replayRecorder?.feed(data));
         this.events.on('script.log', (text, level, source) => {
             this._scriptLog.push({
                 text: text ?? '',
@@ -145,6 +162,10 @@ export class MudSession {
 
     connect(url: string): void {
         this.lastUrl = url;
+        // A running replay feeds the same parsing pipeline the live socket is
+        // about to use — interleaving them would corrupt telnet/GMCP state, so
+        // dialing wins and the replay stops.
+        this.abortReplay();
         this.teardownClient();
         // Synchronously re-measure the main console's char grid before dialing.
         // The resize observer that normally feeds windowSize is async, so a quick
@@ -261,6 +282,94 @@ export class MudSession {
         return this.client?.sendTelnetChannel102(msg) ?? false;
     }
 
+    // ── Mudlet replay (record + playback) ───────────────────────────────────
+
+    get replaySpeed(): number { return this._replaySpeed; }
+    get isReplayRecording(): boolean { return this.replayRecorder !== null; }
+    get isReplaying(): boolean { return this.replayPlayer !== null; }
+
+    /** Set the playback speed divisor, clamped to Mudlet's 1..1024 range.
+     *  Takes effect from the next chunk of an active replay. */
+    setReplaySpeed(speed: number): void {
+        const s = Math.max(1, Math.min(1024, Math.round(Number(speed) || 1)));
+        if (s === this._replaySpeed) return;
+        this._replaySpeed = s;
+        this.events.emit('replay.speed', s);
+    }
+
+    /** Start recording the inbound stream to Mudlet's replay format. Returns
+     *  false when a recording is already running. */
+    startReplayRecording(): boolean {
+        if (this.replayRecorder) return false;
+        this.replayRecorder = new ReplayRecorder();
+        this.events.emit('replay.recording', true);
+        this.postReplayInfo('Replay recording has started.');
+        return true;
+    }
+
+    /** Stop recording and return the captured stream as a Mudlet .dat file's
+     *  bytes, or null when no recording was running. The caller decides where
+     *  the bytes go (profile VFS, browser download, …). */
+    stopReplayRecording(): Uint8Array | null {
+        if (!this.replayRecorder) return null;
+        const bytes = this.replayRecorder.encode();
+        this.replayRecorder = null;
+        this.events.emit('replay.recording', false);
+        return bytes;
+    }
+
+    /** Start playing a Mudlet-format replay (the Lua `loadReplay` core).
+     *  Works offline — with no live connection the chunks feed a detached
+     *  client's parsing pipeline. Returns null on success or a human-readable
+     *  failure reason (mirroring Mudlet's loadReplay error strings). */
+    loadReplayData(bytes: Uint8Array): string | null {
+        if (this.replayPlayer) return 'another one may already be in progress';
+        const chunks = parseReplay(bytes);
+        if (chunks === null) return 'replay file seems to be corrupt';
+        const client = this.ensureReplayClient();
+        const durationMs = replayDurationMs(chunks);
+        this.replayPlayer = new ReplayPlayer(chunks, {
+            speed: () => this._replaySpeed,
+            feed: (data) => client.feedTelnet(data),
+            onDone: () => {
+                this.replayPlayer = null;
+                this.postReplayInfo('The replay has ended.');
+                this.events.emit('replay.over');
+            },
+        });
+        this.postReplayInfo(`Loading replay: ${chunks.length} chunks covering ${formatReplayDuration(durationMs)}.`);
+        this.events.emit('replay.start', durationMs);
+        this.replayPlayer.start();
+        return null;
+    }
+
+    /** Stop the active replay without delivering its remaining chunks.
+     *  Returns false when no replay is running. */
+    abortReplay(): boolean {
+        if (!this.replayPlayer) return false;
+        this.replayPlayer.abort();
+        this.replayPlayer = null;
+        this.postReplayInfo('The replay has been aborted.');
+        this.events.emit('replay.over');
+        return true;
+    }
+
+    /** The client whose parsing pipeline replay chunks feed into. Reuses the
+     *  live client when one exists; otherwise creates a detached MudClient
+     *  that is never connect()ed — the inbound pipeline works without a
+     *  socket, and any replies the replayed IAC traffic provokes are dropped
+     *  by the readyState guards, which is exactly right for playback. */
+    private ensureReplayClient(): MudClient {
+        if (!this.client) {
+            this.client = new MudClient({ url: '', ...this.options }, this.events as EventBus<MudClientEvents>);
+        }
+        return this.client;
+    }
+
+    private postReplayInfo(text: string): void {
+        this.events.emit('message', `\x1b[36m[ INFO ]\x1b[0m  - ${text}`, 'script', Date.now());
+    }
+
     /** Mudlet `reconnect()`. Disconnect and redial the most recently connected
      *  URL (set by connect(), so it covers both the app and Lua connect paths).
      *  Returns false when nothing has been dialed yet. */
@@ -361,6 +470,12 @@ export class MudSession {
     destroy(): void {
         if (this._destroyed) return;
         this._destroyed = true;
+        // Silence replay machinery first — the player's timer chain would
+        // otherwise keep feeding a torn-down pipeline. No lifecycle messages
+        // during teardown; the output is going away anyway.
+        this.replayPlayer?.abort();
+        this.replayPlayer = null;
+        this.replayRecorder = null;
         if (typeof window !== 'undefined') {
             window.removeEventListener('beforeunload', this.beforeUnload);
         }
@@ -389,4 +504,11 @@ export class MudSession {
         this.events.emit('message', text, 'error', Date.now());
         this.events.emit('script.log', text, 'error');
     }
+}
+
+/** hh:mm:ss for the replay-loading info line (Mudlet logs the same shape). */
+function formatReplayDuration(ms: number): string {
+    const totalSecs = Math.round(ms / 1000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${p(Math.floor(totalSecs / 3600))}:${p(Math.floor(totalSecs / 60) % 60)}:${p(totalSecs % 60)}`;
 }

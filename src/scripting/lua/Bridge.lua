@@ -1428,6 +1428,24 @@ function saveProfile(location)
     return true, r or ''
 end
 
+-- Mudlet loadReplay(fileName) → true on success, (nil, errMsg) on failure.
+-- Plays back a Mudlet binary replay (.dat) from the profile filesystem: the
+-- recorded telnet stream is fed through the normal parsing pipeline on its
+-- original timeline, so triggers/GMCP/rendering behave as they did live.
+function loadReplay(fileName)
+    local r = __mudix_loadReplay(fileName)
+    if type(r) == 'table' then
+        local ok = r[0]; if ok == nil then ok = r[1] end
+        local val = r[1]; if r[0] == nil then val = r[2] end
+        if ok == false then return nil, val end
+        return true
+    end
+    if r then return true end
+    return nil, 'unable to start replay'
+end
+-- Mudlet registers loadReplay under this legacy name too.
+loadRawFile = loadReplay
+
 -- Mudlet setProfileIcon(path) → (true, path) on success, (false, errorMessage)
 -- on failure. The JS bridge reads the VFS image and inlines it, returning a
 -- { ok, path } / { ok=false, error } table (it can only push one Lua value);

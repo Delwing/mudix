@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { Folder, FolderOpen, FolderPlus, FolderUp, File, RefreshCw, LucideFolderPen, Upload, Trash2, Home, Link, Unlink } from 'lucide-react';
+import { Folder, FolderOpen, FolderPlus, FolderUp, File, RefreshCw, LucideFolderPen, Upload, Trash2, Home, Link, Unlink, Play } from 'lucide-react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { ResizableModal } from './ResizableModal';
 import { ContextMenu } from './components';
@@ -814,9 +814,12 @@ interface FileBrowserModalProps {
     // Read alongside `initialPath`/`initialPathTick` so error-log hyperlinks
     // like `foo.lua:42` land on line 42.
     initialLine?: number;
+    // When set, .dat files get a "Play replay" context-menu action that hands
+    // the VFS path back (ProfileSession starts the Mudlet-replay playback).
+    onPlayReplay?: (path: string) => void;
 }
 
-export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, initialPathTick, initialLine }: FileBrowserModalProps) {
+export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, initialPathTick, initialLine, onPlayReplay }: FileBrowserModalProps) {
     const savedBounds     = useAppStore(s => s.connectionModalBounds[connectionId]?.['files']);
     const saveModalBounds = useAppStore(s => s.saveModalBounds);
 
@@ -1696,6 +1699,16 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                     )}
                     {ctxMenu.node.type === 'file' && (
                         <>
+                            {onPlayReplay && ctxMenu.node.name.toLowerCase().endsWith('.dat') && (
+                                <button
+                                    className="ctx-menu__item"
+                                    type="button"
+                                    onClick={() => { setCtxMenu(null); onPlayReplay(ctxMenu.node.path); }}
+                                >
+                                    <Play size={13} />
+                                    Play replay
+                                </button>
+                            )}
                             <button
                                 className="ctx-menu__item"
                                 type="button"

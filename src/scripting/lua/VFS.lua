@@ -36,6 +36,28 @@ do
 
     local _handles = {}
 
+    -- The wasmoon Lua↔JS string bridge is UTF-8-based: crossing it truncates
+    -- at NUL bytes and mangles 0x80–0xFF, so binary file content would corrupt.
+    -- Every io payload therefore crosses "armored" as pure ASCII: a marker
+    -- byte (\2 = raw, \1 = encoded) plus the data with NUL / '%' / high bytes
+    -- as %XX escapes. The JS hooks in LuaRuntime.setupVFS mirror the scheme.
+    local ENC, RAW = string.char(1), string.char(2)
+    local function _armor(s)
+        if s:find('[%z%%\128-\255]') then
+            return ENC .. s:gsub('[%z%%\128-\255]', function(c)
+                return string.format('%%%02X', string.byte(c))
+            end)
+        end
+        return RAW .. s
+    end
+    local function _unarmor(s)
+        local payload = s:sub(2)
+        if s:sub(1, 1) == RAW then return payload end
+        return (payload:gsub('%%(%x%x)', function(h)
+            return string.char(tonumber(h, 16))
+        end))
+    end
+
     local function _make_handle(id)
         local mt = {
             __index = {
@@ -43,14 +65,16 @@ do
                     local formats = {fmt or '*l', ...}
                     local out = {}
                     for i = 1, #formats do
-                        out[i] = _read(id, formats[i])
+                        local v = _read(id, formats[i])
+                        if type(v) == 'string' then v = _unarmor(v) end
+                        out[i] = v
                     end
                     return unpack(out)
                 end,
                 write = function(self, ...)
                     local args = {...}
                     for i = 1, #args do
-                        local e = _write_fn(id, tostring(args[i]))
+                        local e = _write_fn(id, _armor(tostring(args[i])))
                         if e then return nil, e end
                     end
                     return self
@@ -69,8 +93,8 @@ do
                 lines = function(self)
                     return function()
                         local line = _read(id, '*l')
-                        if line == nil then self:close() end
-                        return line
+                        if line == nil then self:close() return nil end
+                        return _unarmor(line)
                     end
                 end,
                 flush = function(self) return self end,
