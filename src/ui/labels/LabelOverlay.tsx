@@ -108,8 +108,12 @@ function Label({ l }: { l: LabelState }) {
             document.head.appendChild(el);
         }
         const sel = `[data-mudix-label="${cssEscape(l.name)}"]`;
+        // !important: the base block lands as INLINE style on the label div,
+        // and inline always beats a <style> rule — a hover rule setting e.g.
+        // background-image would silently lose to the base `background`. In Qt
+        // the pseudo-state rule wins by ordinary stylesheet order.
         el.textContent = parts.scoped
-            .map(r => `${sel}${r.pseudo} { ${qtDeclarationsToCss(r.declarations)} }`)
+            .map(r => `${sel}${r.pseudo} { ${qtDeclarationsToCss(r.declarations, true)} }`)
             .join('\n');
         return () => { document.getElementById(id)?.remove(); };
     }, [l.styleSheet, l.name]);

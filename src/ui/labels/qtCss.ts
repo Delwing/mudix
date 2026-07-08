@@ -133,12 +133,7 @@ function declarationsToStyleWithMargin(css: string): {
 } {
     const out: Record<string, string> = {};
     const margin: Partial<QtMargin> = {};
-    for (const decl of splitDeclarations(css)) {
-        const i = decl.indexOf(':');
-        if (i < 0) continue;
-        const key = decl.slice(0, i).trim().toLowerCase();
-        const val = stripOuterQuotes(decl.slice(i + 1).trim());
-        if (!key || !val) continue;
+    for (const { key, val } of applyBorderImageBlockTransform(parseQtDeclarations(css))) {
         if (key === 'qproperty-alignment') {
             Object.assign(out, qtAlignmentToFlex(val));
             continue;
@@ -294,24 +289,179 @@ export function cssEscape(s: string): string {
 // Translate a flat declaration block into a CSS declaration string (Qt → CSS
 // for values like QLinearGradient and unitless lengths). Used to serialize a
 // scoped pseudo-state ruleset body for injection into a `<style>` element.
-export function qtDeclarationsToCss(css: string): string {
+// `important` appends `!important` to every declaration: scoped pseudo-state
+// rules (`QLabel::hover`) must beat the base block, which the label renders as
+// INLINE style — without `!important` a hover rule can never override it (Qt
+// resolves this by ordinary rule order within one stylesheet).
+export function qtDeclarationsToCss(css: string, important = false): string {
     const out: string[] = [];
+    const bang = important ? ' !important' : '';
+    for (const { key, val } of applyBorderImageBlockTransform(parseQtDeclarations(css))) {
+        if (key === 'qproperty-alignment') {
+            for (const [k, v] of Object.entries(qtAlignmentToFlex(val))) {
+                out.push(`${k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}: ${v}${bang}`);
+            }
+            continue;
+        }
+        const [outKey, outVal] = translateDeclaration(key, val);
+        out.push(`${outKey}: ${outVal}${bang}`);
+    }
+    return out.join('; ');
+}
+
+// ── Qt border-image ───────────────────────────────────────────────────────────
+//
+// Qt QSS `border-image: <url> [<cuts>{1,4}] [(stretch|repeat|round){1,2}]`
+// slices the image into nine cells and — unlike CSS — always paints the middle
+// cell. When the cut values are omitted, Qt slices by the widget's *border
+// widths* declared alongside (EleUI2 pairs `border-top: 85px solid transparent`
+// with `border-image: url(UI_Window.png)` so the frame's title bar and corners
+// stay at their native thickness while the middle stretches). With neither cuts
+// nor border widths the whole image stretches across the widget — the classic
+// Mudlet "background that scales with the label" idiom.
+//
+// Reproducing that needs block-level context, so this pass runs over the whole
+// parsed declaration list:
+//   • cuts (explicit, else border widths) → CSS border-image-slice + `fill`
+//     (CSS omits the middle cell by default) with the border widths as
+//     border-image-width;
+//   • all-zero cuts → a stretched CSS background;
+//   • the real borders are folded away into padding: Qt insets the content by
+//     border + padding, and Qt allows *negative* padding (EleUI2 pulls the
+//     title text up into the frame's title bar with `padding-top: -95px`) which
+//     CSS drops entirely. Emitting the combined inset as clamped padding keeps
+//     the text where Qt puts it, and CSS border-image paints fine without real
+//     borders since border-image-width is explicit.
+// Qt's parser tolerates stray tokens (scripts write CSS-isms like `fill`);
+// unknown tokens are skipped the same way.
+
+interface QtDeclaration { key: string; val: string }
+
+function parseQtDeclarations(css: string): QtDeclaration[] {
+    const out: QtDeclaration[] = [];
     for (const decl of splitDeclarations(css)) {
         const i = decl.indexOf(':');
         if (i < 0) continue;
         const key = decl.slice(0, i).trim().toLowerCase();
         const val = stripOuterQuotes(decl.slice(i + 1).trim());
         if (!key || !val) continue;
-        if (key === 'qproperty-alignment') {
-            for (const [k, v] of Object.entries(qtAlignmentToFlex(val))) {
-                out.push(`${k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}: ${v}`);
-            }
-            continue;
-        }
-        const [outKey, outVal] = translateDeclaration(key, val);
-        out.push(`${outKey}: ${outVal}`);
+        out.push({ key, val });
     }
-    return out.join('; ');
+    return out;
+}
+
+// Margin-style shorthand expansion (1–4 values → top right bottom left).
+function expandBoxShorthand(vals: number[]): [number, number, number, number] {
+    const [t, r = t, b = t, l = r] = vals;
+    return [t, r, b, l];
+}
+
+const SIDE_INDEX: Record<string, number> = { top: 0, right: 1, bottom: 2, left: 3 };
+
+function parseLengths(val: string): number[] {
+    const out: number[] = [];
+    for (const tok of val.split(/\s+/)) {
+        const m = tok.match(/^(-?\d+(?:\.\d+)?)(?:px)?$/);
+        if (m) out.push(parseFloat(m[1]));
+    }
+    return out;
+}
+
+// Border declarations that this pass consumes when a border-image is present.
+// Widths feed the slice grid; style/color are consumed too — Qt replaces the
+// border painting with the image, and a leftover `border-style: solid` would
+// otherwise paint a browser-default 3px border.
+const BORDER_SIDE_RE = /^border-(top|right|bottom|left)$/;
+const BORDER_SIDE_WIDTH_RE = /^border-(top|right|bottom|left)-width$/;
+const BORDER_CONSUMED_RE = /^border(-(top|right|bottom|left))?(-(style|color))?$/;
+const PADDING_SIDE_RE = /^padding-(top|right|bottom|left)$/;
+
+function applyBorderImageBlockTransform(decls: QtDeclaration[]): QtDeclaration[] {
+    let biIndex = -1;
+    for (let i = decls.length - 1; i >= 0; i--) {
+        if (decls[i].key === 'border-image' && /\burl\(/i.test(decls[i].val)) { biIndex = i; break; }
+    }
+    if (biIndex < 0) return decls;
+
+    const widths: [number, number, number, number] = [0, 0, 0, 0];
+    const pads: [number, number, number, number] = [0, 0, 0, 0];
+    let sawBorder = false;
+    let sawPadding = false;
+    const consumed = new Set<number>();
+
+    decls.forEach((d, i) => {
+        let m: RegExpMatchArray | null;
+        if (d.key === 'border' || d.key === 'border-width') {
+            const nums = parseLengths(d.val);
+            if (nums.length) {
+                const ex = d.key === 'border' ? [nums[0]] : nums;
+                const [t, r, b, l] = expandBoxShorthand(ex);
+                widths[0] = t; widths[1] = r; widths[2] = b; widths[3] = l;
+                sawBorder = true;
+            }
+            consumed.add(i);
+        } else if ((m = d.key.match(BORDER_SIDE_RE)) || (m = d.key.match(BORDER_SIDE_WIDTH_RE))) {
+            const nums = parseLengths(d.val);
+            if (nums.length) { widths[SIDE_INDEX[m[1]]] = nums[0]; sawBorder = true; }
+            consumed.add(i);
+        } else if (BORDER_CONSUMED_RE.test(d.key)) {
+            consumed.add(i);
+        } else if (d.key === 'padding') {
+            const nums = parseLengths(d.val);
+            if (nums.length) {
+                const [t, r, b, l] = expandBoxShorthand(nums);
+                pads[0] = t; pads[1] = r; pads[2] = b; pads[3] = l;
+                sawPadding = true;
+            }
+            consumed.add(i);
+        } else if ((m = d.key.match(PADDING_SIDE_RE))) {
+            const nums = parseLengths(d.val);
+            if (nums.length) { pads[SIDE_INDEX[m[1]]] = nums[0]; sawPadding = true; }
+            consumed.add(i);
+        }
+    });
+    consumed.add(biIndex);
+
+    const out = decls.filter((_, i) => !consumed.has(i));
+
+    // Qt insets the label's content by border + padding per side (padding may
+    // be negative); CSS padding can't go below zero, so clamp.
+    if (sawBorder || sawPadding) {
+        const sides = ['top', 'right', 'bottom', 'left'];
+        sides.forEach((side, i) => {
+            out.push({ key: `padding-${side}`, val: `${Math.max(0, widths[i] + pads[i])}px` });
+        });
+    }
+
+    // Parse the border-image value itself: url, optional cuts, repeat keywords.
+    const val = decls[biIndex].val;
+    const urlMatch = val.match(/\burl\(\s*(?:"[^"]*"|'[^']*'|[^)]*?)\s*\)/i);
+    if (!urlMatch || urlMatch.index === undefined) return decls; // unreachable — biIndex required url()
+    const url = urlMatch[0];
+    const rest = val.slice(0, urlMatch.index) + val.slice(urlMatch.index + url.length);
+    const cuts: number[] = [];
+    const repeats: string[] = [];
+    for (const tok of rest.trim().split(/\s+/)) {
+        if (!tok) continue;
+        if (/^\d+(?:\.\d+)?(?:px)?$/.test(tok)) cuts.push(parseFloat(tok));
+        else if (/^(stretch|repeat|round|space)$/i.test(tok)) repeats.push(tok.toLowerCase());
+    }
+
+    const slice = cuts.length ? expandBoxShorthand(cuts) : widths;
+    if (slice.every(c => c === 0)) {
+        out.push({ key: 'background-image', val: url });
+        out.push({ key: 'background-size', val: '100% 100%' });
+        out.push({ key: 'background-repeat', val: 'no-repeat' });
+        out.push({ key: 'background-origin', val: 'border-box' });
+        return out;
+    }
+    const gridWidths = widths.some(w => w !== 0) ? widths : slice;
+    const repeat = repeats.length ? repeats.join(' ') : 'stretch';
+    out.push({
+        key: 'border-image',
+        val: `${url} ${slice.join(' ')} fill / ${gridWidths.map(w => `${w}px`).join(' ')} ${repeat}`,
+    });
+    return out;
 }
 
 // Shared Qt→CSS rewrites that aren't structural (alignment is structural and

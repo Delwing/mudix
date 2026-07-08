@@ -4914,11 +4914,40 @@ end`,
         if (result !== undefined && result !== null) this.lua.global.set(globalName, result);
     }
 
+    // Mudlet parity (Host::raiseEvent): an event raised while another event is
+    // still dispatching — installPackage inside a sysDownloadDone handler
+    // raising sysInstallPackage, any handler calling raiseEvent — is queued and
+    // dispatched after the in-flight event finishes. Synchronous nested
+    // dispatch let a handler registered mid-dispatch see the event already in
+    // flight: EleUI2's GitUpdater (registered while its package installed
+    // inside the sysDownloadDone dispatch) received that same sysDownloadDone,
+    // mistook the package's own install download for a finished update, and
+    // uninstalled the package.
+    private dispatchingEvent = false;
+    private readonly pendingEvents: Array<{ event: string; args: unknown[] }> = [];
+
     emitEvent(event: string, args: unknown[]): void {
         // HTTP callbacks fire from background fetches and may resolve after the
         // owning ScriptingEngine tore us down; emitting on a closed lua_State
         // throws a confusing wasm error. Drop the event silently in that case.
         if (this.destroyed) return;
+        this.pendingEvents.push({ event, args });
+        if (this.dispatchingEvent) return;
+        this.dispatchingEvent = true;
+        try {
+            while (this.pendingEvents.length > 0 && !this.destroyed) {
+                const next = this.pendingEvents.shift()!;
+                this.dispatchEventNow(next.event, next.args);
+            }
+        } finally {
+            this.dispatchingEvent = false;
+            // A throw mid-drain would otherwise leak stale events into the
+            // next dispatch.
+            this.pendingEvents.length = 0;
+        }
+    }
+
+    private dispatchEventNow(event: string, args: unknown[]): void {
         // Refresh the Lua-side getMainWindowSize cache (Bridge.lua) from the
         // authoritative new size on the SAME signal that triggers Geyser's
         // reposition, set before dispatch so the reposition handler reads current

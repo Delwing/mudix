@@ -229,28 +229,33 @@ if (typeof document !== 'undefined') {
 
 /**
  * Measures the pixel size of an average character cell for `family` at `size`
- * px. Backs Mudlet's `calcFontSize(...)` — scripts use the returned (w, h) to
- * pre-size miniconsoles for a column/row count. The width is measured via a
- * canvas 2D context (monospace fonts have a uniform advance, so any glyph
- * works); height uses the font bounding box ascent+descent when available,
- * falling back to 1.2x size which matches the line-height Qt's QFontMetrics
- * reports for common fonts.
+ * points. Backs Mudlet's `calcFontSize(...)` — scripts use the returned (w, h)
+ * to pre-size miniconsoles for a column/row count. Font sizes are Qt point
+ * sizes everywhere in the Mudlet API, and mudix renders them as CSS `pt`
+ * (StickyOutputPanel), so the cell is measured at the CSS-px equivalent
+ * (1pt = 4/3 px at 96dpi) to match both Mudlet's QFontMetrics numbers and what
+ * the DOM actually paints. The width is measured via a canvas 2D context
+ * (monospace fonts have a uniform advance, so any glyph works); height uses
+ * the font bounding box ascent+descent when available, falling back to 1.2x
+ * size which matches the line-height Qt's QFontMetrics reports for common
+ * fonts.
  */
 function measureMonospaceCell(family: string, size: number): [number, number] {
-    const fallback: [number, number] = [Math.round(size * 0.6), Math.round(size * 1.2)];
+    const px = size * 4 / 3;
+    const fallback: [number, number] = [Math.round(px * 0.6), Math.round(px * 1.2)];
     if (typeof document === 'undefined') return fallback;
     const ctx = document.createElement('canvas').getContext('2d');
     if (!ctx) return fallback;
     const stack = family && family.trim()
         ? `"${family.trim().replace(/"/g, '\\"')}", ${DEFAULT_MONO_STACK}`
         : DEFAULT_MONO_STACK;
-    ctx.font = `${size}px ${stack}`;
+    ctx.font = `${px}px ${stack}`;
     const m = ctx.measureText('M');
     const ascent = m.fontBoundingBoxAscent;
     const descent = m.fontBoundingBoxDescent;
     const height = (typeof ascent === 'number' && typeof descent === 'number')
         ? ascent + descent
-        : size * 1.2;
+        : px * 1.2;
     return [Math.round(m.width), Math.round(height)];
 }
 
@@ -4392,7 +4397,8 @@ export class ScriptingAPI {
      * `[width, height]` of an average character cell in pixels. Two overloads:
      *
      *   • `calcFontSize(size [, family])` — measure `family` (or the main
-     *     output font when omitted) at `size` px.
+     *     output font when omitted) at `size` points (Qt point sizes, like
+     *     every font size in the Mudlet API).
      *   • `calcFontSize("WindowName")` — measure the named window/miniconsole
      *     using its configured font+size. Use `"main"` for the main output.
      *
