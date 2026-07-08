@@ -1153,6 +1153,19 @@ export class ScriptingEngine {
                 if (!v) return css;
                 return rewriteVfsUrlsInCss(css, this.connectionId, v);
             });
+            // Raw-bytes reader for synchronous binary consumers (setMovie's
+            // GIF decoder). ProfileVFS resolves leading-slash paths absolutely
+            // (so getMudletHomeDir()-prefixed paths work) and relative ones
+            // against the profile root.
+            this.api.setFileBytesReader((path) => {
+                const v = this.vfs;
+                if (!v) return null;
+                try {
+                    return v.readBinaryFile(path);
+                } catch {
+                    return null;
+                }
+            });
             // Sound loader: absolute URLs hit the network; everything else is
             // resolved against the mounted profile VFS so package-bundled sounds
             // work out of the box.

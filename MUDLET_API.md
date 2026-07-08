@@ -734,7 +734,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `moveWindow(name, x, y)` | ✅ | JS-exposed |
 | `openUserWindow(name [, …])` | ✅ | Opens (or focuses) a dockable user-window panel |
 | `paste([window])` | ✅ | Pastes the clipboard at the cursor; appends at end when on the last line |
-| `pauseMovie(name)` | 🚧 | No QMovie equivalent in browser |
+| `pauseMovie(name)` | ✅ | Pauses the label's GIF player on its current frame (in-browser QMovie replacement — see `setMovie`) |
 | `prefix(text)` | ✅ | Pure Lua via GUIUtils.lua (moveCursor + insertText) |
 | `print(...)` | ✅ | Alias for echo |
 | `raiseWindow(name)` | ✅ | CSS `z-index` on labels via `raiseLabel`/`lowerLabel` |
@@ -753,7 +753,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `resetUserWindowTitle(name)` | ✅ | Pairs with `setUserWindowTitle` |
 | `resizeWindow(name, w, h)` | ✅ | JS-exposed |
 | `saveWindowLayout()` | ✅ | Snapshots window hints + dock extents into `connectionLayoutSnapshots` |
-| `scaleMovie(name, factor)` | 🚧 | No QMovie equivalent |
+| `scaleMovie(name, [autoscale])` | ✅ | Scales the GIF to the label; autoscale (default) keeps tracking label resizes via CSS 100%, `false` freezes at the current size |
 | `selectCaptureGroup(n)` | ✅ | JS-exposed |
 | `selectCmdLineText([name])` | ✅ | Selects all text in the targeted overlay cmd line or the main bar (per-userwindow cmd lines accept the name for parity) |
 | `selectCurrentLine([window])` | ✅ | JS-exposed |
@@ -796,7 +796,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setMainWindowSize(w, h)` | 🚧 | The main window IS the browser viewport |
 | `setMapWindowTitle(title)` | ✅ | Sets the dockable map panel (`id "map"`) tab title via `WindowManager.setTitle`; empty title resets to default. False when the map widget is closed. Unblocks `resetMapWindowTitle` (GUIUtils) and `Geyser.Mapper` |
 | `setMiniConsoleFontSize(name, size)` | ✅ | Bridge.lua; rejects non-miniconsole targets (CONSOLE-only, matches Mudlet) |
-| `setMovie(name, path)` / `setMovieFrame(name, n)` / `setMovieSpeed(name, factor)` / `startMovie(name)` | 🚧 | No QMovie equivalent — could be replaced by `<img>` with animated GIFs |
+| `setMovie(name, path)` / `setMovieFrame(name, n)` / `setMovieSpeed(name, factor)` / `startMovie(name)` | ✅ | QMovie replaced by an in-browser GIF decoder (`gifMovie.ts`) rendering to a `<canvas>` in the label — full pause/frame/speed/scale control; path resolves through the profile VFS. Animated WebP / APNG also decode via WebCodecs `ImageDecoder` where available (Chromium/Safari; frames land async into a pending player). Geyser `Label:setMovie` etc. work via the bundled wrappers. mp4 is NOT a QMovie format — video goes through `playVideoFile` (already ✅) |
 | `setOverline([window,] bool)` | ✅ | FormatState `overline` channel (ANSI SGR 53/55) → CSS `text-decoration: overline`; selection-aware like the other style setters. `setTextFormat`/`getTextFormat` carry it too |
 | `setPopup([window,] cmds, hints)` | ✅ | Right-click popup on the current selection (preserves formatting, like `setLink`) |
 | `setProfileStyleSheet(css)` | ✅ | Installs/replaces a profile-wide `<style>` block in `document.head` (keyed apart from `setAppStyleSheet`); raises `sysAppStyleSheetChange` with tag `"profile"` |

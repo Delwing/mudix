@@ -7,6 +7,7 @@ import { classifyReservedKey, formatKeyCombo, reservedKeyNote } from '../mud/key
 import { getBrand } from '../branding';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
+import { decodeGif, decodeAnimatedImage, sniffDecodableImage, supportsImageDecoder, MoviePlayer } from '../ui/labels/gifMovie';
 import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
 import type { ScrollBoxManager } from '../ui/scrollbox/ScrollBoxManager';
 import { TextEditManager } from '../ui/textedit/TextEditManager';
@@ -577,6 +578,9 @@ export class ScriptingAPI {
     private packageInfoGetter: ((name: string) => Record<string, string>) | null = null;
     private packageInfoSetter: ((name: string, key: string, value: string) => boolean) | null = null;
     private cssRewriter: ((css: string) => string) | null = null;
+    /** Reads raw file bytes from the profile VFS (wired by ScriptingEngine).
+     *  Backs synchronous binary consumers like setMovie's GIF decoder. */
+    private fileBytesReader: ((path: string) => Uint8Array | null) | null = null;
     private scriptToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
     private triggerStayOpenSetter: ((name: string, lines: number) => boolean) | null = null;
@@ -1433,6 +1437,10 @@ export class ScriptingAPI {
 
     setCssRewriter(fn: ((css: string) => string) | null): void {
         this.cssRewriter = fn;
+    }
+
+    setFileBytesReader(fn: ((path: string) => Uint8Array | null) | null): void {
+        this.fileBytesReader = fn;
     }
 
     installPackage(path: string): InstallOutcome {
@@ -4105,6 +4113,86 @@ export class ScriptingAPI {
         const y = Number.isFinite(hotY) ? Math.max(0, Math.round(hotY as number)) : 0;
         const escaped = url.replace(/"/g, '\\"');
         return this.session.labels.setCursor(name, `url("${escaped}") ${x} ${y}, auto`);
+    }
+
+    // ── Label movies ──────────────────────────────────────────────────────────
+    // Mudlet's QMovie family, backed by an in-browser GIF decoder + canvas
+    // player (src/ui/labels/gifMovie.ts). Paths resolve through the profile
+    // VFS like Mudlet's local files (`getMudletHomeDir().."/movie.gif"`).
+
+    /**
+     * Mudlet `setMovie(labelName, path)` — decode the animation at `path`,
+     * install it on the label, and start playing (Mudlet starts immediately
+     * too). GIFs decode synchronously via the bundled decoder (every
+     * browser); WebP/APNG go through the WebCodecs ImageDecoder where
+     * available (Chromium/Safari) — for those a pending player is installed
+     * immediately (so follow-up scaleMovie/startMovie calls work, matching
+     * the Mudlet idiom) and frames land when the async decode completes.
+     * False when the label doesn't exist or the file isn't decodable.
+     */
+    setMovie(name: string, path: string): boolean {
+        if (!name || !path || !this.session.labels.has(name)) return false;
+        const bytes = this.fileBytesReader?.(path) ?? null;
+        if (!bytes) return false;
+
+        if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) { // "GIF"
+            let player: MoviePlayer;
+            try {
+                player = new MoviePlayer(decodeGif(bytes));
+            } catch {
+                return false;
+            }
+            this.session.labels.setMovie(name, player);
+            player.start();
+            return true;
+        }
+
+        const sniffed = sniffDecodableImage(bytes);
+        if (!sniffed || !supportsImageDecoder()) return false;
+        const player = MoviePlayer.pending(sniffed.width, sniffed.height);
+        this.session.labels.setMovie(name, player);
+        player.start();
+        decodeAnimatedImage(bytes, sniffed.mime)
+            .then(gif => player.resolveFrames(gif))
+            .catch((err: unknown) => {
+                player.stop();
+                const msg = err instanceof Error ? err.message : String(err);
+                this.printError(`setMovie: failed to decode "${path}": ${msg}`);
+            });
+        return true;
+    }
+
+    /** Mudlet `startMovie(labelName)` — resume a paused/finished animation. */
+    startMovie(name: string): boolean {
+        const movie = this.session.labels.getMovie(name);
+        if (!movie) return false;
+        movie.start();
+        return true;
+    }
+
+    /** Mudlet `pauseMovie(labelName)` — freeze on the current frame. */
+    pauseMovie(name: string): boolean {
+        const movie = this.session.labels.getMovie(name);
+        if (!movie) return false;
+        movie.pause();
+        return true;
+    }
+
+    /** Mudlet `setMovieFrame(labelName, n)` — jump to frame n (0-based, like
+     *  QMovie::jumpToFrame). False when the frame doesn't exist. */
+    setMovieFrame(name: string, frame: number): boolean {
+        return this.session.labels.getMovie(name)?.jumpToFrame(frame) ?? false;
+    }
+
+    /** Mudlet `setMovieSpeed(labelName, percent)` — 100 = recorded speed. */
+    setMovieSpeed(name: string, percent: number): boolean {
+        return this.session.labels.getMovie(name)?.setSpeed(percent) ?? false;
+    }
+
+    /** Mudlet `scaleMovie(labelName, [autoscale=true])` — size the GIF to the
+     *  label; with autoscale it keeps tracking label resizes. */
+    scaleMovie(name: string, autoscale: boolean): boolean {
+        return this.session.labels.setMovieScale(name, autoscale);
     }
 
     private applyBackgroundImage(_target: undefined, path: string, mode: number): boolean {

@@ -828,6 +828,13 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('setLabelCursor',      '(name, shape)',                       'Set the mouse cursor over a label. shape is a Qt::CursorShape int (or string name; see mudlet.cursor). -1 resets.'),
     fn('resetLabelCursor',    '(name)',                              'Restore the default cursor on a label.'),
     fn('setLabelCustomCursor','(name, cursorPath [, hotX, hotY])',   'Set a label cursor to a custom image. cursorPath resolves against the package VFS; hotX/hotY are the hotspot in pixels (default 0,0).'),
+    // Label movies (QMovie family — canvas-based GIF player)
+    fn('setMovie',            '(labelName, pathToGif) → bool',       'Decode an animation from the profile VFS (e.g. getMudletHomeDir().."/movie.gif"), show it on the label, and start playing. GIF works in every browser; animated WebP / APNG additionally work where WebCodecs ImageDecoder exists (Chromium/Safari). Replaces the label\'s text/html content, like QLabel.'),
+    fn('startMovie',          '(labelName) → bool',                  'Resume a paused (or finished) GIF animation set with setMovie.'),
+    fn('pauseMovie',          '(labelName) → bool',                  'Pause the label\'s GIF animation on its current frame.'),
+    fn('setMovieFrame',       '(labelName, frameNr) → bool',         'Jump the label\'s GIF to a specific frame (0-based, like QMovie). Returns false when the frame doesn\'t exist.'),
+    fn('setMovieSpeed',       '(labelName, percent) → bool',         'Set the GIF playback speed in percent (100 = recorded speed, 200 = double).'),
+    fn('scaleMovie',          '(labelName [, autoscale]) → bool',    'Scale the GIF to fill its label. With autoscale (default true) it keeps tracking label resizes; with false it is scaled once to the current size.'),
     // Sounds
     fn('playSoundFile',       '(filename [, volume]) | ({name=..., volume=..., fadein=..., fadeout=..., start=..., loops=..., key=..., tag=..., caption=...})',
        'Play a sound effect. Filename resolves against the profile VFS (e.g. "media/hit.wav") or may be an absolute http(s):// URL. Volume 0..100; loops -1=infinite; fadein/fadeout/start in ms. caption sets the closed-caption text (shown when closed captions are enabled). Browser audio unlocks after the first user gesture; before that, playback is queued until unlock.'),

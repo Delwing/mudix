@@ -1,4 +1,5 @@
 import { cssEscape } from './qtCss';
+import type { MoviePlayer } from './gifMovie';
 
 export interface LabelCreateOptions {
     /** Parent window id ('main' for main viewport). Defaults to 'main'. */
@@ -58,6 +59,9 @@ export interface LabelState {
     tooltip?: string;
     /** CSS cursor value (e.g. 'pointer', 'crosshair', 'none'). */
     cursor?: string;
+    /** Animated GIF player installed by Mudlet's setMovie. Rendered as a
+     *  <canvas> instead of the html content (QLabel shows one or the other). */
+    movie?: MoviePlayer;
     /** z-index applied to the label DIV. Higher = on top of other labels. */
     zIndex?: number;
 }
@@ -127,6 +131,7 @@ export class LabelManager {
     destroy(name: string): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
+        lbl.movie?.stop();
         this.labels.delete(name);
         this.notify(lbl.parent);
         return true;
@@ -207,7 +212,37 @@ export class LabelManager {
     setHtml(name: string, html: string): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
+        // QLabel shows one content at a time — setText replaces a running
+        // movie, so echo()/setLabelText after setMovie drops the animation.
+        if (lbl.movie) { lbl.movie.stop(); lbl.movie = undefined; }
         lbl.html = html;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    /** Mudlet setMovie — install (or replace) the label's GIF player. */
+    setMovie(name: string, player: MoviePlayer): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl) return false;
+        lbl.movie?.stop();
+        lbl.movie = player;
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    getMovie(name: string): MoviePlayer | null {
+        return this.labels.get(name)?.movie ?? null;
+    }
+
+    /** Mudlet scaleMovie — autoscale tracks the label size (CSS 100%);
+     *  autoscale=false freezes the scale at the label's current geometry.
+     *  False when the label has no movie (matches Mudlet's warning case). */
+    setMovieScale(name: string, autoscale: boolean): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl?.movie) return false;
+        lbl.movie.scale = autoscale
+            ? { mode: 'auto' }
+            : { mode: 'fixed', width: lbl.width, height: lbl.height };
         this.notify(lbl.parent);
         return true;
     }
@@ -398,7 +433,10 @@ export class LabelManager {
 
     clearAll(): void {
         const parents = new Set<string>();
-        for (const l of this.labels.values()) parents.add(l.parent);
+        for (const l of this.labels.values()) {
+            parents.add(l.parent);
+            l.movie?.stop();
+        }
         this.labels.clear();
         for (const p of parents) this.notify(p);
     }

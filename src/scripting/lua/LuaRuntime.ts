@@ -1288,6 +1288,31 @@ export class LuaRuntime implements IScriptingRuntime {
             );
         });
 
+        // ── Label movies (Mudlet's QMovie family) ────────────────────────────
+        // setMovie(labelName, pathToGif) — decode + install + start playing.
+        this.lua.global.set('setMovie', (name: unknown, path: unknown) => {
+            if (typeof name !== 'string' || name === '') return false;
+            return this.api.setMovie(name, String(path ?? ''));
+        });
+        this.lua.global.set('startMovie', (name: unknown) => {
+            return typeof name === 'string' && this.api.startMovie(name);
+        });
+        this.lua.global.set('pauseMovie', (name: unknown) => {
+            return typeof name === 'string' && this.api.pauseMovie(name);
+        });
+        // Frame numbers / speed can arrive as capture strings — coerce.
+        this.lua.global.set('setMovieFrame', (name: unknown, frame: unknown) => {
+            return typeof name === 'string' && this.api.setMovieFrame(name, Number(frame));
+        });
+        this.lua.global.set('setMovieSpeed', (name: unknown, percent: unknown) => {
+            return typeof name === 'string' && this.api.setMovieSpeed(name, Number(percent));
+        });
+        // scaleMovie(labelName, [autoscale]) — autoscale defaults to true.
+        this.lua.global.set('scaleMovie', (name: unknown, autoscale?: unknown) => {
+            return typeof name === 'string'
+                && this.api.scaleMovie(name, autoscale === undefined ? true : autoscale !== false);
+        });
+
         // Mudlet setAppStyleSheet(css, [tag]) — install or replace a CSS block
         // in document.head, then raise sysAppStyleSheetChange so theme scripts
         // can re-apply derivative styles. The optional `tag` lets multiple

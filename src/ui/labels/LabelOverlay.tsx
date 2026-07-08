@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
 import type { LabelManager, LabelMouseEvent, LabelState, LabelWheelEvent } from './LabelManager';
+import type { MoviePlayer } from './gifMovie';
 import { cssTextToParts, qtDeclarationsToCss, cssEscape } from './qtCss';
 import './LabelOverlay.css';
 
@@ -249,6 +250,17 @@ function Label({ l }: { l: LabelState }) {
         ? (e: React.MouseEvent<HTMLDivElement>) => e.preventDefault()
         : undefined;
 
+    // A movie (setMovie) replaces the html content, like QLabel. The canvas
+    // sits left-aligned / vertically centered (QLabel's default pixmap
+    // alignment) and is clipped to the label's geometry.
+    const movie = l.movie;
+    if (movie) {
+        style.display = 'flex';
+        style.alignItems = 'center';
+        style.justifyContent = 'flex-start';
+        style.overflow = 'hidden';
+    }
+
     return (
         <div
             className="label"
@@ -263,8 +275,28 @@ function Label({ l }: { l: LabelState }) {
             onMouseEnter={l.onMouseEnter && (e => ref.current.onMouseEnter?.(buildMouseEvent(e)))}
             onMouseLeave={l.onMouseLeave && (e => ref.current.onMouseLeave?.(buildMouseEvent(e)))}
             onWheel={l.onWheel && (e => ref.current.onWheel?.(buildWheelEvent(e)))}
-            dangerouslySetInnerHTML={{ __html: l.html }}
-        />
+            {...(movie ? {} : { dangerouslySetInnerHTML: { __html: l.html } })}
+        >
+            {movie ? <MovieCanvas player={movie} /> : undefined}
+        </div>
     );
+}
+
+/** The <canvas> a MoviePlayer paints GIF frames onto. The drawing buffer is
+ *  always the GIF's native size (putImageData ignores CSS scaling); the
+ *  player's scale mode only changes the CSS box. */
+function MovieCanvas({ player }: { player: MoviePlayer }) {
+    const ref = useRef<HTMLCanvasElement | null>(null);
+    useEffect(() => {
+        player.attach(ref.current);
+        return () => player.attach(null);
+    }, [player]);
+    const scale = player.scale;
+    const style: React.CSSProperties = scale.mode === 'auto'
+        ? { width: '100%', height: '100%' }
+        : scale.mode === 'fixed'
+            ? { width: scale.width, height: scale.height }
+            : {};
+    return <canvas ref={ref} width={player.gif.width} height={player.gif.height} style={style} />;
 }
 
