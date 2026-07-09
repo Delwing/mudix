@@ -1,7 +1,10 @@
 # Publishes mudix to npm when a version tag (v*) is pushed.
-# Requires the NPM_TOKEN repository secret (npmjs.com → Access Tokens →
-# Granular, with read/write on the mudix package). `--provenance` attaches a
-# verifiable build attestation linking the package to this workflow run.
+# Uses npm Trusted Publishing (OIDC) — no NPM_TOKEN secret needed. The package
+# must have a Trusted Publisher configured on npmjs.com (package Settings →
+# Trusted Publisher → GitHub Actions) pointing at this repo and this exact
+# workflow filename (publish.yml). `id-token: write` lets npm CLI >= 11.5.1
+# exchange GitHub's OIDC token for a short-lived publish token; provenance
+# attestation is generated automatically, no `--provenance` flag needed.
 name: Publish to npm
 
 on:
@@ -15,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm provenance
+      id-token: write # npm trusted publishing (OIDC) + provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,7 +27,8 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: yarn install --frozen-lockfile
       - run: yarn test
+      # Trusted publishing needs npm CLI >= 11.5.1; Node 22's bundled npm can
+      # lag behind that, so upgrade explicitly rather than relying on it.
+      - run: npm install -g npm@latest
       # prepublishOnly runs build:lib, so dist-lib is always freshly built.
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --access public

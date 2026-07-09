@@ -27,7 +27,9 @@ export {
     type LandingProps,
 } from "./branding";
 export { BrandLoginScreen } from "./ui/BrandLoginScreen";
-export { setSessionCredentials, getSessionCredentials, type SessionCredentials } from "./utils/sessionCredentials";
+export { useBrandLogin, type UseBrandLoginResult } from "./ui/useBrandLogin";
+export { BrandLoginFields, type BrandLoginFieldsProps } from "./ui/BrandLoginFields";
+export { setSessionCredentials, getSessionCredentials, getLastSessionCredentials, type SessionCredentials } from "./utils/sessionCredentials";
 export type { MudConnection, ConnectionMode } from "./storage/schema";
 
 // Core

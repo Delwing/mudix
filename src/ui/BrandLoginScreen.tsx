@@ -3,7 +3,7 @@ import { Info } from 'lucide-react';
 import { Button, Input, FormField } from './components';
 import { AboutModal } from './AboutModal';
 import { getBrand, type LandingProps } from '../branding';
-import { getLastSessionCredentials, setSessionCredentials } from '../utils/sessionCredentials';
+import { useBrandLogin } from './useBrandLogin';
 
 /**
  * Built-in landing for branded builds: no profile creation or selection —
@@ -11,29 +11,17 @@ import { getLastSessionCredentials, setSessionCredentials } from '../utils/sessi
  * its own `Landing` component. Credentials are held in memory only (never
  * persisted): they feed the same auto-login path as the connection editor
  * (GMCP Char.Login, or typed at text-login prompts) for this page's lifetime,
- * so a reload starts back at an empty form.
+ * so a reload starts back at an empty form. See `useBrandLogin`/
+ * `BrandLoginFields` to reuse this behavior in a custom `Landing`.
  */
 export function BrandLoginScreen({ openProfile, ensureBrandProfile, openSettings }: LandingProps) {
     const brand = getBrand();
-    // Prefill from the last in-memory credentials (e.g. after closing the
-    // profile and coming back within the same page) — nothing is read from
-    // storage.
-    const saved = getLastSessionCredentials();
-    const [account, setAccount] = useState(saved?.account ?? '');
-    const [password, setPassword] = useState(saved?.password ?? '');
+    const { account, setAccount, password, setPassword, enter } = useBrandLogin({ openProfile, ensureBrandProfile });
     const [aboutOpen, setAboutOpen] = useState(false);
-
-    // In `profileMode: 'perLogin'` the account picks (or creates) that
-    // account's own profile; in `'single'` mode it's the one shared profile.
-    const open = (connect: boolean) => {
-        const id = ensureBrandProfile(account);
-        setSessionCredentials(id, { account: account.trim(), password });
-        openProfile(id, connect);
-    };
 
     const handleConnect = (e: React.FormEvent) => {
         e.preventDefault();
-        open(true);
+        enter(true);
     };
 
     return (
@@ -82,7 +70,7 @@ export function BrandLoginScreen({ openProfile, ensureBrandProfile, openSettings
                         />
                     </FormField>
                     <Button type="submit" variant="primary">Connect</Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => open(false)}
+                    <Button type="button" variant="ghost" size="sm" onClick={() => enter(false)}
                         title="Open the profile without connecting — scripts and settings stay available">
                         Open offline
                     </Button>
