@@ -73,6 +73,11 @@ export interface TelnetNegotiatorFlags {
     nawsEnabled: boolean;
     /** Whether the game-facing transport is TLS (MTTS SSL bit, NEW-ENVIRON TLS var). */
     secureTransport: boolean;
+    /** Whether to advertise screen-reader use (MTTS SCREEN READER bit,
+     *  NEW-ENVIRON SCREEN_READER var) — Mudlet's `advertiseScreenReader` config
+     *  key. Default false; some MUDs adjust their output (e.g. suppress ASCII
+     *  art, add extra room-description detail) when this is set. */
+    screenReaderAdvertised: boolean;
 }
 
 export interface TelnetNegotiatorHooks {
@@ -463,6 +468,7 @@ export class TelnetNegotiator {
         const mtts = computeMtts({
             utf8: this.hooks.getEncoding() === 'utf-8',
             tls: this.flags.secureTransport,
+            screenReader: this.flags.screenReaderAdvertised,
         });
         const cycle = ['MUDIX', 'ANSI-TRUECOLOR', `MTTS ${mtts}`];
         const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
@@ -513,6 +519,7 @@ export class TelnetNegotiator {
             utf8: encoding === 'utf-8',
             tls: this.flags.secureTransport,
             wrapColumns: this.windowSize?.cols ?? 0,
+            screenReader: this.flags.screenReaderAdvertised,
         }, extended);
     }
 

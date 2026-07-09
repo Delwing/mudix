@@ -104,6 +104,34 @@ describe('telnet option negotiation (TelnetNegotiator via MudClient)', () => {
     expect(sentText(sock)).toContain(TTYPE_IS + 'MTTS ');
   });
 
+  it('sets the MTTS SCREEN READER bit in the TTYPE cycle when advertiseScreenReader is on', () => {
+    const { sock } = connected({ screenReaderAdvertised: true });
+    sock.deliver(TTYPE_DO);
+    const sendReq = '\xFF\xFA' + OPT_TTYPE + TTYPE_SEND + '\xFF\xF0';
+    sock.sent.length = 0;
+    sock.deliver(sendReq); // name
+    sock.sent.length = 0;
+    sock.deliver(sendReq); // terminal type
+    sock.sent.length = 0;
+    sock.deliver(sendReq); // MTTS bitvector
+    // ANSI(1) + 256(8) + OSC_COLOR_PALETTE(32) + TRUECOLOR(256) + UTF8(4) + SCREEN_READER(64) = 365.
+    expect(sentText(sock)).toContain(TTYPE_IS + 'MTTS 365');
+  });
+
+  it('omits the MTTS SCREEN READER bit by default', () => {
+    const { sock } = connected();
+    sock.deliver(TTYPE_DO);
+    const sendReq = '\xFF\xFA' + OPT_TTYPE + TTYPE_SEND + '\xFF\xF0';
+    sock.sent.length = 0;
+    sock.deliver(sendReq);
+    sock.sent.length = 0;
+    sock.deliver(sendReq);
+    sock.sent.length = 0;
+    sock.deliver(sendReq);
+    // ANSI(1) + 256(8) + OSC_COLOR_PALETTE(32) + TRUECOLOR(256) + UTF8(4) = 301.
+    expect(sentText(sock)).toContain(TTYPE_IS + 'MTTS 301');
+  });
+
   it('accepts WILL CHARSET with DO CHARSET and sends our REQUEST', () => {
     const { sock } = connected();
     sock.deliver(CHARSET_WILL);

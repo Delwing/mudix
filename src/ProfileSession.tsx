@@ -159,7 +159,11 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // wss:// connection is TLS, but proxy mode is plaintext upstream regardless
     // of the proxy URL scheme (see connectionSecureTransport).
     const secureTransport = connectionSecureTransport(connection);
-    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mccpEnabled, mxpEnabled, mnesEnabled, newEnvironEnabled, secureTransport, nawsEnabled, subprotocols });
+    // Mudlet's `advertiseScreenReader` (config bag). Read like the protocol
+    // toggles above — the MTTS/NEW-ENVIRON negotiation only runs at connect
+    // time, so a mid-session change takes effect on the next reconnect.
+    const screenReaderAdvertised = (profileConfig?.advertiseScreenReader as boolean | undefined) ?? false;
+    session.setProtocolOptions({ gmcpEnabled, mttsEnabled, msdpEnabled, msspEnabled, charsetEnabled, mspEnabled, mccpEnabled, mxpEnabled, mnesEnabled, newEnvironEnabled, secureTransport, screenReaderAdvertised, nawsEnabled, subprotocols });
     // Mudlet's "Fix unnecessary linebreaks on GA servers" (config bag, persisted
     // by setConfig). Applied during render — like the protocol toggles above —
     // so it's on the session's options before autoConnect dials, and re-applied

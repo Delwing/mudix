@@ -29,7 +29,7 @@ If you have Mudlet scripts, triggers, aliases, or maps, mudix aims to run them u
 - Full protocol support: **GMCP**, **MSDP**, **MSSP**, **MCCP** (compression), **MSP** (sound), telnet **CHARSET**, **TTYPE/MTTS**, and GA/EOR prompt detection.
 
 ### 📜 Mudlet-compatible Lua scripting
-- A complete **Lua 5.1** runtime (WASM) with Mudlet-native globals — `send`, `echo`/`cecho`/`decho`/`hecho`, `tempTimer`, `tempTrigger`, `tempAlias`, and [hundreds more](./MUDLET_API.md).
+- A complete **Lua 5.1** runtime (WASM) with Mudlet-native globals — `send`, `echo`/`cecho`/`decho`/`hecho`, `tempTimer`, `tempTrigger`, `tempAlias`, and [hundreds more](docs/MUDLET_API.md).
 - **Triggers, aliases, timers, keybindings, and buttons** organized in Mudlet-style folder trees.
 - **PCRE regex** powered by `pcre2-wasm` — the same engine flavor as Mudlet.
 - Bundled Mudlet standard library: Geyser GUI toolkit, the generic mapper, string/table utilities, and the `db:*` database API.
@@ -111,7 +111,7 @@ MudClient (WebSocket — direct or via telnet proxy)
 | **Storage** | `src/storage`, `src/scripting/vfs`, `src/db` | Zustand + per-profile VFS + SQLite + IndexedDB logs |
 | **Import** | `src/import` | Mudlet XML & package install/export |
 
-A deeper tour of the internals lives in [`CLAUDE.md`](./CLAUDE.md); the full Mudlet API implementation status is tracked in [`MUDLET_API.md`](./MUDLET_API.md).
+A deeper tour of the internals lives in [`CLAUDE.md`](./CLAUDE.md); the full Mudlet API implementation status is tracked in [`MUDLET_API.md`](docs/MUDLET_API.md).
 
 ## ⚠️ Limitations & known constraints
 
@@ -123,7 +123,7 @@ mudix runs inside a browser sandbox, which trades some of Mudlet's native reach 
 - **Disk-folder linking is Chromium-only.** The "link a folder on disk" feature uses the File System Access API, which Firefox and Safari don't implement. Those browsers fall back to IndexedDB-only storage.
 - **Secure context required.** The VFS service worker (which serves profile images/fonts/CSS) needs HTTPS or `localhost`.
 - **Clipboard access is best-effort.** The browser's OS clipboard is asynchronous and gated on a user gesture (and a secure context), whereas Mudlet's `getClipboardText`/`setClipboardText` are synchronous. mudix keeps a session-local text-clipboard mirror as the authoritative value and syncs it to the real OS clipboard opportunistically — so `setClipboardText` may not reach the system clipboard without a user gesture, and `getClipboardText` returns the last value mudix knows about (an external copy made elsewhere shows up on the *next* call, once the async read completes). This mirror is separate from the rich-text buffer used by `copy()`/`paste()`.
-- **Some Mudlet APIs are stubbed or partial.** Anything fundamentally native is bound as a warning-emitting no-op so imported packages still load, but does nothing: **Discord** Rich Presence, **IRC** client, OS `spawn`/subprocess, and the system dictionary. A few synchronous Mudlet calls (`invokeFileDialog`, `getImageSize`) don't map cleanly onto the browser's async pickers/loaders and are still in progress. See [`MUDLET_API.md`](./MUDLET_API.md) for the per-function status (✅ / ⚠️ / 🚧 / ❌).
+- **Some Mudlet APIs are stubbed or partial.** Anything fundamentally native is bound as a warning-emitting no-op so imported packages still load, but does nothing: **Discord** Rich Presence, **IRC** client, OS `spawn`/subprocess, and the system dictionary. A few synchronous Mudlet calls (`invokeFileDialog`, `getImageSize`) don't map cleanly onto the browser's async pickers/loaders and are still in progress. See [`MUDLET_API.md`](docs/MUDLET_API.md) for the per-function status (✅ / ⚠️ / 🚧 / ❌).
 - **The main window is the viewport.** Calls like `setMainWindowSize` are no-ops — the browser window is the main window.
 - **The Lua↔JS boundary has a per-call cost.** Each crossing between the Lua VM and JS is cheap individually but adds up — a script that makes thousands of tiny boundary calls in a tight loop (e.g. iterating every room in a large area one `getRoom*` call at a time) will feel noticeably slower than in native Mudlet. The hot paths you actually hit constantly (line/trigger processing, GMCP) are batched and stay fast; prefer bulk/batched APIs over per-item calls when you can.
 

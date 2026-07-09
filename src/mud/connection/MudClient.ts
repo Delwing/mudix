@@ -113,6 +113,10 @@ export interface MudClientOptions {
      *  only secures the browser↔proxy hop while the proxy↔MUD telnet socket is
      *  plaintext (see connectionSecureTransport). */
     secureTransport?: boolean;
+    /** Whether to advertise screen-reader use, reported as the MTTS SCREEN
+     *  READER bit and the NEW-ENVIRON `SCREEN_READER` capability
+     *  (`setConfig("advertiseScreenReader", …)`). Default false. */
+    screenReaderAdvertised?: boolean;
     /** Whether to negotiate NAWS / window size (telnet option 31). Default true
      *  (matching Mudlet). When true the client offers IAC WILL NAWS on connect
      *  and, once the server accepts (IAC DO NAWS), reports the main output
@@ -226,6 +230,7 @@ export class MudClient {
             mnesEnabled = false,
             newEnvironEnabled = false,
             secureTransport,
+            screenReaderAdvertised = false,
             nawsEnabled = true,
             fixUnnecessaryLinebreaks = false,
             subprotocols = [],
@@ -269,6 +274,7 @@ export class MudClient {
                 // correct for a direct websocket connection; proxy mode passes
                 // false explicitly.
                 secureTransport: secureTransport ?? /^wss:/i.test(url),
+                screenReaderAdvertised,
             },
             eventBus,
             {

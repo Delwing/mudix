@@ -188,6 +188,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     // ScreenReaderLog component reads the same key.
     const announceIncomingText = (config?.announceIncomingText as boolean | undefined) ?? true;
     const enableClosedCaption = (config?.enableClosedCaption as boolean | undefined) ?? false;
+    const advertiseScreenReader = (config?.advertiseScreenReader as boolean | undefined) ?? false;
     const rawCaretShortcut = config?.caretShortcut;
     const caretShortcut: CaretShortcut =
         rawCaretShortcut === 'tab' || rawCaretShortcut === 'ctrltab' || rawCaretShortcut === 'f6'
@@ -1105,10 +1106,24 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     onChange={next => patchConfig({ enableClosedCaption: next })}
                                 />
                             </div>
-                            <p className="settings-hint">
-                                Server advertisement of screen-reader use is coming as that
-                                feature lands.
-                            </p>
+                            <div className="settings-row">
+                                <span className="settings-label" id="advertise-screen-reader-label">
+                                    Advertise screen-reader use to the server
+                                    <HelpTip label="About advertising screen-reader use">
+                                        Report screen-reader use to the MUD via MTTS/NEW-ENVIRON
+                                        (Mudlet's <code>advertiseScreenReader</code>). Some MUDs
+                                        adjust their output when they see this — e.g. trimming
+                                        ASCII art or adding extra room-description detail. Off by
+                                        default; takes effect on the next connect.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="advertise-screen-reader"
+                                    aria-labelledby="advertise-screen-reader-label"
+                                    checked={advertiseScreenReader}
+                                    onChange={next => patchConfig({ advertiseScreenReader: next })}
+                                />
+                            </div>
                         </section>
                     )}
                     {activeTab === 'colors' && connectionId && (

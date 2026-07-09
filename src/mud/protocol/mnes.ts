@@ -130,6 +130,10 @@ export interface NewEnvironState {
     tls: boolean;
     /** Output window wrap column, or 0 when the grid hasn't been measured yet. */
     wrapColumns: number;
+    /** Whether the client is advertising screen-reader use (MTTS SCREEN READER
+     *  bit, NEW-ENVIRON SCREEN_READER var) — `setConfig("advertiseScreenReader", …)`.
+     *  Defaults to false (matching Mudlet's opt-in behaviour). */
+    screenReader?: boolean;
 }
 
 /** The five core variables MNES standardises (https://tintin.mudhalla.net/protocols/mnes/).
@@ -159,7 +163,7 @@ export function buildNewEnvironVars(
     state: NewEnvironState,
     extended: boolean,
 ): MnesVar[] {
-    const mtts = String(computeMtts({ utf8: state.utf8, tls: state.tls }));
+    const mtts = String(computeMtts({ utf8: state.utf8, tls: state.tls, screenReader: state.screenReader }));
     const core: MnesVar[] = [
         { name: "CHARSET", value: state.charset },
         { name: "CLIENT_NAME", value: CLIENT_NAME },
@@ -177,7 +181,7 @@ export function buildNewEnvironVars(
         { name: "TRUECOLOR", value: "1" },
         { name: "TLS", value: state.tls ? "1" : "0" },
         { name: "WORD_WRAP", value: String(state.wrapColumns) },
-        { name: "SCREEN_READER", value: "0" },
+        { name: "SCREEN_READER", value: state.screenReader ? "1" : "0" },
         { name: "OSC_COLOR_PALETTE", value: "1" },
         // OSC 8 hyperlinks. A flag reads "1" only once mudix actually honours
         // that part of Mudlet's OSC 8 extension; the rest stay "0" until the

@@ -86,6 +86,10 @@ real behaviour:
 | `showTabConnectionIndicators` | When `true` (default), prefixes the window/tab title with a connection-status dot (🟢/🟡/🔴). The profile name is always shown. mudix has no tab strip, so this lives in the title. | `ProfileSession` |
 | `fixUnnecessaryLinebreaks` | When `true` (default `false`) and the session is GA-driven, strips a single spurious leading newline from the start of each GA-terminated data block — Mudlet's "Fix unnecessary linebreaks on GA servers" (`mUSE_IRE_DRIVER_BUGFIX`, `cTelnet::gotPrompt`), for IRE-style servers that prepend a stray `<LF>` to every transmission. ANSI SGR escapes at the block start are skipped before the newline check. Forwarded to `MudClient.setFixUnnecessaryLinebreaks` via `MudSession`. **Deviation:** the very first transmission (before the first GA latches GA-driver mode) keeps its leading newline, since mudix emits whole lines eagerly and can't tell the session is GA-driven until that GA arrives. | `ProfileSession` → `MudSession` → `MudClient` |
 | `enableBlinkText` | When `true`, ANSI blink (SGR 5/6) renders as a smooth opacity pulse; when `false` (default — matching Mudlet) blinking text is shown in italics instead. `FormatState.toHtml` always emits the `ansi-slow-blink`/`ansi-rapid-blink` classes; the effect toggles a `blink-text-enabled` class on the document root, and `App.css` picks the pulse-vs-italic presentation from it (so it covers the main output, user windows, and mini-consoles alike). | `ProfileSession` → `<html>` class → `App.css` |
+| `announceIncomingText` | When `true` (default), mirrors MUD output to an off-screen `role="log" aria-live="polite"` region so a screen reader (NVDA, JAWS, VoiceOver, Orca) narrates each new line. | `ScreenReaderLog` |
+| `caretShortcut` | `'none'` (default) / `'tab'` / `'ctrltab'` / `'f6'`. The key that opens a keyboard-navigable, `role="document"` mirror of the scrollback (Mudlet's caret mode) for character/word/line screen-reader review; the same key (or `Esc`) returns to the command line. | `CaretReviewPanel` / `caretMode.ts` |
+| `enableClosedCaption` | When `true` (default `false`), prints a short text line in the output whenever a sound, music track, or video starts or stops (Mudlet's `TMedia::printClosedCaption` format), for users who can't hear game audio. | `ScriptingEngine` (fed by `SoundManager`/`VideoManager` lifecycle hooks) |
+| `advertiseScreenReader` | When `true` (default `false`), reports screen-reader use to the server via the MTTS SCREEN READER bit (TTYPE cycle) and the NEW-ENVIRON `SCREEN_READER` capability variable — some MUDs adjust output (e.g. trim ASCII art, add extra room-description detail) when this is set. Negotiation only runs at connect time, so a change takes effect on the **next connect** (like the protocol toggles in group 1). | `ProfileSession` → `MudSession` → `MudClient` → `TelnetNegotiator` → `computeMtts`/`buildNewEnvironVars` |
 
 ### 3. Persist-only — round-trips but **not yet enforced**
 
@@ -96,19 +100,18 @@ act on them yet**. Each needs a real feature behind it (see "Not implemented"
 below). String keys with an `enum` reject out-of-range writes (`setConfig`
 returns `false`).
 
-`advertiseScreenReader`, `ambiguousEAsianWidthCharacters` (`auto`/`wide`/`narrow`),
-`announceIncomingText`, `askTlsAvailable`,
-`caretShortcut` (`none`/`tab`/`ctrltab`/`f6`),
+`ambiguousEAsianWidthCharacters` (`auto`/`wide`/`narrow`), `askTlsAvailable`,
 `compactInputLine`, `controlCharacterHandling` (`asis`/`oem`/`picture`),
-`editorAutoComplete`, `enableClosedCaption`, `f3SearchEnabled`,
+`editorAutoComplete`, `f3SearchEnabled`,
 `inputLineStrictUnixEndings`, `logInHTML`,
 `promptForMXPProcessorOn`, `promptForVersionInTTYPE`, `show3dMapView`,
 `showRoomIdsOnMap`, `showUpperLowerLevels`,
 `specialForceGAOff`, `versionInTTYPE`.
 
 (`commandLineHistorySaveSize`, `showTabConnectionIndicators`,
-`fixUnnecessaryLinebreaks`, and `enableBlinkText` also live in the `config` bag
-but are now consumed by the UI — see group 2a.)
+`fixUnnecessaryLinebreaks`, `enableBlinkText`, `announceIncomingText`,
+`caretShortcut`, `enableClosedCaption`, and `advertiseScreenReader` also live in
+the `config` bag but are now consumed by the UI — see group 2a.)
 
 ### 4. Read-only
 
@@ -133,8 +136,6 @@ but are now consumed by the UI — see group 2a.)
 These round-trip through `get`/`set` but have no behavior yet. Promote them from
 group 3 to group 1/2 as the underlying feature lands:
 
-- **Accessibility:** `advertiseScreenReader`, `announceIncomingText`,
-  `enableClosedCaption`, `caretShortcut` (no caret-browse mode).
 - **Rendering:** `controlCharacterHandling`, `ambiguousEAsianWidthCharacters`.
 - **Input line / editor:** `compactInputLine`, `inputLineStrictUnixEndings`,
   `editorAutoComplete`, `f3SearchEnabled`.

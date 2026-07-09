@@ -140,6 +140,9 @@ const CONFIG_PERSIST_ONLY: Record<string, {
     default: boolean | number | string;
     enum?: readonly string[];
 }> = {
+    // Consumed by ProfileSession (fed into MudSession.setProtocolOptions →
+    // TelnetNegotiator's MTTS/NEW-ENVIRON SCREEN_READER reporting) on the next
+    // connect — see docs/config-api.md group 2a.
     advertiseScreenReader:          { type: 'bool', default: false },
     ambiguousEAsianWidthCharacters: { type: 'str',  default: 'auto', enum: ['auto', 'wide', 'narrow'] },
     // Default true, matching Mudlet's mAnnounceIncomingText: the off-screen

@@ -168,6 +168,20 @@ describe('buildNewEnvironVars', () => {
     expect(byName.get('OSC_HYPERLINKS_MENU')).toBe('1');
     expect(byName.get('OSC_HYPERLINKS_SPOILER')).toBe('1');
   });
+
+  it('reports SCREEN_READER and sets the MTTS bit when screenReader is advertised', () => {
+    const vars = buildNewEnvironVars({ ...state, screenReader: true }, true);
+    const byName = new Map(vars.map(v => [v.name, v.value]));
+    expect(byName.get('SCREEN_READER')).toBe('1');
+    // ANSI(1) + 256(8) + OSC_COLOR_PALETTE(32) + TRUECOLOR(256) + UTF8(4) + SSL(2048) + SCREEN_READER(64) = 2413.
+    expect(byName.get('MTTS')).toBe('2413');
+  });
+
+  it('defaults SCREEN_READER to "0" when screenReader is omitted', () => {
+    const vars = buildNewEnvironVars(state, true);
+    const byName = new Map(vars.map(v => [v.name, v.value]));
+    expect(byName.get('SCREEN_READER')).toBe('0');
+  });
 });
 
 describe('selectMnesVars', () => {
