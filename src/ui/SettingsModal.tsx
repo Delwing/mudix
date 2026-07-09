@@ -5,7 +5,7 @@ import { getThemeChoices } from '../branding';
 import { useModalFocus } from './components/useModalFocus';
 import { DEFAULT_ANSI_PALETTE } from '../mud/text/colors';
 import { DEFAULT_HISTORY_SAVE_SIZE, MAX_HISTORY } from './commandHistory';
-import type { ShowSentTextMode } from '../mud/MudSession';
+import type { ShowSentTextMode, ControlCharacterMode } from '../mud/MudSession';
 
 const SHOW_SENT_TEXT_OPTIONS: { value: ShowSentTextMode; label: string }[] = [
     { value: 'script', label: 'Let scripts decide' },
@@ -82,6 +82,12 @@ const CARET_SHORTCUT_OPTIONS: { value: CaretShortcut; label: string }[] = [
     { value: 'tab',     label: 'Tab' },
     { value: 'ctrltab', label: 'Ctrl+Tab' },
     { value: 'f6',      label: 'F6' },
+];
+
+const CONTROL_CHARACTER_OPTIONS: { value: ControlCharacterMode; label: string }[] = [
+    { value: 'asis',    label: 'Nothing' },
+    { value: 'picture', label: 'Unicode control pictures' },
+    { value: 'oem',     label: 'CP437 (OEM font)-like' },
 ];
 
 interface SettingsModalProps {
@@ -194,6 +200,11 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
         rawCaretShortcut === 'tab' || rawCaretShortcut === 'ctrltab' || rawCaretShortcut === 'f6'
             ? rawCaretShortcut
             : 'none';
+    const rawControlCharacterHandling = config?.controlCharacterHandling;
+    const controlCharacterHandling: ControlCharacterMode =
+        rawControlCharacterHandling === 'oem' || rawControlCharacterHandling === 'picture'
+            ? rawControlCharacterHandling
+            : 'asis';
     // showSentText is stored as a mode string; legacy profiles may hold a boolean
     // (false ≙ never, true/unset ≙ script).
     const rawShowSentText = config?.showSentText;
@@ -1083,6 +1094,32 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     onChange={e => patchConfig({ caretShortcut: e.target.value as CaretShortcut })}
                                 >
                                     {CARET_SHORTCUT_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="settings-row">
+                                <label className="settings-label" htmlFor="control-character-handling">
+                                    Display control characters as
+                                    <HelpTip label="About control character handling">
+                                        How raw control bytes (and tabs) from the MUD render in the
+                                        output (Mudlet's <code>controlCharacterHandling</code>).
+                                        <strong> Nothing</strong> shows them as-is (invisible, except
+                                        tabs still expand to the next tab stop).
+                                        <strong> Unicode control pictures</strong> shows each one as
+                                        its dedicated symbol (e.g. ␛ for Escape). <strong>CP437 (OEM
+                                        font)-like</strong> mimics an old DOS text window with
+                                        decorative glyphs (♥, ♦, ♪, …) instead — note tabs don't get
+                                        tab-stop spacing in this mode, matching Mudlet.
+                                    </HelpTip>
+                                </label>
+                                <select
+                                    id="control-character-handling"
+                                    className="settings-select"
+                                    value={controlCharacterHandling}
+                                    onChange={e => patchConfig({ controlCharacterHandling: e.target.value as ControlCharacterMode })}
+                                >
+                                    {CONTROL_CHARACTER_OPTIONS.map(opt => (
                                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                                     ))}
                                 </select>

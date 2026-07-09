@@ -14,7 +14,8 @@ import {
     type LinkStateStyle,
 } from "./hyperlinkConfig";
 import { applyVisibility } from "./hyperlinkVisibility";
-import { appendCells, cellsToHtml } from "./cellRender";
+import { appendCells, cellsToHtml, columnAfter } from "./cellRender";
+import { getControlCharacterMode } from "./controlCharacterMode";
 
 /** Apply OSC 4/104 palette operations to the global colour tables. Palette
  *  changes affect text parsed *after* this point — which is exactly document
@@ -1009,9 +1010,12 @@ export class AnsiAwareBuffer {
         let html = "";
 
         const escape = (s: string) => this.escapeHtml(s);
+        const mode = getControlCharacterMode();
+        let column = 0;
 
         for (const segment of this.segments) {
-            const escapedText = cellsToHtml(segment.text, escape);
+            const escapedText = cellsToHtml(segment.text, escape, column, mode);
+            column = columnAfter(segment.text, column, mode);
 
             if (!segment.state || isDefaultState(segment.state)) {
                 html += escapedText;
@@ -1099,18 +1103,20 @@ export class AnsiAwareBuffer {
         const onClickKeys = new Map<(ev: MouseEvent) => void, string>();
         let prevLinkKey: string | null = null;
         let currentInst = ''; // nav key of the in-progress adjacency run
+        const controlCharacterMode = getControlCharacterMode();
+        let column = 0;
 
         for (const segment of this.segments) {
             const state = segment.state;
 
             if (!state || isDefaultState(state)) {
                 prevLinkKey = null; // plain text breaks link-run adjacency
-                appendCells(fragment, segment.text);
+                column = appendCells(fragment, segment.text, column, controlCharacterMode);
                 continue;
             }
 
             const element = document.createElement('span');
-            appendCells(element, segment.text);
+            column = appendCells(element, segment.text, column, controlCharacterMode);
 
             const link = state.hyperlink;
             const linkStyle = link?.config?.style;

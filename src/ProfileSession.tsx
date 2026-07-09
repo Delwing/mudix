@@ -20,7 +20,7 @@ import { setBaseTitle, flashTitle, clearTitleFlash } from './utils/documentTitle
 import { getBrand, isBrandedMode } from './branding';
 import { getSessionCredentials, setSessionCredentials } from './utils/sessionCredentials';
 import { applyAnsiPalette, setServerRedefineColorsAllowed, resetAllPaletteColors } from './mud/text/colors';
-import type { MudSession } from './mud/MudSession';
+import type { MudSession, ControlCharacterMode } from './mud/MudSession';
 import type { FileDialogRequest } from './mud/events';
 import { replayFileName } from './mud/replay/replayFormat';
 import { FilePickerModal } from './ui/FilePickerModal';
@@ -169,6 +169,14 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // so it's on the session's options before autoConnect dials, and re-applied
     // live whenever the config bag changes.
     session.setFixUnnecessaryLinebreaks((profileConfig?.fixUnnecessaryLinebreaks as boolean | undefined) ?? false);
+    // Mudlet's `controlCharacterHandling` (config bag) — how control characters
+    // (and tabs) render across the console/text windows. Applied on every
+    // render like the flags above, so a Lua setConfig() or a Settings change
+    // takes effect immediately.
+    const rawControlCharacterHandling = profileConfig?.controlCharacterHandling;
+    const controlCharacterHandling: ControlCharacterMode =
+        rawControlCharacterHandling === 'oem' || rawControlCharacterHandling === 'picture' ? rawControlCharacterHandling : 'asis';
+    session.setControlCharacterMode(controlCharacterHandling);
 
     const { engineRef } = useEngines(session, true, connection, vfs);
 

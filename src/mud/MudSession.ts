@@ -15,8 +15,10 @@ import { parseReplay, replayDurationMs } from './replay/replayFormat';
 import { type MudClientEvents, type MudEvents, type SessionStatus } from './events';
 import type { Console } from './text/Console';
 import { mxpColor } from './text/colorParsers';
+import { setControlCharacterMode as setActiveControlCharacterMode, type ControlCharacterMode } from './text/controlCharacterMode';
 
 export type { SessionStatus, MudEvents } from './events';
+export type { ControlCharacterMode } from './text/controlCharacterMode';
 
 export type MudSessionOptions = Omit<MudClientOptions, 'url'>;
 
@@ -421,6 +423,13 @@ export class MudSession {
     setFixUnnecessaryLinebreaks(enabled: boolean): void {
         this.options.fixUnnecessaryLinebreaks = enabled;
         this.client?.setFixUnnecessaryLinebreaks(enabled);
+    }
+
+    /** Mudlet `setConfig("controlCharacterHandling", …)`. Applies immediately —
+     *  every console/text window re-renders control characters (and tab-stops)
+     *  under the new mode on their next paint. */
+    setControlCharacterMode(mode: ControlCharacterMode): void {
+        setActiveControlCharacterMode(mode);
     }
 
     /** Update the telnet protocol toggles applied on the next connect.

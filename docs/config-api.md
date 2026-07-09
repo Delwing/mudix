@@ -90,6 +90,7 @@ real behaviour:
 | `caretShortcut` | `'none'` (default) / `'tab'` / `'ctrltab'` / `'f6'`. The key that opens a keyboard-navigable, `role="document"` mirror of the scrollback (Mudlet's caret mode) for character/word/line screen-reader review; the same key (or `Esc`) returns to the command line. | `CaretReviewPanel` / `caretMode.ts` |
 | `enableClosedCaption` | When `true` (default `false`), prints a short text line in the output whenever a sound, music track, or video starts or stops (Mudlet's `TMedia::printClosedCaption` format), for users who can't hear game audio. | `ScriptingEngine` (fed by `SoundManager`/`VideoManager` lifecycle hooks) |
 | `advertiseScreenReader` | When `true` (default `false`), reports screen-reader use to the server via the MTTS SCREEN READER bit (TTYPE cycle) and the NEW-ENVIRON `SCREEN_READER` capability variable — some MUDs adjust output (e.g. trim ASCII art, add extra room-description detail) when this is set. Negotiation only runs at connect time, so a change takes effect on the **next connect** (like the protocol toggles in group 1). | `ProfileSession` → `MudSession` → `MudClient` → `TelnetNegotiator` → `computeMtts`/`buildNewEnvironVars` |
+| `controlCharacterHandling` | `'asis'` (default) / `'oem'` / `'picture'` — ported from Mudlet's `TTextEdit::replaceControlCharacterWith_Picture`/`_OEMFont`. `asis` renders control bytes invisibly (unchanged from before); `picture` maps codes 0-31/127 onto the Unicode Control Pictures block (e.g. ESC→␛); `oem` maps them onto CP437-style decorative glyphs (♥♦♣♠…). Tabs expand to the next 8-column tab stop in `asis`/`picture` (this also **fixes** a pre-existing bug where a raw tab rendered as an invisible zero-width box); `oem` mode does not tab-stop-expand, matching Mudlet. Applied on every render via a module-level mode (`src/mud/text/controlCharacterMode.ts`) kept in sync by `MudSession.setControlCharacterMode` — so it covers the main console, script/mini-console windows, and session logging alike. **Known gap:** a mode change repaints new output immediately but does not retroactively re-render already-displayed scrollback (Mudlet forces a full `refreshView()`; mudix has no equivalent bulk-repaint hook yet). | `ProfileSession` → `MudSession` → `FormatState`/`cellRender` |
 
 ### 3. Persist-only — round-trips but **not yet enforced**
 
@@ -101,7 +102,7 @@ below). String keys with an `enum` reject out-of-range writes (`setConfig`
 returns `false`).
 
 `ambiguousEAsianWidthCharacters` (`auto`/`wide`/`narrow`), `askTlsAvailable`,
-`compactInputLine`, `controlCharacterHandling` (`asis`/`oem`/`picture`),
+`compactInputLine`,
 `editorAutoComplete`, `f3SearchEnabled`,
 `inputLineStrictUnixEndings`, `logInHTML`,
 `promptForMXPProcessorOn`, `promptForVersionInTTYPE`, `show3dMapView`,
@@ -110,8 +111,9 @@ returns `false`).
 
 (`commandLineHistorySaveSize`, `showTabConnectionIndicators`,
 `fixUnnecessaryLinebreaks`, `enableBlinkText`, `announceIncomingText`,
-`caretShortcut`, `enableClosedCaption`, and `advertiseScreenReader` also live in
-the `config` bag but are now consumed by the UI — see group 2a.)
+`caretShortcut`, `enableClosedCaption`, `advertiseScreenReader`, and
+`controlCharacterHandling` also live in the `config` bag but are now consumed
+by the UI — see group 2a.)
 
 ### 4. Read-only
 
@@ -136,7 +138,7 @@ the `config` bag but are now consumed by the UI — see group 2a.)
 These round-trip through `get`/`set` but have no behavior yet. Promote them from
 group 3 to group 1/2 as the underlying feature lands:
 
-- **Rendering:** `controlCharacterHandling`, `ambiguousEAsianWidthCharacters`.
+- **Rendering:** `ambiguousEAsianWidthCharacters`.
 - **Input line / editor:** `compactInputLine`, `inputLineStrictUnixEndings`,
   `editorAutoComplete`, `f3SearchEnabled`.
 - **Telnet edge switches:** `askTlsAvailable`, `specialForceGAOff`,
