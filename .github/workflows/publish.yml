@@ -5,6 +5,13 @@
 # workflow filename (publish.yml). `id-token: write` lets npm CLI >= 11.5.1
 # exchange GitHub's OIDC token for a short-lived publish token; provenance
 # attestation is generated automatically, no `--provenance` flag needed.
+#
+# node-version is pinned to 24, not 22: every Node 22.x release bundles npm
+# 10.x (never >= 11.5.1, checked against nodejs.org/dist/index.json), so
+# trusted publishing needs a newer Node line. Node 24.5.0+ bundles a
+# compliant npm out of the box — self-upgrading via `npm install -g
+# npm@latest` was tried instead and broke (`Cannot find module 'sigstore'`,
+# npm's own bundled dependency going missing mid-upgrade on the runner).
 name: Publish to npm
 
 on:
@@ -23,12 +30,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
       - run: yarn install --frozen-lockfile
       - run: yarn test
-      # Trusted publishing needs npm CLI >= 11.5.1; Node 22's bundled npm can
-      # lag behind that, so upgrade explicitly rather than relying on it.
-      - run: npm install -g npm@latest
       # prepublishOnly runs build:lib, so dist-lib is always freshly built.
       - run: npm publish --access public
