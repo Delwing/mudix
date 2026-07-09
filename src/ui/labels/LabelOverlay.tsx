@@ -186,6 +186,18 @@ function Label({ l }: { l: LabelState }) {
         const url = l.backgroundImage.url.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
         style.backgroundImage = `url("${url}")`;
         style.backgroundRepeat = 'no-repeat';
+        // Mudlet's setBackgroundImage is QLabel::setPixmap() under the hood:
+        // the image paints at its native size, left-aligned and vertically
+        // centered (QLabel's default alignment), clipped by the label rather
+        // than scaled to fit it. CSS defaults to top-left, so pin vcenter
+        // explicitly. Raster images already have a CSS intrinsic size and
+        // render native-size automatically; `width`/`height` (SVGs resolved
+        // async — see backgroundImageSize.ts) forces the same for formats
+        // that would otherwise stretch to fill the label.
+        style.backgroundPosition = 'left center';
+        if (l.backgroundImage.width != null && l.backgroundImage.height != null) {
+            style.backgroundSize = `${l.backgroundImage.width}px ${l.backgroundImage.height}px`;
+        }
     }
 
     // Mudlet semantics (TLabel): the click callback fires on mouse PRESS

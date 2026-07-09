@@ -29,9 +29,14 @@ export interface LabelState {
     /** rgba 0..255 channels; alpha defaults to 255 when set via setBackgroundColor. */
     backgroundColor?: { r: number; g: number; b: number; a: number };
     /** Mudlet setBackgroundImage(labelName, imageLocation) — resolved CSS URL.
-     *  Labels have no `mode` (unlike consoles); always rendered as a centered
-     *  no-repeat background, matching Mudlet's QLabel default. */
-    backgroundImage?: { url: string };
+     *  Labels have no `mode` (unlike consoles): Mudlet just calls
+     *  `QLabel::setPixmap()`, which paints the image at its native pixel size
+     *  (no scaling), left-aligned and vertically centered, clipped to the
+     *  label's geometry. `width`/`height` are the image's resolved intrinsic
+     *  size (filled in asynchronously for SVGs, which otherwise have no CSS
+     *  intrinsic size — see backgroundImageSize.ts); until resolved, or for
+     *  formats CSS already sizes natively, they're left unset. */
+    backgroundImage?: { url: string; width?: number; height?: number };
     /** Qt-style CSS string set via setLabelStyleSheet; parsed at render time. */
     styleSheet?: string;
     /** Mudlet setLinkStyle(labelName, linkColor, linkVisitedColor, underline) —
@@ -265,6 +270,17 @@ export class LabelManager {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
         lbl.backgroundImage = { url };
+        this.notify(lbl.parent);
+        return true;
+    }
+
+    /** Fills in the intrinsic pixel size resolved asynchronously for `url`
+     *  (see backgroundImageSize.ts). No-ops if the label's image has since
+     *  changed away from `url` (stale resolution racing a newer call). */
+    setBackgroundImageSize(name: string, url: string, width: number, height: number): boolean {
+        const lbl = this.labels.get(name);
+        if (!lbl?.backgroundImage || lbl.backgroundImage.url !== url) return false;
+        lbl.backgroundImage = { url, width, height };
         this.notify(lbl.parent);
         return true;
     }

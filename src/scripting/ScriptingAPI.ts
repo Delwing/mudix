@@ -8,6 +8,7 @@ import { getBrand } from '../branding';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
 import { decodeGif, decodeAnimatedImage, sniffDecodableImage, supportsImageDecoder, MoviePlayer } from '../ui/labels/gifMovie';
+import { resolveSvgIntrinsicSize } from '../ui/labels/backgroundImageSize';
 import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
 import type { ScrollBoxManager } from '../ui/scrollbox/ScrollBoxManager';
 import { TextEditManager } from '../ui/textedit/TextEditManager';
@@ -4067,7 +4068,7 @@ export class ScriptingAPI {
             // path. Fall through to main when the name is literally "main"
             // (matches setBackgroundColor's special case), default mode 1.
             if (this.session.labels.has(a)) {
-                return this.session.labels.setBackgroundImage(a, this.resolveImageUrl(b));
+                return this.applyLabelBackgroundImage(a, b);
             }
             if (a === 'main') {
                 return this.applyBackgroundImage(undefined, b, 1);
@@ -4198,6 +4199,23 @@ export class ScriptingAPI {
      *  label; with autoscale it keeps tracking label resizes. */
     scaleMovie(name: string, autoscale: boolean): boolean {
         return this.session.labels.setMovieScale(name, autoscale);
+    }
+
+    /** Label form of setBackgroundImage — mirrors Mudlet's `pL->setPixmap()`,
+     *  which shows the image at its native pixel size rather than scaling it
+     *  to the label. CSS already does that for raster formats; SVGs without a
+     *  `width`/`height` have no CSS intrinsic size and get stretched, so once
+     *  the image loads we resolve its real size (viewBox fallback, matching
+     *  Qt's QSvgRenderer::defaultSize()) and patch it in. */
+    private applyLabelBackgroundImage(name: string, path: string): boolean {
+        const url = this.resolveImageUrl(path);
+        const ok = this.session.labels.setBackgroundImage(name, url);
+        if (ok) {
+            resolveSvgIntrinsicSize(url).then(size => {
+                if (size) this.session.labels.setBackgroundImageSize(name, url, size.width, size.height);
+            });
+        }
+        return ok;
     }
 
     private applyBackgroundImage(_target: undefined, path: string, mode: number): boolean {
