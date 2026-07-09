@@ -113,6 +113,10 @@ MudClient (WebSocket — direct or via telnet proxy)
 
 A deeper tour of the internals lives in [`CLAUDE.md`](./CLAUDE.md); the full Mudlet API implementation status is tracked in [`MUDLET_API.md`](docs/MUDLET_API.md).
 
+## 🏷️ Branded builds
+
+mudix is also published as an npm library (`@delwing/mudix`) for shipping a **white-label client for one specific MUD** — your own name, login screen, theme, toolbar, and bundled Lua packages, without forking the repo. See [`docs/BRANDED_BUILDS.md`](docs/BRANDED_BUILDS.md) for the setup guide, or [embervale-web](https://github.com/Delwing/embervale-web) for a live example.
+
 ## ⚠️ Limitations & known constraints
 
 mudix runs inside a browser sandbox, which trades some of Mudlet's native reach for zero-install portability. Worth knowing before you switch:
