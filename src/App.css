@@ -5,6 +5,39 @@
     padding: 0;
 }
 
+/* Bitstream Vera Sans Mono — bundled so the default look matches Mudlet's
+ * out-of-the-box console/label font instead of depending on what's installed
+ * on the host OS. See src/assets/fonts/bitstream-vera-sans-mono/COPYRIGHT.TXT
+ * for the (freely redistributable) license. */
+@font-face {
+    font-family: 'Bitstream Vera Sans Mono';
+    src: url('./assets/fonts/bitstream-vera-sans-mono/VeraMono.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Bitstream Vera Sans Mono';
+    src: url('./assets/fonts/bitstream-vera-sans-mono/VeraMoBd.ttf') format('truetype');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Bitstream Vera Sans Mono';
+    src: url('./assets/fonts/bitstream-vera-sans-mono/VeraMoIt.ttf') format('truetype');
+    font-weight: 400;
+    font-style: italic;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Bitstream Vera Sans Mono';
+    src: url('./assets/fonts/bitstream-vera-sans-mono/VeraMoBI.ttf') format('truetype');
+    font-weight: 700;
+    font-style: italic;
+    font-display: swap;
+}
+
 :root {
     color-scheme: dark;
 
@@ -39,7 +72,7 @@
     --shadow-button-hover: 0 4px 16px rgba(0, 0, 0, 0.5);
 
     /* ── Non-themed tokens ── */
-    --font-mono:    'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace;
+    --font-mono:    'Bitstream Vera Sans Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace;
     --font-ui:      system-ui, -apple-system, sans-serif;
     --dim-start:    1;
     --dim-end:      0;

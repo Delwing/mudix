@@ -1,3 +1,5 @@
+import { OverlayLayerOrder } from '../layout/overlayLayerOrder';
+
 export interface CmdLineCreateOptions {
     /** Parent window id ('main' for the main viewport). */
     parent?: string;
@@ -60,6 +62,11 @@ export class CommandLineManager {
     private nextRaiseZ = 1000;
     private nextLowerZ = -1;
 
+    // Public so CommandLineOverlay (and other overlay components sharing this
+    // registry via the other managers) can read/subscribe to the wrapper
+    // layer's z-index — see overlayLayerOrder.ts.
+    constructor(readonly overlayZ: OverlayLayerOrder = new OverlayLayerOrder()) {}
+
     /** Mudlet createCommandLine(name, x, y, w, h) — false when a cmd line with
      *  that name already exists. */
     create(name: string, opts: CmdLineCreateOptions): boolean {
@@ -75,6 +82,7 @@ export class CommandLineManager {
             enabled: true,
             action: null,
         });
+        this.overlayZ.touch(parent, 'cmdlines');
         this.notify(parent);
         return true;
     }
@@ -117,6 +125,7 @@ export class CommandLineManager {
         if (cl.parent !== parent) {
             const old = cl.parent;
             cl.parent = parent;
+            this.overlayZ.touch(parent, 'cmdlines');
             this.notify(old);
             this.notify(parent);
         }
@@ -141,6 +150,7 @@ export class CommandLineManager {
         const cl = this.cmdLines.get(name);
         if (!cl) return false;
         cl.zIndex = this.nextRaiseZ++;
+        this.overlayZ.touch(cl.parent, 'cmdlines');
         this.notify(cl.parent);
         return true;
     }
@@ -149,6 +159,7 @@ export class CommandLineManager {
         const cl = this.cmdLines.get(name);
         if (!cl) return false;
         cl.zIndex = this.nextLowerZ--;
+        this.overlayZ.touch(cl.parent, 'cmdlines');
         this.notify(cl.parent);
         return true;
     }

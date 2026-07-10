@@ -3,6 +3,7 @@ import { WindowManager } from '../ui/windows/WindowManager';
 import { LabelManager } from '../ui/labels/LabelManager';
 import { CommandLineManager } from '../ui/cmdline/CommandLineManager';
 import { ScrollBoxManager } from '../ui/scrollbox/ScrollBoxManager';
+import { OverlayLayerOrder } from '../ui/layout/overlayLayerOrder';
 import { SoundManager } from '../ui/sound/SoundManager';
 import { VideoManager } from '../ui/video/VideoManager';
 import { CmdLineMenuRegistry } from '../ui/CmdLineMenuRegistry';
@@ -51,10 +52,13 @@ export interface ScriptLogEntry {
 
 export class MudSession {
     readonly events = new EventBus<MudEvents>();
-    readonly windows = new WindowManager();
-    readonly labels = new LabelManager();
-    readonly cmdLines = new CommandLineManager();
-    readonly scrollBoxes = new ScrollBoxManager();
+    // Shared z-order across nested windows/the embedded mapper, labels,
+    // command lines, and scroll boxes — see overlayLayerOrder.ts.
+    private readonly overlayLayerOrder = new OverlayLayerOrder();
+    readonly windows = new WindowManager(this.overlayLayerOrder);
+    readonly labels = new LabelManager(this.overlayLayerOrder);
+    readonly cmdLines = new CommandLineManager(this.overlayLayerOrder);
+    readonly scrollBoxes = new ScrollBoxManager(this.overlayLayerOrder);
     readonly sounds = new SoundManager();
     readonly videos = new VideoManager();
     readonly cmdLineMenu = new CmdLineMenuRegistry();

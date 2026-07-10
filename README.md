@@ -141,6 +141,8 @@ mudix is licensed under the **GNU General Public License, version 2 or (at your 
 
 Lua scripts and packages that mudix merely *runs* (your profile scripts, installed `.mpackage`s, branded-build packages) are separate works and are not required to be GPL — the same way the Mudlet ecosystem treats its packages.
 
+mudix also bundles **Bitstream Vera Sans Mono** (`src/assets/fonts/bitstream-vera-sans-mono/`) as the default console output and command-line font, matching Mudlet's own default console typeface. It's under the separate, permissive [Bitstream Vera license](src/assets/fonts/bitstream-vera-sans-mono/COPYRIGHT.TXT) (free redistribution and embedding; just don't sell the font standalone or rename a modified copy while keeping "Bitstream"/"Vera" in the name).
+
 <div align="center">
 <sub>Built with React, TypeScript, and a lot of WebAssembly. Happy MUDding. 🐉</sub>
 </div>

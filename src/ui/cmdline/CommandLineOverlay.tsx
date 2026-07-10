@@ -12,9 +12,15 @@ interface CommandLineOverlayProps {
 export function CommandLineOverlay({ manager, parent }: CommandLineOverlayProps) {
     const [cmdLines, setCmdLines] = useState<CmdLineState[]>(() => manager.list(parent));
     useEffect(() => manager.subscribe(parent, setCmdLines), [manager, parent]);
+    // The wrapper's z-index is shared with this parent's nested windows /
+    // labels / scroll boxes (see overlayLayerOrder.ts) instead of a fixed
+    // CSS band, so raiseWindow/lowerWindow on any of them can genuinely
+    // interleave, matching Mudlet's single Qt widget stack.
+    const [zIndex, setZIndex] = useState(() => manager.overlayZ.getZ(parent, 'cmdlines'));
+    useEffect(() => manager.overlayZ.subscribe(parent, () => setZIndex(manager.overlayZ.getZ(parent, 'cmdlines'))), [manager, parent]);
     if (cmdLines.length === 0) return null;
     return (
-        <div className="cmdline-overlay">
+        <div className="cmdline-overlay" style={{ zIndex }}>
             {cmdLines.map(c => <CommandLine key={c.name} c={c} manager={manager} />)}
         </div>
     );

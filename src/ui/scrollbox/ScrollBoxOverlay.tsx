@@ -53,6 +53,11 @@ function ScrollBox({ sb, manager, labels, cmdLines }: { sb: ScrollBoxState; mana
     useEffect(() => labels.subscribe(sb.name, setChildLabels), [labels, sb.name]);
     useEffect(() => cmdLines.subscribe(sb.name, setChildCmdLines), [cmdLines, sb.name]);
     useEffect(() => manager.subscribe(sb.name, setChildBoxes), [manager, sb.name]);
+    // Re-render when this box's shared layer rank changes (see
+    // overlayLayerOrder.ts) — e.g. a sibling label on the same parent gets
+    // raised, which should shift this box's default z-index too.
+    const [, setLayerTick] = useState(0);
+    useEffect(() => manager.overlayZ.subscribe(sb.parent, () => setLayerTick(t => t + 1)), [manager, sb.parent]);
 
     if (!sb.visible) return null;
 
@@ -67,7 +72,11 @@ function ScrollBox({ sb, manager, labels, cmdLines }: { sb: ScrollBoxState; mana
     const overflowsY = maxBottom > sb.height;
     const style: React.CSSProperties = {
         left: sb.x, top: sb.y, width: sb.width, height: sb.height,
-        zIndex: sb.zIndex,
+        // Falls back to the shared per-parent layer rank (see
+        // overlayLayerOrder.ts) when this specific box was never explicitly
+        // raised/lowered, so it stays comparable with sibling labels / nested
+        // windows / cmd lines instead of a fixed CSS band.
+        zIndex: sb.zIndex ?? manager.overlayZ.getZ(sb.parent, 'scrollboxes'),
         // Only scroll an axis whose children actually overflow — otherwise a
         // box that fits its content must show NO scrollbar (and not have its
         // content squeezed by a scrollbar that shouldn't be there).

@@ -1,5 +1,6 @@
 import { cssEscape, patchStyleSheetBackgroundColor } from './qtCss';
 import type { MoviePlayer } from './gifMovie';
+import { OverlayLayerOrder } from '../layout/overlayLayerOrder';
 
 export interface LabelCreateOptions {
     /** Parent window id ('main' for main viewport). Defaults to 'main'. */
@@ -110,6 +111,11 @@ export class LabelManager {
     private nextRaiseZ = 1000;
     private nextLowerZ = -1;
 
+    // Public so LabelOverlay (and other overlay components sharing this
+    // registry via the other managers) can read/subscribe to the wrapper
+    // layer's z-index — see overlayLayerOrder.ts.
+    constructor(readonly overlayZ: OverlayLayerOrder = new OverlayLayerOrder()) {}
+
     /** Returns true if a new label was created. Mudlet's createLabel returns
      *  false when a label with the same name already exists. */
     create(name: string, opts: LabelCreateOptions): boolean {
@@ -125,6 +131,7 @@ export class LabelManager {
             html: '',
         };
         this.labels.set(name, state);
+        this.overlayZ.touch(parent, 'labels');
         this.notify(parent);
         return true;
     }
@@ -176,6 +183,7 @@ export class LabelManager {
         if (lbl.parent !== parent) {
             const old = lbl.parent;
             lbl.parent = parent;
+            this.overlayZ.touch(parent, 'labels');
             this.notify(old);
             this.notify(parent);
         }
@@ -426,6 +434,7 @@ export class LabelManager {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
         lbl.zIndex = this.nextRaiseZ++;
+        this.overlayZ.touch(lbl.parent, 'labels');
         this.notify(lbl.parent);
         return true;
     }
@@ -434,6 +443,7 @@ export class LabelManager {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
         lbl.zIndex = this.nextLowerZ--;
+        this.overlayZ.touch(lbl.parent, 'labels');
         this.notify(lbl.parent);
         return true;
     }

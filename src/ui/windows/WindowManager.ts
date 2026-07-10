@@ -8,6 +8,7 @@ import { saveMap as saveMapToStorage, loadMap as loadMapFromStorage } from '../.
 import { readMapFromBuffer, writeMapToBuffer } from 'mudlet-map-binary-reader';
 import { parseMapInWorker, serializeMapInWorker } from '../../map/mapParserClient';
 import { Buffer } from 'buffer';
+import { OverlayLayerOrder } from '../layout/overlayLayerOrder';
 
 interface ScriptWindowData extends ScriptWindowRenderData {
     pendingText: Array<string | AnsiAwareBuffer>;
@@ -144,6 +145,28 @@ export class WindowManager {
     private nextZ       = 10;
     private nextDockOrder = 0;
     private readonly dockExtents: Record<DockSide, number> = { ...DEFAULT_DOCK_EXTENTS };
+
+    // Public so FloatingWindowLayer (and other overlay components sharing this
+    // registry via the other managers) can read/subscribe to the nested
+    // wrapper layer's z-index — see overlayLayerOrder.ts.
+    constructor(readonly overlayZ: OverlayLayerOrder = new OverlayLayerOrder()) {}
+
+    /** Resolves the same "nested under which parent" id FloatingWindowLayer's
+     *  resolveParent uses: an explicit non-'main' parent, else 'main' when this
+     *  is a mini-console (createMiniConsole/createMapper without an explicit
+     *  parent still nests under the main viewport), else null for a genuine
+     *  root floating window — which shares no stacking context with any
+     *  parent's labels, so there's nothing to touch. */
+    private overlayParentId(win: Pick<ScriptWindowData, 'id' | 'parent'>): string | null {
+        if (win.parent && win.parent !== 'main') return win.parent;
+        if (this.miniConsoles.has(win.id)) return 'main';
+        return null;
+    }
+
+    private touchOverlayWindows(win: Pick<ScriptWindowData, 'id' | 'parent'>): void {
+        const parentId = this.overlayParentId(win);
+        if (parentId) this.overlayZ.touch(parentId, 'windows');
+    }
 
     onWindowsChange?:     WindowsChangedFn;
     onWindowHint?:        (id: string, hint: WindowOpenOptions) => void;
@@ -1022,7 +1045,14 @@ export class WindowManager {
     }
 
     markAsMiniConsole(id: string): void {
-        if (this.windows.has(id)) this.miniConsoles.add(id);
+        const win = this.windows.get(id);
+        if (!win) return;
+        this.miniConsoles.add(id);
+        // A freshly-marked mini-console (createMiniConsole/createMapper without
+        // an explicit parent) nests under the main viewport for the first time
+        // here — open() ran before this call could see isMiniConsole()==true,
+        // so the initial overlayParentId() resolution missed it.
+        this.touchOverlayWindows(win);
     }
 
     isMiniConsole(id: string): boolean {
@@ -1053,6 +1083,7 @@ export class WindowManager {
         if (!win) return false;
         if (win.parent !== parent) {
             win.parent = parent;
+            this.touchOverlayWindows(win);
             this.notify();
         }
         return true;
@@ -1423,6 +1454,7 @@ export class WindowManager {
         const win = this.windows.get(id);
         if (!win) return;
         win.zIndex = ++this.nextZ;
+        this.touchOverlayWindows(win);
         this.notify();
     }
 
@@ -1435,6 +1467,7 @@ export class WindowManager {
         let min = Infinity;
         for (const w of this.windows.values()) if (w.id !== id && w.zIndex < min) min = w.zIndex;
         win.zIndex = (Number.isFinite(min) ? min : 10) - 1;
+        this.touchOverlayWindows(win);
         this.notify();
     }
 
@@ -1662,6 +1695,7 @@ export class WindowManager {
             if (options.title) existing.title = options.title;
             existing.visible = true;
             existing.zIndex  = ++this.nextZ;
+            this.touchOverlayWindows(existing);
             this.notify();
             if (existing.kind === 'map') this.onMapOpen?.(id);
             return this.makeHandle(id);
@@ -1751,6 +1785,7 @@ export class WindowManager {
         };
 
         this.windows.set(id, win);
+        this.touchOverlayWindows(win);
         this.windowHints[id] = {
             ...this.windowHints[id],
             kind:     win.kind,

@@ -45,9 +45,13 @@ async function handle(event, url) {
 
     const headers = new Headers();
     headers.set('Content-Type', reply.contentType || 'application/octet-stream');
-    // Force a revalidation each navigation; the in-memory cache here is the
-    // primary speedup and is invalidated on writes via postMessage.
-    headers.set('Cache-Control', 'private, max-age=0, must-revalidate');
+    // no-store keeps this response out of the browser's own HTTP cache, which
+    // has no validator to revalidate against (we set none) and would otherwise
+    // race our explicit Cache Storage entry above — that race is what produced
+    // stale 304-with-no-body responses for cached images. The Cache Storage
+    // entry (invalidated on writes via postMessage) is the only cache that
+    // should own this decision.
+    headers.set('Cache-Control', 'no-store');
     const response = new Response(reply.bytes, { headers });
     cache.put(event.request, response.clone()).catch(() => {});
     return response;

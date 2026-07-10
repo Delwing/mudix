@@ -63,9 +63,15 @@ interface LabelOverlayProps {
 export function LabelOverlay({ manager, parent }: LabelOverlayProps) {
     const [labels, setLabels] = useState<LabelState[]>(() => manager.list(parent));
     useEffect(() => manager.subscribe(parent, setLabels), [manager, parent]);
+    // The wrapper's z-index is shared with this parent's nested windows /
+    // cmd lines / scroll boxes (see overlayLayerOrder.ts) instead of a fixed
+    // CSS band, so raiseWindow/lowerWindow on any of them can genuinely
+    // interleave, matching Mudlet's single Qt widget stack.
+    const [zIndex, setZIndex] = useState(() => manager.overlayZ.getZ(parent, 'labels'));
+    useEffect(() => manager.overlayZ.subscribe(parent, () => setZIndex(manager.overlayZ.getZ(parent, 'labels'))), [manager, parent]);
     if (labels.length === 0) return null;
     return (
-        <div className="label-overlay">
+        <div className="label-overlay" style={{ zIndex }}>
             {labels.map(l => <Label key={l.name} l={l} />)}
         </div>
     );

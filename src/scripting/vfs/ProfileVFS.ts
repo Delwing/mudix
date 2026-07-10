@@ -20,6 +20,7 @@ import {
 } from '@zenfs/core';
 import { IndexedDB, WebAccess } from '@zenfs/dom';
 import { checkFolderPermission, loadFolderHandle } from './folderHandleStore';
+import { invalidateVfsPath } from './vfsBridge';
 
 let rootReady: Promise<void> | null = null;
 
@@ -165,6 +166,7 @@ export class ProfileVFS {
         ensureParentDir(abs);
         this.clearForOverwrite(abs);
         writeFileSync(abs, content, 'utf8');
+        this.invalidate(abs);
     }
 
     writeBinaryFile(path: string, data: Uint8Array): void {
@@ -172,6 +174,7 @@ export class ProfileVFS {
         ensureParentDir(abs);
         this.clearForOverwrite(abs);
         writeFileSync(abs, data);
+        this.invalidate(abs);
     }
 
     /**
@@ -191,16 +194,22 @@ export class ProfileVFS {
         const abs = this.resolvePath(path);
         ensureParentDir(abs);
         appendFileSync(abs, content, 'utf8');
+        this.invalidate(abs);
     }
 
     deleteFile(path: string): void {
-        unlinkSync(this.resolvePath(path));
+        const abs = this.resolvePath(path);
+        unlinkSync(abs);
+        this.invalidate(abs);
     }
 
     rename(oldPath: string, newPath: string): void {
+        const absOld = this.resolvePath(oldPath);
         const absNew = this.resolvePath(newPath);
         ensureParentDir(absNew);
-        renameSync(this.resolvePath(oldPath), absNew);
+        renameSync(absOld, absNew);
+        this.invalidate(absOld);
+        this.invalidate(absNew);
     }
 
     mkdir(path: string): void {
@@ -269,6 +278,16 @@ export class ProfileVFS {
         const fs = disableAtime(await resolveMountConfig({ backend: WebAccess, handle: this._handle }) as Syncable);
         mount(this.profilePath, fs);
         this._fs = fs;
+        // We don't know which files changed on disk — drop everything cached
+        // for this connection rather than serving stale bytes for some of them.
+        invalidateVfsPath(this.connectionId, '');
+    }
+
+    /** Tell the VFS service worker to drop its cached copy of a file, keyed
+     *  by its path relative to the profile root (matches vfsUrlFor's scheme). */
+    private invalidate(abs: string): void {
+        const rel = abs.startsWith(`${this.profilePath}/`) ? abs.slice(this.profilePath.length + 1) : abs;
+        invalidateVfsPath(this.connectionId, rel);
     }
 
     unmount(): void {

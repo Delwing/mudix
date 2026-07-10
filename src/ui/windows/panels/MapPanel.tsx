@@ -22,6 +22,12 @@ function applyMapperSettings(target: MapRendererSettings, mapper: MapperSettings
     // window showed the page/window through it. A user-picked colour in the
     // Mapper tab still wins.
     target.backgroundColor = mapper?.backgroundColor ?? '#000000';
+    // Mudlet always draws room symbols (and, in mudix, the area-name header)
+    // with its bundled "Bitstream Vera Sans Mono" (TMap.h: mMapSymbolFont) —
+    // never the profile's console font. The renderer's own default is a
+    // generic 'sans-serif', which picks a different glyph shape per-OS for
+    // Unicode room-symbol characters. Match Mudlet's fixed choice instead.
+    target.fontFamily = "'Bitstream Vera Sans Mono', sans-serif";
     if (!mapper) return;
     if (mapper.roomSize !== undefined) target.roomSize = mapper.roomSize;
     if (mapper.roomShape !== undefined) target.roomShape = mapper.roomShape;
@@ -1385,7 +1391,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                     </label>
                 </div>
             )}
-            {contextMenu && (
+            {contextMenu && createPortal(
                 <MapContextMenu
                     x={contextMenu.x}
                     y={contextMenu.y}
@@ -1418,7 +1424,8 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                         manager.mapStore.dispatchMapEvent(uniqueName, contextMenu.roomId);
                         setContextMenu(null);
                     }}
-                />
+                />,
+                document.body,
             )}
             {editorOpen && (
                 <MapEditorModal

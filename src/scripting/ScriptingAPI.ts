@@ -211,7 +211,7 @@ function measureColumnCapacity(el: HTMLElement | null): number {
 
 // Default monospace stack used by the output panels — mirrors --font-mono in
 // App.css. Used as the fallback family when the profile has no outputFont set.
-const DEFAULT_MONO_STACK = `'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace`;
+const DEFAULT_MONO_STACK = `'Bitstream Vera Sans Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace`;
 
 // Mudlet's getMousePosition() returns the cursor position relative to the
 // main console widget. There's no equivalent of QCursor::pos() on the web —

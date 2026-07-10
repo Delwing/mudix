@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { DragState, ScriptWindowRenderData } from '../windows/types';
 import type { WindowManager } from '../windows/WindowManager';
@@ -69,6 +70,20 @@ export function FloatingWindowLayer({ windows, manager, onDragStateChange, onTit
         }
     }
 
+    // The nested wrapper's z-index is shared with its parent's labels / cmd
+    // lines / scroll boxes (see overlayLayerOrder.ts) so an embedded mapper
+    // or mini-console can out-rank a sibling label — e.g. via Geyser's
+    // raiseWindow("mapper") — instead of always painting beneath it. Re-render
+    // when any currently-nested parent's order changes.
+    const nestedParentIds = [...nestedByParent.keys()];
+    const [, setTick] = useState(0);
+    useEffect(() => {
+        if (nestedParentIds.length === 0) return;
+        const unsubs = nestedParentIds.map(id => manager.overlayZ.subscribe(id, () => setTick(t => t + 1)));
+        return () => { for (const u of unsubs) u(); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [manager, nestedParentIds.join(',')]);
+
     return (
         <>
             {createPortal(
@@ -82,7 +97,10 @@ export function FloatingWindowLayer({ windows, manager, onDragStateChange, onTit
                     ? manager.getMainViewportElement()!
                     : manager.getViewport(parent)!;
                 return createPortal(
-                    <div className="floating-window-root floating-window-root--nested">
+                    <div
+                        className="floating-window-root floating-window-root--nested"
+                        style={{ zIndex: manager.overlayZ.getZ(parent, 'windows') }}
+                    >
                         {list.map(renderWindow)}
                     </div>,
                     target,

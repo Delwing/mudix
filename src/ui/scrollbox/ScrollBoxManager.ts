@@ -1,3 +1,5 @@
+import { OverlayLayerOrder } from '../layout/overlayLayerOrder';
+
 export interface ScrollBoxCreateOptions {
     /** Parent window id ('main' for the main viewport, or a userwindow / another
      *  scroll box name for nesting). */
@@ -46,6 +48,11 @@ export class ScrollBoxManager {
     private nextRaiseZ = 1000;
     private nextLowerZ = -1;
 
+    // Public so ScrollBoxOverlay (and other overlay components sharing this
+    // registry via the other managers) can read/subscribe to the wrapper
+    // layer's z-index — see overlayLayerOrder.ts.
+    constructor(readonly overlayZ: OverlayLayerOrder = new OverlayLayerOrder()) {}
+
     /** Mudlet createScrollBox([parent,] name, x, y, w, h) — false when a scroll
      *  box with that name already exists. */
     create(name: string, opts: ScrollBoxCreateOptions): boolean {
@@ -57,6 +64,7 @@ export class ScrollBoxManager {
             width: safeCoord(opts.width), height: safeCoord(opts.height),
             visible: true,
         });
+        this.overlayZ.touch(parent, 'scrollboxes');
         this.notify(parent);
         return true;
     }
@@ -102,6 +110,7 @@ export class ScrollBoxManager {
         if (sb.parent !== parent) {
             const old = sb.parent;
             sb.parent = parent;
+            this.overlayZ.touch(parent, 'scrollboxes');
             this.notify(old);
             this.notify(parent);
         }
@@ -126,6 +135,7 @@ export class ScrollBoxManager {
         const sb = this.boxes.get(name);
         if (!sb) return false;
         sb.zIndex = this.nextRaiseZ++;
+        this.overlayZ.touch(sb.parent, 'scrollboxes');
         this.notify(sb.parent);
         return true;
     }
@@ -134,6 +144,7 @@ export class ScrollBoxManager {
         const sb = this.boxes.get(name);
         if (!sb) return false;
         sb.zIndex = this.nextLowerZ--;
+        this.overlayZ.touch(sb.parent, 'scrollboxes');
         this.notify(sb.parent);
         return true;
     }
