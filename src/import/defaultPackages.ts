@@ -42,8 +42,16 @@ const DEFAULTS: DefaultPackage[] = [
  *
  * Failures are logged and swallowed: a broken default must never block the
  * profile from opening.
+ *
+ * Returns the manifest names that were actually (re)installed this call — a
+ * fresh install into a profile that never had the package, or a version-bump
+ * reinstall. The caller raises sysInstallPackage for each of these once the
+ * runtime has loaded far enough for the package's own handlers to be
+ * registered; a package whose scripts gate one-time setup on that event
+ * (rather than the every-open sysLoadEvent) needs it fired here, since these
+ * installs never go through the normal installPackageFromVfsPath path.
  */
-export async function ensureDefaultPackages(connectionId: string, vfs: ProfileVFS): Promise<void> {
+export async function ensureDefaultPackages(connectionId: string, vfs: ProfileVFS): Promise<string[]> {
     const state = useAppStore.getState();
     const installedPackages = state.connectionPackages[connectionId] ?? [];
     const removedByUser = new Set(state.connectionProfile[connectionId]?.uninstalledPackages ?? []);
@@ -55,7 +63,7 @@ export async function ensureDefaultPackages(connectionId: string, vfs: ProfileVF
         ...(brand.stockPackages === false ? [] : DEFAULTS),
         ...(brand.packages ?? []),
     ];
-    let installedAny = false;
+    const installed: string[] = [];
     for (const def of defaults) {
         const current = installedPackages.find(p => p.name === def.name);
         // Installed and current (no declared version, or versions match) —
@@ -69,10 +77,11 @@ export async function ensureDefaultPackages(connectionId: string, vfs: ProfileVF
             const buf = new Uint8Array(await res.arrayBuffer());
             const { manifest, data } = installPackageFromBytes(def.filename, buf, vfs);
             useAppStore.getState().installPackage(connectionId, manifest, data);
-            installedAny = true;
+            installed.push(manifest.name);
         } catch (err) {
             console.warn(`[default-packages] failed to install ${def.name}:`, err);
         }
     }
-    if (installedAny) await vfs.flush();
+    if (installed.length) await vfs.flush();
+    return installed;
 }

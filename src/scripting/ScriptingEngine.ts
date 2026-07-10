@@ -384,9 +384,12 @@ export class ScriptingEngine {
             // Idempotent: skips packages already in the store, so existing profiles
             // also pick up newly-added defaults on next open. Runs before
             // applyScriptsFromStore so the alias/script nodes participate in the
-            // very first runtime load.
+            // very first runtime load. Freshly-(re)installed names are remembered so
+            // sysInstallPackage can be raised for them below, once their own
+            // handlers are registered.
+            let freshlyInstalledPackages: string[] = [];
             if (this.vfs) {
-                await ensureDefaultPackages(this.connectionId, this.vfs);
+                freshlyInstalledPackages = await ensureDefaultPackages(this.connectionId, this.vfs);
             }
 
             // Modules are loaded from disk on every profile open — XML on disk is the
@@ -410,6 +413,12 @@ export class ScriptingEngine {
             this.applyTimersFromStore();
             this.applyKeybindingsFromStore();
             this.warnBrowserReservedKeybindings();
+            // Default/brand packages installed just above never go through
+            // installPackageFromVfsPath, so notifyPackageInstalled was never called
+            // for them — fire it now that their own scripts are loaded (just above)
+            // and can see it. Comes before sysLoadEvent, matching a package install
+            // preceding a profile's connect/load in real usage.
+            for (const name of freshlyInstalledPackages) this.notifyPackageInstalled(name);
             // sysLoadEvent fires once after the initial script load.
             // sysMapLoadEvent follows when a persisted map was ingested, so
             // scripts can register a sysMapLoadEvent handler during sysLoadEvent
