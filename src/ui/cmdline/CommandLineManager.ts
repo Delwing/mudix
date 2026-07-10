@@ -28,8 +28,6 @@ export interface CmdLineState {
     /** Raw Qt-style CSS string from setCmdLineStyleSheet. Translated to scoped
      *  CSS at render time via {@link cmdLineQssToScopedCss}. */
     styleSheet?: string;
-    /** z-index — bumped by raiseWindow/lowerWindow. */
-    zIndex?: number;
     /** Lua-side Enter handler. Plain field; not part of the React snapshot. */
     action: ((text: string) => void) | null;
 }
@@ -59,8 +57,6 @@ export class CommandLineManager {
     /** Per-cmdline imperative control registered by the React mount —
      *  selectAll() drives <input>.select() (Mudlet selectCmdLineText). */
     private readonly controls = new Map<string, { selectAll: () => void }>();
-    private nextRaiseZ = 1000;
-    private nextLowerZ = -1;
 
     // Public so CommandLineOverlay (and other overlay components sharing this
     // registry via the other managers) can read/subscribe to the wrapper
@@ -82,7 +78,7 @@ export class CommandLineManager {
             enabled: true,
             action: null,
         });
-        this.overlayZ.touch(parent, 'cmdlines');
+        this.overlayZ.touch(parent, 'cmdlines', name);
         this.notify(parent);
         return true;
     }
@@ -97,6 +93,7 @@ export class CommandLineManager {
         this.cmdLines.delete(name);
         this.valueProbes.delete(name);
         this.controls.delete(name);
+        this.overlayZ.forget(cl.parent, 'cmdlines', name);
         this.notify(cl.parent);
         return true;
     }
@@ -125,7 +122,8 @@ export class CommandLineManager {
         if (cl.parent !== parent) {
             const old = cl.parent;
             cl.parent = parent;
-            this.overlayZ.touch(parent, 'cmdlines');
+            this.overlayZ.forget(old, 'cmdlines', name);
+            this.overlayZ.touch(parent, 'cmdlines', name);
             this.notify(old);
             this.notify(parent);
         }
@@ -149,8 +147,7 @@ export class CommandLineManager {
     raise(name: string): boolean {
         const cl = this.cmdLines.get(name);
         if (!cl) return false;
-        cl.zIndex = this.nextRaiseZ++;
-        this.overlayZ.touch(cl.parent, 'cmdlines');
+        this.overlayZ.touch(cl.parent, 'cmdlines', name);
         this.notify(cl.parent);
         return true;
     }
@@ -158,8 +155,7 @@ export class CommandLineManager {
     lower(name: string): boolean {
         const cl = this.cmdLines.get(name);
         if (!cl) return false;
-        cl.zIndex = this.nextLowerZ--;
-        this.overlayZ.touch(cl.parent, 'cmdlines');
+        this.overlayZ.sink(cl.parent, 'cmdlines', name);
         this.notify(cl.parent);
         return true;
     }

@@ -72,11 +72,11 @@ function ScrollBox({ sb, manager, labels, cmdLines }: { sb: ScrollBoxState; mana
     const overflowsY = maxBottom > sb.height;
     const style: React.CSSProperties = {
         left: sb.x, top: sb.y, width: sb.width, height: sb.height,
-        // Falls back to the shared per-parent layer rank (see
-        // overlayLayerOrder.ts) when this specific box was never explicitly
-        // raised/lowered, so it stays comparable with sibling labels / nested
-        // windows / cmd lines instead of a fixed CSS band.
-        zIndex: sb.zIndex ?? manager.overlayZ.getZ(sb.parent, 'scrollboxes'),
+        // This box's own per-widget rank (see overlayLayerOrder.ts) — shared
+        // with sibling labels / nested windows / cmd lines under the same
+        // parent, so a raise/lower here compares directly against them
+        // instead of the whole scroll-box layer moving as one block.
+        zIndex: manager.overlayZ.getZ(sb.parent, 'scrollboxes', sb.name),
         // Only scroll an axis whose children actually overflow — otherwise a
         // box that fits its content must show NO scrollbar (and not have its
         // content squeezed by a scrollbar that shouldn't be there).

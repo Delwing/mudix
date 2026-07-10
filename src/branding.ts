@@ -256,9 +256,9 @@ export function brandConnectionData(brand: BrandConfig, account?: string): Omit<
         autoReconnect: mud.autoConnect || undefined,
     };
     if (mud.mode === 'mud') {
-        return { ...common, mode: 'mud', host: mud.host ?? '', port: mud.port ?? 23 };
+        return { ...common, mode: 'mud', host: mud.host ?? '', port: mud.port ?? 23, url: undefined };
     }
-    return { ...common, mode: 'websocket', url: mud.url ?? '' };
+    return { ...common, mode: 'websocket', url: mud.url ?? '', host: undefined, port: undefined };
 }
 
 /** The existing managed profile a login maps to, if any. In `'perLogin'` mode

@@ -12,21 +12,24 @@ interface CommandLineOverlayProps {
 export function CommandLineOverlay({ manager, parent }: CommandLineOverlayProps) {
     const [cmdLines, setCmdLines] = useState<CmdLineState[]>(() => manager.list(parent));
     useEffect(() => manager.subscribe(parent, setCmdLines), [manager, parent]);
-    // The wrapper's z-index is shared with this parent's nested windows /
-    // labels / scroll boxes (see overlayLayerOrder.ts) instead of a fixed
-    // CSS band, so raiseWindow/lowerWindow on any of them can genuinely
-    // interleave, matching Mudlet's single Qt widget stack.
-    const [zIndex, setZIndex] = useState(() => manager.overlayZ.getZ(parent, 'cmdlines'));
-    useEffect(() => manager.overlayZ.subscribe(parent, () => setZIndex(manager.overlayZ.getZ(parent, 'cmdlines'))), [manager, parent]);
+    // Each cmd line's own z-index (below) is shared with this parent's
+    // nested windows / labels / scroll boxes (see overlayLayerOrder.ts)
+    // instead of the whole wrapper carrying one block z-index, so
+    // raiseWindow/lowerWindow on any of them can genuinely interleave
+    // per-widget, matching Mudlet's single Qt widget stack.
+    const [, setLayerTick] = useState(0);
+    useEffect(() => manager.overlayZ.subscribe(parent, () => setLayerTick(t => t + 1)), [manager, parent]);
     if (cmdLines.length === 0) return null;
     return (
-        <div className="cmdline-overlay" style={{ zIndex }}>
-            {cmdLines.map(c => <CommandLine key={c.name} c={c} manager={manager} />)}
+        <div className="cmdline-overlay">
+            {cmdLines.map(c => (
+                <CommandLine key={c.name} c={c} manager={manager} zIndex={manager.overlayZ.getZ(parent, 'cmdlines', c.name)} />
+            ))}
         </div>
     );
 }
 
-function CommandLine({ c, manager }: { c: CmdLineState; manager: CommandLineManager }) {
+function CommandLine({ c, manager, zIndex }: { c: CmdLineState; manager: CommandLineManager; zIndex: number }) {
     const [value, setValue] = useState(c.value);
     const valueRef = useRef(value);
     valueRef.current = value;
@@ -77,7 +80,7 @@ function CommandLine({ c, manager }: { c: CmdLineState; manager: CommandLineMana
 
     const style: React.CSSProperties = {
         left: c.x, top: c.y, width: c.width, height: c.height,
-        zIndex: c.zIndex,
+        zIndex,
     };
 
     return (

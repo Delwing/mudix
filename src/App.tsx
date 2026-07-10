@@ -284,10 +284,17 @@ export default function App() {
         if (conn) openProfile(conn, connect);
     };
     const ensureBrandProfile = (account?: string): string => {
-        const existing = matchBrandProfile(useAppStore.getState().connections, brand, account);
-        if (existing) return existing.id;
         const seed = brandConnectionData(brand, brand.profileMode === 'perLogin' ? account : undefined);
         if (!seed) throw new Error('ensureBrandProfile: the brand does not configure a MUD target');
+        const existing = matchBrandProfile(useAppStore.getState().connections, brand, account);
+        if (existing) {
+            // The brand config is the source of truth for its managed profile(s) —
+            // re-sync the connection target on every login instead of freezing it
+            // at whatever it was when the profile was first created, so editing
+            // brand.mud takes effect without the user clearing storage.
+            patchConnection(existing.id, seed);
+            return existing.id;
+        }
         return addConnection(seed);
     };
     // Branded mode never shows profile creation/selection: the landing is a

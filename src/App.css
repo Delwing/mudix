@@ -1561,6 +1561,22 @@ body.is-sorting {
 }
 .output-area-content > .output-container { flex: 1; min-height: 0; }
 
+/* Wraps the main viewport's LabelOverlay/CommandLineOverlay/ScrollBoxOverlay
+   (see OutputArea.tsx). These assign each widget an inline z-index ordinal
+   (overlayLayerOrder.ts) that's unbounded in a large Mudlet GUI package — left
+   uncontained it competes directly in the root stacking context and can climb
+   above .floating-window-root (z:35) or even .resizable-modal (z:40). Giving
+   this wrapper its own z-index traps that ordinal inside a bounded stacking
+   context, so the main viewport's overlays as a group always sit below
+   floating windows/miniconsoles, which sit below app modals — matching the
+   .floating-window-root--nested comment in ScriptWindow.css. */
+.main-overlay-root {
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    pointer-events: none;
+}
+
 /* ── Caret mode / reading-cursor review panel ──────────────────
    Focusable scrollback mirror that overlays the output while the user reviews
    it with the keyboard / a screen reader (see CaretReviewPanel). Sits above the

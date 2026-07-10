@@ -14,10 +14,16 @@ interface FloatingWindowLayerProps {
 export function FloatingWindowLayer({ windows, manager, onDragStateChange, onTitlebarContextMenu }: FloatingWindowLayerProps) {
     const floating = windows.filter(w => !w.docked);
 
-    const renderWindow = (w: ScriptWindowRenderData) => w.visible && (
+    // `zIndexOverride` is set for nested windows: their stacking order must
+    // compare directly against sibling labels/cmd-lines/scroll boxes under
+    // the same parent (see overlayLayerOrder.ts), not just other windows —
+    // so it replaces `w.zIndex` (a global, windows-only counter) instead of
+    // being layered under a wrapper-level z-index.
+    const renderWindow = (w: ScriptWindowRenderData, zIndexOverride?: number) => w.visible && (
         <ScriptWindow
             key={w.id}
             {...w}
+            zIndex={zIndexOverride ?? w.zIndex}
             manager={manager}
             isMiniConsole={manager.isMiniConsole(w.id)}
             lockFloating={w.lockFloating}
@@ -49,15 +55,15 @@ export function FloatingWindowLayer({ windows, manager, onDragStateChange, onTit
     const resolveParent = (w: ScriptWindowRenderData): { id: string; el: HTMLElement } | null => {
         const isMC = manager.isMiniConsole(w.id);
         const parent = w.parent;
-        if (parent && parent !== 'main') {
-            const el = manager.getViewport(parent);
-            return el ? { id: parent, el } : null;
-        }
-        if (isMC) {
-            const el = manager.getMainViewportElement();
-            return el ? { id: 'main', el } : null;
-        }
-        return null;
+        // Explicit userwindow parent, or an unparented mini-console (nests under
+        // 'main'). Either way it portals into that viewport's overlay host — the
+        // same stacking context its labels/cmd-lines/scroll-boxes live in — so
+        // this window's z-index compares directly against theirs. See
+        // WindowManager.getOverlayHost.
+        const id = (parent && parent !== 'main') ? parent : (isMC ? 'main' : null);
+        if (id === null) return null;
+        const el = manager.getOverlayHost(id);
+        return el ? { id, el } : null;
     };
     for (const w of floating) {
         const resolved = resolveParent(w);
@@ -93,15 +99,18 @@ export function FloatingWindowLayer({ windows, manager, onDragStateChange, onTit
                 document.body,
             )}
             {[...nestedByParent.entries()].map(([parent, list]) => {
-                const target = parent === 'main'
-                    ? manager.getMainViewportElement()!
-                    : manager.getViewport(parent)!;
+                const target = manager.getOverlayHost(parent)!;
+                // No zIndex on the wrapper itself — a positioned element only
+                // needs an explicit z-index to start its own stacking context,
+                // and this wrapper must NOT start one: each nested window's
+                // own z-index (below) has to compare directly against this
+                // parent's label/cmd-line/scroll-box siblings, which live in
+                // their own separately-portaled wrapper (see LabelOverlay
+                // etc.) — trapping them all under one block z-index here is
+                // exactly the bug this per-widget ranking replaces.
                 return createPortal(
-                    <div
-                        className="floating-window-root floating-window-root--nested"
-                        style={{ zIndex: manager.overlayZ.getZ(parent, 'windows') }}
-                    >
-                        {list.map(renderWindow)}
+                    <div className="floating-window-root floating-window-root--nested">
+                        {list.map(w => renderWindow(w, manager.overlayZ.getZ(parent, 'windows', w.id)))}
                     </div>,
                     target,
                     `nested:${parent}`,

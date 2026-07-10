@@ -1232,6 +1232,11 @@ export class LuaRuntime implements IScriptingRuntime {
             if (this.api.cmdLines.has(name)) { this.api.cmdLines.raise(name); return true; }
             if (this.api.scrollBoxes.has(name)) { this.api.scrollBoxes.raise(name); return true; }
             if (this.api.windows.has(name)) { this.api.windows.bringToFront(name); return true; }
+            // A bare Geyser container identity (no real widget of its own —
+            // e.g. Adjustable.Container's raiseAll() raises self.name before
+            // each child). Mudlet's flat z-order has nothing to raise for it;
+            // the per-child raises that follow carry the z. Return false, as
+            // Mudlet's raiseWindow does for an unknown window.
             return false;
         };
         const lowerAny = (name: unknown): boolean => {

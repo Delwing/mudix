@@ -21,8 +21,6 @@ export interface ScrollBoxState {
     /** Raw Qt-style CSS string from a future setScrollBoxStyleSheet — stored for
      *  parity; Geyser.ScrollBox:setStyleSheet is itself unimplemented upstream. */
     styleSheet?: string;
-    /** z-index — bumped by raiseWindow / lowerWindow. */
-    zIndex?: number;
 }
 
 type Listener = (scrollBoxes: ScrollBoxState[]) => void;
@@ -45,8 +43,6 @@ function safeCoord(n: number): number {
 export class ScrollBoxManager {
     private readonly boxes = new Map<string, ScrollBoxState>();
     private readonly listeners = new Map<string, Set<Listener>>();
-    private nextRaiseZ = 1000;
-    private nextLowerZ = -1;
 
     // Public so ScrollBoxOverlay (and other overlay components sharing this
     // registry via the other managers) can read/subscribe to the wrapper
@@ -64,7 +60,7 @@ export class ScrollBoxManager {
             width: safeCoord(opts.width), height: safeCoord(opts.height),
             visible: true,
         });
-        this.overlayZ.touch(parent, 'scrollboxes');
+        this.overlayZ.touch(parent, 'scrollboxes', name);
         this.notify(parent);
         return true;
     }
@@ -81,6 +77,7 @@ export class ScrollBoxManager {
         const sb = this.boxes.get(name);
         if (!sb) return false;
         this.boxes.delete(name);
+        this.overlayZ.forget(sb.parent, 'scrollboxes', name);
         this.notify(sb.parent);
         return true;
     }
@@ -110,7 +107,8 @@ export class ScrollBoxManager {
         if (sb.parent !== parent) {
             const old = sb.parent;
             sb.parent = parent;
-            this.overlayZ.touch(parent, 'scrollboxes');
+            this.overlayZ.forget(old, 'scrollboxes', name);
+            this.overlayZ.touch(parent, 'scrollboxes', name);
             this.notify(old);
             this.notify(parent);
         }
@@ -134,8 +132,7 @@ export class ScrollBoxManager {
     raise(name: string): boolean {
         const sb = this.boxes.get(name);
         if (!sb) return false;
-        sb.zIndex = this.nextRaiseZ++;
-        this.overlayZ.touch(sb.parent, 'scrollboxes');
+        this.overlayZ.touch(sb.parent, 'scrollboxes', name);
         this.notify(sb.parent);
         return true;
     }
@@ -143,8 +140,7 @@ export class ScrollBoxManager {
     lower(name: string): boolean {
         const sb = this.boxes.get(name);
         if (!sb) return false;
-        sb.zIndex = this.nextLowerZ--;
-        this.overlayZ.touch(sb.parent, 'scrollboxes');
+        this.overlayZ.sink(sb.parent, 'scrollboxes', name);
         this.notify(sb.parent);
         return true;
     }

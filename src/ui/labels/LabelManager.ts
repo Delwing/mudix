@@ -68,8 +68,6 @@ export interface LabelState {
     /** Animated GIF player installed by Mudlet's setMovie. Rendered as a
      *  <canvas> instead of the html content (QLabel shows one or the other). */
     movie?: MoviePlayer;
-    /** z-index applied to the label DIV. Higher = on top of other labels. */
-    zIndex?: number;
 }
 
 /** Event payload for label mouse callbacks. `button` is the Qt button *name*
@@ -106,10 +104,6 @@ function safeCoord(n: number): number {
 export class LabelManager {
     private readonly labels = new Map<string, LabelState>();
     private readonly listeners = new Map<string, Set<Listener>>();
-    // Monotonic counters so raise/lowerLabel give predictable ordering across
-    // many calls without ever colliding. Starts mid-range to leave headroom.
-    private nextRaiseZ = 1000;
-    private nextLowerZ = -1;
 
     // Public so LabelOverlay (and other overlay components sharing this
     // registry via the other managers) can read/subscribe to the wrapper
@@ -131,7 +125,7 @@ export class LabelManager {
             html: '',
         };
         this.labels.set(name, state);
-        this.overlayZ.touch(parent, 'labels');
+        this.overlayZ.touch(parent, 'labels', name);
         this.notify(parent);
         return true;
     }
@@ -145,6 +139,7 @@ export class LabelManager {
         if (!lbl) return false;
         lbl.movie?.stop();
         this.labels.delete(name);
+        this.overlayZ.forget(lbl.parent, 'labels', name);
         this.notify(lbl.parent);
         return true;
     }
@@ -183,7 +178,8 @@ export class LabelManager {
         if (lbl.parent !== parent) {
             const old = lbl.parent;
             lbl.parent = parent;
-            this.overlayZ.touch(parent, 'labels');
+            this.overlayZ.forget(old, 'labels', name);
+            this.overlayZ.touch(parent, 'labels', name);
             this.notify(old);
             this.notify(parent);
         }
@@ -433,8 +429,7 @@ export class LabelManager {
     raise(name: string): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
-        lbl.zIndex = this.nextRaiseZ++;
-        this.overlayZ.touch(lbl.parent, 'labels');
+        this.overlayZ.touch(lbl.parent, 'labels', name);
         this.notify(lbl.parent);
         return true;
     }
@@ -442,8 +437,7 @@ export class LabelManager {
     lower(name: string): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
-        lbl.zIndex = this.nextLowerZ--;
-        this.overlayZ.touch(lbl.parent, 'labels');
+        this.overlayZ.sink(lbl.parent, 'labels', name);
         this.notify(lbl.parent);
         return true;
     }

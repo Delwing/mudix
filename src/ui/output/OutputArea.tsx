@@ -40,6 +40,7 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
     const { outputRef, sentinelRef, stickyAreaRef, isSplitView, scrollToBottom } =
         useStickyOutput(session.events, { stickyLines, showTimestamps });
     const viewportRef = useRef<HTMLDivElement>(null);
+    const overlayHostRef = useRef<HTMLDivElement>(null);
 
     // Mudlet addMouseEvent: custom entries folded into the output right-click
     // menu. Evaluated lazily when the menu opens (the registry can change).
@@ -58,9 +59,11 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
     useEffect(() => {
         session.windows.registerMainOutput(outputRef.current);
         session.windows.registerMainViewport(viewportRef.current);
+        session.windows.registerMainOverlayHost(overlayHostRef.current);
         return () => {
             session.windows.registerMainOutput(null);
             session.windows.registerMainViewport(null);
+            session.windows.registerMainOverlayHost(null);
         };
     }, [session, outputRef]);
 
@@ -100,9 +103,22 @@ export function OutputArea({ session, stickyLines = DEFAULT_STICKY_LINES, comman
                 <CaretReviewPanel session={session} commandInputRef={commandInputRef} />
             </div>
             <ScreenReaderLog session={session} />
-            <LabelOverlay manager={session.labels} parent="main" />
-            <CommandLineOverlay manager={session.cmdLines} parent="main" />
-            <ScrollBoxOverlay manager={session.scrollBoxes} labels={session.labels} cmdLines={session.cmdLines} parent="main" />
+            {/* Establishes a stacking context (see .main-overlay-root in App.css) so
+                these widgets' per-instance z-index ordinals (overlayLayerOrder.ts,
+                bounded but arbitrary within it) stay contained below floating
+                windows and app modals instead of leaking into the root stacking
+                context and painting over them. Main-parented nested windows
+                (mini-consoles, embedded mapper) are ALSO portaled into this same
+                element (registerMainOverlayHost) — NOT a separate sibling — so a
+                window's z-index and a label's z-index compete in ONE stacking
+                context and the overlayZ ranks actually order them against each
+                other. Portaling a window into any other wrapper reintroduces the
+                "map paints over every label" bug. */}
+            <div className="main-overlay-root" ref={overlayHostRef}>
+                <LabelOverlay manager={session.labels} parent="main" />
+                <CommandLineOverlay manager={session.cmdLines} parent="main" />
+                <ScrollBoxOverlay manager={session.scrollBoxes} labels={session.labels} cmdLines={session.cmdLines} parent="main" />
+            </div>
         </>
     );
 }

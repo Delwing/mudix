@@ -165,7 +165,12 @@ export class WindowManager {
 
     private touchOverlayWindows(win: Pick<ScriptWindowData, 'id' | 'parent'>): void {
         const parentId = this.overlayParentId(win);
-        if (parentId) this.overlayZ.touch(parentId, 'windows');
+        if (parentId) this.overlayZ.touch(parentId, 'windows', win.id);
+    }
+
+    private sinkOverlayWindows(win: Pick<ScriptWindowData, 'id' | 'parent'>): void {
+        const parentId = this.overlayParentId(win);
+        if (parentId) this.overlayZ.sink(parentId, 'windows', win.id);
     }
 
     onWindowsChange?:     WindowsChangedFn;
@@ -472,6 +477,41 @@ export class WindowManager {
         return this.mainViewportEl;
     }
 
+    /**
+     * The DOM element main-parented nested windows (mini-consoles, embedded
+     * mapper) portal into. This is `.main-overlay-root` — the SAME wrapper the
+     * main labels / command lines / scroll boxes render into — so a window's
+     * z-index and a label's z-index compete in one CSS stacking context and the
+     * overlayZ ordinals actually take visual effect. It must NOT be a separate
+     * sibling of the label overlay: `.main-overlay-root` carries an explicit
+     * `z-index` (a stacking context that keeps all overlay content below
+     * floating windows / modals), so a nested window portaled anywhere else
+     * would either be trapped in a different context or leak its z above the
+     * labels — which was the long-standing "map paints over every label" bug.
+     * Both `.main-overlay-root` and the console viewport are `inset:0` over the
+     * same main-viewport, so the portal target swap doesn't shift coordinates.
+     * Falls back to the console viewport if the host hasn't registered yet.
+     */
+    private mainOverlayHostEl: HTMLElement | null = null;
+    registerMainOverlayHost(element: HTMLElement | null): void {
+        this.mainOverlayHostEl = element;
+        // Main-parented miniconsoles portal into this element; re-render so the
+        // FloatingWindowLayer picks up the new (or cleared) target.
+        this.notify();
+    }
+
+    getMainOverlayHost(): HTMLElement | null {
+        return this.mainOverlayHostEl ?? this.mainViewportEl;
+    }
+
+    /** The overlay host element that widgets under `parentId` (labels AND
+     *  nested windows) share so their z-indices compete in one stacking
+     *  context: `.main-overlay-root` for 'main', else the userwindow's own
+     *  viewport (where its panel already renders the label overlays). */
+    getOverlayHost(parentId: string): HTMLElement | null {
+        return parentId === 'main' ? this.getMainOverlayHost() : (this.getViewport(parentId) ?? null);
+    }
+
     register(id: string, element: HTMLElement, _kind: 'html'): void {
         this.elements.set(id, element);
         const win = this.windows.get(id);
@@ -554,39 +594,74 @@ export class WindowManager {
     private observeResize(id: string, element: HTMLElement): void {
         if (typeof ResizeObserver === 'undefined') return;
         this.resizeObservers.get(id)?.disconnect();
-        const observer = new ResizeObserver(() => {
-            const rect = element.getBoundingClientRect();
-            const w = Math.round(rect.width);
-            const h = Math.round(rect.height);
-            // Skip the initial 0×0 frame and any spurious zero-size entries
-            // that happen during portal moves between dock/floating shells.
-            if (w <= 0 && h <= 0) return;
-            const last = this.lastEmittedSize.get(id);
-            const sizeChanged = !last || last.w !== w || last.h !== h;
-            if (sizeChanged) {
-                this.lastEmittedSize.set(id, { w, h });
-                // Mudlet argument order:
-                //   sysWindowResizeEvent(width, height)         — main window
-                //   sysUserWindowResizeEvent(width, height, name) — user windows
-                // GeyserReposition's user-window branch reads `arg.."Container" == window.name`,
-                // so the name must be the third arg, not the first.
-                if (id === 'main') this.onRaiseEvent?.('sysWindowResizeEvent', [w, h]);
-                else               this.onRaiseEvent?.('sysUserWindowResizeEvent', [w, h, id]);
-            }
-            // Mudlet sysConsoleSizeChanged(name, columns, rows) — fires when
-            // the char-grid changes. cols is the wrap setting (falling back to
-            // an estimate from element width); rows is derived from element
-            // height. Both axes use the rendered monospace cell size so the
-            // event values match what scripts can use to lay out output.
-            this.emitConsoleGridIfChanged(id, w, h, element);
-            // Mudlet sysWindowOverflowEvent(name, overflowLines) — fires when a
-            // non-scrolling console pushes content past its visible row count.
-            // The DOM exposes this directly via scrollHeight vs clientHeight; a
-            // ResizeObserver tick is the cheapest reliable hook.
-            this.emitWindowOverflowIfPresent(id, element);
-        });
+        const observer = new ResizeObserver(() => this.measureAndEmitResize(id, element));
         observer.observe(element);
         this.resizeObservers.set(id, observer);
+    }
+
+    /** Force an immediate measure-and-emit for the main viewport, if it's
+     *  registered. ResizeObserver's own first callback is spec-deferred (never
+     *  synchronous with observe()) — registerMainViewport runs from
+     *  OutputArea's mount effect, which commits before ScriptingEngine's
+     *  constructor exists to wire up onRaiseEvent, so that deferred callback
+     *  can easily land *after* Lua bootstrap has already dispatched
+     *  sysLoadEvent/sysInstallPackage and run scripts that build
+     *  percentage-positioned Geyser containers. GeyserReposition (the bundled
+     *  Mudlet Lua that actually resolves that percentage geometry into pixels)
+     *  only runs in response to sysWindowResizeEvent, so those containers —
+     *  and anything gated on their resolved get_x()/get_width(), e.g.
+     *  Adjustable.Container:attachToBorder's validAttachPositions() check —
+     *  silently see stale/unresolved geometry and fail with no error. Called
+     *  by ScriptingEngine right after it wires up onRaiseEvent (and after the
+     *  Lua runtime exists to receive the event — see the guard in
+     *  measureAndEmitResize), guaranteeing at least one sysWindowResizeEvent
+     *  has already landed before any script-load event fires. The dedup check
+     *  inside measureAndEmitResize makes the real (later) ResizeObserver tick
+     *  a same-size no-op rather than a duplicate event. */
+    primeMainResize(): void {
+        if (this.mainViewportEl) this.measureAndEmitResize('main', this.mainViewportEl);
+    }
+
+    /** Shared by observeResize's ResizeObserver callback and primeMainResize's
+     *  eager call — measures `element`, and raises sysWindowResizeEvent/
+     *  sysUserWindowResizeEvent plus the console-grid and overflow events when
+     *  the size actually changed since last reported. */
+    private measureAndEmitResize(id: string, element: HTMLElement): void {
+        const rect = element.getBoundingClientRect();
+        const w = Math.round(rect.width);
+        const h = Math.round(rect.height);
+        // Skip the initial 0×0 frame and any spurious zero-size entries
+        // that happen during portal moves between dock/floating shells.
+        if (w <= 0 && h <= 0) return;
+        const last = this.lastEmittedSize.get(id);
+        const sizeChanged = !last || last.w !== w || last.h !== h;
+        // Only record the size as "reported" once there's actually a listener
+        // to deliver it to (onRaiseEvent is wired up by ScriptingEngine, later
+        // than viewport registration — see primeMainResize). Recording it
+        // unconditionally would make a premature call here permanently
+        // suppress the real event once a listener does exist, since the dedup
+        // check would see the size as unchanged.
+        if (sizeChanged && this.onRaiseEvent) {
+            this.lastEmittedSize.set(id, { w, h });
+            // Mudlet argument order:
+            //   sysWindowResizeEvent(width, height)         — main window
+            //   sysUserWindowResizeEvent(width, height, name) — user windows
+            // GeyserReposition's user-window branch reads `arg.."Container" == window.name`,
+            // so the name must be the third arg, not the first.
+            if (id === 'main') this.onRaiseEvent('sysWindowResizeEvent', [w, h]);
+            else               this.onRaiseEvent('sysUserWindowResizeEvent', [w, h, id]);
+        }
+        // Mudlet sysConsoleSizeChanged(name, columns, rows) — fires when
+        // the char-grid changes. cols is the wrap setting (falling back to
+        // an estimate from element width); rows is derived from element
+        // height. Both axes use the rendered monospace cell size so the
+        // event values match what scripts can use to lay out output.
+        this.emitConsoleGridIfChanged(id, w, h, element);
+        // Mudlet sysWindowOverflowEvent(name, overflowLines) — fires when a
+        // non-scrolling console pushes content past its visible row count.
+        // The DOM exposes this directly via scrollHeight vs clientHeight; a
+        // ResizeObserver tick is the cheapest reliable hook.
+        this.emitWindowOverflowIfPresent(id, element);
     }
 
     /** Measure one monospace cell (px) by probing `el` with its own inherited
@@ -1047,6 +1122,16 @@ export class WindowManager {
     markAsMiniConsole(id: string): void {
         const win = this.windows.get(id);
         if (!win) return;
+        // Idempotence guard: createMiniConsole/createMapper are singleton-
+        // reposition calls that re-invoke this on every Geyser reflow cycle
+        // (GeyserReposition() cascades from essentially any widget add/move
+        // anywhere in the UI, so this can fire dozens of times a second).
+        // Without the guard, the touch below fired every single time,
+        // keeping this window permanently at the freshest possible z-order
+        // touch — outranking every sibling label/container no matter how
+        // recently *they* were actually raised (e.g. a map/EMCO console
+        // staying on top of a just-dragged-to-front Adjustable.Container).
+        if (this.miniConsoles.has(id)) return;
         this.miniConsoles.add(id);
         // A freshly-marked mini-console (createMiniConsole/createMapper without
         // an explicit parent) nests under the main viewport for the first time
@@ -1467,7 +1552,7 @@ export class WindowManager {
         let min = Infinity;
         for (const w of this.windows.values()) if (w.id !== id && w.zIndex < min) min = w.zIndex;
         win.zIndex = (Number.isFinite(min) ? min : 10) - 1;
-        this.touchOverlayWindows(win);
+        this.sinkOverlayWindows(win);
         this.notify();
     }
 
@@ -1798,6 +1883,11 @@ export class WindowManager {
     }
 
     close(id: string): void {
+        const win = this.windows.get(id);
+        if (win) {
+            const parentId = this.overlayParentId(win);
+            if (parentId) this.overlayZ.forget(parentId, 'windows', id);
+        }
         this.windows.delete(id);
         this.controls.delete(id);
         this.elements.delete(id);

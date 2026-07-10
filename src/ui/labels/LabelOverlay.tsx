@@ -63,21 +63,23 @@ interface LabelOverlayProps {
 export function LabelOverlay({ manager, parent }: LabelOverlayProps) {
     const [labels, setLabels] = useState<LabelState[]>(() => manager.list(parent));
     useEffect(() => manager.subscribe(parent, setLabels), [manager, parent]);
-    // The wrapper's z-index is shared with this parent's nested windows /
-    // cmd lines / scroll boxes (see overlayLayerOrder.ts) instead of a fixed
-    // CSS band, so raiseWindow/lowerWindow on any of them can genuinely
-    // interleave, matching Mudlet's single Qt widget stack.
-    const [zIndex, setZIndex] = useState(() => manager.overlayZ.getZ(parent, 'labels'));
-    useEffect(() => manager.overlayZ.subscribe(parent, () => setZIndex(manager.overlayZ.getZ(parent, 'labels'))), [manager, parent]);
+    // Each label's own z-index (below) is shared with this parent's nested
+    // windows / cmd lines / scroll boxes (see overlayLayerOrder.ts) instead
+    // of the whole wrapper carrying one block z-index, so raiseWindow/
+    // lowerWindow on any of them can genuinely interleave per-widget,
+    // matching Mudlet's single Qt widget stack. Re-render on any touch under
+    // this parent so those per-label ordinals stay current.
+    const [, setLayerTick] = useState(0);
+    useEffect(() => manager.overlayZ.subscribe(parent, () => setLayerTick(t => t + 1)), [manager, parent]);
     if (labels.length === 0) return null;
     return (
-        <div className="label-overlay" style={{ zIndex }}>
-            {labels.map(l => <Label key={l.name} l={l} />)}
+        <div className="label-overlay">
+            {labels.map(l => <Label key={l.name} l={l} zIndex={manager.overlayZ.getZ(parent, 'labels', l.name)} />)}
         </div>
     );
 }
 
-function Label({ l }: { l: LabelState }) {
+function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
     // Latest-callback ref so re-renders during a hover/drag don't lose pointer
     // state; the Mudlet API replaces callbacks live and we want the next event
     // to land on the new fn even if React hasn't re-mounted us yet.
@@ -176,7 +178,7 @@ function Label({ l }: { l: LabelState }) {
         left, top, width, height,
         pointerEvents: l.clickThrough ? 'none' : 'auto',
         cursor: l.cursor ?? (l.onClick ? 'pointer' : undefined),
-        zIndex: l.zIndex,
+        zIndex,
     };
     if (inlineFromStylesheet) {
         Object.assign(style, inlineFromStylesheet);

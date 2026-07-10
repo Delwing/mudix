@@ -5,7 +5,9 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
-    z-index: 31; /* one above .label-overlay so a cmd-line sits on top of labels at the same coords */
+    /* Deliberately no z-index (stays `auto`) — see the comment on
+       .floating-window-root--nested in ScriptWindow.css. Each cmd line gets
+       its own inline z-index instead (overlayLayerOrder.ts). */
     overflow: hidden;
 }
 

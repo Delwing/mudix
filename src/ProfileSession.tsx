@@ -25,6 +25,13 @@ import type { FileDialogRequest } from './mud/events';
 import { replayFileName } from './mud/replay/replayFormat';
 import { FilePickerModal } from './ui/FilePickerModal';
 import type { ProfileVFS } from './scripting/vfs/ProfileVFS';
+
+// Mudlet parity (AUTO_LOGIN_USERNAME_DELAY_MS in Mudlet's cTelnet): how long
+// to wait after connecting, with no IAC GA/EOR prompt marker seen, before
+// sending the saved account name anyway. See the text-login auto-fill effect
+// in ProfileSession for why this fallback exists.
+const AUTO_LOGIN_USERNAME_FALLBACK_MS = 2000;
+
 interface Props {
     connection: MudConnection;
     /** If true, dial the WebSocket on mount. Offline mode skips this. */
@@ -76,6 +83,10 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // credentials in a loop when they're wrong. Both reset on each connect.
     const autoLoginStage = useRef<'idle' | 'name' | 'password'>('idle');
     const gmcpAutoTried = useRef(false);
+    // Fallback timer for MUDs that never send IAC GA/EOR around their login
+    // prompt (e.g. plain FluffOS/LPMud bare-telnet banners) — see the
+    // text-login auto-fill effect below.
+    const nameFallbackTimer = useRef<number | null>(null);
 
     const outputFont = useAppStore(s => selectProfileField(s, connection.id, 'outputFont'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connection.id, 'promptTimeoutMs'));
@@ -519,20 +530,41 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                 password: conn?.charLoginPassword ?? '',
             };
         };
-        const onConnect = () => {
-            gmcpAutoTried.current = false;
-            const { account, password } = readCreds();
-            autoLoginStage.current = account && password ? 'name' : 'idle';
+        const clearNameFallback = () => {
+            if (nameFallbackTimer.current !== null) {
+                window.clearTimeout(nameFallbackTimer.current);
+                nameFallbackTimer.current = null;
+            }
         };
         // First prompt ≈ the "By what name?" prompt: send the account (echoed,
         // since the server echoes it back off here just like a typed name).
-        const onPrompt = () => {
+        // Called either from the real 'prompt' event (IAC GA/EOR) or, absent
+        // one, from the fallback timer below.
+        const sendAccount = () => {
+            clearNameFallback();
             if (autoLoginStage.current !== 'name') return;
             const { account } = readCreds();
             if (!account) { autoLoginStage.current = 'idle'; return; }
             autoLoginStage.current = 'password';
             send(account, true);
         };
+        const onConnect = () => {
+            gmcpAutoTried.current = false;
+            clearNameFallback();
+            const { account, password } = readCreds();
+            autoLoginStage.current = account && password ? 'name' : 'idle';
+            if (autoLoginStage.current === 'name') {
+                // Some MUDs (e.g. plain FluffOS/LPMud bare-telnet banners) never
+                // send IAC GA/EOR at all, so the 'prompt' event that normally
+                // drives sendAccount would never fire and the account would sit
+                // unsent forever. Mirrors Mudlet's mTimerLogin — a fixed delay
+                // from connect, independent of any telnet signal — as a backstop
+                // for exactly these servers. Superseded (cleared) by a real
+                // 'prompt' event if one arrives first.
+                nameFallbackTimer.current = window.setTimeout(sendAccount, AUTO_LOGIN_USERNAME_FALLBACK_MS);
+            }
+        };
+        const onPrompt = () => sendAccount();
         // Server enters password mode (ECHO off) → send the password via the
         // secret path so it never surfaces as plaintext, even under the
         // showSentText='always' echo mode.
@@ -542,12 +574,12 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
             autoLoginStage.current = 'idle';
             if (password) session.sendSecret(password);
         };
-        const onDisconnect = () => { autoLoginStage.current = 'idle'; };
+        const onDisconnect = () => { autoLoginStage.current = 'idle'; clearNameFallback(); };
         const u1 = session.events.on('client.connect', onConnect);
         const u2 = session.events.on('prompt', onPrompt);
         const u3 = session.events.on('telnet.echo', onEcho);
         const u4 = session.events.on('client.disconnect', onDisconnect);
-        return () => { u1(); u2(); u3(); u4(); };
+        return () => { u1(); u2(); u3(); u4(); clearNameFallback(); };
     }, [session, connection.id, send]);
 
     // Register the getCmdLine provider on the engine. Effect re-runs when the

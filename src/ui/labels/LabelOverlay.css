@@ -5,8 +5,14 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
-    /* Stays above panel content but below modals (.resizable-modal is z:40). */
-    z-index: 30;
+    /* Deliberately no z-index (stays `auto`) — see the comment on
+       .floating-window-root--nested in ScriptWindow.css. Each label gets its
+       own inline z-index instead (overlayLayerOrder.ts), so it compares
+       directly against sibling nested windows / cmd lines / scroll boxes
+       under the same parent rather than the whole layer moving as one block.
+       Modals (.resizable-modal z:40+) still paint above: an auto-z-index
+       element is treated as z:0 against any positioned sibling that DOES
+       declare one. */
     overflow: hidden;
 }
 
@@ -34,6 +40,11 @@
     justify-content: center;
     align-items: stretch;
     box-sizing: border-box;
+    /* Mudlet's TLabel isn't a text widget — its content isn't selectable, so
+       dragging a label (or a click-through label sitting over selectable
+       output) must not start a text selection underneath the cursor. */
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 /* Wrapper around a label's echoed HTML. Qt renders QLabel rich text through a

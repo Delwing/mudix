@@ -12,21 +12,27 @@
 
 /* Nested variant: portaled into a parent userwindow viewport for parent-anchored
  * miniconsoles. position:absolute so absolute child coords are parent-relative.
+ * Also carries the base .floating-window-root class above (shared portal
+ * wrapper styling) — which sets z-index:35, so this rule must explicitly
+ * reset it back to `auto` rather than just omitting the property, or the
+ * base class's z:35 keeps applying.
  *
- * The explicit z-index is load-bearing: when this root is portaled into the MAIN
- * output viewport (.output-area-content, which has z-index:auto), it shares that
- * element's stacking context with the sibling .label-overlay (z:30). Each nested
- * miniconsole carries an ever-growing inline z-index (WindowManager.nextZ), so
- * once enough windows are created/raised its value climbs past 30 and the console
- * paints OVER the label overlay — burying a Geyser widget's right-click menu and
- * tab-bar labels behind its own content (issue #7). Giving the root its own
- * stacking context (any z-index on a positioned element) traps those inline
- * z-indexes inside it; a value below the overlay band (labels 30 / cmd-line 31 /
- * scrollbox 32) keeps parented console content beneath the widget chrome, while
- * still sitting above the main gameplay output (z:auto) it's layered on top of. */
+ * Deliberately z-index:auto: a z-index on a positioned element starts its own
+ * stacking context, which would trap every nested window's own z-index
+ * inside this wrapper as one block — always entirely above or entirely below
+ * the sibling .label-overlay / .cmdline-overlay / .scrollbox-overlay wrappers
+ * (which are equally z-index:auto for the same reason), regardless of which
+ * specific widget was actually raised/created last (issue #7 all over again,
+ * just inverted). Leaving all four wrappers context-less lets each
+ * individual child's own inline z-index (see overlayLayerOrder.ts — a small,
+ * per-widget ordinal shared across all four kinds) compare directly against
+ * every other child of any kind under the same parent, in one shared stacking
+ * context — an embedded mapper or mini-console can out-rank one sibling label
+ * while a different sibling window stays below a different label, matching
+ * Mudlet's single Qt widget stack. */
 .floating-window-root--nested {
     position: absolute;
-    z-index: 5;
+    z-index: auto;
 }
 
 .script-window {

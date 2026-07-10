@@ -1198,11 +1198,14 @@ describe('createScrollBox / deleteScrollBox — overlay container + routing', ()
     expect(env.run('return (showWindow("sb3"))')).toBe(true);
     env.run('hideWindow("sb3")');
     expect(env.session.scrollBoxes.get('sb3')!.visible).toBe(false);
+    // raiseWindow / lowerWindow reorder the box in the shared overlay
+    // z-registry (overlayLayerOrder.ts) — compare against a sibling box.
+    env.run('createScrollBox("sb3sib", 0, 0, 100, 100)');
+    const z = (n: string) => env.session.scrollBoxes.overlayZ.getZ('main', 'scrollboxes', n);
     expect(env.run('return (raiseWindow("sb3"))')).toBe(true);
-    const raisedZ = env.session.scrollBoxes.get('sb3')!.zIndex;
-    expect(raisedZ).toBeGreaterThan(0);
+    expect(z('sb3')).toBeGreaterThan(z('sb3sib'));
     expect(env.run('return (lowerWindow("sb3"))')).toBe(true);
-    expect(env.session.scrollBoxes.get('sb3')!.zIndex).toBeLessThan(0);
+    expect(z('sb3')).toBeLessThan(z('sb3sib'));
   });
 
   it('windowType reports "scrollbox"', () => {
