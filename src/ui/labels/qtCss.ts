@@ -286,6 +286,24 @@ export function cssEscape(s: string): string {
     return s.replace(/["\\\n\r]/g, '\\$&');
 }
 
+// Mirrors Mudlet's Host::setBackgroundColor for labels: rather than treating
+// setColor/setBackgroundColor as independent of setStyleSheet, Mudlet patches
+// the `background-color` declaration directly into whatever stylesheet is
+// already on the label (regex-replacing every occurrence — base rule and any
+// pseudo-state rules alike — or appending one if none exists). So whichever
+// of setStyleSheet/setBackgroundColor was called most recently wins for that
+// one property, while the rest of the stylesheet (border, radius, ...) stays
+// intact. Packages commonly rely on this ordering (e.g. EMCO's tab switcher
+// calls setStyleSheet then setColor to tint an otherwise-styled tab).
+export function patchStyleSheetBackgroundColor(styleSheet: string, r: number, g: number, b: number, a: number): string {
+    const decl = `background-color: rgba(${r}, ${g}, ${b}, ${a});`;
+    if (styleSheet.includes('background-color')) {
+        return styleSheet.replace(/background-color:[^;]*;/g, decl);
+    }
+    const sep = styleSheet && !styleSheet.endsWith('\n') ? '\n' : '';
+    return styleSheet + sep + decl;
+}
+
 // Translate a flat declaration block into a CSS declaration string (Qt → CSS
 // for values like QLinearGradient and unitless lengths). Used to serialize a
 // scoped pseudo-state ruleset body for injection into a `<style>` element.

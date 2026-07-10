@@ -1,4 +1,4 @@
-import { cssEscape } from './qtCss';
+import { cssEscape, patchStyleSheetBackgroundColor } from './qtCss';
 import type { MoviePlayer } from './gifMovie';
 
 export interface LabelCreateOptions {
@@ -255,7 +255,15 @@ export class LabelManager {
     setBackgroundColor(name: string, r: number, g: number, b: number, a = 255): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
-        lbl.backgroundColor = { r, g, b, a };
+        // Matches Mudlet: a stylesheet already on the label isn't replaced or
+        // ignored — the background-color declaration inside it is patched in
+        // place (see patchStyleSheetBackgroundColor). Only fall back to the
+        // plain fill color when there's no stylesheet to patch.
+        if (lbl.styleSheet) {
+            lbl.styleSheet = patchStyleSheetBackgroundColor(lbl.styleSheet, r, g, b, a);
+        } else {
+            lbl.backgroundColor = { r, g, b, a };
+        }
         // Mudlet implicitly enables fill when the user sets a bg color.
         lbl.fillBackground = true;
         this.notify(lbl.parent);

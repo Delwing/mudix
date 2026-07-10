@@ -4,6 +4,7 @@ import {
     cssTextToParts,
     qtDeclarationsToCss,
     userWindowQssToScopedCss,
+    patchStyleSheetBackgroundColor,
 } from '../../src/ui/labels/qtCss';
 
 describe('qtCss rgba alpha normalization', () => {
@@ -184,5 +185,43 @@ describe('qtCss Qt border-image translation', () => {
         expect(css).toContain('background-image: url("/__vfs/abc/EleUI2/imgs/FF7Cursor.png") !important');
         expect(css).toContain('background-repeat: no-repeat !important');
         expect(css).toContain('background-position: left center !important');
+    });
+});
+
+describe('patchStyleSheetBackgroundColor', () => {
+    it('replaces an existing background-color declaration in place, keeping the rest of the rule', () => {
+        // EleUI2's EMCO tab switcher: setStyleSheet(activeTabCSS) paints a dark
+        // red background with a gold border, then setColor(activeTabBGColor)
+        // (green by default) is expected to retint just the background — as
+        // real Mudlet's Host::setBackgroundColor does via an in-place regex
+        // patch — not get silently dropped in favor of the stylesheet.
+        const css = [
+            'QLabel{',
+            'background-color: #4d0000;',
+            'border-style: outset;',
+            'border-color: "#996600";',
+            '}',
+        ].join('\n');
+        const patched = patchStyleSheetBackgroundColor(css, 0, 180, 0, 255);
+        expect(patched).toContain('background-color: rgba(0, 180, 0, 255);');
+        expect(patched).not.toContain('#4d0000');
+        expect(patched).toContain('border-style: outset;');
+        expect(patched).toContain('border-color: "#996600";');
+    });
+
+    it('patches every occurrence, including pseudo-state rules', () => {
+        const css = 'QLabel{background-color: #4d0000;} QLabel::hover{background-color: #b30000;}';
+        const patched = patchStyleSheetBackgroundColor(css, 0, 180, 0, 255);
+        const matches = patched.match(/background-color: rgba\(0, 180, 0, 255\);/g) ?? [];
+        expect(matches.length).toBe(2);
+    });
+
+    it('appends the declaration when the stylesheet has no background-color', () => {
+        const patched = patchStyleSheetBackgroundColor('border-style: outset;', 10, 20, 30, 255);
+        expect(patched).toBe('border-style: outset;\nbackground-color: rgba(10, 20, 30, 255);');
+    });
+
+    it('appends onto an empty stylesheet', () => {
+        expect(patchStyleSheetBackgroundColor('', 1, 2, 3, 255)).toBe('background-color: rgba(1, 2, 3, 255);');
     });
 });
