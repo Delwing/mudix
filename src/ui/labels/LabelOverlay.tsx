@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
 import type { LabelManager, LabelMouseEvent, LabelState, LabelWheelEvent } from './LabelManager';
 import type { MoviePlayer } from './gifMovie';
-import { cssTextToParts, qtDeclarationsToCss, cssEscape } from './qtCss';
+import { cssTextToParts, qtDeclarationsToCss, qtAlignmentToFlex, cssEscape } from './qtCss';
 import './LabelOverlay.css';
 
 // Mudlet reports `event.button` as a Qt button *name string* (not an int) — see
@@ -187,6 +187,16 @@ function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
         style.background = bg
             ? `rgba(${bg.r},${bg.g},${bg.b},${bg.a / 255})`
             : '#fff';
+    }
+    // Sticky Qt alignment (qproperty-alignment) overrides the `.label` default
+    // (Qt::AlignLeft | Qt::AlignVCenter, encoded in LabelOverlay.css). Applied
+    // after the stylesheet inline so it wins over the base rule; when the live
+    // stylesheet still carries the qproperty-alignment this is the same value
+    // it already produced, so re-applying is idempotent. Kept as a widget
+    // property (LabelManager) rather than parsed from styleSheet so it survives
+    // a restyle that drops it — see setStyleSheet.
+    if (l.alignment) {
+        Object.assign(style, qtAlignmentToFlex(l.alignment));
     }
     // Layer setBackgroundImage on top so it shows over the fillBackground color
     // (and ignores it when a stylesheet already painted the background).

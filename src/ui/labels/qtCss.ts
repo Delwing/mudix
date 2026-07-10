@@ -535,34 +535,65 @@ function stripOuterQuotes(val: string): string {
 }
 
 // Translate a Qt `qproperty-alignment` value (`AlignLeft | AlignVCenter`, etc.)
-// into the flexbox properties that produce the same effect on the `.label`
-// flex container.
+// into the CSS that produces the same effect on the `.label` flex container.
 //
-// Our `.label` is `display: flex; flex-direction: column`, so main-axis is
-// vertical (controlled by `justify-content`) and cross-axis is horizontal
-// (controlled by `align-items`). Setting a horizontal alignment also un-
-// stretches the cross-axis sizing (the inner echo div shrinks to content
-// width), which mirrors Qt: explicit horizontal alignment pins the document
-// to one edge instead of letting it span the full widget width.
-function qtAlignmentToFlex(val: string): Record<string, string> {
+// Every Mudlet label is rich text — `TLabel` forces `Qt::RichText` in its
+// constructor — so Qt lays it out through a QTextDocument, and the two axes are
+// handled quite differently (see QLabelPrivate in qlabel.cpp):
+//
+//   • Vertical: `layoutRect()` is the *only* place the alignment moves the
+//     content, offsetting the text box down for AlignVCenter/AlignBottom. Our
+//     `.label` is `display: flex; flex-direction: column`, so that maps to
+//     `justify-content` on the main (vertical) axis.
+//
+//   • Horizontal: Qt feeds the alignment into the document's *default text
+//     option* (`ensureTextLayouted`: `opt.setAlignment(align)`), i.e. it sets
+//     the default block alignment — which inner HTML (`<center>`,
+//     `align="left"`) overrides — while `doc->setTextWidth(documentRect()
+//     .width())` keeps the document spanning the *full* content width. So it
+//     maps to `text-align` (inherited by the echoed HTML, overridable
+//     per-block), NOT to shrinking/pinning the box via `align-items`; the
+//     inner div must stay stretched to full width for `<center>` to centre.
+export function qtAlignmentToFlex(val: string): Record<string, string> {
     const flags = val.split('|').map(s => s.trim().toLowerCase());
     const has = (name: string) => flags.includes(name.toLowerCase());
     const out: Record<string, string> = {};
 
-    // Vertical → main axis (column direction).
+    // Vertical → main axis (column direction) via justify-content.
     if (has('AlignCenter') || has('AlignVCenter')) out.justifyContent = 'center';
     else if (has('AlignBottom')) out.justifyContent = 'flex-end';
     else if (has('AlignTop')) out.justifyContent = 'flex-start';
 
-    // Horizontal → cross axis. When the script names a horizontal anchor we
-    // pin to it (and thus stop stretching); when it doesn't, stretch stays so
-    // HTML alignment (`<center>`, `align="left"`) drives the rendered position
-    // within the full-width inner div.
-    if (has('AlignCenter') || has('AlignHCenter')) out.alignItems = 'center';
-    else if (has('AlignRight')) out.alignItems = 'flex-end';
-    else if (has('AlignLeft')) out.alignItems = 'flex-start';
+    // Horizontal → the document's default block alignment via text-align.
+    if (has('AlignCenter') || has('AlignHCenter')) out.textAlign = 'center';
+    else if (has('AlignRight')) out.textAlign = 'right';
+    else if (has('AlignLeft')) out.textAlign = 'left';
 
     return out;
+}
+
+// Pull the value of a `qproperty-alignment` declaration out of a Qt stylesheet
+// (base block or a `QLabel { … }` rule), quote-stripped like the QSS parser
+// does — or undefined when none is present. Qt applies qproperty-* declarations
+// as *widget properties*: they persist across a later setStyleSheet that omits
+// them (unlike ordinary style, which is fully replaced). LabelManager captures
+// this so a restyle that drops the alignment keeps the last one that was set —
+// e.g. Adjustable.Container installs `AlignLeft | AlignTop`, then a theme like
+// EleUI2 replaces the whole sheet without an alignment and the title stays
+// top-aligned. Last declaration wins, mirroring Qt's in-order application.
+export function extractQtAlignment(css: string): string | undefined {
+    const blocks = css.indexOf('{') < 0
+        ? [css]
+        : splitRulesets(css)
+            .filter(r => r.selector.trim() === '' || /^QLabel$/i.test(r.selector.trim()))
+            .map(r => r.body);
+    let found: string | undefined;
+    for (const block of blocks) {
+        for (const { key, val } of parseQtDeclarations(block)) {
+            if (key === 'qproperty-alignment') found = val;
+        }
+    }
+    return found;
 }
 
 // Pull out base-level declarations from a stylesheet that may also have

@@ -1,4 +1,4 @@
-import { cssEscape, patchStyleSheetBackgroundColor } from './qtCss';
+import { cssEscape, extractQtAlignment, patchStyleSheetBackgroundColor } from './qtCss';
 import type { MoviePlayer } from './gifMovie';
 import { OverlayLayerOrder } from '../layout/overlayLayerOrder';
 
@@ -40,6 +40,14 @@ export interface LabelState {
     backgroundImage?: { url: string; width?: number; height?: number };
     /** Qt-style CSS string set via setLabelStyleSheet; parsed at render time. */
     styleSheet?: string;
+    /** Sticky Qt `alignment` widget property, captured from a
+     *  `qproperty-alignment` declaration in any setStyleSheet call. In Qt,
+     *  qproperty-* declarations set the widget property permanently — a later
+     *  setStyleSheet that omits it does NOT revert it (ordinary style is
+     *  replaced wholesale, but the property sticks). So we track it separately
+     *  from `styleSheet` and re-apply it at render. Raw Qt value, e.g.
+     *  "AlignLeft | AlignTop"; translated by qtAlignmentToFlex at render. */
+    alignment?: string;
     /** Mudlet setLinkStyle(labelName, linkColor, linkVisitedColor, underline) —
      *  styling for `<a>` links inside the label's HTML. Cleared by
      *  resetLinkStyle. Colors are any CSS color string (empty = leave default). */
@@ -309,6 +317,12 @@ export class LabelManager {
         const lbl = this.labels.get(name);
         if (!lbl) return false;
         lbl.styleSheet = css;
+        // qproperty-alignment is a Qt widget property, not transient style: once
+        // set it sticks even when a later stylesheet omits it. Capture it here so
+        // a restyle that drops the alignment keeps the previous one (an absent
+        // declaration leaves lbl.alignment untouched).
+        const align = extractQtAlignment(css);
+        if (align !== undefined) lbl.alignment = align;
         this.notify(lbl.parent);
         return true;
     }

@@ -3,6 +3,8 @@ import {
     cssTextToStyle,
     cssTextToParts,
     qtDeclarationsToCss,
+    qtAlignmentToFlex,
+    extractQtAlignment,
     userWindowQssToScopedCss,
     patchStyleSheetBackgroundColor,
 } from '../../src/ui/labels/qtCss';
@@ -223,5 +225,59 @@ describe('patchStyleSheetBackgroundColor', () => {
 
     it('appends onto an empty stylesheet', () => {
         expect(patchStyleSheetBackgroundColor('', 1, 2, 3, 255)).toBe('background-color: rgba(1, 2, 3, 255);');
+    });
+});
+
+describe('qtAlignmentToFlex', () => {
+    // Mudlet labels are always rich text, so Qt maps the vertical flag to a box
+    // offset (→ justify-content) and the horizontal flag to the document's
+    // default block alignment (→ text-align, overridable by inner <center>).
+    it('maps vertical flags to justify-content on the column axis', () => {
+        expect(qtAlignmentToFlex('AlignTop')).toEqual({ justifyContent: 'flex-start' });
+        expect(qtAlignmentToFlex('AlignVCenter')).toEqual({ justifyContent: 'center' });
+        expect(qtAlignmentToFlex('AlignBottom')).toEqual({ justifyContent: 'flex-end' });
+    });
+
+    it('maps horizontal flags to text-align, never to align-items (keeps the doc full-width)', () => {
+        expect(qtAlignmentToFlex('AlignLeft')).toEqual({ textAlign: 'left' });
+        expect(qtAlignmentToFlex('AlignHCenter')).toEqual({ textAlign: 'center' });
+        expect(qtAlignmentToFlex('AlignRight')).toEqual({ textAlign: 'right' });
+        // No align-items in any output — an explicit horizontal anchor must not
+        // shrink the inner div, or an inner <center> could no longer centre.
+        for (const v of ['AlignLeft', 'AlignRight', 'AlignHCenter', 'AlignCenter']) {
+            expect(qtAlignmentToFlex(v).alignItems).toBeUndefined();
+        }
+    });
+
+    it('handles the combined AlignLeft | AlignTop and AlignCenter forms', () => {
+        expect(qtAlignmentToFlex('AlignLeft | AlignTop')).toEqual({
+            justifyContent: 'flex-start', textAlign: 'left',
+        });
+        // AlignCenter is HCenter | VCenter.
+        expect(qtAlignmentToFlex('AlignCenter')).toEqual({
+            justifyContent: 'center', textAlign: 'center',
+        });
+    });
+});
+
+describe('extractQtAlignment', () => {
+    it('reads a quote-stripped value from a base-block declaration', () => {
+        expect(extractQtAlignment("border: 0; qproperty-alignment: 'AlignLeft | AlignTop';"))
+            .toBe('AlignLeft | AlignTop');
+    });
+
+    it('reads it from a QLabel { … } ruleset', () => {
+        expect(extractQtAlignment('QLabel { qproperty-alignment: AlignCenter; }'))
+            .toBe('AlignCenter');
+    });
+
+    it('returns undefined when the stylesheet has no alignment', () => {
+        expect(extractQtAlignment('border-image: url(bg.png); padding-top: -95px;'))
+            .toBeUndefined();
+    });
+
+    it('takes the last declaration when several are present (Qt in-order)', () => {
+        expect(extractQtAlignment('qproperty-alignment: AlignTop; qproperty-alignment: AlignBottom;'))
+            .toBe('AlignBottom');
     });
 });
