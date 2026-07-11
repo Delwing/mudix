@@ -138,6 +138,10 @@ function declarationsToStyleWithMargin(css: string): {
             Object.assign(out, qtAlignmentToFlex(val));
             continue;
         }
+        // qproperty-scaledContents is a Qt widget property, captured separately
+        // (extractQtScaledContents) and applied to the background image at render
+        // — it has no direct CSS declaration, so drop it here.
+        if (key === 'qproperty-scaledcontents') continue;
         if (key === 'margin' || key === 'margin-top' || key === 'margin-right'
             || key === 'margin-bottom' || key === 'margin-left') {
             applyMarginDeclaration(margin, key, val);
@@ -321,6 +325,9 @@ export function qtDeclarationsToCss(css: string, important = false): string {
             }
             continue;
         }
+        // Widget property applied to the background image at render, not a CSS
+        // declaration — see extractQtScaledContents / declarationsToStyleWithMargin.
+        if (key === 'qproperty-scaledcontents') continue;
         const [outKey, outVal] = translateDeclaration(key, val);
         out.push(`${outKey}: ${outVal}${bang}`);
     }
@@ -591,6 +598,31 @@ export function extractQtAlignment(css: string): string | undefined {
     for (const block of blocks) {
         for (const { key, val } of parseQtDeclarations(block)) {
             if (key === 'qproperty-alignment') found = val;
+        }
+    }
+    return found;
+}
+
+// Pull the value of a `qproperty-scaledContents` declaration out of a Qt
+// stylesheet (base block or a `QLabel { … }` rule) as a boolean — or undefined
+// when none is present, so a restyle that omits it leaves the last value in
+// place. Like qproperty-alignment, Qt applies qproperty-* as *widget
+// properties* that persist across later stylesheets. When true, Qt's
+// QLabel::setScaledContents scales the pixmap (setBackgroundImage) to fill the
+// whole label instead of painting it at native size. Last declaration wins.
+export function extractQtScaledContents(css: string): boolean | undefined {
+    const blocks = css.indexOf('{') < 0
+        ? [css]
+        : splitRulesets(css)
+            .filter(r => r.selector.trim() === '' || /^QLabel$/i.test(r.selector.trim()))
+            .map(r => r.body);
+    let found: boolean | undefined;
+    for (const block of blocks) {
+        for (const { key, val } of parseQtDeclarations(block)) {
+            if (key === 'qproperty-scaledcontents') {
+                const v = val.trim().toLowerCase();
+                found = v === 'true' || v === '1';
+            }
         }
     }
     return found;

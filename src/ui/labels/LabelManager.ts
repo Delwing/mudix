@@ -1,4 +1,4 @@
-import { cssEscape, extractQtAlignment, patchStyleSheetBackgroundColor } from './qtCss';
+import { cssEscape, extractQtAlignment, extractQtScaledContents, patchStyleSheetBackgroundColor } from './qtCss';
 import type { MoviePlayer } from './gifMovie';
 import { OverlayLayerOrder } from '../layout/overlayLayerOrder';
 
@@ -48,6 +48,14 @@ export interface LabelState {
      *  from `styleSheet` and re-apply it at render. Raw Qt value, e.g.
      *  "AlignLeft | AlignTop"; translated by qtAlignmentToFlex at render. */
     alignment?: string;
+    /** Sticky Qt `scaledContents` widget property, captured from a
+     *  `qproperty-scaledContents` declaration in any setStyleSheet call. When
+     *  true, Qt's QLabel::setScaledContents scales the pixmap
+     *  (setBackgroundImage) to fill the entire label instead of painting it at
+     *  native size; LabelOverlay maps that to `background-size: 100% 100%`. Like
+     *  `alignment`, it's a widget property that persists across a later
+     *  stylesheet that omits it. */
+    scaledContents?: boolean;
     /** Mudlet setLinkStyle(labelName, linkColor, linkVisitedColor, underline) —
      *  styling for `<a>` links inside the label's HTML. Cleared by
      *  resetLinkStyle. Colors are any CSS color string (empty = leave default). */
@@ -323,6 +331,9 @@ export class LabelManager {
         // declaration leaves lbl.alignment untouched).
         const align = extractQtAlignment(css);
         if (align !== undefined) lbl.alignment = align;
+        // qproperty-scaledContents is likewise a sticky widget property.
+        const scaled = extractQtScaledContents(css);
+        if (scaled !== undefined) lbl.scaledContents = scaled;
         this.notify(lbl.parent);
         return true;
     }

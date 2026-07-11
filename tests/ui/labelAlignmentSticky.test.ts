@@ -49,3 +49,42 @@ describe('LabelManager qproperty-alignment stickiness', () => {
         expect(mgr.list('main')[0].alignment).toBeUndefined();
     });
 });
+
+// qproperty-scaledContents is the same kind of sticky Qt widget property as
+// alignment: it makes setBackgroundImage stretch to fill the label (issue #9),
+// and persists across a later setStyleSheet that omits it.
+describe('LabelManager qproperty-scaledContents stickiness', () => {
+    function make(): LabelManager {
+        const mgr = new LabelManager();
+        mgr.create('t', {
+            x: 0, y: 0, width: 100, height: 100, fillBackground: false,
+        });
+        return mgr;
+    }
+
+    it('captures scaledContents from a stylesheet that declares it', () => {
+        const mgr = make();
+        mgr.setStyleSheet('t', 'padding: 6px; qproperty-scaledContents: true;');
+        expect(mgr.list('main')[0].scaledContents).toBe(true);
+    });
+
+    it('keeps scaledContents when a later stylesheet omits it', () => {
+        const mgr = make();
+        mgr.setStyleSheet('t', 'qproperty-scaledContents: true;');
+        mgr.setStyleSheet('t', 'padding: 6px;');
+        expect(mgr.list('main')[0].scaledContents).toBe(true); // sticky
+    });
+
+    it('updates scaledContents when a later stylesheet flips it off', () => {
+        const mgr = make();
+        mgr.setStyleSheet('t', 'qproperty-scaledContents: true;');
+        mgr.setStyleSheet('t', 'qproperty-scaledContents: false;');
+        expect(mgr.list('main')[0].scaledContents).toBe(false);
+    });
+
+    it('leaves scaledContents unset when no stylesheet ever declared it', () => {
+        const mgr = make();
+        mgr.setStyleSheet('t', 'border-image: url(bg.png);');
+        expect(mgr.list('main')[0].scaledContents).toBeUndefined();
+    });
+});

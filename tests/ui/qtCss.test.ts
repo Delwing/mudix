@@ -5,6 +5,7 @@ import {
     qtDeclarationsToCss,
     qtAlignmentToFlex,
     extractQtAlignment,
+    extractQtScaledContents,
     userWindowQssToScopedCss,
     patchStyleSheetBackgroundColor,
 } from '../../src/ui/labels/qtCss';
@@ -279,5 +280,40 @@ describe('extractQtAlignment', () => {
     it('takes the last declaration when several are present (Qt in-order)', () => {
         expect(extractQtAlignment('qproperty-alignment: AlignTop; qproperty-alignment: AlignBottom;'))
             .toBe('AlignBottom');
+    });
+});
+
+describe('extractQtScaledContents', () => {
+    it('reads true from a base-block declaration', () => {
+        expect(extractQtScaledContents('padding: 6px; qproperty-scaledContents: true;')).toBe(true);
+    });
+
+    it('reads it from a QLabel { … } ruleset', () => {
+        expect(extractQtScaledContents('QLabel { qproperty-scaledContents: true; }')).toBe(true);
+    });
+
+    it('reads false explicitly', () => {
+        expect(extractQtScaledContents('qproperty-scaledContents: false;')).toBe(false);
+    });
+
+    it('accepts the quoted / 1 / 0 forms', () => {
+        expect(extractQtScaledContents("qproperty-scaledContents: 'true';")).toBe(true);
+        expect(extractQtScaledContents('qproperty-scaledContents: 1;')).toBe(true);
+        expect(extractQtScaledContents('qproperty-scaledContents: 0;')).toBe(false);
+    });
+
+    it('returns undefined when the stylesheet has no scaledContents', () => {
+        expect(extractQtScaledContents('border: 0; padding: 6px;')).toBeUndefined();
+    });
+
+    it('takes the last declaration when several are present (Qt in-order)', () => {
+        expect(extractQtScaledContents('qproperty-scaledContents: true; qproperty-scaledContents: false;'))
+            .toBe(false);
+    });
+
+    it('is not emitted as a stray CSS property on the inline style', () => {
+        const style = cssTextToStyle('padding: 6px; qproperty-scaledContents: true;') as Record<string, string>;
+        expect(style.qpropertyScaledContents).toBeUndefined();
+        expect(style.padding).toBe('6px');
     });
 });

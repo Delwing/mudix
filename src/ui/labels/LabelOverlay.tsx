@@ -204,17 +204,24 @@ function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
         const url = l.backgroundImage.url.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
         style.backgroundImage = `url("${url}")`;
         style.backgroundRepeat = 'no-repeat';
-        // Mudlet's setBackgroundImage is QLabel::setPixmap() under the hood:
-        // the image paints at its native size, left-aligned and vertically
-        // centered (QLabel's default alignment), clipped by the label rather
-        // than scaled to fit it. CSS defaults to top-left, so pin vcenter
-        // explicitly. Raster images already have a CSS intrinsic size and
-        // render native-size automatically; `width`/`height` (SVGs resolved
-        // async — see backgroundImageSize.ts) forces the same for formats
-        // that would otherwise stretch to fill the label.
-        style.backgroundPosition = 'left center';
-        if (l.backgroundImage.width != null && l.backgroundImage.height != null) {
-            style.backgroundSize = `${l.backgroundImage.width}px ${l.backgroundImage.height}px`;
+        if (l.scaledContents) {
+            // Qt's setScaledContents(true) (via `qproperty-scaledContents`)
+            // stretches the pixmap to fill the whole label, ignoring its native
+            // size and aspect ratio — `background-size: 100% 100%` matches that.
+            style.backgroundSize = '100% 100%';
+        } else {
+            // Mudlet's setBackgroundImage is QLabel::setPixmap() under the hood:
+            // the image paints at its native size, left-aligned and vertically
+            // centered (QLabel's default alignment), clipped by the label rather
+            // than scaled to fit it. CSS defaults to top-left, so pin vcenter
+            // explicitly. Raster images already have a CSS intrinsic size and
+            // render native-size automatically; `width`/`height` (SVGs resolved
+            // async — see backgroundImageSize.ts) forces the same for formats
+            // that would otherwise stretch to fill the label.
+            style.backgroundPosition = 'left center';
+            if (l.backgroundImage.width != null && l.backgroundImage.height != null) {
+                style.backgroundSize = `${l.backgroundImage.width}px ${l.backgroundImage.height}px`;
+            }
         }
     }
 
