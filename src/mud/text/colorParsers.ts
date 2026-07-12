@@ -100,6 +100,83 @@ export function parseDecho(text: string): string {
         .replace(/<r>/g, '\x1b[0m') + '\x1b[0m';
 }
 
+/**
+ * Fast-path for `decho`: the ANSI-escape equivalent of `str`, or `null` when the
+ * string uses any decho feature {@link parseDecho} does NOT reproduce exactly as
+ * Mudlet's Lua `xEcho` would. Callers (the native `decho` fast path) fall back to
+ * the Lua `xEcho` on `null`, so output stays identical to Mudlet.
+ *
+ * Handled here (and only here): foreground `<r,g,b>`, background `<:r,g,b>` with
+ * channels in 0..255, and the `<r>` reset. Deferred to Lua: combined `<fg:bg>`,
+ * background alpha `<:r,g,b,a>`, text-style tags (`<b>`/`<i>`/`<u>`/`<s>`/`<o>`),
+ * out-of-range channels, and any other `<...>` token — the conservative guard
+ * from our design discussion, so a decho grammar we don't model degrades to
+ * slow-but-correct rather than wrong.
+ */
+export function dechoToAnsiFast(str: string): string | null {
+    const tags = str.match(/<[^>]*>/g);
+    if (tags) {
+        for (const t of tags) {
+            if (t === '<r>') continue;
+            const m = /^<(:?)(\d{1,3}),(\d{1,3}),(\d{1,3})>$/.exec(t);
+            if (!m) return null;
+            if (+m[2] > 255 || +m[3] > 255 || +m[4] > 255) return null;
+        }
+    }
+    return parseDecho(str);
+}
+
+/**
+ * Fast-path for `cecho` — see {@link dechoToAnsiFast}. Handles ONLY a plain
+ * foreground `<name>` (resolvable in the Mudlet colour table) and the
+ * `<r>`/`<reset>` reset. Everything else falls back to Lua `xEcho`, because
+ * {@link parseCecho}'s grammar and name resolution diverge from Mudlet's:
+ *  - style tags `<b>`/`<i>`/`<u>`/`<s>`/`<o>` (parseCecho would treat `b` as a
+ *    colour name),
+ *  - combined `<fg:bg>` / `<fg,bg>` and `<:bg>` backgrounds, and the `<b:…>`
+ *    form (Mudlet reads `<b:red>` as fg=b, bg=red — not "background red"),
+ *  - unknown names (parseCecho drops the tag; Mudlet leaves it literal).
+ *
+ * The `ansi_NNN` / `ansiXxx` family IS fast-pathed: this palette and the runtime
+ * `color_table` (seeded from {@link ../text/xterm256}) agree, verified by the
+ * full-palette sweep in the parity test — which also fails loudly if they ever
+ * drift again.
+ */
+export function cechoToAnsiFast(str: string): string | null {
+    const tags = str.match(/<[^>]*>/g);
+    if (tags) {
+        for (const t of tags) {
+            const name = t.slice(1, -1);
+            if (name === 'r' || name === 'reset') continue;
+            if (/^\/?[biuso]$/.test(name)) return null;        // style tags
+            if (!/^[a-zA-Z0-9_]+$/.test(name)) return null;    // combined/bg/`:`/`,`
+            if (MUDLET_COLORS[name] === undefined) return null; // unknown → Mudlet keeps literal
+        }
+    }
+    return parseCecho(str);
+}
+
+/**
+ * Fast-path for `hecho` — see {@link dechoToAnsiFast}. Handles ONLY a plain
+ * foreground `#RRGGBB` and the `#r` reset. Falls back to Lua `xEcho` for
+ * everything {@link parseHecho} can't reproduce as Mudlet does:
+ *  - the `|c…` / `|b` pipe forms and `\#` escapes,
+ *  - `#:…` (not Mudlet syntax) and `#,…` / `#RRGGBB,…` backgrounds/combined,
+ *  - style tags `#b`/`#i`/`#u`/`#s`/`#o`.
+ */
+export function hechoToAnsiFast(str: string): string | null {
+    if (str.includes('|') || str.includes('\\')) return null;
+    const re = /#/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(str))) {
+        const rest = str.slice(m.index + 1);
+        if (rest.charCodeAt(0) === 114 /* 'r' */) continue;    // #r reset
+        if (!/^[0-9a-fA-F]{6}/.test(rest)) return null;         // not a plain fg colour
+        if (rest.charAt(6) === ',') return null;                // combined fg,bg
+    }
+    return parseHecho(str);
+}
+
 /** hecho: #RRGGBBtext  or  #:RRGGBBtext for background, #r to reset */
 export function parseHecho(text: string): string {
     return text

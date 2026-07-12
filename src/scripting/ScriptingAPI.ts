@@ -18,7 +18,7 @@ import { classifyHyperlinkUri } from '../mud/text/ansiEscapes';
 import { extractQuery } from '../mud/text/hyperlinkConfig';
 import { OscLinkManager } from '../mud/text/oscLinkManager';
 import { openOsc8Menu } from '../ui/output/osc8Menu';
-import { namedColorToState } from '../mud/text/colorParsers';
+import { namedColorToState, dechoToAnsiFast, cechoToAnsiFast, hechoToAnsiFast } from '../mud/text/colorParsers';
 import { colorCodes } from '../mud/text/colors';
 import { Console } from '../mud/text/Console';
 import { flashTitle } from '../utils/documentTitle';
@@ -1807,6 +1807,52 @@ export class ScriptingAPI {
         const con = this.outputConsole(win);
         con.echo(text);
         this.drainWindowConsole(win, con);
+    }
+
+    /**
+     * Native fast path for the color-echo family (`decho`/`cecho`/`hecho`).
+     * Mudlet's Lua `xEcho` splits the string into color segments and crosses the Lua↔JS
+     * boundary twice per segment (`setFgColor` + `echo`); a per-character
+     * rainbow line is ~180 crossings. This converts the whole string to ANSI in
+     * one pass and appends it as a single buffer — the same path network output
+     * uses — so a `decho`-heavy loop pays ~1 crossing per line instead.
+     *
+     * Returns `false` when the fast path can't preserve exact `xEcho` semantics;
+     * the Lua wrapper then falls back to the original `decho`. It bails on:
+     *  - label targets (xEcho replaces their HTML wholesale),
+     *  - main-window echo during trigger processing (echo appends to the matched
+     *    line via a raw, non-ANSI insert the ANSI path can't reproduce),
+     *  - any input the per-kind guard declines ({@link dechoToAnsiFast} /
+     *    {@link cechoToAnsiFast} / {@link hechoToAnsiFast}) — style tags,
+     *    combined fg/bg, backgrounds, unknown color names, unmodeled tokens.
+     */
+    fastColorEcho(kind: string, win: string, str: string): boolean {
+        if (win !== 'main' && this.labels.has(win)) return false;
+        if (win === 'main' && this.echoOnMatchedLine) return false;
+
+        let ansi: string | null = null;
+        if (kind === 'decho') ansi = dechoToAnsiFast(str);
+        else if (kind === 'cecho') ansi = cechoToAnsiFast(str);
+        else if (kind === 'hecho') ansi = hechoToAnsiFast(str);
+        if (ansi === null) return false;
+
+        // parseDecho unconditionally appends a trailing reset; we reset the pen
+        // before every echo below, so drop it to avoid leaving a stray empty
+        // partial (xEcho leaves none). Any internal `<r>` resets are preserved.
+        if (ansi.endsWith('\x1b[0m')) ansi = ansi.slice(0, -4);
+
+        const con = this.outputConsole(win);
+        // Mirror xEcho's pre-echo `deselect(win)` + `resetFormat(win)`: leading
+        // text renders in the default pen and the pen returns to default after.
+        // Pass the concrete `win` (never undefined) exactly as xEcho does, so a
+        // main-window echo only clears a selection owned by main — clearing
+        // unconditionally would clobber a selection held in another window.
+        this.deselect(win);
+        con.resetFormat();
+        con.echo(ansi);
+        if (win === 'main') this.drainMain();
+        else this.drainWindowConsole(win, con);
+        return true;
     }
 
     /**

@@ -408,6 +408,14 @@ export class LuaRuntime implements IScriptingRuntime {
             }
         });
 
+        // Native fast path for the color-echo family. The Lua wrapper installed
+        // after LuaGlobal.lua (see FAST_COLOR_ECHO_LUA) calls this before falling
+        // back to Mudlet's per-segment xEcho. Returns true iff handled natively.
+        this.lua.global.set('__mudixFastColorEcho', (kind: unknown, win: unknown, str: unknown): boolean => {
+            if (typeof kind !== 'string' || typeof win !== 'string' || typeof str !== 'string') return false;
+            return this.api.fastColorEcho(kind, win, str);
+        });
+
         // Format state — called by xEcho between text chunks.
         // Lua calling conventions:
         //   setFgColor([win,] r, g, b)
@@ -4067,12 +4075,54 @@ export class LuaRuntime implements IScriptingRuntime {
             'lpeg-register',
         );
         this.exec(LUAGLOBAL, 'LuaGlobal');
+        this.installFastColorEcho();
         this.setupAnsiColorTable();
         // Record the default namespace so the Variables view can hide built-ins.
         // Must run after the bundle but before any user global is added.
         this.exec(CAPTURE_BASELINE_LUA, 'baseline-globals');
 
         if (BUSTED_ENABLED) this.setupBustedBridge();
+    }
+
+    // Shadow the shared `xEcho` dispatcher (not decho/cecho/hecho themselves) so
+    // that a colour echo tries the native fast path (__mudixFastColorEcho) and
+    // falls back to the original xEcho for anything the fast path declines
+    // (labels, style tags, combined fg/bg, backgrounds, unknown colour names,
+    // trigger-time matched-line echo, etc). Wrapping xEcho — rather than the
+    // public functions — is deliberate:
+    //   * it keeps decho/cecho/hecho's function identities intact, which
+    //     prefix()/suffix() depend on (GUIUtils' `insertFuncs` maps those exact
+    //     identities to their insert variants), and
+    //   * it only accelerates func == "echo"; insertText/echoLink/echoPopup and
+    //     the label-HTML path route through the untouched original.
+    // The bundled GUIUtils.lua is not modified. Runs after LuaGlobal.lua.
+    private installFastColorEcho(): void {
+        this.exec(
+            `do
+  local fast = __mudixFastColorEcho
+  local orig_xEcho = xEcho
+  local styleKind = { Decimal = 'decho', Color = 'cecho', Hex = 'hecho' }
+  function xEcho(style, func, ...)
+    if func == 'echo' then
+      local kind = styleKind[style]
+      if kind then
+        local n = select('#', ...)
+        local a, b = ...
+        local win, str
+        if n >= 2 and type(a) == 'string' and type(b) == 'string' then
+          win, str = a, b
+        elseif n >= 1 and type(a) == 'string' then
+          win, str = 'main', a
+        end
+        if str ~= nil and fast(kind, win, str) then return end
+      end
+    end
+    return orig_xEcho(style, func, ...)
+  end
+end
+__mudixFastColorEcho = nil`,
+            'fast-color-echo',
+        );
     }
 
     // Seed color_table with the xterm-256 palette (ansi_000..ansi_255). Mudlet's
