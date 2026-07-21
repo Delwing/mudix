@@ -3225,6 +3225,25 @@ export class ScriptingEngine {
             session.events.on('telnet.echo.anomaly', () => {
                 this.raiseEvent('sysEchoAnomalyDetected', []);
             }),
+            // Mudlet `raiseProtocolEvent("sysProtocolRejected", name)` — fired
+            // when mudix refuses a telnet option it deliberately doesn't support
+            // (SUPPRESS_GO_AHEAD, LINEMODE — line mode only, like Mudlet).
+            session.events.on('protocol.rejected', (protocol) => {
+                this.raiseEvent('sysProtocolRejected', [protocol]);
+            }),
+            // Mudlet `sysCharacterModeDetected` — the server requested SGA and
+            // enabled server-side echo (character-at-a-time), which mudix can't
+            // drive well. Raised once per connection, and — matching Mudlet's
+            // cTelnet::checkCharacterModePattern — accompanied by a visible
+            // [ WARN ] line in the main output.
+            session.events.on('charmode.detected', () => {
+                this.raiseEvent('sysCharacterModeDetected', []);
+                this.session.events.emit('message',
+                    mudletWarn('This game appears to use character-at-a-time mode, which is not '
+                        + 'supported. Input may not work as expected. Consider using keybindings '
+                        + 'for immediate key response instead.'),
+                    'warn', Date.now());
+            }),
             session.events.on('flushLines', (groups) => {
                 // TEMP DIAGNOSTIC: set window.__MUDIX_DEBUG_FLUSH = true in the
                 // devtools console to log each network flush batch's raw line

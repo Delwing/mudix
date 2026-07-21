@@ -12,6 +12,8 @@ import {
     GMCP_SB,
     GMCP_SE,
     GMCP_WILL,
+    LINEMODE_DONT,
+    LINEMODE_WONT,
     MSDP_DO,
     MSDP_WILL,
     MSP_DO,
@@ -28,7 +30,7 @@ import {
     OPT_TTYPE,
     parseMnesRequest,
     selectMnesVars,
-    SGA_DO,
+    SGA_DONT,
     TTYPE_IS,
     TTYPE_SEND,
     TTYPE_WILL,
@@ -45,13 +47,13 @@ const SE = 0xF0, SB = 0xFA, WILL = 0xFB, WONT = 0xFC, DO = 0xFD, DONT = 0xFE;
 // to a sibling handler). Everything else goes through the supported-options
 // registry or is surfaced as a `telnet.event`.
 const OPT_ECHO = 1, OPT_SGA = 3, OPT_TTYPE_NUM = 24, OPT_EOR = 25, OPT_NAWS = 31,
-    OPT_NEW_ENVIRON_NUM = 39, OPT_CHARSET_NUM = 42, OPT_MSDP = 69, OPT_MSSP = 70,
-    OPT_MCCP1 = 85, OPT_MCCP2 = 86, OPT_MSP = 90, OPT_MXP = 91, OPT_GMCP = 201;
+    OPT_LINEMODE = 34, OPT_NEW_ENVIRON_NUM = 39, OPT_CHARSET_NUM = 42, OPT_MSDP = 69,
+    OPT_MSSP = 70, OPT_MCCP1 = 85, OPT_MCCP2 = 86, OPT_MSP = 90, OPT_MXP = 91, OPT_GMCP = 201;
 
 /** Options the client negotiates natively — excluded from `sysTelnetEvent`
  *  so script handlers see only "everything else". */
 const HARDCODED = new Set<number>([
-    OPT_ECHO, OPT_SGA, OPT_TTYPE_NUM, OPT_EOR, OPT_NAWS, OPT_NEW_ENVIRON_NUM,
+    OPT_ECHO, OPT_SGA, OPT_TTYPE_NUM, OPT_EOR, OPT_NAWS, OPT_LINEMODE, OPT_NEW_ENVIRON_NUM,
     OPT_CHARSET_NUM, OPT_MSDP, OPT_MSSP, OPT_MCCP1, OPT_MCCP2, OPT_MSP, OPT_MXP, OPT_GMCP,
 ]);
 
@@ -146,6 +148,11 @@ export class TelnetNegotiator {
      *  has measured the grid at least once. Deliberately NOT cleared by reset()
      *  so a reconnect keeps reporting the current grid. */
     private windowSize: { cols: number; rows: number } | null = null;
+    /** Latches true once the server has asked us to suppress go-ahead (IAC WILL
+     *  SGA). mudix refuses SGA (line mode only), but records the request:
+     *  combined with active server echo it's the character-at-a-time signature
+     *  the owner uses to raise `sysCharacterModeDetected`. Reset on connect(). */
+    private serverRequestedSGA = false;
 
     constructor(
         private readonly flags: TelnetNegotiatorFlags,
@@ -161,6 +168,14 @@ export class TelnetNegotiator {
         this.mxpStarted = false;
         this.nawsWillSent = false;
         this.nawsNegotiated = false;
+        this.serverRequestedSGA = false;
+    }
+
+    /** Whether the server has asked us to suppress go-ahead this connection
+     *  (IAC WILL SGA). We refuse SGA, but the owner combines this with the
+     *  echo state to detect character-at-a-time mode. */
+    get sgaRequested(): boolean {
+        return this.serverRequestedSGA;
     }
 
     /** The WebSocket handshake completed — proactively offer NAWS (RFC 1073
@@ -286,11 +301,32 @@ export class TelnetNegotiator {
                 // frame independently — nothing to do here.
                 return;
             case OPT_SGA:
-                // Server offers Suppress-Go-Ahead (IAC WILL SGA, option 3)
-                // → we accept (IAC DO SGA). Standard for full-duplex MUD
-                // sessions; leaving it unanswered stalls strict servers
-                // that wait for negotiation to settle before prompting.
-                if (cmd === WILL) this.hooks.sendRaw(SGA_DO);
+                // Server offers Suppress-Go-Ahead (IAC WILL SGA, option 3) →
+                // we REFUSE it (IAC DONT SGA), matching Mudlet: mudix operates
+                // in line mode only. A DONT is still a definitive answer, so
+                // strict servers don't stall; and refusing keeps `IAC GA`
+                // un-suppressed, which mudix's prompt detection relies on.
+                // We record the request — SGA plus active server echo is the
+                // character-at-a-time signature the owner watches for.
+                if (cmd === WILL) {
+                    this.hooks.sendRaw(SGA_DONT);
+                    this.serverRequestedSGA = true;
+                    this.eventBus.emit('protocol.rejected', 'SUPPRESS_GO_AHEAD');
+                }
+                return;
+            case OPT_LINEMODE:
+                // LINEMODE (RFC 1184, option 34) would hand line editing /
+                // forwarding policy to the server. mudix does its own local
+                // line editing and never delegates it, so — like Mudlet — we
+                // refuse in both directions: DONT to the server's WILL, WONT
+                // to its DO.
+                if (cmd === WILL) {
+                    this.hooks.sendRaw(LINEMODE_DONT);
+                    this.eventBus.emit('protocol.rejected', 'LINEMODE');
+                } else if (cmd === DO) {
+                    this.hooks.sendRaw(LINEMODE_WONT);
+                    this.eventBus.emit('protocol.rejected', 'LINEMODE');
+                }
                 return;
             case OPT_EOR:
                 // Server announces it will mark prompts with IAC EOR (telnet

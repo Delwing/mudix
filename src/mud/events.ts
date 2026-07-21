@@ -96,6 +96,19 @@ export type MudClientEvents = {
      *  IAC commands the client doesn't natively recognise (everything other
      *  than the hardcoded GMCP/MSDP/TTYPE/MCCP/ECHO negotiations). */
     'telnet.event': [type: number, option: number, message: string];
+    /** Mudlet `raiseProtocolEvent("sysProtocolRejected", name)` — a telnet
+     *  option mudix deliberately refuses. mudix, like Mudlet, operates in line
+     *  mode only, so it rejects SUPPRESS_GO_AHEAD (option 3) and LINEMODE
+     *  (option 34) rather than let the server switch it into character-at-a-
+     *  time / server-driven line editing. The payload is the protocol name
+     *  (`'SUPPRESS_GO_AHEAD'` or `'LINEMODE'`). */
+    'protocol.rejected': [protocol: string];
+    /** Mudlet `sysCharacterModeDetected`. Fires once per connection when the
+     *  server has both asked to suppress go-ahead (IAC WILL SGA) *and* enabled
+     *  server-side echo — the classic character-at-a-time signature that mudix,
+     *  a line-based client, can't drive well. Lets scripts / the UI warn the
+     *  user that input may not behave as expected. */
+    'charmode.detected': void;
 } & Record<string, any>;
 
 export type MudEvents = MudClientEvents & {

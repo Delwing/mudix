@@ -1,10 +1,12 @@
 // @vitest-environment node
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MudClient } from '../../../src/mud/connection/MudClient';
 import { EventBus } from '../../../src/core/EventBus';
 import {
   EOR_WILL, EOR_DO,
-  SGA_WILL, SGA_DO,
+  SGA_WILL, SGA_DO, SGA_DONT,
+  LINEMODE_WILL, LINEMODE_DO, LINEMODE_DONT, LINEMODE_WONT,
+  ECHO_WILL,
   NEW_ENVIRON_DO, NEW_ENVIRON_WILL, NEW_ENVIRON_WONT,
   OPT_NEW_ENVIRON, NEW_ENVIRON_IS, NEW_ENVIRON_SEND,
   NEW_ENVIRON_VAR, NEW_ENVIRON_USERVAR,
@@ -75,10 +77,56 @@ describe('login-time telnet negotiation replies', () => {
     expect(sentText(sock)).toContain(EOR_DO);
   });
 
-  it('accepts WILL SGA with DO SGA', () => {
-    const { sock } = connected();
+  it('refuses WILL SGA with DONT SGA (Mudlet-parity: line mode only)', () => {
+    const { sock, bus } = connected();
+    const rejected: string[] = [];
+    bus.on('protocol.rejected', (p) => rejected.push(p));
     sock.deliver(SGA_WILL);
-    expect(sentText(sock)).toContain(SGA_DO);
+    const out = sentText(sock);
+    expect(out).toContain(SGA_DONT);
+    expect(out).not.toContain(SGA_DO); // never enable SGA — keeps IAC GA prompt markers flowing
+    expect(rejected).toContain('SUPPRESS_GO_AHEAD');
+  });
+
+  it('refuses WILL LINEMODE with DONT LINEMODE', () => {
+    const { sock, bus } = connected();
+    const rejected: string[] = [];
+    bus.on('protocol.rejected', (p) => rejected.push(p));
+    sock.deliver(LINEMODE_WILL);
+    expect(sentText(sock)).toContain(LINEMODE_DONT);
+    expect(rejected).toContain('LINEMODE');
+  });
+
+  it('refuses DO LINEMODE with WONT LINEMODE', () => {
+    const { sock, bus } = connected();
+    const rejected: string[] = [];
+    bus.on('protocol.rejected', (p) => rejected.push(p));
+    sock.deliver(LINEMODE_DO);
+    expect(sentText(sock)).toContain(LINEMODE_WONT);
+    expect(rejected).toContain('LINEMODE');
+  });
+
+  it('raises charmode.detected once when SGA request meets server ECHO', () => {
+    vi.useFakeTimers();
+    try {
+      const { sock, bus } = connected();
+      let count = 0;
+      bus.on('charmode.detected', () => { count++; });
+      // Server asks to suppress go-ahead, then turns on server-side echo — the
+      // classic character-at-a-time signature.
+      sock.deliver(SGA_WILL);
+      // Server echo commits only after the EchoHandler debounce window.
+      sock.deliver(ECHO_WILL);
+      expect(count).toBe(0); // SGA seen, but echo not committed yet
+      vi.advanceTimersByTime(600);
+      expect(count).toBe(1);
+      // Idempotent for the rest of the connection.
+      sock.deliver(ECHO_WILL);
+      vi.advanceTimersByTime(600);
+      expect(count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('declines DO NEW-ENVIRON with WONT when MNES is disabled', () => {
@@ -216,7 +264,7 @@ describe('login-time telnet negotiation replies', () => {
     const { sock } = connected({ mnesEnabled: false });
     sock.deliver(SGA_WILL + EOR_WILL + NEW_ENVIRON_DO);
     const out = sentText(sock);
-    expect(out).toContain(SGA_DO);
+    expect(out).toContain(SGA_DONT); // refused (line mode only), but still answered
     expect(out).toContain(EOR_DO);
     expect(out).toContain(NEW_ENVIRON_WONT);
   });

@@ -21,12 +21,27 @@ export const TELOPT_EOR  = "\x19";          // 25
 export const EOR_WILL = "\xFF\xFB\x19";     // IAC WILL EOR - server will send EOR prompt markers
 export const EOR_DO   = "\xFF\xFD\x19";     // IAC DO EOR   - client accepts EOR prompt markers
 
-// Telnet SGA (Suppress Go Ahead, RFC 858, option 3). Standard for character-at-
-// a-time / full-duplex sessions; MUDs offer `IAC WILL SGA` and expect a
-// `IAC DO SGA` confirmation. Silently ignoring it leaves strict servers waiting.
+// Telnet SGA (Suppress Go Ahead, RFC 858, option 3). Enabling SGA suppresses
+// the `IAC GA` prompt marker and is the classic character-at-a-time signal.
+// mudix — matching Mudlet (cTelnet.cpp) — operates in line mode only, so it
+// *rejects* SGA: on `IAC WILL SGA` it replies `IAC DONT SGA`. A DONT is still a
+// definitive answer (strict servers don't stall on it), and refusing keeps
+// `IAC GA` un-suppressed so it can continue to drive prompt detection.
 export const TELOPT_SGA  = "\x03";          // 3
-export const SGA_WILL = "\xFF\xFB\x03";     // IAC WILL SGA - server suppresses go-ahead
-export const SGA_DO   = "\xFF\xFD\x03";     // IAC DO SGA   - client accepts
+export const SGA_WILL = "\xFF\xFB\x03";     // IAC WILL SGA  - server offers to suppress go-ahead
+export const SGA_DO   = "\xFF\xFD\x03";     // IAC DO SGA    - (accept form; unused — mudix rejects SGA)
+export const SGA_DONT = "\xFF\xFE\x03";     // IAC DONT SGA  - client refuses (stay in line mode)
+
+// Telnet LINEMODE (RFC 1184, option 34). Negotiates who performs line editing
+// and when a line is forwarded to the server. mudix — matching Mudlet — always
+// does its own local line editing and sends whole lines on Enter, and never
+// delegates that to the server, so it refuses LINEMODE in *both* directions:
+// `IAC DONT LINEMODE` to the server's WILL, `IAC WONT LINEMODE` to its DO.
+export const TELOPT_LINEMODE = "\x22";       // 34
+export const LINEMODE_WILL = "\xFF\xFB\x22"; // IAC WILL LINEMODE - server offers line-mode control
+export const LINEMODE_DO   = "\xFF\xFD\x22"; // IAC DO LINEMODE   - server requests we do line-mode
+export const LINEMODE_DONT = "\xFF\xFE\x22"; // IAC DONT LINEMODE - refuse the server's offer
+export const LINEMODE_WONT = "\xFF\xFC\x22"; // IAC WONT LINEMODE - refuse the server's request
 export const GMCP_COMMAND_CODE = 201;
 export const GMCP_IAC = "\xFF";
 export const GMCP_SB = "\xFA";

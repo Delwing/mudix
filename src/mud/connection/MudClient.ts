@@ -186,6 +186,10 @@ export class MudClient {
     private readonly mccpHandler: MccpHandler;
     private readonly echoHandler: EchoHandler;
     private readonly negotiator: TelnetNegotiator;
+    /** Latches once `sysCharacterModeDetected` has fired for this connection so
+     *  the warning isn't repeated. Reset on each connect(). See
+     *  {@link maybeDetectCharacterMode}. */
+    private charModeDetected = false;
     /** Byte↔char codec for the session (inbound streaming decoder + outgoing
      *  encoding). Swapped between encodings by the CHARSET handler. */
     private readonly codec = new SessionCodec();
@@ -336,9 +340,30 @@ export class MudClient {
 
         this.echoHandler = new EchoHandler(
             (data) => this.sendRaw(data),
-            (maskInput) => this.eventBus.emit('telnet.echo', maskInput),
+            (maskInput) => {
+                this.eventBus.emit('telnet.echo', maskInput);
+                // Server echo just committed — if the server also requested SGA
+                // earlier, that's the character-at-a-time signature (echo can
+                // arrive after the SGA WILL, so re-check on this edge too).
+                this.maybeDetectCharacterMode();
+            },
             () => this.eventBus.emit('telnet.echo.anomaly'),
         );
+    }
+
+    /** Mudlet-parity character-at-a-time detection (cTelnet::
+     *  checkCharacterModePattern). When the server has both asked to suppress
+     *  go-ahead (IAC WILL SGA — which we refuse) *and* enabled server-side echo,
+     *  it's driving a character-at-a-time session that mudix, a line-based
+     *  client, can't handle well. Raise `sysCharacterModeDetected` once so the
+     *  UI / scripts can warn the user. Checked on both trigger edges: an SGA
+     *  request arriving while echo is already on, and echo committing while SGA
+     *  was already requested. */
+    private maybeDetectCharacterMode(): void {
+        if (this.charModeDetected) return;
+        if (!this.negotiator.sgaRequested || !this.echoHandler.serverEchoing) return;
+        this.charModeDetected = true;
+        this.eventBus.emit('charmode.detected');
     }
 
     setMccpEnabled(enabled: boolean): void {
@@ -380,6 +405,7 @@ export class MudClient {
         this.codec.reset();
         this.assembler.reset();
         this.negotiator.reset();
+        this.charModeDetected = false;
         this.gmcpHelloSent = false;
         this.mspParser.reset();
 
@@ -406,6 +432,9 @@ export class MudClient {
                     }
                     this.negotiator.processFrame(data);
                     this.echoHandler.processData(data);
+                    // Catch the case where the SGA request lands in a frame
+                    // after server echo is already committed on.
+                    this.maybeDetectCharacterMode();
                     this.eventBus.emit('socket.incoming', data);
                     try {
                         this.processIncomingData(data);
