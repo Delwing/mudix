@@ -17,6 +17,7 @@ import type {MspCommand, MxpLink} from '../mud/protocol';
 import {MxpParser, splitMxpResultLines} from '../mud/protocol';
 import {ScriptingAPI, type InstallOutcome} from './ScriptingAPI';
 import {formatClosedCaption, type MediaCaptionInfo} from '../ui/sound/closedCaption';
+import type {PlayMusicOptions} from '../ui/sound/SoundManager';
 
 /** The fields every tree node (alias/trigger/timer/key/button/script) shares —
  *  enough for the tree-walking APIs (ancestors/findItems/isAncestorsActive/
@@ -63,6 +64,17 @@ function hexToRgb(hex: string): RgbColor | null {
 function debugMspEnabled(): boolean {
     try {
         return typeof localStorage !== 'undefined' && localStorage.getItem('mudix.debugMsp') === '1';
+    } catch {
+        return false;
+    }
+}
+
+/** `mudix.debugGmcp` — log each incoming GMCP message's path + truncated body,
+ *  so we can see exactly which modules a server drives (e.g. whether audio
+ *  arrives over `Client.Media.*` GMCP or MSP tags). */
+function debugGmcpEnabled(): boolean {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem('mudix.debugGmcp') === '1';
     } catch {
         return false;
     }
@@ -276,6 +288,10 @@ export class ScriptingEngine {
     // location once with `!!SOUND(Off U=https://.../wav_v1/)` and then send
     // subsequent tags with just the filename.
     private mspBaseUrl: { sound?: string; music?: string } = {};
+    // Default media URL for the GMCP media protocol, set by a
+    // `Client.Media.Default { "url": ... }` message. Used as the base directory
+    // for any subsequent Play/Load whose payload omits its own `url`.
+    private gmcpMediaDefaultUrl = '';
     // sysExitEvent must fire exactly once per engine — either on teardown
     // (destroy) or on page unload, whichever comes first.
     private exitFired = false;
@@ -1427,69 +1443,183 @@ export class ScriptingEngine {
      * reloads. Returns null when the file can't be located or fetched.
      */
     private async resolveMspMedia(command: MspCommand): Promise<string | null> {
-        const debug = debugMspEnabled();
+        // Per-command U= wins; otherwise use the kind's default set by an
+        // earlier tag (often the Alteraeon-style `Off U=...` boot directive).
+        const baseUrl = command.url ?? this.mspBaseUrl[command.kind];
+        return this.resolveMediaFile(command.file ?? '', baseUrl, '[mudix.msp]', debugMspEnabled());
+    }
+
+    /**
+     * Resolve a media `file` (+ optional base `url` directory) to a VFS-relative
+     * path under `media/` the SoundManager loader can read, downloading and
+     * caching it on a miss. Shared by MSP (`resolveMspMedia`) and the GMCP media
+     * protocol (`handleClientMedia`). The whole filename — including any
+     * subdirectories — is appended to the base URL and mirrored under `media/`,
+     * so the cache layout matches the server's. `..`/`.` segments are rejected
+     * so a hostile server can't escape the cache root. Returns null when the
+     * file can't be located or fetched.
+     */
+    private async resolveMediaFile(
+        file: string,
+        baseUrl: string | undefined,
+        logPrefix: string,
+        debug: boolean,
+    ): Promise<string | null> {
         const vfs = this.vfs;
         if (!vfs) {
-            if (debug) console.debug('[mudix.msp] no profile VFS — cannot resolve media');
+            if (debug) console.debug(`${logPrefix} no profile VFS — cannot resolve media`);
             return null;
         }
-        // Preserve subdirectories — per the MSP spec the whole filename is
-        // appended to U= (e.g. `!!SOUND(combat/hit.wav)` → `<U>/combat/hit.wav`)
-        // and is mirrored under `media/` so the cache layout matches the
-        // server's. Reject `..` / `.` segments outright so a hostile server
-        // can't escape the cache root.
-        const raw = (command.file ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
+        const raw = (file ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
         const segments = raw.split('/').filter(s => s.length > 0);
         const cleanSegments: string[] = [];
         for (const seg of segments) {
             if (seg === '.' || seg === '..') {
-                if (debug) console.debug(`[mudix.msp] rejecting traversal segment in "${command.file}"`);
+                if (debug) console.debug(`${logPrefix} rejecting traversal segment in "${file}"`);
                 return null;
             }
             const clean = seg.replace(/[^\w.\-]/g, '_').replace(/^\.+/, '');
             if (!clean) {
-                if (debug) console.debug(`[mudix.msp] empty segment after sanitising "${command.file}"`);
+                if (debug) console.debug(`${logPrefix} empty segment after sanitising "${file}"`);
                 return null;
             }
             cleanSegments.push(clean);
         }
         if (cleanSegments.length === 0) {
-            if (debug) console.debug(`[mudix.msp] empty filename "${command.file}"`);
+            if (debug) console.debug(`${logPrefix} empty filename "${file}"`);
             return null;
         }
         const cleanFile = cleanSegments.join('/');
         const vfsPath = `media/${cleanFile}`;
         const absPath = `${vfs.profilePath}/${vfsPath}`;
         if (vfs.exists(absPath)) {
-            if (debug) console.debug(`[mudix.msp] cache hit ${vfsPath}`);
+            if (debug) console.debug(`${logPrefix} cache hit ${vfsPath}`);
             return vfsPath;
         }
-        // Per-command U= wins; otherwise use the kind's default set by an
-        // earlier tag (often the Alteraeon-style `Off U=...` boot directive).
-        const baseUrl = command.url ?? this.mspBaseUrl[command.kind];
         if (!baseUrl) {
-            if (debug) console.debug(`[mudix.msp] "${cleanFile}" not in media/ and no U= base URL`);
+            if (debug) console.debug(`${logPrefix} "${cleanFile}" not in media/ and no base URL`);
             return null;
         }
         let downloadUrl: string;
         try {
             // URL() treats `base` as a file when it has no trailing slash, so
-            // normalise: `U=http://x/sounds` + `zap.wav` → `http://x/sounds/zap.wav`.
+            // normalise: `http://x/sounds` + `zap.wav` → `http://x/sounds/zap.wav`.
             const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
             downloadUrl = new URL(cleanFile, base).toString();
         } catch {
-            if (debug) console.debug(`[mudix.msp] invalid U= "${baseUrl}"`);
+            if (debug) console.debug(`${logPrefix} invalid base URL "${baseUrl}"`);
             return null;
         }
         try {
             const bytes = await downloadFromUrl(downloadUrl, this.proxyUrlGetter());
             vfs.writeBinaryFile(absPath, bytes);
-            if (debug) console.debug(`[mudix.msp] downloaded ${downloadUrl} → ${vfsPath} (${bytes.byteLength} bytes)`);
+            if (debug) console.debug(`${logPrefix} downloaded ${downloadUrl} → ${vfsPath} (${bytes.byteLength} bytes)`);
             return vfsPath;
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            if (debug) console.debug(`[mudix.msp] download failed ${downloadUrl}: ${msg}`);
+            if (debug) console.debug(`${logPrefix} download failed ${downloadUrl}: ${msg}`);
             return null;
+        }
+    }
+
+    /**
+     * Handle a GMCP media message (`Client.Media.Play/Load/Stop/Default`).
+     * Mirrors Mudlet's `TMedia` MediaProtocolGMCP. The payload is the already-
+     * parsed JSON body; `action` is the lowercased segment after `Client.Media`
+     * (defaulting to `play`, matching Mudlet's bare `Client.Media`). Server-
+     * driven, so playback rides the `game` mute gate like MSP.
+     */
+    private async handleClientMedia(action: string, value: unknown): Promise<void> {
+        const debug = debugGmcpEnabled();
+        const obj: Record<string, unknown> =
+            value && typeof value === 'object' && !Array.isArray(value)
+                ? (value as Record<string, unknown>)
+                : {};
+        const str = (k: string): string => {
+            const v = obj[k];
+            return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
+        };
+        const num = (k: string): number | undefined => {
+            const v = obj[k];
+            if (typeof v === 'number' && Number.isFinite(v)) return v;
+            if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+            return undefined;
+        };
+        const bool = (k: string): boolean | undefined => {
+            const v = obj[k];
+            if (typeof v === 'boolean') return v;
+            if (typeof v === 'string') return v.toLowerCase() === 'true';
+            return undefined;
+        };
+
+        if (action === 'default') {
+            // Client.Media.Default { url } — remember the base directory for
+            // later Play/Load messages that omit their own url.
+            const url = str('url');
+            if (url) this.gmcpMediaDefaultUrl = url;
+            if (debug) console.debug(`[mudix.gmcp] media default url=${url || '(none)'}`);
+            return;
+        }
+
+        if (action === 'stop') {
+            // Client.Media.Stop [{ name, type, tag, key, fadeout }] — stop
+            // matching media (everything when no filters are given).
+            const type = str('type').toLowerCase();
+            const name = str('name') || undefined;
+            const key = str('key') || undefined;
+            const tag = str('tag') || undefined;
+            const fadeout = num('fadeout');
+            if (type !== 'sound') {
+                this.session.sounds.stopMusic({ name, key, tag, fadeout });
+            }
+            if (type !== 'music') {
+                this.session.sounds.stopSounds();
+            }
+            if (debug) console.debug(`[mudix.gmcp] media stop type=${type || 'all'}`);
+            return;
+        }
+
+        // Play / Load both need a resolved file.
+        const name = str('name');
+        if (!name) return;
+        const baseUrl = str('url') || this.gmcpMediaDefaultUrl || undefined;
+        const resolved = await this.resolveMediaFile(name, baseUrl, '[mudix.gmcp] media', debug);
+        if (!resolved) return;
+
+        if (action === 'load') {
+            // Client.Media.Load — preload/cache only, don't play.
+            this.session.sounds.preload(resolved);
+            if (debug) console.debug(`[mudix.gmcp] media load ${resolved}`);
+            return;
+        }
+
+        // action === 'play' (or bare Client.Media).
+        const type = (str('type') || 'sound').toLowerCase();
+        const opts: PlayMusicOptions = { name: resolved, origin: 'game' };
+        const volume = num('volume');
+        if (volume !== undefined) opts.volume = volume;
+        const loops = num('loops');
+        if (loops !== undefined) opts.loops = loops;
+        const fadein = num('fadein');
+        if (fadein !== undefined) opts.fadein = fadein;
+        const fadeout = num('fadeout');
+        if (fadeout !== undefined) opts.fadeout = fadeout;
+        const start = num('start');
+        if (start !== undefined) opts.start = start;
+        const key = str('key');
+        if (key) opts.key = key;
+        const tag = str('tag');
+        if (tag) opts.tag = tag;
+
+        if (type === 'music') {
+            // Mudlet's music `continue` defaults to true — a repeat Play of the
+            // same track is ignored while it's already playing.
+            opts.continue = bool('continue') ?? true;
+            if (debug) console.debug('[mudix.gmcp] media playMusic', opts);
+            void this.session.sounds.playMusic(opts);
+        } else {
+            if (debug) console.debug('[mudix.gmcp] media playSound', opts);
+            void this.session.sounds.playSound(opts);
         }
     }
 
@@ -2894,6 +3024,11 @@ export class ScriptingEngine {
                                 units.push({ plain: rd.plain, buffer: fbuf, outputLine: rd.plain, blankRenders: rd.plain === '' });
                             }
                         }
+                        // MXP <SOUND>/<MUSIC> are the same server-driven audio
+                        // triggers as MSP, so route them through the identical
+                        // resolve-and-play path (media/ cache, U= download, game
+                        // mute gate).
+                        if (r.sounds) for (const s of r.sounds) void this.handleMspCommand(s);
                     } else {
                         const buffer = new AnsiAwareBuffer(line, carryState, this.osc8Presets);
                         this.wireOsc8Links(buffer);
@@ -3162,6 +3297,11 @@ export class ScriptingEngine {
                 // gmcp.Char.Items, gmcp.Char.Items.List for an incoming
                 // "Char.Items.List", each with args (eventName, fullKey).
                 if (!path) return;
+                if (debugGmcpEnabled()) {
+                    const body = JSON.stringify(value);
+                    console.debug(`[mudix.gmcp] ${path}`,
+                        body.length > 200 ? body.slice(0, 200) + '…' : body);
+                }
                 this.runtimes.lua?.setGmcpValue(path, value);
                 const fullKey = `gmcp.${path}`;
                 let token = 'gmcp';
@@ -3182,6 +3322,15 @@ export class ScriptingEngine {
                 if (path.toLowerCase() === 'client.map') {
                     const url = parseClientMapPayload(value);
                     if (url) this.session.windows.setMmpMapLocation(url);
+                }
+                // Built-in Client.Media handler — Mudlet's GMCP media protocol
+                // (TMedia MediaProtocolGMCP). `Client.Media.Play/Load/Stop/
+                // Default` drive server-side audio; we advertise `Client.Media 1`
+                // in Core.Supports.Set, so a server may send these instead of MSP.
+                const lowerPath = path.toLowerCase();
+                if (lowerPath === 'client.media' || lowerPath.startsWith('client.media.')) {
+                    const action = lowerPath.slice('client.media'.length).replace(/^\./, '');
+                    void this.handleClientMedia(action || 'play', value);
                 }
             }),
             // MSDP finished negotiating (server WILL → client DO). Mirrors the

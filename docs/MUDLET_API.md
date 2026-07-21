@@ -336,6 +336,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `pauseVideos()` | ✅ | Pauses every active `<video>` element |
 | `purgeMediaCache()` | ✅ | Drops every decoded-audio buffer; active playback unaffected |
 | `receiveMSP(payload)` | ✅ | Parses the payload through a fresh `MspParser` and re-emits each `!!SOUND`/`!!MUSIC` command as a `msp` session event, so `ScriptingEngine.handleMspCommand` plays it through `SoundManager`. Returns true when ≥1 command parsed |
+| GMCP media protocol (`Client.Media.Play`/`Load`/`Stop`/`Default`) | ✅ | Mudlet's `TMedia` MediaProtocolGMCP. We advertise `Client.Media 1` in `Core.Supports.Set`; `ScriptingEngine.handleClientMedia` resolves the `name` (+ optional `url` base, or the `Client.Media.Default` url) through the shared `media/` VFS cache and plays it via `SoundManager` on the `game` mute gate. Supports `type` (sound/music), `volume`, `loops`, `key`, `tag`, `fadein`/`fadeout`, `start`, and music `continue`. Not yet mapped: `priority`, `finish`, name wildcards; `Stop` filters sounds only by all-stop (music honours name/key/tag/fadeout) |
 | `registerAnonymousEventHandler(event, fn)` | ✅ | Other.lua override tracks IDs in `handlerIdsToHandlers` |
 | `registerNamedEventHandler(name, event, code)` | ✅ | IDManager.lua |
 | `reloadModule(name)` | ✅ | JS-exposed |

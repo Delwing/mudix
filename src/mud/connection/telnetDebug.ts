@@ -42,6 +42,15 @@ export function debugMspEnabled(): boolean {
 }
 
 /**
+ * `mudix.debugGmcp` — log every parsed GMCP message's path and (truncated) body
+ * as it arrives. Used to see exactly which modules a server drives — e.g.
+ * whether login audio comes over `Client.Media.*` GMCP vs. MSP tags.
+ */
+export function debugGmcpEnabled(): boolean {
+    return gateEnabled('mudix.debugGmcp');
+}
+
+/**
  * `mudix.debugGa` — log every IAC GA / IAC EOR prompt marker the server sends,
  * plus the one-time moment the client latches into GA-driven prompt mode. Use
  * this to confirm whether a MUD actually signals its prompts (GA-less MUDs rely

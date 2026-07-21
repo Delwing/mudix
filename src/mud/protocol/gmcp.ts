@@ -65,7 +65,11 @@ const parseGmcpPayload = (
         const gmcp = JSON.parse(payload);
         onMessage(type, gmcp);
     } catch (error) {
-        console.error("Error parsing GMCP JSON:", error);
+        // A non-conformant server can send a GMCP body that isn't valid JSON.
+        // Nothing we can do but drop it — log the module name + raw body (not
+        // just the error) so the offending message is identifiable, and use
+        // warn rather than error since it's the server's fault, not a bug here.
+        console.warn(`Error parsing GMCP JSON for "${type}":`, JSON.stringify(payload), error);
     }
 };
 

@@ -26,6 +26,7 @@ import type { BufferSegment, FormatColor, FormatStateSnapshot, FormatHyperlink }
 import { mxpColor } from "../text/colorParsers";
 import { scanEscape, parseOsc8Payload, classifyHyperlinkUri, parseOscColorPalette } from "../text/ansiEscapes";
 import { parseOsc8Uri, HyperlinkPresetRegistry } from "../text/hyperlinkConfig";
+import type { MspCommand, MspKind } from "./msp";
 
 /** A clickable region the parser found, expressed as offsets into `plain`. The
  *  engine builds the actual `FormatHyperlink` (with session/URL behaviour). */
@@ -88,6 +89,10 @@ export interface MxpLineResult {
     frames?: MxpFrameCommand[];
     /** Text redirected into frames via `<DEST>` on this line. Omitted when none. */
     redirects?: MxpRedirect[];
+    /** `<SOUND>`/`<MUSIC>` audio triggers seen on this line, shaped as
+     *  {@link MspCommand} so the consumer can route them through the same
+     *  SoundManager path as MSP. Omitted when none. */
+    sounds?: MspCommand[];
 }
 
 type MxpMode = "open" | "secure" | "locked";
@@ -148,8 +153,8 @@ const OPEN_MODE_TAGS = new Set<string>([
 const SUPPORTED_TAGS = [
     "+b", "+i", "+u", "+s", "+h", "+high", "+strikeout", "+color", "+c", "+font",
     "+send", "+a", "+br", "+sbr", "+nobr", "+p", "+hr", "+var", "+version", "+support",
-    "+frame", "+dest",
-    "-image", "-relocate", "-filter", "-gauge", "-stat", "-music", "-sound",
+    "+frame", "+dest", "+sound", "+music",
+    "-image", "-relocate", "-filter", "-gauge", "-stat",
 ];
 
 /** Built-in XML/HTML entities. User and `<V>`-defined entities augment these via
@@ -202,6 +207,8 @@ export class MxpParser {
     /** `<FRAME>` commands and `<DEST>` redirects accumulated this line. */
     private frames: MxpFrameCommand[] = [];
     private redirects: MxpRedirect[] = [];
+    /** `<SOUND>`/`<MUSIC>` commands accumulated this line. */
+    private sounds: MspCommand[] = [];
     /** Redirected-text scratch — the current `<DEST>` run's segments/plain. */
     private destOut: BufferSegment[] = [];
     private destPlain = "";
@@ -232,6 +239,7 @@ export class MxpParser {
         this.links = [];
         this.frames = [];
         this.redirects = [];
+        this.sounds = [];
         this.destOut = [];
         this.destPlain = "";
         this.presets.clear();
@@ -251,6 +259,7 @@ export class MxpParser {
         this.links = [];
         this.frames = [];
         this.redirects = [];
+        this.sounds = [];
         // destName/destEol/destEof persist across lines (until </DEST>); only the
         // per-line accumulators reset.
         this.destOut = [];
@@ -279,6 +288,7 @@ export class MxpParser {
         const result: MxpLineResult = { segments: this.out, plain: this.plain, trailingSnapshot: trailing, links: this.links };
         if (this.frames.length > 0) result.frames = this.frames;
         if (this.redirects.length > 0) result.redirects = this.redirects;
+        if (this.sounds.length > 0) result.sounds = this.sounds;
         return result;
     }
 
@@ -551,6 +561,10 @@ export class MxpParser {
                 this.handleFrameTag(named, positional); break;
             case "dest":
                 this.handleDestTag(named, positional); break;
+            case "sound":
+                this.handleSoundTag("sound", named, positional); break;
+            case "music":
+                this.handleSoundTag("music", named, positional); break;
             case "support":
                 this.opts.send(`${MXP_SECURE_REPLY_PREFIX}<SUPPORTS ${SUPPORTED_TAGS.join(" ")}>`); break;
             case "version":
@@ -600,6 +614,35 @@ export class MxpParser {
         this.destEof = flags.has("eof") || named.has("eof");
         this.destOut = [];
         this.destPlain = "";
+    }
+
+    /** `<SOUND fname [V=vol] [L=loops] [P=priority] [T=type] [U=url]>` and
+     *  `<MUSIC fname [V=vol] [L=loops] [C=continue] [T=type] [U=url]>` — MXP's
+     *  audio triggers (https://www.zuggsoft.com/zmud/mxp.htm#Sound). They carry
+     *  the same fields as MSP's `!!SOUND`/`!!MUSIC`, so surface them as an
+     *  {@link MspCommand} and let the consumer route them through the same
+     *  SoundManager path. FNAME is the FNAME attribute or the first positional;
+     *  the literal `Off` (also `off`) stops playback. A fileless tag is ignored. */
+    private handleSoundTag(kind: MspKind, named: Map<string, string>, positional: string[]): void {
+        const file = (named.get("fname") ?? positional[0] ?? "").trim();
+        if (file === "") return;
+        // Normalise `off`/`OFF` to the canonical `Off` the consumer stops on.
+        const cmd: MspCommand = { kind, file: file.toLowerCase() === "off" ? "Off" : file };
+        const url = named.get("u");
+        if (url) cmd.url = url;
+        const v = parseInt(named.get("v") ?? "", 10);
+        if (Number.isFinite(v)) cmd.volume = v < 0 ? 0 : v > 100 ? 100 : v;
+        const l = parseInt(named.get("l") ?? "", 10);
+        if (Number.isFinite(l)) cmd.loops = l;
+        if (kind === "sound") {
+            const p = parseInt(named.get("p") ?? "", 10);
+            if (Number.isFinite(p)) cmd.priority = p < 0 ? 0 : p > 100 ? 100 : p;
+        } else if (named.get("c") === "1") {
+            cmd.continueIfPlaying = true;
+        }
+        const type = named.get("t");
+        if (type) cmd.type = type;
+        this.sounds.push(cmd);
     }
 
     /** Finalize the current `<DEST>` run into a redirect and stop redirecting. */
