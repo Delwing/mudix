@@ -83,7 +83,11 @@ describe('setProfileStyleSheet — installs a <style> block in document.head', (
   it('raises sysAppStyleSheetChange with tag "profile"', () => {
     // Wire api → runtime event routing exactly as ScriptingEngine does (the
     // bare test runtime doesn't set this up). Restored after the assertion.
-    env.api.setEventRaiser((event, args) => env.rt.emitEvent(event, args));
+    const baseHost = env.api.engineHost;
+    env.api.setHost({
+      ...baseHost,
+      raiseEvent: (event, args) => env.rt.emitEvent(event, args),
+    });
     env.run([
       'sawCss, sawTag = nil, nil',
       'registerAnonymousEventHandler("sysAppStyleSheetChange", function(_, css, tag) sawCss = css; sawTag = tag end)',
@@ -91,7 +95,7 @@ describe('setProfileStyleSheet — installs a <style> block in document.head', (
     ].join('\n'));
     expect(env.run('return sawTag')).toBe('profile');
     expect(env.run('return sawCss')).toBe('.x { top: 0; }');
-    env.api.setEventRaiser(null);
+    env.api.setHost(baseHost);
   });
 });
 

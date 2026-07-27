@@ -1305,9 +1305,12 @@ describe('exportAreaImage — Lua binding', () => {
 
   it('delegates to ScriptingAPI.exportAreaImage with coerced args', () => {
     const calls: Array<[number, string, number | undefined]> = [];
-    env.api.setExportAreaImageCallback((areaId, filePath, zLevel) => {
-      calls.push([areaId, filePath, zLevel]);
-      return { path: `/profiles/test/${filePath}` };
+    env.api.setHost({
+      ...env.api.engineHost,
+      exportAreaImageToVfs: (areaId, filePath, zLevel) => {
+        calls.push([areaId, filePath, zLevel]);
+        return { path: `/profiles/test/${filePath}` };
+      },
     });
     const [ok, path] = [
       env.run('return (exportAreaImage(7, "maps/area7.png", 2))'),
@@ -1327,13 +1330,13 @@ describe('resetProfile — Lua binding', () => {
 
   it('is callable and invokes the wired callback without throwing', () => {
     let called = 0;
-    env.api.setResetProfileCallback(() => { called++; });
+    env.api.setHost({ ...env.api.engineHost, resetProfile: () => { called++; } });
     expect(() => env.run('resetProfile()')).not.toThrow();
     expect(called).toBe(1);
   });
 
-  it('is a no-op (no throw) when no callback is wired', () => {
-    env.api.setResetProfileCallback(null);
+  it('is a no-op (no throw) when no engine is bound', () => {
+    env.api.setHost(null);
     expect(() => env.run('resetProfile()')).not.toThrow();
   });
 });

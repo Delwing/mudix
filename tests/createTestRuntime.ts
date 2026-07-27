@@ -36,7 +36,8 @@ export interface TestRuntime {
  * and the pure string/table/colour utilities.
  *
  * NOT wired here: the trigger/alias DISPATCH pipeline and timer pump, which live
- * in ScriptingEngine (setFeedDispatcher/bridgeEvents). So `tempTrigger`/
+ * in ScriptingEngine (EngineHost.processFlushBatch/bridgeEvents). No engine is
+ * constructed, so the API runs on its default host throughout. `tempTrigger`/
  * `tempAlias` register fine but won't fire against `feedTriggers` input, and
  * `tempTimer` won't tick. Testing those needs the full ScriptingEngine wiring —
  * a follow-up if/when trigger coverage is wanted.

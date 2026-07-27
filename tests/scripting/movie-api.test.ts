@@ -20,12 +20,19 @@ const GIF_BYTES = buildGif({
     loopCount: 0,
 });
 
+// Swap just the host's file-bytes reader, keeping every other host member.
+function setBytesReader(fn: (path: string) => Uint8Array | null): void {
+    rtRef!.api.setHost({ ...rtRef!.api.engineHost, readFileBytes: fn });
+}
+let rtRef: TestRuntime | null = null;
+
 describe('label movie APIs (QMovie family)', () => {
     let rt: TestRuntime;
 
     beforeAll(async () => {
         rt = await createTestRuntime();
-        rt.api.setFileBytesReader((path) => (path === GIF_PATH ? GIF_BYTES : null));
+        rtRef = rt;
+        setBytesReader((path) => (path === GIF_PATH ? GIF_BYTES : null));
         rt.run(`createLabel("movieLabel", 0, 0, 50, 50, 0)`);
     });
     afterAll(() => {
@@ -46,21 +53,21 @@ describe('label movie APIs (QMovie family)', () => {
     it('rejects missing labels, missing files, and non-GIF bytes', () => {
         expect(rt.run(`return setMovie("noSuchLabel", "${GIF_PATH}")`)).toBe(false);
         expect(rt.run(`return setMovie("movieLabel", "/nope.gif")`)).toBe(false);
-        rt.api.setFileBytesReader(() => new Uint8Array([1, 2, 3]));
+        setBytesReader(() => new Uint8Array([1, 2, 3]));
         expect(rt.run(`return setMovie("movieLabel", "/garbage.bin")`)).toBe(false);
-        rt.api.setFileBytesReader((path) => (path === GIF_PATH ? GIF_BYTES : null));
+        setBytesReader((path) => (path === GIF_PATH ? GIF_BYTES : null));
     });
 
     it('rejects WebP/APNG when the browser has no ImageDecoder (node env)', () => {
         // A sniffable PNG header — but this environment lacks WebCodecs, so
         // the async path must refuse rather than install a dead player.
-        rt.api.setFileBytesReader(() => new Uint8Array([
+        setBytesReader(() => new Uint8Array([
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
             0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
             0, 0, 0, 5, 0, 0, 0, 7, 8, 6, 0, 0, 0,
         ]));
         expect(rt.run(`return setMovie("movieLabel", "/anim.png")`)).toBe(false);
-        rt.api.setFileBytesReader((path) => (path === GIF_PATH ? GIF_BYTES : null));
+        setBytesReader((path) => (path === GIF_PATH ? GIF_BYTES : null));
     });
 
     it('pauseMovie / startMovie toggle playback', () => {

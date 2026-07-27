@@ -16,6 +16,7 @@ import {HyperlinkVisibilityController} from '../mud/text/hyperlinkVisibility';
 import type {MspCommand, MxpLink} from '../mud/protocol';
 import {MxpParser, splitMxpResultLines} from '../mud/protocol';
 import {ScriptingAPI, type InstallOutcome} from './ScriptingAPI';
+import type { EngineHost } from './EngineHost';
 import {formatClosedCaption, type MediaCaptionInfo} from '../ui/sound/closedCaption';
 import type {PlayMusicOptions} from '../ui/sound/SoundManager';
 
@@ -189,7 +190,7 @@ function hasTaggedSliceChanged<T extends { id: string; packageName?: string }>(
     return false;
 }
 
-export class ScriptingEngine {
+export class ScriptingEngine implements EngineHost {
     private runtimes: { lua: IScriptingRuntime | null } = { lua: null };
     private readonly unsubs: (() => void)[] = [];
     private readonly api: ScriptingAPI;
@@ -332,6 +333,13 @@ export class ScriptingEngine {
         // boot-time map load can restore the position.
         session.windows.mapStore.profileName = connectionName;
         this.connectionId = connectionId;
+        // Bind the host here rather than after the Lua runtime resolves: the
+        // runtime is created asynchronously and executes the whole bundled
+        // Mudlet Lua during setup, so binding later leaves a real window in
+        // which script-reachable APIs (send → dispatchSendRequest, getPackages,
+        // exists, …) have no engine behind them. Every field those methods read
+        // is assigned above, and nothing calls them synchronously from here.
+        this.api.setHost(this);
         this.bridgeEvents(session);
         // Let WindowManager raise system events (e.g. sysUserWindowResizeEvent)
         // through the same path as everything else.
@@ -1120,104 +1128,79 @@ export class ScriptingEngine {
         return this.createRuntime(this.vfs);
     }
 
+    // ── EngineHost ───────────────────────────────────────────────────────────
+    // The rest of the interface is satisfied by methods the engine already had
+    // (toggleScriptByName, createPermTrigger, installModuleFromPath, …). Only
+    // these seven existed solely as inline arrows in the old wiring block, so
+    // they get real methods here.
+
+    /** Run a chunk of Lua on behalf of a clicked hyperlink. */
+    runLinkCode(code: string): void {
+        const lua = this.runtimes.lua;
+        if (!lua) return;
+        try {
+            lua.run(code, 'link');
+        } catch (err) {
+            this.api.printError(`[link] ${err instanceof Error ? err.message : String(err)}`);
+        }
+        this.api.flushOutput();
+    }
+
+    /** Mudlet `expandAlias` — run text through the alias pipeline, sending it
+     *  to the MUD when nothing consumes it. */
+    expandAlias(text: string, echo: boolean): void {
+        if (!this.processInput(text)) this.api.send(text, echo);
+    }
+
+    /** Mudlet `reconnect()` — redial the last URL, refused during teardown. */
+    requestReconnect(): boolean {
+        if (this.disposed) { this.refuseDuringTeardown('reconnect()'); return false; }
+        return this.session.reconnect();
+    }
+
+    /** Raise sysDataSendRequest; true means a handler called denyCurrentSend(). */
+    dispatchSendRequest(text: string): boolean {
+        return this.runtimes.lua?.dispatchSendRequest(text) ?? false;
+    }
+
+    /** Names of every package installed in this profile. */
+    getPackageNames(): string[] {
+        return (useAppStore.getState().connectionPackages[this.connectionId] ?? []).map(p => p.name);
+    }
+
+    /** Module manifest fields as a flat record, with Lua-set overrides applied. */
+    getModuleInfoRecord(name: string): Record<string, unknown> | null {
+        const info = this.getModuleInfo(name);
+        if (!info) return null;
+        const rec = info as unknown as Record<string, unknown>;
+        this.applyInfoOverrides(rec as Record<string, string>, this.moduleInfoOverrides, name);
+        return rec;
+    }
+
+    /** Rewrite VFS-relative url(...) references to service-worker paths. */
+    rewriteCss(css: string): string {
+        const v = this.vfs;
+        if (!v) return css;
+        return rewriteVfsUrlsInCss(css, this.connectionId, v);
+    }
+
+    /** Raw-bytes reader for synchronous binary consumers (setMovie's GIF
+     *  decoder). ProfileVFS resolves leading-slash paths absolutely (so
+     *  getMudletHomeDir()-prefixed paths work) and relative ones against the
+     *  profile root. */
+    readFileBytes(path: string): Uint8Array | null {
+        const v = this.vfs;
+        if (!v) return null;
+        try {
+            return v.readBinaryFile(path);
+        } catch {
+            return null;
+        }
+    }
+
     private createRuntime(vfs: ProfileVFS | null): Promise<IScriptingRuntime> {
         return LuaRuntime.create(this.api, vfs, this.proxyUrlGetter).then(rt => {
             this.runtimes.lua = rt;
-            this.api.setExecuteScript((code) => {
-                const lua = this.runtimes.lua;
-                if (!lua) return;
-                try {
-                    lua.run(code, 'link');
-                } catch (err) {
-                    this.api.printError(`[link] ${err instanceof Error ? err.message : String(err)}`);
-                }
-                this.api.flushOutput();
-            });
-            this.api.setExpandAlias((text, echo) => {
-                if (!this.processInput(text)) this.api.send(text, echo);
-            });
-            this.api.setSendRequestDispatcher((text) =>
-                this.runtimes.lua?.dispatchSendRequest(text) ?? false);
-            // Route script-initiated connect()/connectToServer() through the
-            // load gate so a connect during the initial load defers until every
-            // script and trigger is in place (same as the auto-connect path).
-            this.api.setConnectDispatcher((url) => this.requestConnect(url));
-            this.api.setEventRaiser((event, args) => this.raiseEvent(event, args));
-            this.api.setFeedDispatcher((groups) => this.processFlushBatch(groups));
-            this.api.setPackageInstaller((path) => this.installPackageFromVfsPath(path));
-            this.api.setPackageUninstaller((name) => this.uninstallPackageByName(name));
-            this.api.setPackagesGetter(() =>
-                (useAppStore.getState().connectionPackages[this.connectionId] ?? []).map(p => p.name));
-            this.api.setModuleInstaller((path) => this.installModuleFromPath(path));
-            this.api.setModuleUninstaller((name) => this.uninstallModuleByName(name));
-            this.api.setModuleSyncer((name) => this.syncModuleToFile(name));
-            this.api.setModuleReloader((name) => this.reloadModuleFromFile(name));
-            this.api.setModuleSyncSetter((name, sync) => this.setModuleSync(name, sync));
-            this.api.setModuleSyncGetter((name) => this.getModuleSync(name));
-            this.api.setModulePrioritySetter((name, p) => this.setModulePriority(name, p));
-            this.api.setModulePriorityGetter((name) => this.getModulePriority(name));
-            this.api.setModulesGetter(() => this.getModuleNames());
-            this.api.setModuleInfoGetter((name) => {
-                const info = this.getModuleInfo(name);
-                if (!info) return null;
-                const rec = info as unknown as Record<string, unknown>;
-                this.applyInfoOverrides(rec as Record<string, string>, this.moduleInfoOverrides, name);
-                return rec;
-            });
-            this.api.setModuleInfoSetter((name, key, value) => this.setModuleInfo(name, key, value));
-            this.api.setModulePathGetter((name) => this.getModulePath(name));
-            this.api.setPackageInfoGetter((name) => this.getPackageInfo(name));
-            this.api.setPackageInfoSetter((name, key, value) => this.setPackageInfo(name, key, value));
-            this.api.setScriptToggler((name, enabled) => this.toggleScriptByName(name, enabled));
-            this.api.setScriptGetter((name, pos) => this.getScriptByName(name, pos));
-            this.api.setTriggerToggler((name, enabled) => this.toggleTriggerByName(name, enabled));
-            this.api.setTriggerStayOpenSetter((name, lines) => this.setTriggerStayOpenByName(name, lines));
-            this.api.setTimerToggler((name, enabled) => this.toggleTimerByName(name, enabled));
-            this.api.setAliasToggler((name, enabled) => this.toggleAliasByName(name, enabled));
-            this.api.setKeyToggler((name, enabled) => this.toggleKeyByName(name, enabled));
-            this.api.setExistsCallback((name, type) => this.existsByName(name, type));
-            this.api.setIsActiveCallback((name, type, checkAncestors) => this.isActiveByName(name, type, checkAncestors));
-            this.api.setAncestorsCallback((id, type) => this.ancestorsById(id, type));
-            this.api.setFindItemsCallback((name, type, exact, cs) => this.findItemsByName(name, type, exact, cs));
-            this.api.setIsAncestorsActiveCallback((id, type) => this.isAncestorsActiveById(id, type));
-            this.api.setProfileStatsCallback(() => this.getProfileStats());
-            this.api.setPermScriptCallback((name, parent, code) => this.createPermScript(name, parent, code));
-            this.api.setPermRegexTriggerCallback((name, parent, regexes, code) => this.createPermRegexTrigger(name, parent, regexes, code));
-            this.api.setPermSubstringTriggerCallback((name, parent, patterns, code) => this.createPermSubstringTrigger(name, parent, patterns, code));
-            this.api.setPermBeginOfLineStringTriggerCallback((name, parent, patterns, code) => this.createPermBeginOfLineStringTrigger(name, parent, patterns, code));
-            this.api.setPermExactMatchTriggerCallback((name, parent, patterns, code) => this.createPermExactMatchTrigger(name, parent, patterns, code));
-            this.api.setPermPromptTriggerCallback((name, parent, code) => this.createPermPromptTrigger(name, parent, code));
-            this.api.setPermAliasCallback((name, parent, pattern, code) => this.createPermAlias(name, parent, pattern, code));
-            this.api.setPermTimerCallback((name, parent, delay, code) => this.createPermTimer(name, parent, delay, code));
-            this.api.setPermKeyCallback((name, parent, modifier, key, code) => this.createPermKey(name, parent, modifier, key, code));
-            this.api.setTempButtonCallback((toolbar, name, code, orientation) => this.createTempButton(toolbar, name, code, orientation));
-            this.api.setTempButtonToolbarCallback((name, orientation, location) => this.createTempButtonToolbar(name, orientation, location));
-            this.api.setButtonStateSetter((name, state) => this.setButtonStateByName(name, state));
-            this.api.setButtonStateGetter((name) => this.getButtonStateByName(name));
-            this.api.setButtonStyleSheetSetter((name, css) => this.setButtonStyleSheetByName(name, css));
-            this.api.setToolBarToggler((name, show) => this.toggleToolBarByName(name, show));
-            this.api.setSetScriptCallback((name, code, pos) => this.setScriptByName(name, code, pos));
-            this.api.setKillByNameCallback((kind, name) => this.killByName(kind, name));
-            this.api.setResetProfileCallback(() => this.resetProfile());
-            this.api.setExportAreaImageCallback((areaId, filePath, zLevel) => this.exportAreaImageToVfs(areaId, filePath, zLevel));
-            this.api.setCssRewriter((css) => {
-                const v = this.vfs;
-                if (!v) return css;
-                return rewriteVfsUrlsInCss(css, this.connectionId, v);
-            });
-            // Raw-bytes reader for synchronous binary consumers (setMovie's
-            // GIF decoder). ProfileVFS resolves leading-slash paths absolutely
-            // (so getMudletHomeDir()-prefixed paths work) and relative ones
-            // against the profile root.
-            this.api.setFileBytesReader((path) => {
-                const v = this.vfs;
-                if (!v) return null;
-                try {
-                    return v.readBinaryFile(path);
-                } catch {
-                    return null;
-                }
-            });
             // Sound loader: absolute URLs hit the network; everything else is
             // resolved against the mounted profile VFS so package-bundled sounds
             // work out of the box.
@@ -2664,7 +2647,9 @@ export class ScriptingEngine {
      * concurrent reset is coalesced.
      */
     resetProfile(): void {
-        if (this.resetting || this.disposed) return;
+        if (this.disposed) { this.refuseDuringTeardown('resetProfile()'); return; }
+        // Already resetting is legitimate de-duplication, not a refusal.
+        if (this.resetting) return;
         this.resetting = true;
         setTimeout(() => { void this.performReset(); }, 0);
     }
@@ -2734,8 +2719,46 @@ export class ScriptingEngine {
      * Once loading is done, requests dial immediately (the normal reconnect
      * path). The latest pending request wins, so exactly one socket opens.
      */
+    /**
+     * Report a script-initiated call that teardown refused.
+     *
+     * Mudlet and mudix reach the same end state by opposite routes, and it is
+     * worth being precise about which:
+     *
+     *   Mudlet guards the ARRIVAL side. `TMainConsole::closeEvent` raises
+     *   sysExitEvent while `Host::mIsClosingDown` is still false, so a
+     *   handler's connectToServer/reconnect is accepted and may even open a
+     *   socket. `Host::closeChildren()` sets the flag afterwards, and every
+     *   inbound callback is gated on it — cTelnet::slot_socketConnected,
+     *   slot_socketDisconnected, slot_socketReadyToBeRead, postData,
+     *   postMessage all early-return. The connection is accepted, then
+     *   discarded.
+     *
+     *   mudix guards the INITIATION side, because its teardown is synchronous:
+     *   destroy() runs start to finish with no yield point, and MudSession
+     *   disposes the client immediately after, so a socket opened here would
+     *   be torn down microseconds later regardless. Refusing up front is the
+     *   same outcome without the pointless socket.
+     *
+     * The observable difference is only what the script is told, and there
+     * mudix is deliberately the more honest of the two: Mudlet returns success
+     * for a connection that will never deliver a byte. Hence this log line —
+     * the divergence is intentional, but it must not be silent.
+     *
+     * Routed to script.log rather than the output window: by this point the
+     * console may already be unmounting, and the log buffer lives on MudSession
+     * so the Errors tab can still show it.
+     */
+    private refuseDuringTeardown(call: string): void {
+        const msg = `${call} ignored — the profile is shutting down. `
+            + '(Mudlet accepts this during sysExitEvent but then discards the '
+            + 'resulting connection; mudix refuses it up front.)';
+        this.session.events.emit('script.log', msg, 'error');
+        console.warn(`[mudix] ${msg}`);
+    }
+
     requestConnect(url: string): void {
-        if (this.disposed) return;
+        if (this.disposed) { this.refuseDuringTeardown('connect()'); return; }
         if (this.scriptsLoadComplete) {
             this.session.connect(url);
         } else {
@@ -2759,17 +2782,33 @@ export class ScriptingEngine {
     }
 
     destroy(): void {
+        // ── Phase 1: disarm ──────────────────────────────────────────────────
+        // The bare minimum that must precede user code, and nothing else. Both
+        // of these stop a sysExitEvent handler from resurrecting the profile
+        // we are closing: `disposed` makes connect()/resetProfile() inert, and
+        // dropping a deferred dial stops markScriptsLoaded() from opening a
+        // socket on the way down. Deliberately NOT teardown — every other
+        // subsystem is still fully live for phase 2.
         this.disposed = true;
-        // A teardown before the load latch resolved must unblock any awaiting
-        // auto-connect and drop a still-pending deferred dial — disposed is set
-        // first so markScriptsLoaded won't open a socket on the way down.
         this.pendingConnectUrl = null;
-        this.markScriptsLoaded();
-        // Fire sysExitEvent before any teardown, while handlers can still run.
         window.removeEventListener('beforeunload', this.beforeUnload);
+
+        // ── Phase 2: user code, against an intact engine ─────────────────────
+        // sysExitEvent dispatches into Lua synchronously, so handlers run to
+        // completion here — with the store, the VFS, the SQL bridge, the Lua
+        // VM and the socket all still working. This is the only re-entrancy
+        // point in destroy(); nothing below may move above it.
         this.fireExit();
-        // Drain any pending automation-data write before the VFS is torn down.
+
+        // ── Phase 3: persist what phase 2 produced ───────────────────────────
+        // Runs after the handlers so anything they changed is captured:
+        // flushProfileData() snapshots the live store and the Lua globals
+        // (captureSavedVariables), and the store subscription is still bound
+        // so their edits are visible. Both must precede the VFS/VM teardown.
+        this.markScriptsLoaded();
         this.flushProfileData();
+
+        // ── Phase 4: tear down ───────────────────────────────────────────────
         for (const t of this.moduleSyncTimers.values()) clearTimeout(t);
         this.moduleSyncTimers.clear();
         // Cancel a still-pending deferred mapOpenEvent so it can't fire mid/post
@@ -2799,10 +2838,23 @@ export class ScriptingEngine {
         this.runtimes.lua = null;
         this.triggerEngine.setLuaEval(null);
         this.triggerEngine.setColorMatcher(null);
-        this.api.setExecuteScript(null);
-        this.api.setExpandAlias(null);
-        this.api.setSendRequestDispatcher(null);
-        this.api.setCssRewriter(null);
+        // Unbind the host. This does NOT guard against late *Lua* calls —
+        // lua_close ran a few lines up. It guards against DOM-side callers
+        // that outlive the engine: a rendered line's hyperlink onClick closure
+        // captures the API, and the output area may unmount after this. Those
+        // paths bottom out in guarded methods (`if (!lua) return`), but the
+        // store-backed ones do not — without this, getPackageNames /
+        // createPermTrigger would read and mutate a closed profile's tree.
+        //
+        // Placement: destroy() is fully synchronous, so nothing external can
+        // observe the states between its statements — this call's position is
+        // free EXCEPT for one hard constraint. fireExit() above dispatches
+        // sysExitEvent into Lua synchronously, so exit handlers re-enter the
+        // API while teardown is in progress. Hoisting this above fireExit()
+        // (tempting, since "unbind first" reads tidier) would hand those
+        // handlers an inert host and silently break every sysExitEvent script
+        // that saves state on the way out. It must stay after fireExit().
+        this.api.setHost(null);
         this.session.sounds.stopAll();
         this.session.sounds.setLoader(null);
         this.api.destroy();
@@ -2964,7 +3016,10 @@ export class ScriptingEngine {
      * scripting `feedTriggers` API so both paths preserve identical semantics
      * (line ordering, ANSI carry, trigger-echo placement).
      */
-    private processFlushBatch(groups: { text: string; type: string }[]): void {
+    /** Part of {@link EngineHost} — also reached directly from the flushLines
+     *  subscription, and by feedTriggers via the host so synthetic batches share
+     *  ordering semantics with network output. */
+    processFlushBatch(groups: { text: string; type: string }[]): void {
         for (const { text, type } of groups) {
             try {
                 const lines = text.split('\n');

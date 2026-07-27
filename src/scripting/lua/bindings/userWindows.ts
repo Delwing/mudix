@@ -1,0 +1,209 @@
+import type { BindingContext } from './context';
+
+/** Mudlet's single-letter docking-area codes → the side names WindowManager
+ *  docks against. Anything unrecognised falls back to 'right', matching how
+ *  Mudlet treats an unknown area. */
+const DOCKMAP: Record<string, string> = {
+    r: 'right',
+    l: 'left',
+    t: 'top',
+    b: 'bottom',
+    main: 'main',
+};
+
+/**
+ * Creating and destroying the addressable UI surfaces Lua can open:
+ * user windows, the map widget, mini-consoles, command lines, and scroll
+ * boxes - plus windowType(), which reports what a given name resolves to.
+ *
+ * Deletion is the interesting half. Each destroy path has to free whatever
+ * Lua-side callback slots the widget had bound before dropping it, or the
+ * registry entry leaks for the lifetime of the runtime.
+ */
+export function installUserWindowBindings({
+    lua,
+    api,
+    emitEvent,
+    unregisterCb,
+    overlayCmdLineActionCbIds,
+}: BindingContext): void {
+    // Mudlet `windowType(name)` → kind string. Returns `(nil, errMsg)` when
+    // the name doesn't resolve. The raw entry point hands JS `null` for the
+    // miss case; the Bridge.lua wrapper re-shapes it into the multi-return.
+    // mudix has no "commandline" or "textedit" concepts, so those kinds are
+    // not reported; off-screen buffers (createBuffer) report "buffer".
+    lua.global.set('__windowType', (window: unknown) => {
+        if (typeof window !== 'string') return null;
+        if (window === 'main') return 'main';
+        if (api.labels.has(window)) return 'label';
+        if (api.windows.isMiniConsole(window)) return 'miniconsole';
+        if (api.windows.has(window)) return 'userwindow';
+        if (api.cmdLines.has(window)) return 'commandline';
+        if (api.textEdits.has(window)) return 'textedit';
+        if (api.scrollBoxes.has(window)) return 'scrollbox';
+        if (api.isBuffer(window)) return 'buffer';
+        return null;
+    });
+    // Mudlet `openUserWindow(name, [restoreLayout, autoDock, dockingArea]) → true`.
+    // Always returns true once the window registry has the panel. The handle
+    // returned by ScriptingWindowsAPI.open is kept internal — userscripts
+    // address windows by name everywhere else (write/move/resize/etc.), so
+    // returning `true` (Mudlet shape) avoids leaking the handle object.
+    lua.global.set('openUserWindow', (window: string, restoreLayout: boolean = true, autoDock: boolean = true, dockingArea: string = 'r') => {
+        api.windows.open(window, {
+            autoDock,
+            dockingArea: DOCKMAP[dockingArea] ?? 'right',
+            ignoreHint: restoreLayout,
+        });
+        return true;
+    });
+    // Mudlet `openMapWidget([dockingArea | x, y [, w, h]]) → true`.
+    //   no args            → restore saved layout, or right-dock if none
+    //   (area)             → "f" floating, or "l"/"r"/"t"/"b" dock side
+    //   (x, y)             → floating at (x, y); width/height inherit the
+    //                        saved hint (or panel defaults if none)
+    //   (x, y, w, h)       → floating at given pixel position and size
+    // Explicit args override the saved layout hint. Always returns true.
+    lua.global.set('openMapWidget', (a?: unknown, b?: unknown, c?: unknown, d?: unknown) => {
+        // 2- or 4-arg numeric form: floating at (x, y[, w, h])
+        if (typeof a === 'number' && typeof b === 'number') {
+            const hasSize = c !== undefined && d !== undefined;
+            api.windows.open('map', {
+                kind: 'map',
+                title: 'Map',
+                autoDock: false,
+                ignoreHint: true,
+                x: Number(a),
+                y: Number(b),
+                ...(hasSize ? { width: Number(c), height: Number(d) } : {}),
+            });
+            return true;
+        }
+        // 0-arg: restore saved layout, fall back to right dock
+        if (a === undefined || a === null) {
+            api.windows.open('map', {
+                kind: 'map',
+                title: 'Map',
+                dockingArea: 'right',
+            });
+            return true;
+        }
+        // 1-arg: dockingArea string
+        const area = String(a);
+        if (area === 'f') {
+            api.windows.open('map', {
+                kind: 'map',
+                title: 'Map',
+                autoDock: false,
+                ignoreHint: true,
+            });
+            return true;
+        }
+        api.windows.open('map', {
+            kind: 'map',
+            title: 'Map',
+            ignoreHint: true,
+            dockingArea: DOCKMAP[area] ?? 'right',
+        });
+        return true;
+    });
+    // Mudlet `closeMapWidget() → true`. Closes the dockable map widget
+    // (id `map`, opened by `openMapWidget`). Returns false when no map
+    // widget is currently open — Mudlet warns/returns nil in that case.
+    lua.global.set('closeMapWidget', () => {
+        if (!api.windows.has('map')) return false;
+        api.windows.close('map');
+        return true;
+    });
+    // Mudlet clearUserWindow([name]) — defaults to clearing the main
+    // console when no name is given (matches `clearWindow` behaviour).
+    lua.global.set("clearUserWindow", (window?: unknown) => {
+        const name = typeof window === 'string' ? window : undefined;
+        if (!name || name === 'main') api.clearWindow();
+        else api.windows.clear(name);
+    });
+    // createMiniConsole has two calling conventions:
+    //   createMiniConsole(name, x, y, w, h)              — 5 args, parent defaults to main
+    //   createMiniConsole(parent, name, x, y, w, h)      — 6 args, miniconsole inside a userwindow
+    // Number() coerces because regex-capture args arrive as Lua strings.
+    lua.global.set('createMiniConsole', (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown, f?: unknown) => {
+        const hasParent = f !== undefined;
+        const [parent, name, x, y, w, h] = hasParent
+            ? [a as string, b, c, d, e, f]
+            : [undefined, a, b, c, d, e];
+        return api.createMiniConsole(
+            String(name ?? ''),
+            Number(x), Number(y),
+            Number(w), Number(h),
+            parent,
+        );
+    });
+    // Mudlet createCommandLine([parent,] name, x, y, w, h) — absolutely-
+    // positioned overlay <input> element on the named parent viewport
+    // (defaults to 'main'). Returns true on success, false when a command
+    // line of that name already exists. The unified moveWindow / resizeWindow
+    // / showWindow / hideWindow lookup below picks it up automatically.
+    lua.global.set('createCommandLine', (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown, f?: unknown) => {
+        const hasParent = f !== undefined;
+        const [parent, name, x, y, w, h] = hasParent
+            ? [a as string, b, c, d, e, f]
+            : [undefined, a, b, c, d, e];
+        if (typeof name !== 'string' || !name) return false;
+        return api.cmdLines.create(name, {
+            parent: parent && parent !== 'main' ? parent : 'main',
+            x: Number(x), y: Number(y),
+            width: Number(w), height: Number(h),
+        });
+    });
+    // Mudlet deleteCommandLine(name) → bool. Destroys an overlay command line
+    // created by createCommandLine. Fires sysCommandLineDeleted(name) on
+    // success, matching Mudlet's sysLabelDeleted / sysMiniConsoleDeleted.
+    // Mudlet deleteCommandLine(name) → true, or (false, errMsg) when the named
+    // command line doesn't exist. Bridge.lua adds the error string (and the
+    // "main cannot be deleted" guard). Fires sysCommandLineDeleted(name) on
+    // success.
+    lua.global.set('__deleteCommandLine', (name: unknown) => {
+        if (typeof name !== 'string') return false;
+        // Free any bound action callback chunk so the Lua registry slot is
+        // released — overlayCmdLineActionCbIds bookkeeping mirrors the
+        // per-window cmd-line lifecycle.
+        const prev = overlayCmdLineActionCbIds.get(name);
+        if (prev) { unregisterCb(prev); overlayCmdLineActionCbIds.delete(name); }
+        const ok = api.cmdLines.destroy(name);
+        if (ok) emitEvent('sysCommandLineDeleted', [name]);
+        return ok;
+    });
+    // Mudlet deleteMiniConsole(name) → true, or (false, errMsg) when the named
+    // mini-console doesn't exist (Bridge.lua adds the error string). Rejects
+    // non-miniconsole targets (main window, dock panels, unknown names).
+    lua.global.set('__deleteMiniConsole', (name: unknown) =>
+        typeof name === 'string' ? api.deleteMiniConsole(name) : false);
+    // Mudlet createScrollBox([parent,] name, x, y, w, h) — absolutely-
+    // positioned scrollable container on the named parent viewport (defaults
+    // to 'main'). Other overlay widgets nest inside it by passing this box's
+    // name as their parent. Returns false when a box of that name already
+    // exists. Picked up by the unified moveWindow / resizeWindow / showWindow
+    // / hideWindow / raiseWindow / lowerWindow lookups below.
+    lua.global.set('createScrollBox', (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown, f?: unknown) => {
+        const hasParent = f !== undefined;
+        const [parent, name, x, y, w, h] = hasParent
+            ? [a as string, b, c, d, e, f]
+            : [undefined, a, b, c, d, e];
+        if (typeof name !== 'string' || !name) return false;
+        return api.scrollBoxes.create(name, {
+            parent: parent && parent !== 'main' ? parent : 'main',
+            x: Number(x), y: Number(y),
+            width: Number(w), height: Number(h),
+        });
+    });
+    // Mudlet deleteScrollBox(name) → bool. Destroys a scroll box created via
+    // createScrollBox. Fires sysScrollBoxDeleted(name) on success, matching
+    // sysCommandLineDeleted / sysMiniConsoleDeleted.
+    lua.global.set('__deleteScrollBox', (name: unknown) => {
+        if (typeof name !== 'string') return false;
+        const ok = api.scrollBoxes.destroy(name);
+        if (ok) emitEvent('sysScrollBoxDeleted', [name]);
+        return ok;
+    });
+}
+

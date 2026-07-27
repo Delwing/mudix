@@ -34,6 +34,7 @@ import {
     primeLocalFontsCache,
 } from '../utils/fontLoader';
 import { ProfilesPresence } from './profilesPresence';
+import { type EngineHost, NULL_ENGINE_HOST } from './EngineHost';
 
 // Mudlet's TChar always carries baked-in fg/bg colors (the rendered pair), so
 // getFgColor/getBgColor never return "no color" for in-bounds positions. mudix
@@ -393,7 +394,10 @@ class ScriptingWindowsAPI {
 class ScriptingLabelsAPI {
     constructor(
         private readonly manager: LabelManager,
-        private readonly cssRewriter: () => ((css: string) => string) | null,
+        /** Resolves the engine's current VFS-aware CSS rewriter. Read lazily
+         *  (rather than captured) because the engine is bound after this API is
+         *  constructed; before that it resolves to an identity rewrite. */
+        private readonly cssRewriter: () => (css: string) => string,
     ) {}
 
     create(name: string, opts: LabelCreateOptions): boolean {
@@ -423,7 +427,7 @@ class ScriptingLabelsAPI {
     }
     setStyleSheet(name: string, css: string): boolean {
         const rewrite = this.cssRewriter();
-        return this.manager.setStyleSheet(name, rewrite ? rewrite(css) : css);
+        return this.manager.setStyleSheet(name, rewrite(css));
     }
     getStyleSheet(name: string): string | undefined {
         return this.manager.getStyleSheet(name);
@@ -499,6 +503,23 @@ function connectionHostPort(conn: MudConnection): { host: string; port: number }
 }
 
 export class ScriptingAPI {
+    /** The engine backing this API. ScriptingEngine binds itself in its own
+     *  constructor, immediately after building this object, so in the real app
+     *  a live engine is present for essentially the whole lifetime. The inert
+     *  host covers the two cases where one genuinely isn't: after teardown
+     *  unbinds (see setHost), and in tests, which construct a ScriptingAPI
+     *  without an engine at all.
+     *
+     *  This is deliberately NOT session-backed. An earlier version gave the
+     *  unbound host live fallbacks (dial the session, send, emit flushLines) to
+     *  preserve pre-engine behaviour from the old nullable-callback design.
+     *  Once the engine started binding in the constructor those became both
+     *  unreachable in production and actively wrong: after destroy() calls
+     *  setHost(null), a `connect()` from a surviving DOM link handler would
+     *  have dialled the session — defeating the teardown refusal three phases
+     *  earlier in the same function. Inert is the correct unbound behaviour. */
+    private host: EngineHost = NULL_ENGINE_HOST;
+
     /** OSC 8 selection-group + visited-link state for this connection. */
     private readonly oscLinks = new OscLinkManager();
     readonly windows: ScriptingWindowsAPI;
@@ -546,87 +567,12 @@ export class ScriptingAPI {
     // rather than starting a new deferred line.
     private echoOnMatchedLine = false;
 
-    // Callback set by ScriptingEngine so link clicks can execute Lua code.
-    private executeScript: ((code: string) => void) | null = null;
+    // The engine-backed callbacks that used to live here (link execution,
+    // alias expansion, package/module management, the perm* constructors, …)
+    // are now methods on the EngineHost bound via setHost. The four below are
+    // different: they are supplied by ProfileSession, not the engine, so they
+    // stay as individually settable slots.
 
-    // Callback set by ScriptingEngine to route expandAlias through the full pipeline.
-    private expandAliasCallback: ((text: string, echo: boolean) => void) | null = null;
-
-    // Callback set by ScriptingEngine. Raises sysDataSendRequest and reports
-    // whether a handler called denyCurrentSend().
-    private sendRequestDispatcher: ((text: string) => boolean) | null = null;
-
-    // Callback set by ScriptingEngine. Routes a connect through the load gate so
-    // a script calling connect()/connectToServer() during the initial load
-    // defers the dial until scripts and triggers are loaded. Falls back to an
-    // immediate session.connect when unset (early init, before the runtime).
-    private connectDispatcher: ((url: string) => void) | null = null;
-
-    // Callback set by ScriptingEngine. Runs a synthetic flushLines batch
-    // through the same pipeline as network-driven flushLines so feedTriggers
-    // shares ordering semantics.
-    private feedDispatcher: ((groups: { text: string; type: string }[]) => void) | null = null;
-
-    // Callbacks set by ScriptingEngine. Wire installPackage / uninstallPackage
-    // through to the engine so the package's items reach the appStore (and
-    // thus the runtime) and sysInstall* / sysUninstall* events fire in order.
-    private packageInstaller: ((path: string) => InstallOutcome) | null = null;
-    private packageUninstaller: ((name: string) => boolean) | null = null;
-    private packagesGetter: (() => string[]) | null = null;
-    private moduleInstaller: ((path: string) => InstallOutcome) | null = null;
-    private moduleUninstaller: ((name: string) => boolean) | null = null;
-    private moduleSyncer: ((name: string) => Promise<void>) | null = null;
-    private moduleReloader: ((name: string) => boolean) | null = null;
-    private moduleSyncSetter: ((name: string, sync: boolean) => void) | null = null;
-    private moduleSyncGetter: ((name: string) => boolean) | null = null;
-    private modulePrioritySetter: ((name: string, priority: number) => boolean) | null = null;
-    private modulePriorityGetter: ((name: string) => number) | null = null;
-    private modulesGetter: (() => string[]) | null = null;
-    private moduleInfoGetter: ((name: string) => Record<string, unknown> | null) | null = null;
-    private moduleInfoSetter: ((name: string, key: string, value: string) => boolean) | null = null;
-    private modulePathGetter: ((name: string) => string | null) | null = null;
-    private packageInfoGetter: ((name: string) => Record<string, string>) | null = null;
-    private packageInfoSetter: ((name: string, key: string, value: string) => boolean) | null = null;
-    private cssRewriter: ((css: string) => string) | null = null;
-    /** Reads raw file bytes from the profile VFS (wired by ScriptingEngine).
-     *  Backs synchronous binary consumers like setMovie's GIF decoder. */
-    private fileBytesReader: ((path: string) => Uint8Array | null) | null = null;
-    private scriptToggler: ((name: string, enabled: boolean) => boolean) | null = null;
-    private triggerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
-    private triggerStayOpenSetter: ((name: string, lines: number) => boolean) | null = null;
-    private timerToggler: ((name: string, enabled: boolean) => boolean) | null = null;
-    private aliasToggler: ((name: string, enabled: boolean) => boolean) | null = null;
-    private keyToggler: ((name: string, enabled: boolean) => boolean) | null = null;
-    private existsCallback: ((nameOrId: string | number, type: string) => number) | null = null;
-    private isActiveCallback: ((nameOrId: string | number, type: string, checkAncestors: boolean) => number) | null = null;
-    private ancestorsCallback: ((id: number, type: string) => Array<{ id: number; name: string; node: string; isActive: boolean }> | null) | null = null;
-    private findItemsCallback: ((name: string, type: string, exact: boolean, caseSensitive: boolean) => number[]) | null = null;
-    private isAncestorsActiveCallback: ((id: number, type: string) => boolean | null) | null = null;
-    private profileStatsCallback: (() => Record<string, unknown>) | null = null;
-    // Mudlet returns a numeric script id from permScript/permRegexTrigger/setScript;
-    // -1 signals failure (missing parent group, unknown script name, etc.).
-    private permScriptCallback: ((name: string, parent: string, code: string) => number) | null = null;
-    private permRegexTriggerCallback: ((name: string, parent: string, regexes: string[], code: string) => number) | null = null;
-    private permSubstringTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
-    private permBeginOfLineStringTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
-    private permExactMatchTriggerCallback: ((name: string, parent: string, patterns: string[], code: string) => number) | null = null;
-    private permPromptTriggerCallback: ((name: string, parent: string, code: string) => number) | null = null;
-    private permAliasCallback: ((name: string, parent: string, pattern: string, code: string) => number) | null = null;
-    private permTimerCallback: ((name: string, parent: string, delay: number, code: string) => number) | null = null;
-    // Mudlet permKey(name, parent, modifier, key, code). Modifier comes from the
-    // engine as a Qt::KeyboardModifier int; the JS-side resolver translates it
-    // back into `["ctrl",...]` strings to store on the KeyNode.
-    private permKeyCallback: ((name: string, parent: string, modifier: number, key: string, code: string) => number) | null = null;
-    // Mudlet button & toolbar APIs operate on ButtonNodes stored in the same
-    // tree the persistent button bar consumes — these callbacks let the
-    // ScriptingEngine carry the mutation while ScriptingAPI keeps the Lua
-    // surface area in one place.
-    private tempButtonCallback: ((toolbar: string, name: string, code: string, orientation: number) => number) | null = null;
-    private tempButtonToolbarCallback: ((name: string, orientation: number, location: number) => number) | null = null;
-    private buttonStateSetter: ((name: string, state: boolean) => boolean) | null = null;
-    private buttonStateGetter: ((name: string) => boolean | null) | null = null;
-    private buttonStyleSheetSetter: ((name: string, css: string) => boolean) | null = null;
-    private toolBarToggler: ((name: string, show: boolean) => boolean) | null = null;
     /** Mudlet `startLogging(state)`. Forwarded to ProfileSession, which owns
      *  the SessionLogger instance (created/torn-down on this hook). */
     private loggingToggler: ((enabled: boolean) => boolean) | null = null;
@@ -636,18 +582,6 @@ export class ScriptingAPI {
     /** Mudlet `closeMudlet()`. mudix maps it to "close the active profile":
      *  disconnect, then return to the connection screen. Wired by ProfileSession. */
     private closeProfileCallback: (() => void) | null = null;
-    /** Mudlet `resetProfile()` — reload the whole profile (fresh Lua VM, UI
-     *  cleared, scripts re-run). Wired by ScriptingEngine; deferred internally. */
-    private resetProfileCallback: (() => void) | null = null;
-    /** Mudlet `exportAreaImage(areaID, filePath[, zLevel])` — render an area to a
-     *  PNG in the profile VFS. Wired by ScriptingEngine (which owns the VFS). */
-    private exportAreaImageCallback: ((areaId: number, filePath: string, zLevel?: number) => { path: string } | { error: string }) | null = null;
-    private setScriptCallback: ((name: string, code: string, pos: number) => number) | null = null;
-    private scriptGetter: ((name: string, pos: number) => { code: string; count: number } | null) | null = null;
-    // Mudlet's killTimer/killAlias/killTrigger/killKey accept the name of a
-    // permanent item in addition to the numeric id of a temp one. The engine
-    // wires these to remove the matching store nodes.
-    private killByNameCallback: ((kind: 'timer' | 'alias' | 'trigger' | 'key', name: string) => boolean) | null = null;
 
     private selection: { windowName: string | undefined; start: number; length: number } | null = null;
 
@@ -680,7 +614,13 @@ export class ScriptingAPI {
         private readonly connectionId: string,
     ) {
         this.windows = new ScriptingWindowsAPI(session);
-        this.labels = new ScriptingLabelsAPI(session.labels, () => this.cssRewriter);
+        // Hand out a bound *call*, not the method itself. `this.host.rewriteCss`
+        // would detach ScriptingEngine.rewriteCss from its instance, and it
+        // dereferences this.vfs — so the label stylesheet path died with
+        // "Cannot read properties of undefined (reading 'vfs')". The predecessor
+        // of this was a closure field, which carried its own binding; a
+        // prototype method does not.
+        this.labels = new ScriptingLabelsAPI(session.labels, () => (css: string) => this.host.rewriteCss(css));
         this.cmdLines = session.cmdLines;
         this.scrollBoxes = session.scrollBoxes;
         this.aliases = aliasEngine;
@@ -698,7 +638,7 @@ export class ScriptingAPI {
         session.consoles.set('main', this.mainConsole);
         // Mudlet `sysBufferShrinkEvent("main", linesRemoved)` — named user
         // windows have the same hook wired in WindowManager.registerConsole.
-        this.mainConsole.onBufferShrink = (n) => this.eventRaiser?.('sysBufferShrinkEvent', ['main', n]);
+        this.mainConsole.onBufferShrink = (n) => this.host.raiseEvent('sysBufferShrinkEvent', ['main', n]);
         // Re-apply the one persisted config key that drives a live session
         // side-effect (suppressing local command echo) so it survives reloads.
         // Older profiles persisted this as a boolean; parseShowSentText maps that
@@ -714,6 +654,20 @@ export class ScriptingAPI {
         session.sounds.setOriginMuted('game', configBool(bag.muteMediaGame ?? false));
     }
 
+    /** Bind the engine backing this API. Called once by ScriptingEngine during
+     *  its own construction; pass null on teardown to revert to the inert host,
+     *  so anything that outlives the engine (a rendered line's link handler,
+     *  say) can't drive a disposed one. */
+    setHost(host: EngineHost | null): void {
+        this.host = host ?? NULL_ENGINE_HOST;
+    }
+
+    /** The currently bound host. Exposed so tests can layer a single override
+     *  over it: `api.setHost({ ...api.engineHost, readFileBytes: fn })`. */
+    get engineHost(): EngineHost {
+        return this.host;
+    }
+
     // ── Connection ────────────────────────────────────────────────────────────
 
     connect(url: string): void {
@@ -721,10 +675,9 @@ export class ScriptingAPI {
     }
 
     /** Dial through the engine's load gate when wired (deferring a connect made
-     *  during initial load), else connect the session directly. */
+     *  during initial load); the default host connects the session directly. */
     private dialConnect(url: string): void {
-        if (this.connectDispatcher) this.connectDispatcher(url);
-        else this.session.connect(url);
+        this.host.requestConnect(url);
     }
 
     disconnect(): void {
@@ -732,9 +685,10 @@ export class ScriptingAPI {
     }
 
     send(text: string, echo = true): void {
-        // sysDataSendRequest handlers may deny the send. If no dispatcher is
-        // wired yet (early init), send straight.
-        if (this.sendRequestDispatcher && this.sendRequestDispatcher(text)) return;
+        // sysDataSendRequest handlers may deny the send. With no engine wired
+        // yet (early init) the no-op host reports "not denied", so this sends
+        // straight through.
+        if (this.host.dispatchSendRequest(text)) return;
         this.session.send(text, echo);
     }
 
@@ -794,8 +748,12 @@ export class ScriptingAPI {
 
     /** Mudlet `reconnect()`. Disconnect and redial the last-connected URL;
      *  false when no connection has been made this session. */
+    /** Mudlet `reconnect()`. Routed through the host rather than straight to the
+     *  session so it observes the same teardown gate as connect() — otherwise a
+     *  sysExitEvent handler calling reconnect() opens a socket that the disposal
+     *  immediately below it then has to tear down. */
     reconnect(): boolean {
-        return this.session.reconnect();
+        return this.host.requestReconnect();
     }
 
     /** Mudlet `getServerEncoding()`. IANA name of the decoder applied to the
@@ -1178,89 +1136,45 @@ export class ScriptingAPI {
         return getHeldModifiers() === (Number(modifiers) | 0);
     }
 
-    setSendRequestDispatcher(fn: ((text: string) => boolean) | null): void {
-        this.sendRequestDispatcher = fn;
-    }
 
-    setConnectDispatcher(fn: ((url: string) => void) | null): void {
-        this.connectDispatcher = fn;
-    }
 
-    setFeedDispatcher(fn: ((groups: { text: string; type: string }[]) => void) | null): void {
-        this.feedDispatcher = fn;
-    }
 
-    setPackageInstaller(fn: ((path: string) => InstallOutcome) | null): void {
-        this.packageInstaller = fn;
-    }
 
-    setPackageUninstaller(fn: ((name: string) => boolean) | null): void {
-        this.packageUninstaller = fn;
-    }
 
-    setPackagesGetter(fn: (() => string[]) | null): void {
-        this.packagesGetter = fn;
-    }
 
     getPackages(): string[] {
-        return this.packagesGetter?.() ?? [];
+        return this.host.getPackageNames();
     }
 
-    setModuleInstaller(fn: ((path: string) => InstallOutcome) | null): void { this.moduleInstaller = fn; }
-    setModuleUninstaller(fn: ((name: string) => boolean) | null): void { this.moduleUninstaller = fn; }
-    setModuleSyncer(fn: ((name: string) => Promise<void>) | null): void { this.moduleSyncer = fn; }
-    setModuleReloader(fn: ((name: string) => boolean) | null): void { this.moduleReloader = fn; }
-    setModuleSyncSetter(fn: ((name: string, sync: boolean) => void) | null): void { this.moduleSyncSetter = fn; }
-    setModuleSyncGetter(fn: ((name: string) => boolean) | null): void { this.moduleSyncGetter = fn; }
-    setModulePrioritySetter(fn: ((name: string, priority: number) => boolean) | null): void { this.modulePrioritySetter = fn; }
-    setModulePriorityGetter(fn: ((name: string) => number) | null): void { this.modulePriorityGetter = fn; }
-    setModulesGetter(fn: (() => string[]) | null): void { this.modulesGetter = fn; }
-    setModuleInfoGetter(fn: ((name: string) => Record<string, unknown> | null) | null): void { this.moduleInfoGetter = fn; }
-    setModuleInfoSetter(fn: ((name: string, key: string, value: string) => boolean) | null): void { this.moduleInfoSetter = fn; }
-    setModulePathGetter(fn: ((name: string) => string | null) | null): void { this.modulePathGetter = fn; }
-    setPackageInfoGetter(fn: ((name: string) => Record<string, string>) | null): void { this.packageInfoGetter = fn; }
-    setPackageInfoSetter(fn: ((name: string, key: string, value: string) => boolean) | null): void { this.packageInfoSetter = fn; }
 
-    installModule(path: string): InstallOutcome { return this.moduleInstaller?.(path) ?? { ok: false, error: 'no module installer available' }; }
-    uninstallModule(name: string): boolean { return this.moduleUninstaller?.(name) ?? false; }
-    syncModule(name: string): Promise<void> { return this.moduleSyncer?.(name) ?? Promise.resolve(); }
-    reloadModule(name: string): boolean { return this.moduleReloader?.(name) ?? false; }
-    enableModuleSync(name: string): void { this.moduleSyncSetter?.(name, true); }
-    disableModuleSync(name: string): void { this.moduleSyncSetter?.(name, false); }
-    getModuleSync(name: string): boolean { return this.moduleSyncGetter?.(name) ?? false; }
+    installModule(path: string): InstallOutcome { return this.host.installModuleFromPath(path); }
+    uninstallModule(name: string): boolean { return this.host.uninstallModuleByName(name); }
+    syncModule(name: string): Promise<void> { return this.host.syncModuleToFile(name); }
+    reloadModule(name: string): boolean { return this.host.reloadModuleFromFile(name); }
+    enableModuleSync(name: string): void { this.host.setModuleSync(name, true); }
+    disableModuleSync(name: string): void { this.host.setModuleSync(name, false); }
+    getModuleSync(name: string): boolean { return this.host.getModuleSync(name); }
     setModulePriority(name: string, priority: number): boolean {
-        return this.modulePrioritySetter?.(name, priority) ?? false;
+        return this.host.setModulePriority(name, priority);
     }
-    getModulePriority(name: string): number { return this.modulePriorityGetter?.(name) ?? 0; }
-    getModules(): string[] { return this.modulesGetter?.() ?? []; }
-    getModuleInfo(name: string): Record<string, unknown> | null { return this.moduleInfoGetter?.(name) ?? null; }
+    getModulePriority(name: string): number { return this.host.getModulePriority(name); }
+    getModules(): string[] { return this.host.getModuleNames(); }
+    getModuleInfo(name: string): Record<string, unknown> | null { return this.host.getModuleInfoRecord(name); }
     /** Mudlet `setModuleInfo(name, key, value)`. Stores a custom info field on a
      *  module (visible via getModuleInfo). Always true. */
-    setModuleInfo(name: string, key: string, value: string): boolean { return this.moduleInfoSetter?.(name, key, value) ?? false; }
-    getModulePath(name: string): string | null { return this.modulePathGetter?.(name) ?? null; }
+    setModuleInfo(name: string, key: string, value: string): boolean { return this.host.setModuleInfo(name, key, value); }
+    getModulePath(name: string): string | null { return this.host.getModulePath(name); }
     /** Mudlet `getPackageInfo(name)`. Merged info table — the package manifest's
      *  standard fields overlaid with anything set via setPackageInfo. Empty when
      *  the package isn't installed and nothing was set. */
-    getPackageInfo(name: string): Record<string, string> { return this.packageInfoGetter?.(name) ?? {}; }
+    getPackageInfo(name: string): Record<string, string> { return this.host.getPackageInfo(name); }
     /** Mudlet `setPackageInfo(name, key, value)`. Stores a custom info field on a
      *  package (visible via getPackageInfo). Always true. */
-    setPackageInfo(name: string, key: string, value: string): boolean { return this.packageInfoSetter?.(name, key, value) ?? false; }
+    setPackageInfo(name: string, key: string, value: string): boolean { return this.host.setPackageInfo(name, key, value); }
 
-    setScriptToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
-        this.scriptToggler = fn;
-    }
 
-    setScriptGetter(fn: ((name: string, pos: number) => { code: string; count: number } | null) | null): void {
-        this.scriptGetter = fn;
-    }
 
-    setTriggerToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
-        this.triggerToggler = fn;
-    }
 
-    setTriggerStayOpenSetter(fn: ((name: string, lines: number) => boolean) | null): void {
-        this.triggerStayOpenSetter = fn;
-    }
 
     /**
      * Mudlet `setTriggerStayOpen(name, lines)`. Keeps the named trigger's chain
@@ -1270,108 +1184,33 @@ export class ScriptingAPI {
      * already-running chain.
      */
     setTriggerStayOpen(name: string, lines: number): boolean {
-        return this.triggerStayOpenSetter?.(name, lines) ?? false;
+        return this.host.setTriggerStayOpenByName(name, lines);
     }
 
-    setTimerToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
-        this.timerToggler = fn;
-    }
 
-    setAliasToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
-        this.aliasToggler = fn;
-    }
 
-    setKeyToggler(fn: ((name: string, enabled: boolean) => boolean) | null): void {
-        this.keyToggler = fn;
-    }
 
-    setExistsCallback(fn: ((nameOrId: string | number, type: string) => number) | null): void {
-        this.existsCallback = fn;
-    }
 
-    setIsActiveCallback(fn: ((nameOrId: string | number, type: string, checkAncestors: boolean) => number) | null): void {
-        this.isActiveCallback = fn;
-    }
 
-    setAncestorsCallback(fn: ((id: number, type: string) => Array<{ id: number; name: string; node: string; isActive: boolean }> | null) | null): void {
-        this.ancestorsCallback = fn;
-    }
 
-    setFindItemsCallback(fn: ((name: string, type: string, exact: boolean, caseSensitive: boolean) => number[]) | null): void {
-        this.findItemsCallback = fn;
-    }
 
-    setIsAncestorsActiveCallback(fn: ((id: number, type: string) => boolean | null) | null): void {
-        this.isAncestorsActiveCallback = fn;
-    }
 
-    setProfileStatsCallback(fn: (() => Record<string, unknown>) | null): void {
-        this.profileStatsCallback = fn;
-    }
 
-    setPermScriptCallback(fn: ((name: string, parent: string, code: string) => number) | null): void {
-        this.permScriptCallback = fn;
-    }
 
-    setPermRegexTriggerCallback(fn: ((name: string, parent: string, regexes: string[], code: string) => number) | null): void {
-        this.permRegexTriggerCallback = fn;
-    }
 
-    setPermSubstringTriggerCallback(fn: ((name: string, parent: string, patterns: string[], code: string) => number) | null): void {
-        this.permSubstringTriggerCallback = fn;
-    }
 
-    setPermBeginOfLineStringTriggerCallback(fn: ((name: string, parent: string, patterns: string[], code: string) => number) | null): void {
-        this.permBeginOfLineStringTriggerCallback = fn;
-    }
 
-    setPermExactMatchTriggerCallback(fn: ((name: string, parent: string, patterns: string[], code: string) => number) | null): void {
-        this.permExactMatchTriggerCallback = fn;
-    }
 
-    setPermPromptTriggerCallback(fn: ((name: string, parent: string, code: string) => number) | null): void {
-        this.permPromptTriggerCallback = fn;
-    }
 
-    setPermAliasCallback(fn: ((name: string, parent: string, pattern: string, code: string) => number) | null): void {
-        this.permAliasCallback = fn;
-    }
 
-    setPermTimerCallback(fn: ((name: string, parent: string, delay: number, code: string) => number) | null): void {
-        this.permTimerCallback = fn;
-    }
 
-    setPermKeyCallback(fn: ((name: string, parent: string, modifier: number, key: string, code: string) => number) | null): void {
-        this.permKeyCallback = fn;
-    }
 
-    setTempButtonCallback(fn: ((toolbar: string, name: string, code: string, orientation: number) => number) | null): void {
-        this.tempButtonCallback = fn;
-    }
 
-    setTempButtonToolbarCallback(fn: ((name: string, orientation: number, location: number) => number) | null): void {
-        this.tempButtonToolbarCallback = fn;
-    }
 
-    setButtonStateSetter(fn: ((name: string, state: boolean) => boolean) | null): void {
-        this.buttonStateSetter = fn;
-    }
 
-    setButtonStateGetter(fn: ((name: string) => boolean | null) | null): void {
-        this.buttonStateGetter = fn;
-    }
 
-    setButtonStyleSheetSetter(fn: ((name: string, css: string) => boolean) | null): void {
-        this.buttonStyleSheetSetter = fn;
-    }
 
-    setToolBarToggler(fn: ((name: string, show: boolean) => boolean) | null): void {
-        this.toolBarToggler = fn;
-    }
 
-    setSetScriptCallback(fn: ((name: string, code: string, pos: number) => number) | null): void {
-        this.setScriptCallback = fn;
-    }
 
     /** Hook for ProfileSession to start/stop the per-connection SessionLogger.
      *  Mudlet `startLogging(true|false)` toggles whether new output lines are
@@ -1412,21 +1251,15 @@ export class ScriptingAPI {
         this.closeProfileCallback?.();
     }
 
-    setResetProfileCallback(fn: (() => void) | null): void {
-        this.resetProfileCallback = fn;
-    }
 
     /** Mudlet `resetProfile()` — reload the entire profile as if just opened:
      *  clear every UI surface, recreate the Lua runtime, and re-run all scripts.
      *  The actual work is deferred by the engine (it closes the Lua VM that is
      *  currently executing this call), so this returns immediately. */
     resetProfile(): void {
-        this.resetProfileCallback?.();
+        this.host.resetProfile();
     }
 
-    setExportAreaImageCallback(fn: ((areaId: number, filePath: string, zLevel?: number) => { path: string } | { error: string }) | null): void {
-        this.exportAreaImageCallback = fn;
-    }
 
     /** Mudlet `exportAreaImage(areaID, filePath[, zLevel])` — render the area to a
      *  PNG file in the profile VFS. Returns `[true, absolutePath]` on success or
@@ -1434,73 +1267,63 @@ export class ScriptingAPI {
      *  unknown). The 0-indexed array is unpacked into Mudlet's multi-return by
      *  Bridge.lua. */
     exportAreaImage(areaId: number, filePath: string, zLevel?: number): [boolean, string] {
-        const r = this.exportAreaImageCallback?.(areaId, filePath, zLevel);
-        if (!r) return [false, 'exportAreaImage: no profile filesystem'];
+        const r = this.host.exportAreaImageToVfs(areaId, filePath, zLevel);
         return 'path' in r ? [true, r.path] : [false, r.error];
     }
 
-    setKillByNameCallback(fn: ((kind: 'timer' | 'alias' | 'trigger' | 'key', name: string) => boolean) | null): void {
-        this.killByNameCallback = fn;
-    }
 
     killByName(kind: 'timer' | 'alias' | 'trigger' | 'key', name: string): boolean {
-        return this.killByNameCallback?.(kind, name) ?? false;
+        return this.host.killByName(kind, name);
     }
 
-    setCssRewriter(fn: ((css: string) => string) | null): void {
-        this.cssRewriter = fn;
-    }
 
-    setFileBytesReader(fn: ((path: string) => Uint8Array | null) | null): void {
-        this.fileBytesReader = fn;
-    }
 
     installPackage(path: string): InstallOutcome {
-        return this.packageInstaller?.(path) ?? { ok: false, error: 'no package installer available' };
+        return this.host.installPackageFromVfsPath(path);
     }
 
     uninstallPackage(name: string): boolean {
-        return this.packageUninstaller?.(name) ?? false;
+        return this.host.uninstallPackageByName(name);
     }
 
     enableScript(name: string): boolean {
-        return this.scriptToggler?.(name, true) ?? false;
+        return this.host.toggleScriptByName(name, true);
     }
 
     disableScript(name: string): boolean {
-        return this.scriptToggler?.(name, false) ?? false;
+        return this.host.toggleScriptByName(name, false);
     }
 
     enableTrigger(name: string): boolean {
-        return this.triggerToggler?.(name, true) ?? false;
+        return this.host.toggleTriggerByName(name, true);
     }
 
     disableTrigger(name: string): boolean {
-        return this.triggerToggler?.(name, false) ?? false;
+        return this.host.toggleTriggerByName(name, false);
     }
 
     enableTimer(name: string): boolean {
-        return this.timerToggler?.(name, true) ?? false;
+        return this.host.toggleTimerByName(name, true);
     }
 
     disableTimer(name: string): boolean {
-        return this.timerToggler?.(name, false) ?? false;
+        return this.host.toggleTimerByName(name, false);
     }
 
     enableAlias(name: string): boolean {
-        return this.aliasToggler?.(name, true) ?? false;
+        return this.host.toggleAliasByName(name, true);
     }
 
     disableAlias(name: string): boolean {
-        return this.aliasToggler?.(name, false) ?? false;
+        return this.host.toggleAliasByName(name, false);
     }
 
     enableKey(name: string): boolean {
-        return this.keyToggler?.(name, true) ?? false;
+        return this.host.toggleKeyByName(name, true);
     }
 
     disableKey(name: string): boolean {
-        return this.keyToggler?.(name, false) ?? false;
+        return this.host.toggleKeyByName(name, false);
     }
 
     /**
@@ -1591,7 +1414,7 @@ export class ScriptingAPI {
     }
 
     exists(nameOrId: string | number, type: string): number {
-        return this.existsCallback?.(nameOrId, type) ?? 0;
+        return this.host.existsByName(nameOrId, type);
     }
 
     /**
@@ -1601,39 +1424,39 @@ export class ScriptingAPI {
      * group must be enabled too. Type strings mirror `exists`.
      */
     isActive(nameOrId: string | number, type: string, checkAncestors = false): number {
-        return this.isActiveCallback?.(nameOrId, type, checkAncestors) ?? 0;
+        return this.host.isActiveByName(nameOrId, type, checkAncestors);
     }
 
     /** Mudlet `ancestors(id, type)`. Ancestor chain (parent→root) of the item,
      *  or null when no item of that type has the id. */
     ancestors(id: number, type: string): Array<{ id: number; name: string; node: string; isActive: boolean }> | null {
-        return this.ancestorsCallback?.(id, type) ?? null;
+        return this.host.ancestorsById(id, type);
     }
 
     /** Mudlet `findItems(name, type [, exact [, caseSensitive]])`. Numeric ids of
      *  matching items/groups. Empty when none match or the type is unknown. */
     findItems(name: string, type: string, exact = true, caseSensitive = true): number[] {
-        return this.findItemsCallback?.(name, type, exact, caseSensitive) ?? [];
+        return this.host.findItemsByName(name, type, exact, caseSensitive);
     }
 
     /** Mudlet `isAncestorsActive(id, type)`. True when every ancestor group is
      *  enabled; null when no item of that type has the id. */
     isAncestorsActive(id: number, type: string): boolean | null {
-        return this.isAncestorsActiveCallback?.(id, type) ?? null;
+        return this.host.isAncestorsActiveById(id, type);
     }
 
     /** Mudlet `getProfileStats()`. Per-family total/active counts (+ trigger
      *  patterns). See ScriptingEngine.getProfileStats for mudix's caveats. */
     getProfileStats(): Record<string, unknown> {
-        return this.profileStatsCallback?.() ?? {};
+        return this.host.getProfileStats();
     }
 
     permScript(name: string, parent: string, code: string): number {
-        return this.permScriptCallback?.(name, parent, code) ?? -1;
+        return this.host.createPermScript(name, parent, code);
     }
 
     permRegexTrigger(name: string, parent: string, regexes: string[], code: string): number {
-        return this.permRegexTriggerCallback?.(name, parent, regexes, code) ?? -1;
+        return this.host.createPermRegexTrigger(name, parent, regexes, code);
     }
 
     /** Mudlet `permSubstringTrigger(name, parent, patterns, luaCode)`. Same
@@ -1642,7 +1465,7 @@ export class ScriptingAPI {
      *  empty patterns array creates a trigger group. Returns the new id, or
      *  -1 if `parent` is given but no trigger group of that name exists. */
     permSubstringTrigger(name: string, parent: string, patterns: string[], code: string): number {
-        return this.permSubstringTriggerCallback?.(name, parent, patterns, code) ?? -1;
+        return this.host.createPermSubstringTrigger(name, parent, patterns, code);
     }
 
     /** Mudlet `permBeginOfLineStringTrigger(name, parent, patterns, luaCode)`.
@@ -1652,7 +1475,7 @@ export class ScriptingAPI {
      *  trigger group. Returns the new id, or -1 if `parent` is given but no
      *  trigger group of that name exists. */
     permBeginOfLineStringTrigger(name: string, parent: string, patterns: string[], code: string): number {
-        return this.permBeginOfLineStringTriggerCallback?.(name, parent, patterns, code) ?? -1;
+        return this.host.createPermBeginOfLineStringTrigger(name, parent, patterns, code);
     }
 
     /** Mudlet `permExactMatchTrigger(name, parent, patterns, luaCode)`. Same
@@ -1661,7 +1484,7 @@ export class ScriptingAPI {
      *  new id, or -1 if `parent` is given but no trigger group of that name
      *  exists. */
     permExactMatchTrigger(name: string, parent: string, patterns: string[], code: string): number {
-        return this.permExactMatchTriggerCallback?.(name, parent, patterns, code) ?? -1;
+        return this.host.createPermExactMatchTrigger(name, parent, patterns, code);
     }
 
     /** Mudlet `permPromptTrigger(name, parent, luaCode)`. Creates a persistent
@@ -1669,7 +1492,7 @@ export class ScriptingAPI {
      *  pattern. Returns the new id, or -1 if `parent` is given but no trigger
      *  group of that name exists. */
     permPromptTrigger(name: string, parent: string, code: string): number {
-        return this.permPromptTriggerCallback?.(name, parent, code) ?? -1;
+        return this.host.createPermPromptTrigger(name, parent, code);
     }
 
     /** Mudlet `permAlias(name, parent, regex, luaCode)`. Creates a persistent
@@ -1677,7 +1500,7 @@ export class ScriptingAPI {
      *  alias id, or -1 when `parent` is non-empty but no alias group of that
      *  name exists. */
     permAlias(name: string, parent: string, pattern: string, code: string): number {
-        return this.permAliasCallback?.(name, parent, pattern, code) ?? -1;
+        return this.host.createPermAlias(name, parent, pattern, code);
     }
 
     /** Mudlet `permTimer(name, parent, seconds, luaCode)`. Creates a
@@ -1685,7 +1508,7 @@ export class ScriptingAPI {
      *  Returns the new timer id, or -1 when `parent` is non-empty but no
      *  timer group of that name exists. */
     permTimer(name: string, parent: string, delay: number, code: string): number {
-        return this.permTimerCallback?.(name, parent, delay, code) ?? -1;
+        return this.host.createPermTimer(name, parent, delay, code);
     }
 
     /** Mudlet `permKey(name, parent, modifier, keycode, luaCode)`. Persists a
@@ -1695,7 +1518,7 @@ export class ScriptingAPI {
      *  4=alt, 8=meta) — -1 means "no modifier" (Mudlet's convention; used by
      *  `permGroup("name","key")`). */
     permKey(name: string, parent: string, modifier: number, key: string, code: string): number {
-        return this.permKeyCallback?.(name, parent, modifier, key, code) ?? -1;
+        return this.host.createPermKey(name, parent, modifier, key, code);
     }
 
     // Combos already warned about via warnReservedTempKey — a script may re-register
@@ -1716,7 +1539,7 @@ export class ScriptingAPI {
         const combo = formatKeyCombo({ key, modifiers });
         // Dedup per combo AND call site: a loop re-binding from one line warns
         // once, but two different scripts binding the same combo each warn.
-        const dedupKey = `${combo} ${source ?? ''}`;
+        const dedupKey = `${combo}\u0000${source ?? ''}`;
         if (this.warnedReservedTempKeys.has(dedupKey)) return;
         this.warnedReservedTempKeys.add(dedupKey);
         const where = source ? ` (from ${source})` : '';
@@ -1731,7 +1554,7 @@ export class ScriptingAPI {
      *  (0=horizontal/1=vertical) — accepted for compat, applied to the
      *  button row inside the toolbar grid. */
     tempButton(toolbar: string, name: string, code: string, orientation: number): number {
-        return this.tempButtonCallback?.(toolbar, name, code, orientation) ?? -1;
+        return this.host.createTempButton(toolbar, name, code, orientation);
     }
 
     /** Mudlet `tempButtonToolbar(name [, orientation [, location]])`. Creates
@@ -1739,26 +1562,26 @@ export class ScriptingAPI {
      *  2=left, 3=right, 4=floating. Returns the new id or -1 on duplicate
      *  name. */
     tempButtonToolbar(name: string, orientation: number, location: number): number {
-        return this.tempButtonToolbarCallback?.(name, orientation, location) ?? -1;
+        return this.host.createTempButtonToolbar(name, orientation, location);
     }
 
     /** Mudlet `setButtonState(name, state)`. Sets the pressed state of a
      *  two-state (push-down) button by name. Returns false when not found. */
     setButtonState(name: string, state: boolean): boolean {
-        return this.buttonStateSetter?.(name, state) ?? false;
+        return this.host.setButtonStateByName(name, state);
     }
 
     /** Mudlet `getButtonState(name)`. Reads the pressed state of a two-state
      *  button. Returns nil when not found. */
     getButtonState(name: string): boolean | null {
-        return this.buttonStateGetter?.(name) ?? null;
+        return this.host.getButtonStateByName(name);
     }
 
     /** Mudlet `setButtonStyleSheet(name, css)`. Stores a CSS string on the
      *  ButtonNode; the renderer applies it inline. Returns false when not
      *  found. */
     setButtonStyleSheet(name: string, css: string): boolean {
-        return this.buttonStyleSheetSetter?.(name, css) ?? false;
+        return this.host.setButtonStyleSheetByName(name, css);
     }
 
     /** Mudlet `showToolBar(name)` / `hideToolBar(name)`. Toggles the toolbar's
@@ -1766,18 +1589,18 @@ export class ScriptingAPI {
      *  on `isEffectivelyEnabled`, so flipping the group's `enabled` field is
      *  the show/hide hook. Returns true on success, false when not found. */
     setToolBarVisibility(name: string, show: boolean): boolean {
-        return this.toolBarToggler?.(name, show) ?? false;
+        return this.host.toggleToolBarByName(name, show);
     }
 
     setScript(name: string, code: string, pos: number): number {
-        return this.setScriptCallback?.(name, code, pos) ?? -1;
+        return this.host.setScriptByName(name, code, pos);
     }
 
     /** Mudlet `getScript(name [, pos]) → code, count`. Returns the source of the
      *  pos-th (1-indexed) script named `name` and how many scripts share that
      *  name. Returns null when none exist (Bridge.lua surfaces "", 0). */
     getScript(name: string, pos: number): { code: string; count: number } | null {
-        return this.scriptGetter?.(name, pos) ?? null;
+        return this.host.getScriptByName(name, pos);
     }
 
     // ── Echo / output ─────────────────────────────────────────────────────────
@@ -1868,7 +1691,7 @@ export class ScriptingAPI {
     echoLink(text: string, cmd: string, tooltip: string, win?: string, useCurrentFormat = false): void {
         if (!text) return;  // xEcho emits empty-text calls for colour-only segments
         const hyperlink: FormatHyperlink = {
-            onClick: () => { this.executeScript?.(cmd); },
+            onClick: () => { this.host.runLinkCode(cmd); },
             title: tooltip || undefined,
         };
         const con = this.outputConsole(win);
@@ -1903,7 +1726,7 @@ export class ScriptingAPI {
     private buildPopupHyperlink(
         cmds: string[],
         hints: string[],
-        action: (cmd: string) => void = (cmd) => { this.executeScript?.(cmd); },
+        action: (cmd: string) => void = (cmd) => { this.host.runLinkCode(cmd); },
     ): FormatHyperlink {
         const onContextMenu = (ev: MouseEvent) => {
             ev.preventDefault();
@@ -1945,7 +1768,7 @@ export class ScriptingAPI {
 
     /**
      * Build a {@link FormatHyperlink} for an MXP `<SEND>`/`<A>` link. Unlike the
-     * popup/link APIs above (whose actions run Lua via `executeScript`), MXP link
+     * popup/link APIs above (whose actions run Lua via `host.runLinkCode`), MXP link
      * targets are MUD commands or URLs:
      *  - `kind === 'url'` → left-click opens the URL in a new browser tab.
      *  - `kind === 'command'` → left-click sends the command to the MUD (echoed
@@ -2128,20 +1951,11 @@ export class ScriptingAPI {
         return true;
     }
 
-    setExecuteScript(fn: ((code: string) => void) | null): void {
-        this.executeScript = fn;
-    }
 
-    setExpandAlias(fn: ((text: string, echo: boolean) => void) | null): void {
-        this.expandAliasCallback = fn;
-    }
 
     expandAlias(text: string, echo: boolean): void {
-        if (this.expandAliasCallback) {
-            this.expandAliasCallback(text, echo);
-        } else {
-            this.send(text, echo);
-        }
+        // The default host falls back to a plain send when no engine is bound.
+        this.host.expandAlias(text, echo);
     }
 
     // ── Format state ──────────────────────────────────────────────────────────
@@ -2531,7 +2345,7 @@ export class ScriptingAPI {
         const buf = this.resolveBuffer(sel.windowName);
         if (!buf) return false;
         const hyperlink: FormatHyperlink = {
-            onClick: () => { this.executeScript?.(cmd); },
+            onClick: () => { this.host.runLinkCode(cmd); },
             title: tooltip || undefined,
         };
         buf.setHyperlink([sel.start, sel.start + sel.length], hyperlink);
@@ -2657,12 +2471,9 @@ export class ScriptingAPI {
         // fed text to the buffer (a full clear() would strand earlier lines).
         this.mainConsole.clearPartial();
 
-        if (this.feedDispatcher) {
-            this.feedDispatcher([{ text: completeLines.join('\n'), type: 'mud' }]);
-        } else {
-            // Engine not wired yet (early init): fall back to a raw event.
-            this.session.events.emit('flushLines', [{ text: completeLines.join('\n'), type: 'mud' }]);
-        }
+        // With no engine bound yet (early init) the default host falls back to
+        // emitting a raw flushLines event.
+        this.host.processFlushBatch([{ text: completeLines.join('\n'), type: 'mud' }]);
 
         if (remainder) {
             this.mainConsole.echo(remainder);
@@ -3000,7 +2811,7 @@ export class ScriptingAPI {
         if (con && buf) {
             const state: FormatStateSnapshot = con.format.toSnapshot();
             state.hyperlink = {
-                onClick: () => { this.executeScript?.(cmd); },
+                onClick: () => { this.host.runLinkCode(cmd); },
                 title: tooltip || undefined,
             };
             if (!useCurrentFormat) {
@@ -3103,7 +2914,7 @@ export class ScriptingAPI {
         if (!name || name === 'main') return false;
         if (!this.session.windows.isMiniConsole(name)) return false;
         this.session.windows.close(name);
-        this.eventRaiser?.('sysMiniConsoleDeleted', [name]);
+        this.host.raiseEvent('sysMiniConsoleDeleted', [name]);
         return true;
     }
 
@@ -3520,14 +3331,10 @@ export class ScriptingAPI {
     // so a stylesheet like `QWidget { padding: 15 20; }` actually pads the
     // window viewport. Scripts can still write the attribute selector
     // explicitly for non-`QWidget` rules. After a successful app-level install
-    // we raise sysAppStyleSheetChange via `eventRaiser` so themes can hook
+    // we raise sysAppStyleSheetChange via `host.raiseEvent` so themes can hook
     // re-applies.
 
-    private eventRaiser: ((event: string, args: unknown[]) => void) | null = null;
 
-    setEventRaiser(fn: ((event: string, args: unknown[]) => void) | null): void {
-        this.eventRaiser = fn;
-    }
 
     setAppStyleSheet(css: string, tag?: string): boolean {
         const key = tag && tag.length > 0 ? tag : 'default';
@@ -3540,7 +3347,7 @@ export class ScriptingAPI {
             document.head.appendChild(el);
         }
         el.textContent = css ?? '';
-        this.eventRaiser?.('sysAppStyleSheetChange', [css ?? '', tag ?? '']);
+        this.host.raiseEvent('sysAppStyleSheetChange', [css ?? '', tag ?? '']);
         return true;
     }
 
@@ -3577,7 +3384,7 @@ export class ScriptingAPI {
             document.head.appendChild(el);
         }
         el.textContent = css ?? '';
-        this.eventRaiser?.('sysAppStyleSheetChange', [css ?? '', 'profile']);
+        this.host.raiseEvent('sysAppStyleSheetChange', [css ?? '', 'profile']);
         return true;
     }
 
@@ -4190,7 +3997,7 @@ export class ScriptingAPI {
      */
     setMovie(name: string, path: string): boolean {
         if (!name || !path || !this.session.labels.has(name)) return false;
-        const bytes = this.fileBytesReader?.(path) ?? null;
+        const bytes = this.host.readFileBytes(path);
         if (!bytes) return false;
 
         if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) { // "GIF"
@@ -4284,9 +4091,13 @@ export class ScriptingAPI {
      *  (e.g. `MyPackage/bg.png`) resolve to vfs:// URLs the renderer can load.
      *  Absolute http(s):/data:/blob: URIs pass through untouched. */
     private resolveImageUrl(path: string): string {
-        if (!this.cssRewriter || !path) return path;
+        if (!path) return path;
         const escaped = path.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        const rewritten = this.cssRewriter(`url("${escaped}")`);
+        const wrapped = `url("${escaped}")`;
+        const rewritten = this.host.rewriteCss(wrapped);
+        // No rewriter bound (or nothing to rewrite): return the original path
+        // rather than unwrapping, which would hand back the *escaped* form.
+        if (rewritten === wrapped) return path;
         const m = /url\(\s*"([^"]*)"\s*\)/.exec(rewritten);
         return m ? m[1] : path;
     }

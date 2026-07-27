@@ -76,7 +76,10 @@ export async function createDomRuntime(): Promise<DomTestRuntime> {
 
   // Run a clicked link/popup command as Lua so tests can assert side effects.
   const lua = (env.rt as unknown as { lua: { doStringSync: (s: string) => unknown } }).lua;
-  env.api.setExecuteScript((code: string) => { lua.doStringSync(code); });
+  env.api.setHost({
+    ...env.api.engineHost,
+    runLinkCode: (code: string) => { lua.doStringSync(code); },
+  });
 
   return {
     ...env,
