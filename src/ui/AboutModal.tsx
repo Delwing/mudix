@@ -1,8 +1,6 @@
 import { useModalFocus } from './components/useModalFocus';
 import { getBrand } from '../branding';
-
-// Bumped alongside package.json on release — the About dialog is the only reader.
-const APP_VERSION = '0.0.1';
+import { CLIENT_VERSION, GIT_COMMIT } from '../version';
 
 /** GitHub mark — lucide dropped brand icons, so it's inlined here. */
 function GithubMark() {
@@ -33,7 +31,12 @@ export function AboutModal({ onClose }: Props) {
                     <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
                 </div>
                 <div className="modal-body about-body">
-                    <div className="about-wordmark">{brand.appName}</div>
+                    <div className="about-wordmark">
+                        {brand.logoUrl && (
+                            <img className="about-logo" src={brand.logoUrl} alt="" aria-hidden="true" />
+                        )}
+                        {brand.appName}
+                    </div>
                     {brand.tagline && <p className="about-tagline">{brand.tagline}</p>}
                     {brand.aboutText && <p className="about-text">{brand.aboutText}</p>}
                     {brand.repoUrl && (
@@ -42,7 +45,10 @@ export function AboutModal({ onClose }: Props) {
                             <span>View source on GitHub</span>
                         </a>
                     )}
-                    <div className="about-version">Version {APP_VERSION}</div>
+                    <div className="about-version">
+                        Version {CLIENT_VERSION}
+                        {GIT_COMMIT && <span className="about-commit"> ({GIT_COMMIT})</span>}
+                    </div>
                 </div>
             </div>
         </>

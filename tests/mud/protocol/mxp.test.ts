@@ -189,7 +189,7 @@ describe('MxpParser — handshake', () => {
   it('replies to <VERSION> with a secure-prefixed reply', () => {
     const { parser, sent } = makeParser();
     parser.parseLine('<version>');
-    expect(sent[0]).toMatch(/^\x1b\[1z<VERSION .*CLIENT="mudix"/);
+    expect(sent[0]).toMatch(/^\x1b\[1z<VERSION .*CLIENT="MUDLET-WEB"/);
   });
 });
 

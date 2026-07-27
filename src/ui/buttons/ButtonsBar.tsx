@@ -119,8 +119,8 @@ function renderToolbarGroup(
     const cols = toolbar.columns ?? 0;
     const useGrid = cols > 0;
     const tbCls = useGrid
-        ? `mudix-toolbar mudix-toolbar--grid mudix-toolbar--${toolbar.orientation}`
-        : `mudix-toolbar mudix-toolbar--${toolbar.orientation}`;
+        ? `mudix-buttonbar mudix-buttonbar--grid mudix-buttonbar--${toolbar.orientation}`
+        : `mudix-buttonbar mudix-buttonbar--${toolbar.orientation}`;
     // Mudlet's buttonColumn = cross-axis cell count, so the role flips:
     //   horizontal toolbar → N rows, buttons fill column-by-column
     //   vertical toolbar   → N columns, buttons fill row-by-row

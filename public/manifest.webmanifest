@@ -1,7 +1,7 @@
 {
-  "name": "mudix",
-  "short_name": "mudix",
-  "description": "A web-based MUD client with Mudlet-compatible Lua scripting, ANSI rendering, and full telnet/GMCP/MSDP support.",
+  "name": "Mudlet Web",
+  "short_name": "Mudlet Web",
+  "description": "Mudlet in your browser — a web-based MUD client with Mudlet Lua scripting, ANSI rendering, and full telnet/GMCP/MSDP support.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

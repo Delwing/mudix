@@ -4,6 +4,7 @@ import { createPassthroughProcessor, type ChunkProcessor } from "../triggers/Chu
 import {
     CharsetHandler,
     CHARSET_COMMAND_CODE,
+    CLIENT_NAME,
     CLIENT_VERSION,
     createGmcpStream,
     createMsdpStream,
@@ -585,15 +586,15 @@ export class MudClient {
      *  `Core.Supports.Set` lists the GMCP modules we understand. Many servers
      *  won't push any GMCP data (room, char, vitals, …) until they've received
      *  this hello, so without it GMCP effectively does nothing. Latched so a
-     *  repeated WILL/DO GMCP doesn't re-announce. Reports the client name as
-     *  "MUDIX" — our own identity — matching the TTYPE/MNES handshake. */
+     *  repeated WILL/DO GMCP doesn't re-announce. Reports our own identity
+     *  (see src/version.ts), matching the TTYPE/MNES/MXP handshakes. */
     private sendGmcpHandshake(): void {
         if (this.gmcpHelloSent) return;
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
         this.gmcpHelloSent = true;
         try {
             this.sendBytes(encodeGmcp('Core.Hello', {
-                client: 'MUDIX',
+                client: CLIENT_NAME,
                 version: CLIENT_VERSION,
             }));
             // Mudlet's default Core.Supports.Set, minus "External.Discord 1"

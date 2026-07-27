@@ -2,7 +2,7 @@
   "name": "@delwing/mudix",
   "version": "0.2.0",
   "type": "module",
-  "description": "Web-based MUD client with Mudlet-compatible Lua scripting — usable standalone or as a library for branded builds",
+  "description": "Mudlet Web — Mudlet in the browser, usable standalone or as a library for branded builds",
   "license": "GPL-2.0-or-later",
   "keywords": [
     "mud",

@@ -95,7 +95,7 @@ describe('telnet option negotiation (TelnetNegotiator via MudClient)', () => {
     const sendReq = '\xFF\xFA' + OPT_TTYPE + TTYPE_SEND + '\xFF\xF0';
     sock.sent.length = 0;
     sock.deliver(sendReq);
-    expect(sentText(sock)).toContain(TTYPE_IS + 'MUDIX');
+    expect(sentText(sock)).toContain(TTYPE_IS + 'MUDLET-WEB');
     sock.sent.length = 0;
     sock.deliver(sendReq);
     expect(sentText(sock)).toContain(TTYPE_IS + 'ANSI-TRUECOLOR');

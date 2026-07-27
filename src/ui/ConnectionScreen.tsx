@@ -127,7 +127,12 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                         <Info size={16} />
                     </button>
                 </div>
-                <div className="connection-brand">{brand.appName}</div>
+                <div className="connection-brand">
+                    {brand.logoUrl && (
+                        <img className="connection-brand-logo" src={brand.logoUrl} alt="" aria-hidden="true" />
+                    )}
+                    {brand.appName}
+                </div>
 
                 <ConnectionGrid
                     connections={connections}

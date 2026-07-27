@@ -226,11 +226,18 @@ html, body, #root {
     /* Grow the bar by the top notch inset and pad it in, so content still gets
        the full --toolbar-h below the inset (border-box folds padding into height). */
     height: calc(var(--toolbar-h) + var(--safe-top));
-    padding: var(--safe-top) calc(12px + var(--safe-right)) 0 calc(12px + var(--safe-left));
-    background: var(--bg-glass);
+    padding: var(--safe-top) calc(12px + var(--safe-right)) 0 calc(16px + var(--safe-left));
+    /* Contained/outlined bar rather than a flush full-bleed strip. This look
+       originally came about by accident — ButtonsBar.css styled `.mudix-toolbar`
+       for Mudlet button bars and leaked onto the app toolbar — but it's the
+       shipped appearance, so it's kept deliberately now that the class
+       collision is fixed (that rule is `.mudix-buttonbar`). The `border`
+       shorthand replaces the bottom-only border on purpose. */
+    background: color-mix(in srgb, var(--bg-surface) 50%, transparent);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
-    border-bottom: 1px solid var(--border);
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: var(--radius);
     box-shadow: inset 0 1px 0 var(--border-hi);
     flex-shrink: 0;
     position: relative;
@@ -266,6 +273,17 @@ html, body, #root {
 .app--fullscreen > .mudix-toolbar:hover,
 .app--fullscreen > .mudix-toolbar:focus-within {
     transform: translateY(0);
+}
+
+/* Logo + wordmark: the bar's 8px flex gap alone crowds the mark against the
+   text, so add 4px on top of it. */
+.brand-logo {
+    height: 22px;
+    width: auto;
+    margin-right: 4px;
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-user-drag: none;
 }
 
 .brand {
@@ -662,7 +680,21 @@ html, body, #root {
     gap: 16px;
 }
 
+/* Sized against the 22px wordmark it sits beside — the mark is a detailed
+   illustration, so it needs to run larger than the cap height to stay legible. */
+.connection-brand-logo {
+    width: 32px;
+    height: auto;
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
 .connection-brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
     font-family: var(--font-ui), sans-serif;
     font-weight: 700;
     font-size: 22px;
@@ -951,11 +983,23 @@ body.is-sorting {
 }
 
 .about-wordmark {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
     font-family: var(--font-ui), sans-serif;
     font-weight: 700;
     font-size: 34px;
     letter-spacing: 0.04em;
     color: var(--accent);
+}
+
+.about-logo {
+    width: 46px;
+    height: auto;
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-user-drag: none;
 }
 
 .about-tagline {
@@ -1000,6 +1044,11 @@ body.is-sorting {
     font-family: var(--font-mono), monospace;
     font-size: 11px;
     color: var(--text-dim);
+}
+
+/* Build hash sits quieter than the version it qualifies. */
+.about-commit {
+    opacity: 0.65;
 }
 
 .connection-form {

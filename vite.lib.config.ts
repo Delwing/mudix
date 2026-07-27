@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import { fileURLToPath } from 'node:url';
+import { buildDefine } from './buildInfo';
 
 /**
  * Library build (`yarn build:lib`) — packages mudix as an importable npm
@@ -33,6 +34,8 @@ export default defineConfig({
     // referenced via relative import.meta.url URLs the consumer's bundler can
     // resolve and re-emit — absolute /assets/ paths would 404 on their site.
     base: './',
+    // Baked at publish time so an installed lib reports its own version/commit.
+    define: buildDefine(),
     plugins: [
         react(),
         nodePolyfills({ include: ['buffer', 'stream', 'events', 'util'] }),

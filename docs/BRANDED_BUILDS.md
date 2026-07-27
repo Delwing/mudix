@@ -1,14 +1,14 @@
 # Branded builds
 
-mudix can be consumed as an npm library to ship a **white-label client for one
+Mudlet Web can be consumed as an npm library to ship a **white-label client for one
 specific MUD** — your own app name, login screen, theme, toolbar, and bundled
-Lua packages — without forking the mudix repo. Updates land as a version bump
+Lua packages — without forking the Mudlet Web repo. Updates land as a version bump
 (`yarn upgrade @delwing/mudix`) instead of a rebase.
 
 A branded build is a small standalone app: `import { MudixApp } from
 '@delwing/mudix'`, render it with a `brand` prop, and let the `@delwing/mudix/vite`
-plugin handle the WASM/polyfill wiring mudix's runtime needs. Everything else
-(index.html, favicon, manifest, deployment) is your repo's own job — mudix
+plugin handle the WASM/polyfill wiring Mudlet Web's runtime needs. Everything else
+(index.html, favicon, manifest, deployment) is your repo's own job — Mudlet Web
 doesn't impose a shell around it.
 
 Live example: [embervale-web](https://github.com/Delwing/embervale-web) is a
@@ -52,7 +52,7 @@ createRoot(document.getElementById('root')!).render(<MudixApp brand={brand} />);
 ```
 
 `yarn dev` and you have a working branded client: setting `brand.mud` switches
-mudix into **branded mode** — no profile picker/creation UI, just a login form
+Mudlet Web into **branded mode** — no profile picker/creation UI, just a login form
 (the built-in one, unless you supply a custom `Landing`), and login
 credentials are never persisted to storage.
 
@@ -62,7 +62,7 @@ everything the consumer build needs) and deploy `dist/` as a static site.
 ## `BrandConfig` reference
 
 All fields are optional; an empty `{}` (or no `brand` prop at all) reproduces
-stock mudix exactly. The full, current type definitions live in
+stock Mudlet Web exactly. The full, current type definitions live in
 [`src/branding.ts`](../src/branding.ts) — treat this section as a guided tour,
 that file as the source of truth.
 
@@ -79,7 +79,7 @@ that file as the source of truth.
   name, so each login keeps its own scripts/layout/files).
 - **`packages`** — `BrandPackage[]` preinstalled into every profile on first
   open (see [Bundling Lua packages](#bundling-lua-packages) below).
-- **`stockPackages`** — set `false` to skip mudix's own stock defaults
+- **`stockPackages`** — set `false` to skip Mudlet Web's own stock defaults
   (`run-lua-code`) when your brand fully controls the package set.
 - **`themes`** / **`availableThemes`** / **`defaultTheme`** — brand color
   themes and picker configuration (see [Theming](#theming) below).
@@ -115,7 +115,7 @@ Pass your component as `brand.Landing`.
 
 Ship a `.mpackage` (or zip) with your app and point a `BrandPackage` at its
 `?url` import — it installs into every profile automatically on first open,
-through the same pipeline as mudix's own defaults:
+through the same pipeline as Mudlet Web's own defaults:
 
 ```ts
 import myPackageUrl from './assets/my-brand.mpackage?url';
@@ -146,7 +146,7 @@ const brand: BrandConfig = {
 ```
 
 A brand theme is injected as a `:root[data-theme="<id>"]` CSS rule after
-mudix's bundled stylesheets, so unset variables fall back to the dark base and
+Mudlet Web's bundled stylesheets, so unset variables fall back to the dark base and
 reusing a stock id (`dark`, `light`, ...) overrides that stock theme in place.
 See the `:root` block in `src/App.css` for the full CSS variable list.
 
@@ -171,7 +171,7 @@ scripts can register a handler for).
 ## Consumer build notes
 
 - **`optimizeDeps`** — the `mudix()` plugin already excludes `@delwing/mudix`
-  and `pcre2-wasm-universal` and pre-bundles the CJS deps mudix needs
+  and `pcre2-wasm-universal` and pre-bundles the CJS deps Mudlet Web needs
   (`eventemitter3`, `wasmoon-lua5.1`, `@zenfs/core > readable-stream`). If dev
   mode reports `"does not provide an export named ..."` for another
   dependency, add it to that `include` list in your own `vite.config.ts`.
@@ -184,14 +184,14 @@ scripts can register a handler for).
 
 ## What's still yours to build
 
-mudix's library export deliberately stops at the app root. Your branded repo
+Mudlet Web's library export deliberately stops at the app root. Your branded repo
 owns:
 - `index.html`, favicon, manifest, and any marketing/landing chrome outside
   `<MudixApp/>`.
 - Deployment (GitHub Pages, Netlify, your own host — `dist/` is a static
   site).
 - The `.mpackage` content itself (scripts, triggers, aliases, maps) — build it
-  in mudix like any other profile and export/zip it.
+  in Mudlet Web like any other profile and export/zip it.
 
 See [`CLAUDE.md`](../CLAUDE.md) for the internals of `MudixApp`/`branding.ts`
 if you need to go beyond what `BrandConfig` exposes.

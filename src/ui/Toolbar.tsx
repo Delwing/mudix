@@ -134,6 +134,9 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
 
     return (
         <div className={`mudix-toolbar${toolbarCfg?.className ? ` ${toolbarCfg.className}` : ''}`} onContextMenu={onContextMenu}>
+            {getBrand().logoUrl && (
+                <img className="brand-logo" src={getBrand().logoUrl} alt="" aria-hidden="true" />
+            )}
             <span className="brand">{getBrand().appName}</span>
             <span className="toolbar-connection-name">{connectionName}</span>
             <span

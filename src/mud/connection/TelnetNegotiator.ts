@@ -36,6 +36,7 @@ import {
     TTYPE_WILL,
     type MnesVar,
 } from "../protocol";
+import { CLIENT_NAME, TERMINAL_TYPE } from "../../version";
 import type { MudClientEvents } from "../events";
 import { debugMspEnabled, debugTelnetEnabled } from "./telnetDebug";
 
@@ -506,7 +507,7 @@ export class TelnetNegotiator {
             tls: this.flags.secureTransport,
             screenReader: this.flags.screenReaderAdvertised,
         });
-        const cycle = ['MUDIX', 'ANSI-TRUECOLOR', `MTTS ${mtts}`];
+        const cycle = [CLIENT_NAME, TERMINAL_TYPE, `MTTS ${mtts}`];
         const value = cycle[Math.min(this.ttypeStep, cycle.length - 1)];
         if (this.ttypeStep < cycle.length - 1) this.ttypeStep++;
         this.hooks.sendRaw(GMCP_IAC + GMCP_SB + OPT_TTYPE + TTYPE_IS + value + GMCP_IAC + GMCP_SE);

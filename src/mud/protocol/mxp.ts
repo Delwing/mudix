@@ -27,6 +27,7 @@ import { mxpColor } from "../text/colorParsers";
 import { scanEscape, parseOsc8Payload, classifyHyperlinkUri, parseOscColorPalette } from "../text/ansiEscapes";
 import { parseOsc8Uri, HyperlinkPresetRegistry } from "../text/hyperlinkConfig";
 import type { MspCommand, MspKind } from "./msp";
+import { CLIENT_NAME, CLIENT_VERSION } from "../../version";
 
 /** A clickable region the parser found, expressed as offsets into `plain`. The
  *  engine builds the actual `FormatHyperlink` (with session/URL behaviour). */
@@ -126,7 +127,6 @@ interface OpenTag {
     colorOverride?: boolean;
 }
 
-const CLIENT_VERSION = "1.0";
 
 /** Prefix for the client→server `<SUPPORTS>`/`<VERSION>` handshake replies. The
  *  `ESC[1z` secure-line-mode marker tells the server's MXP parser this inbound
@@ -568,7 +568,9 @@ export class MxpParser {
             case "support":
                 this.opts.send(`${MXP_SECURE_REPLY_PREFIX}<SUPPORTS ${SUPPORTED_TAGS.join(" ")}>`); break;
             case "version":
-                this.opts.send(`${MXP_SECURE_REPLY_PREFIX}<VERSION MXP="1.0" CLIENT="mudix" VERSION="${CLIENT_VERSION}">`); break;
+                // MXP="1.0" is the *protocol* version we speak; CLIENT/VERSION
+                // are our own identity (see src/version.ts).
+                this.opts.send(`${MXP_SECURE_REPLY_PREFIX}<VERSION MXP="1.0" CLIENT="${CLIENT_NAME}" VERSION="${CLIENT_VERSION}">`); break;
             default:
                 // Structural no-ops (p, nobr, hr) and discarded heavy tags (image,
                 // gauge, relocate, …): consume the tag, render nothing for it.

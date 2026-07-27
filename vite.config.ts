@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import mudix from './vite-plugin/vite';
+import { buildDefine } from './buildInfo';
 
 // The standalone app build. All mudix-specific machinery (pcre2 WASM, node
 // polyfills incl. workers, the VFS service worker, optimizeDeps/onwarn tweaks)
@@ -9,5 +10,6 @@ import mudix from './vite-plugin/vite';
 // emission self-skips here because public/vfs-sw.js exists.
 export default defineConfig({
     base: './',
+    define: buildDefine(),
     plugins: [mudix(), react()],
 });

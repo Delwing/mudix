@@ -36,7 +36,12 @@ export function BrandLoginScreen({ openProfile, ensureBrandProfile, openSettings
                         <Info size={16} />
                     </button>
                 </div>
-                <div className="connection-brand">{brand.appName}</div>
+                <div className="connection-brand">
+                    {brand.logoUrl && (
+                        <img className="connection-brand-logo" src={brand.logoUrl} alt="" aria-hidden="true" />
+                    )}
+                    {brand.appName}
+                </div>
                 {brand.tagline && (
                     <p style={{ textAlign: 'center', opacity: 0.7, marginTop: 4 }}>{brand.tagline}</p>
                 )}

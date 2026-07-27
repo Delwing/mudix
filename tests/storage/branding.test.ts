@@ -9,9 +9,9 @@ const conn = (c: Partial<MudConnection>): MudConnection => ({ id: 'x', name: 'x'
 afterEach(() => setBrand());
 
 describe('setBrand / getBrand', () => {
-    it('defaults to the stock mudix brand', () => {
+    it('defaults to the stock Mudlet Web brand', () => {
         expect(getBrand()).toEqual(DEFAULT_BRAND);
-        expect(getBrand().appName).toBe('mudix');
+        expect(getBrand().appName).toBe('Mudlet Web');
         expect(isBrandedMode()).toBe(false);
     });
 
@@ -33,7 +33,24 @@ describe('setBrand / getBrand', () => {
     it('resets to defaults when called with no brand', () => {
         setBrand({ appName: 'Arkadia' });
         setBrand();
-        expect(getBrand().appName).toBe('mudix');
+        expect(getBrand().appName).toBe('Mudlet Web');
+    });
+
+    // The stock logo is Mudlet's own mark. Unlike every other field it must not
+    // fall through to a white-label build that only overrode the name.
+    it('does not leak the stock logo into a brand that never asked for one', () => {
+        expect(getBrand().logoUrl).toBe(DEFAULT_BRAND.logoUrl);
+        expect(DEFAULT_BRAND.logoUrl).toBeTruthy();
+
+        setBrand({ appName: 'Arkadia' });
+        expect(getBrand().logoUrl).toBeUndefined();
+
+        setBrand({ appName: 'Arkadia', logoUrl: '/arkadia-logo.svg' });
+        expect(getBrand().logoUrl).toBe('/arkadia-logo.svg');
+
+        // Clearing the brand restores the stock mark.
+        setBrand();
+        expect(getBrand().logoUrl).toBe(DEFAULT_BRAND.logoUrl);
     });
 });
 

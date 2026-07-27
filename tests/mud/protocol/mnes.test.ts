@@ -120,7 +120,7 @@ describe('buildNewEnvironVars', () => {
     expect(vars.map(v => v.name)).toEqual([
       'CHARSET', 'CLIENT_NAME', 'CLIENT_VERSION', 'MTTS', 'TERMINAL_TYPE',
     ]);
-    expect(vars).toContainEqual({ name: 'CLIENT_NAME', value: 'MUDIX' });
+    expect(vars).toContainEqual({ name: 'CLIENT_NAME', value: 'MUDLET-WEB' });
     // MTTS is computed from live state: UTF-8 + TLS here → 2349 (matches Mudlet).
     expect(vars).toContainEqual({ name: 'MTTS', value: String(computeMtts({ utf8: true, tls: true })) });
     expect(vars).toContainEqual({ name: 'MTTS', value: '2349' });

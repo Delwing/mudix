@@ -1,13 +1,14 @@
 import type { ComponentType, ReactNode } from 'react';
 import type { ConnectionMode, MudConnection } from './storage/schema';
+import mudletLogoUrl from './assets/mudlet-logo.svg?url';
 
 /**
- * White-label branding for mudix builds. A branded client (a client shipped for
- * one specific MUD) passes a `BrandConfig` to `<MudixApp brand={...}/>`; the
- * config is held in a module-level singleton so non-React code (proxy
- * resolution, document title, default packages) can read it without prop
- * drilling. The default brand is plain mudix — rendering `<MudixApp/>` with no
- * brand reproduces the stock client exactly.
+ * White-label branding for Mudlet Web builds. A branded client (a client
+ * shipped for one specific MUD) passes a `BrandConfig` to
+ * `<MudixApp brand={...}/>`; the config is held in a module-level singleton so
+ * non-React code (proxy resolution, document title, default packages) can read
+ * it without prop drilling. The default brand is stock Mudlet Web — rendering
+ * `<MudixApp/>` with no brand reproduces it exactly.
  */
 
 /** The one MUD a branded build targets. Setting this switches the client into
@@ -29,7 +30,7 @@ export interface BrandMudTarget {
 }
 
 /** A package bundled with the brand, installed on first profile open through
- *  the same pipeline as mudix's own defaults (see `ensureDefaultPackages`). */
+ *  the same pipeline as the stock defaults (see `ensureDefaultPackages`). */
 export interface BrandPackage {
     /** Must match the manifest name produced by installPackageFromBytes. */
     name: string;
@@ -133,6 +134,14 @@ export interface LandingProps {
 export interface BrandConfig {
     /** App name: wordmark, document title, About dialog. */
     appName: string;
+    /** Logo shown beside the wordmark in the toolbar. Resolved URL — in a brand
+     *  repo, an `?url` import of your own asset.
+     *
+     *  **Not inherited.** The stock value is Mudlet's own logo, so passing any
+     *  `brand` at all clears it unless that brand sets `logoUrl` itself; a
+     *  white-label client never ships the Mudlet mark by accident. Set it to
+     *  your own asset to show one, or leave it unset for a wordmark alone. */
+    logoUrl?: string;
     /** Short tagline under the About wordmark. Empty string hides it. */
     tagline?: string;
     /** Descriptive paragraph in the About dialog. Empty string hides it. */
@@ -156,7 +165,7 @@ export interface BrandConfig {
     profileMode?: 'single' | 'perLogin';
     /** Packages preinstalled into every profile on first open. */
     packages?: BrandPackage[];
-    /** Whether mudix's own stock default packages (run-lua-code) install too
+    /** Whether the stock default packages (run-lua-code) install too
      *  (default true). Set false for a brand that fully controls the package
      *  set via `packages`. */
     stockPackages?: boolean;
@@ -178,21 +187,27 @@ export interface BrandConfig {
 }
 
 export const DEFAULT_BRAND: BrandConfig = {
-    appName: 'mudix',
-    tagline: 'A modern, web-based MUD client.',
+    appName: 'Mudlet Web',
+    logoUrl: mudletLogoUrl,
+    tagline: 'Mudlet, in your browser.',
     aboutText:
-        'mudix connects to MUD servers over WebSocket with full telnet, GMCP and MSDP support, ' +
-        'renders ANSI output, and runs Mudlet-compatible Lua scripting right in your browser — ' +
-        'aiming for drop-in compatibility with Mudlet packages, maps and profiles.',
+        'Mudlet Web connects to MUD servers over WebSocket with full telnet, GMCP and MSDP ' +
+        'support, renders ANSI output, and runs Mudlet Lua scripting right in the browser — ' +
+        'with drop-in support for existing Mudlet packages, maps and profiles, and nothing ' +
+        'to install.',
     repoUrl: 'https://github.com/Delwing/mudix',
 };
 
 let current: BrandConfig = DEFAULT_BRAND;
 
 /** Install the active brand. Called once by `MudixApp` before first render;
- *  unspecified fields fall back to the stock mudix brand. Idempotent. */
+ *  unspecified fields fall back to the stock Mudlet Web brand. Idempotent. */
 export function setBrand(brand?: Partial<BrandConfig>): void {
     current = { ...DEFAULT_BRAND, ...brand };
+    // `logoUrl` is the one field that does NOT fall through: the stock value is
+    // Mudlet's own logo, and a white-label client that merely renamed itself
+    // must not ship it. Opting in is explicit — set `logoUrl` in your brand.
+    if (brand && !('logoUrl' in brand)) current.logoUrl = undefined;
 }
 
 export function getBrand(): BrandConfig {

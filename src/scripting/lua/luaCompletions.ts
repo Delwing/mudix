@@ -546,10 +546,9 @@ const MUDLET_GLOBALS: Completion[] = [
     fn('selectAll',        '([window])',                      'Select the entire content of the current line/window'),
     fn('openMudletHomeDir','()',                              'Open the Mudlet home directory in the OS file manager (no-op in the web client)'),
     // File system
-    fn('getMudixProfilePath', '() → string',        'Returns the VFS profile root path for this connection'),
-    fn('getMudletHomeDir',   '() → string',        'Mudlet-compatible alias for getMudixProfilePath()'),
+    fn('getMudletHomeDir',   '() → string',        'Returns the VFS profile root path for this connection'),
     fn('invokeFileDialog',   '(fileOrFolder, title [, location]) → path', 'Ask the user to pick a file (true) or folder (false) via an in-app picker over the profile VFS. Returns the picked absolute VFS path, or "" if cancelled. The calling handler is suspended until the user answers (the rest of the client keeps running, like Mudlet\'s nested dialog event loop); calling it inside your own pcall fails — Lua 5.1 cannot yield across pcall.'),
-    fn('getMudletVersion',   '([mode]) → version', 'Mudlet version. No arg → {major, minor, revision, build} table. "string" → "X.Y.Z". "major"/"minor"/"revision"/"build" → field. "table" → major, minor, revision as 3 return values'),
+    fn('getMudletVersion',   '([mode]) → version', 'Mudlet API level this client implements (not the Mudlet Web release number). No arg → {major, minor, revision, build} table. "string" → "X.Y.Z". "major"/"minor"/"revision"/"build" → field. "table" → major, minor, revision as 3 return values'),
     fn('getConnectionInfo',  '() → host, port, connected', 'Active connection details: host string, port number, and whether the session is currently connected. For mud-mode connections these are the configured host/port; for raw websocket connections they are parsed from the endpoint URL.'),
     fn('announce',           '(text [, processing])', 'Send text to assistive technology via an ARIA live region. processing controls politeness: "importantall"/"importantmostrecent" → assertive, anything else → polite.'),
     fn('showNotification',   '(title [, content [, expirySeconds]])', 'Show a desktop notification via the Web Notifications API (requests permission on first use). content defaults to title; expirySeconds auto-closes it. Always returns true.'),

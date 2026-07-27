@@ -23,7 +23,9 @@ deploys to GitHub Pages via `.github/workflows/deploy.yml` on push to `master`.
 
 ## What This Is
 
-Mudix is a **web-based MUD (Multi-User Dungeon) client** built with React + TypeScript. It connects to MUD servers over WebSocket (directly or through a telnet proxy) with full telnet/GMCP/MSDP/MSSP/MCCP/MSP support, renders ANSI-colored output, runs **Mudlet-compatible Lua scripting** in the browser, and aims for drop-in compatibility with Mudlet packages, maps, and the XML profile format. It ships a custom dock/float multi-panel UI, a per-profile virtual filesystem, an in-browser SQLite database, and session logging.
+Mudlet Web is a **web-based MUD (Multi-User Dungeon) client** built with React + TypeScript — the browser edition of Mudlet. It connects to MUD servers over WebSocket (directly or through a telnet proxy) with full telnet/GMCP/MSDP/MSSP/MCCP/MSP support, renders ANSI-colored output, runs **Mudlet Lua scripting** in the browser, and aims for drop-in compatibility with Mudlet packages, maps, and the XML profile format. It ships a custom dock/float multi-panel UI, a per-profile virtual filesystem, an in-browser SQLite database, and session logging.
+
+> **Naming.** The project was renamed from *mudix* to *Mudlet Web*. Internal identifiers deliberately kept the old name: the `mudix_*` storage keys (localStorage + IndexedDB) and the `.mudix/` VFS directory (renaming orphans existing users' profiles), the `__mudix_*` Lua globals in `Bridge.lua` (name-paired with their JS call sites), the `.mudix-*` CSS classes (a documented brand-styling API), and the `MudixApp`/`@delwing/mudix` library entry points (pending the move to a Mudlet-owned npm scope). Don't rename these opportunistically.
 
 Key libraries: `wasmoon-lua5.1` (WASM-compiled Lua 5.1), `pcre2-wasm-universal` (PCRE regex for triggers/aliases), `@sqlite.org/sqlite-wasm` (the `db:*` API), `@zenfs/core` + `@zenfs/dom` (the profile VFS), `mudlet-map-binary-reader`/`-renderer`/`-editor` (map files), `zustand` (state), `pako`/`fflate` (compression), `@codemirror/*` (the script editor), `dompurify` + `marked` (HTML/markdown panels).
 
@@ -124,7 +126,7 @@ A **service worker** (`public/vfs-sw.js`, registered in `main.tsx`) serves VFS f
 
 ### Packages & Import
 
-mudix installs **Mudlet packages/modules** (`.mpackage`/`.zip`/XML). `src/import/` handles it: `mudletXmlImport`/`mudletXmlExport` (the Mudlet XML format for scripts/aliases/triggers/etc.), `packageInstaller` (unpack into the VFS + register tree nodes), `packageRepository` + `PackageRepositoryModal` (browse the public Mudlet package repo — fetch the manifest from `raw.githubusercontent.com`, **not** the stale github.io mirror), `remotePackageInstall` (install from URL / `sysInstall` GUI payloads), and `defaultPackages` (seed bundled defaults like `run-lua-code` on first profile open).
+Mudlet Web installs **Mudlet packages/modules** (`.mpackage`/`.zip`/XML). `src/import/` handles it: `mudletXmlImport`/`mudletXmlExport` (the Mudlet XML format for scripts/aliases/triggers/etc.), `packageInstaller` (unpack into the VFS + register tree nodes), `packageRepository` + `PackageRepositoryModal` (browse the public Mudlet package repo — fetch the manifest from `raw.githubusercontent.com`, **not** the stale github.io mirror), `remotePackageInstall` (install from URL / `sysInstall` GUI payloads), and `defaultPackages` (seed bundled defaults like `run-lua-code` on first profile open).
 
 ### Media: Sound, TTS, Video
 

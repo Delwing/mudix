@@ -10,6 +10,7 @@ import {
     NEW_ENVIRON_ESC,
     computeMtts,
 } from "./constants";
+import { CLIENT_NAME, CLIENT_VERSION, TERMINAL_TYPE } from "../../version";
 
 // NEW-ENVIRON control bytes as numeric codes for the byte-at-a-time parser.
 // The command byte (right after the option code) and the structural markers
@@ -137,16 +138,11 @@ export interface NewEnvironState {
 }
 
 /** The five core variables MNES standardises (https://tintin.mudhalla.net/protocols/mnes/).
- *  Plain NEW-ENVIRON reports these too, plus the extended capability set below. */
-const CLIENT_NAME = "MUDIX";
-// Reported terminal type. "ANSI-TRUECOLOR" (matching Mudlet) describes mudix's
-// real capability — ANSI with 24-bit colour — better than an xterm emulation
-// claim; 256-colour/truecolour support is also signalled via MTTS + the
-// 256_COLORS/TRUECOLOR vars, so capability detection doesn't rely on this name.
-const TERMINAL_TYPE = "ANSI-TRUECOLOR";
-/** Client version reported as the CLIENT_VERSION variable. Exported because the
- *  GMCP `Core.Hello` handshake reports the same version — one source of truth. */
-export const CLIENT_VERSION = "0.1.0";
+ *  Plain NEW-ENVIRON reports these too, plus the extended capability set below.
+ *  Client name/version/terminal type come from the shared identity module so
+ *  MNES, TTYPE, GMCP `Core.Hello` and MXP can't drift apart; re-exported here
+ *  because the protocol barrel and `MudClient` already source them from MNES. */
+export { CLIENT_NAME, CLIENT_VERSION, TERMINAL_TYPE };
 
 /**
  * Build the variable set the client reports for option 39. The five MNES core

@@ -43,7 +43,7 @@
     align-items: center;
 }
 
-.mudix-toolbar {
+.mudix-buttonbar {
     display: flex;
     gap: 3px;
     padding: 2px 4px;
@@ -52,10 +52,10 @@
     background: color-mix(in srgb, var(--bg-surface) 50%, transparent);
 }
 
-.mudix-toolbar--horizontal { flex-direction: row;    align-items: center; }
-.mudix-toolbar--vertical   { flex-direction: column; align-items: stretch; }
+.mudix-buttonbar--horizontal { flex-direction: row;    align-items: center; }
+.mudix-buttonbar--vertical   { flex-direction: column; align-items: stretch; }
 
-.mudix-toolbar--grid {
+.mudix-buttonbar--grid {
     display: grid;
     gap: 3px;
 }
@@ -164,7 +164,7 @@
     pointer-events: none;
 }
 
-.mudix-floating-toolbar > .mudix-toolbar {
+.mudix-floating-toolbar > .mudix-buttonbar {
     border: none;
     border-radius: 0 0 var(--radius) var(--radius);
     background: transparent;

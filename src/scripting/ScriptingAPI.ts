@@ -4,6 +4,7 @@ import type { TriggerEngine } from '../mud/triggers/TriggerEngine';
 import type { TimerEngine } from '../mud/timers/TimerEngine';
 import type { KeyEngine } from '../mud/keybindings/KeyEngine';
 import { classifyReservedKey, formatKeyCombo, reservedKeyNote } from '../mud/keybindings/browserReservedKeys';
+import { CLIENT_VERSION } from '../version';
 import { getBrand } from '../branding';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
@@ -855,12 +856,14 @@ export class ScriptingAPI {
     }
 
     /** Mudlet `getMudletInfo()`. Echoes a short diagnostic block to the main
-     *  window. mudix is a browser client with no Qt build, so it reports the
-     *  web-client equivalents (profile, server encoding, platform). */
+     *  window. This is a browser client with no Qt build, so it reports the
+     *  web-client equivalents (profile, server encoding, platform). The client
+     *  version is our own release (see src/version.ts), not the Mudlet API
+     *  level — that's what `getMudletVersion()` reports. */
     getMudletInfo(): void {
         const platform = typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown';
         const lines = [
-            `${getBrand().appName} — web-based MUD client (Mudlet-compatible Lua API)`,
+            `${getBrand().appName} ${CLIENT_VERSION} — web-based MUD client`,
             `Profile: ${this.profileName || '(none)'}`,
             `Server encoding: ${this.session.getServerEncoding()}`,
             `Platform: ${platform}`,

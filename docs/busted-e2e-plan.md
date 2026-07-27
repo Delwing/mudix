@@ -1,9 +1,9 @@
-# Plan: run Mudlet's busted Lua suite against mudix (Vitest + Playwright)
+# Plan: run Mudlet's busted Lua suite against Mudlet Web (Vitest + Playwright)
 
 ## Status
 
 **Landed — single path via Playwright.** Real busted 2.3.0 runs in-process inside
-wasmoon against the **real running mudix app** in a browser. Driving the actual
+wasmoon against the **real running Mudlet Web app** in a browser. Driving the actual
 app (not a node thin-layer) means the full `ScriptingEngine` — trigger/alias
 dispatch, timer pump, overlay/Geyser geometry — is wired exactly as in
 production, so there is **one execution path for the whole corpus**.
@@ -55,7 +55,7 @@ Run it: `npm run test:e2e` (Playwright boots `npm run dev:busted` — a
 non-100% counts are upstream `pending()` stubs: IDManager 7, GUIUtils 1). ✓ =
 asserted green. (`bootProfile`/`reopen` poll a
 trivial run until it succeeds, so the test never races the runtime re-creation
-during initial mount; the scoreboard re-navigates per spec so mudix's JS console
+during initial mount; the scoreboard re-navigates per spec so Mudlet Web's JS console
 state can't leak between specs — busted only insulates Lua `_G`.)
 
 | Spec | Result | Note |
@@ -98,8 +98,8 @@ _Original two-tier design notes follow (kept for history; the node tier was
 folded into the single Playwright path above)._
 
 This documents how to stand up a two-tier harness that runs Mudlet's own
-`busted` Lua test suite against mudix's `LuaRuntime`, so that every failing spec
-is a concrete gap in mudix's Mudlet-compatible API.
+`busted` Lua test suite against Mudlet Web's `LuaRuntime`, so that every failing spec
+is a concrete gap in Mudlet Web's Mudlet-compatible API.
 
 ## What Mudlet's "busted test suite" actually is
 
@@ -122,7 +122,7 @@ References: [tests dir](https://github.com/Mudlet/Mudlet/tree/development/src/mu
 [in-client regression tests #2589](https://github.com/Mudlet/Mudlet/issues/2589),
 [add busted to CI #3408](https://github.com/Mudlet/Mudlet/issues/3408).
 
-## Where mudix stands
+## Where Mudlet Web stands
 
 The hard part — a real embedded Lua 5.1 plus an "eval a string, get values back"
 surface — already exists and is battle-tested:
@@ -136,7 +136,7 @@ surface — already exists and is battle-tested:
 
 Friction points (the work this plan covers):
 
-| Need | mudix state | Work |
+| Need | Mudlet Web state | Work |
 |---|---|---|
 | busted + luassert + say + deps | **absent** | Vendor the pure-Lua source into the VFS |
 | busted's runner | n/a | **Re-implement programmatically** (same as Mudlet) — never the CLI runner |
@@ -181,7 +181,7 @@ in-process runner, and so do we.
   `mediator`, `term`, and the **penlight subset** busted's core touches
   (`pl.tablex`, `pl.compat`, `pl.utils` — avoid `pl.dir` / `pl.path` by not using
   file discovery).
-- **Shims required** (mudix's environment differs from a real Lua CLI):
+- **Shims required** (Mudlet Web's environment differs from a real Lua CLI):
   - `io` is a VFS shim with **no real stdout** → the output handler must collect
     into a Lua table, never call `io.write` / `io.stdout`. Use a custom minimal
     handler, not busted's `utfTerminal`.
@@ -332,5 +332,5 @@ can't produce.
 Direct seeding (above) is the chosen runtime path, so XML is not on it. XML keeps
 an optional role: keep the corpus + runner **exportable** via the existing
 `src/import/mudletXmlExport.ts` so the *same* package can be imported into **real
-Mudlet** for cross-validation (does mudix agree with Mudlet on the same specs?).
+Mudlet** for cross-validation (does Mudlet Web agree with Mudlet on the same specs?).
 Add-on, not a dependency.

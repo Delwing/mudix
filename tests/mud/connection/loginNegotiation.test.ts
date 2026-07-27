@@ -164,7 +164,7 @@ describe('login-time telnet negotiation replies', () => {
     sock.deliver(sendRequest);
     const out = sentText(sock);
     expect(out).toContain(NEW_ENVIRON_IS + NEW_ENVIRON_VAR + 'CHARSET');
-    expect(out).toContain(NEW_ENVIRON_VAR + 'CLIENT_NAME' + '\x01' + 'MUDIX');
+    expect(out).toContain(NEW_ENVIRON_VAR + 'CLIENT_NAME' + '\x01' + 'MUDLET-WEB');
     // MNES restricts to the five core vars — no extended capabilities, no USERVAR.
     // (Check unambiguous extended-only vars; "ANSI" now appears inside the
     // TERMINAL_TYPE value "ANSI-TRUECOLOR".)

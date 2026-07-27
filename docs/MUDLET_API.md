@@ -212,7 +212,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `getRoomWeight(roomID)` | ✅ | JS-exposed; false when missing |
 | `getSpecialExits(roomID [, listAllExits])` | ✅ | `{[exitRoomID]={[cmd]="0"\|"1"}}`; lowest-weight command per room unless `listAllExits` |
 | `getSpecialExitsSwap(roomID)` | ✅ | JS-exposed; `{cmd=toId}` |
-| `gotoRoom(targetRoomID)` | ✅ | Pure Lua (Bridge.lua): `getPath` then `send`s the moves. mudix sends immediately (no autonomous timed-walk engine) |
+| `gotoRoom(targetRoomID)` | ✅ | Pure Lua (Bridge.lua): `getPath` then `send`s the moves. Mudlet Web sends immediately (no autonomous timed-walk engine) |
 | `hasSpecialExitLock(fromID, toID, cmd)` | ✅ | `toID` ignored; returns the lock boolean or `(nil, errMsg)` when missing |
 | `highlightRoom(roomID, …)` | ✅ | JS-exposed — color1/color2 + radius + alpha |
 | `killMapInfo(label)` | ✅ | Removes a contributor entirely |
@@ -266,7 +266,7 @@ Transactions are driven through the Luasql connection (`conn:commit()`/`conn:rol
 | `unsetRoomCharColor(roomID)` | ✅ | Drops the side-table entry; false when the room is missing or had no override |
 | `updateMap()` | ✅ | Forces the map panel to re-read MapStore and redraw |
 
-mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"editing")`, `getMapRoomSize`/`setMapRoomSize`, `setMapBackgroundColor`, `removeCustomEnvColor`.
+Mudlet Web-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"editing")`, `getMapRoomSize`/`setMapRoomSize`, `setMapBackgroundColor`, `removeCustomEnvColor`.
 
 ---
 
@@ -280,7 +280,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `announce(text [, processing])` | ✅ | ARIA live region; `processing` (`importantall`/`importantmostrecent` → assertive, else polite) matches Mudlet's politeness mapping |
 | `appendLog(text)` | ✅ | Appends a line (type `appendLog`) to the active `SessionLogger`; false when logging is off |
 | `cfeedTriggers(text)` | ✅ | Pure Lua via GUIUtils.lua |
-| `clearVisitedLinks()` | ✅ | True no-op — mudix tracks no visited-link state, so there is nothing to clear (bound for script portability) |
+| `clearVisitedLinks()` | ✅ | True no-op — Mudlet Web tracks no visited-link state, so there is nothing to clear (bound for script portability) |
 | `closeMudlet()` | ✅ | Closes the active profile — disconnects then returns to the connection screen (callback wired by `ProfileSession`) |
 | `compare(a, b)` | ✅ | Other.lua — alias for `_comp` deep equality |
 | `deleteAllNamedEventHandlers([type])` | ✅ | IDManager.lua |
@@ -291,7 +291,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `enableModuleSync(name)` | ✅ | Marks the module syncing |
 | `expandAlias(text [, echo])` | ✅ | `ScriptingAPI.expandAlias` |
 | `feedTriggers(text)` | ✅ | Feeds text through trigger pipeline + shows in output |
-| `getCharacterName()` | ✅ | mudix maps character→profile (one character per profile); returns the profile name (same as `getProfileName`), "" when unset |
+| `getCharacterName()` | ✅ | Mudlet Web maps character→profile (one character per profile); returns the profile name (same as `getProfileName`), "" when unset |
 | `getConfig(key)` | ✅ | Config registry in `ScriptingAPI`. Structured keys (protocol toggles, mapper, `autoClearInputLine`, `showSentText`, `mapperPanelVisible`) read their real field / live state; UI-consumed keys (`commandLineHistorySaveSize`, `showTabConnectionIndicators`) round-trip via the `config` bag and drive behaviour; other catalogued keys persist-only. Unknown key → nil. Full key table + enforced/persist-only breakdown: [`docs/config-api.md`](config-api.md) |
 | `getCommandSeparator()` | ✅ | Reads the profile's `commandSeparator` (default `;;`) |
 | `getModuleInfo(name, key)` | ✅ | Bridge.lua |
@@ -299,7 +299,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getModulePriority(name)` | ✅ | JS-exposed |
 | `getModules()` | ✅ | JS-exposed |
 | `getModuleSync(name)` | ✅ | JS-exposed |
-| `getMudletHomeDir()` | ✅ | VFS.lua — alias for `getMudixProfilePath()` |
+| `getMudletHomeDir()` | ✅ | VFS.lua — returns the profile's VFS root path |
 | `getMudletInfo()` | ✅ | Echoes a diagnostic block (profile, server encoding, platform/user-agent) to the main window |
 | `getMudletVersion([mode])` | ✅ | Supports `nil`/`"string"`/`"major"`/`"minor"`/`"revision"`/`"build"`/`"table"` |
 | `getNamedEventHandlers()` | ✅ | IDManager.lua |
@@ -307,10 +307,10 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `getOS()` | ✅ | Sniffed from user agent → `"windows"`/`"mac"`/`"linux"`/`"freebsd"`/`"openbsd"`/`"netbsd"`/`"unknown"` |
 | `getProcessMemoryUsage()` | ✅ | (Mudlet 4.21) Memory in Kb. Browser-adapted: the JS heap in use (`performance.memory`, Chromium only), else 0 |
 | `getSubsystemMemoryStats()` | ✅ | (Mudlet 4.21) Diagnostic table: `heapUsedKb`/`heapTotalKb`/`heapLimitKb` (`performance.memory`), `luaMemoryKb` (Bridge.lua via `collectgarbage("count")`), and counts `mapRooms`/`mapAreas`/`activeMediaPlayers`/`loadedFonts`/`triggerPatterns`/`aliasPatterns`. Best-effort |
-| `lpeg` (library) | ✅ | (Mudlet 4.21 bundles C lpeg) mudix bundles the pure-Lua **LuLPeg** port at `mudlet-lua/3rdparty/lulpeg.lua`, registered as `package.loaded["lpeg"]` before `LuaGlobal.lua`'s guard publishes the `lpeg` global. Full PEG API (`P`/`R`/`S`/`C`/`Ct`/`match`/…) |
+| `lpeg` (library) | ✅ | (Mudlet 4.21 bundles C lpeg) Mudlet Web bundles the pure-Lua **LuLPeg** port at `mudlet-lua/3rdparty/lulpeg.lua`, registered as `package.loaded["lpeg"]` before `LuaGlobal.lua`'s guard publishes the `lpeg` global. Full PEG API (`P`/`R`/`S`/`C`/`Ct`/`match`/…) |
 | `getPackages()` | ✅ | JS-exposed |
 | `getPackageInfo(name [, key])` | ✅ | Merged table: manifest fields (name/title/author/version/description/created/icon/installed) overlaid with `setPackageInfo` overrides; single-key form returns `""` when absent |
-| `getPausedMusic()` / `getPausedSounds()` | ✅ | Always empty — mudix's Web Audio backend stops rather than pauses sources, so nothing sits paused (kept for parity) |
+| `getPausedMusic()` / `getPausedSounds()` | ✅ | Always empty — Mudlet Web's Web Audio backend stops rather than pauses sources, so nothing sits paused (kept for parity) |
 | `getPausedVideos()` | ✅ | Lists genuinely-paused `<video>` elements (`element.paused`), optionally name-filtered. 1-indexed `{name, path, volume}` |
 | `getPlayingMusic()` | ✅ | Sister of `getPlayingSounds` for the music channel; 1-indexed `{name, key, tag, volume}` |
 | `getPlayingVideos()` | ✅ | Currently-playing `<video>` elements, optionally name-filtered. 1-indexed `{name, path, volume}` |
@@ -342,7 +342,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `reloadModule(name)` | ✅ | JS-exposed |
 | `removeFileWatch(path)` | ✅ | Stops watching a path |
 | `resetLinkStyle(labelName)` / `setLinkStyle(labelName, linkColor, visitedColor[, underline])` | ✅ | Styles the `<a>` links inside a label. `LabelManager` stores the per-label `linkStyle`; `LabelOverlay` injects a `<style>` scoped via the label's `data-mudix-label` selector (`a { color; text-decoration }`, `a:visited { color }`). `underline` defaults to true |
-| `resetProfile()` | ✅ | Reloads the profile as if just reopened: clears every UI surface (windows, labels, gauges, command lines, scroll boxes; stops sound/video), recreates the Lua runtime (fresh globals + event handlers), and re-runs all scripts/aliases/triggers/timers/keys from current profile state, re-firing `sysLoadEvent`. Deferred to a fresh task (it closes the running `lua_State`), so call it from an alias / command line, not a script-item — matching Mudlet's own guidance. mudix reloads from the live store, not a re-read of disk |
+| `resetProfile()` | ✅ | Reloads the profile as if just reopened: clears every UI surface (windows, labels, gauges, command lines, scroll boxes; stops sound/video), recreates the Lua runtime (fresh globals + event handlers), and re-runs all scripts/aliases/triggers/timers/keys from current profile state, re-firing `sysLoadEvent`. Deferred to a fresh task (it closes the running `lua_State`), so call it from an alias / command line, not a script-item — matching Mudlet's own guidance. Mudlet Web reloads from the live store, not a re-read of disk |
 | `resumeNamedEventHandler(name)` | ✅ | IDManager.lua |
 | `saveProfile([name])` | ✅ | Bridge.lua → `__mudix_saveProfile` forces the debounced VFS flush through to IndexedDB; `(nil, errMsg)` when no VFS, else `true, path`. `name` ignored (single-profile) |
 | `setConfig(key, value)` | ✅ | Config registry in `ScriptingAPI` (base global; Other.lua adds the table-form/no-arg wrappers). Enforced: protocol enables + `specialForce*Off`/`forceNewEnvironNegotiationOff` (next connect), `mapRoomSize`/`mapExitSize`/`mapRoundRooms`/`mapShowRoomBorders`/`mapShowGrid`, `autoClearInputLine`, `showSentText`, `mapperPanelVisible` (live), `commandLineHistorySaveSize`/`showTabConnectionIndicators` (config bag, consumed by UI). Other keys persist only. Read-only/unknown → false. Details: [`docs/config-api.md`](config-api.md) |
@@ -352,7 +352,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `setPackageInfo(name, key, value)` | ✅ | Stores a custom info field (in-memory override map) surfaced by `getPackageInfo`; always true |
 | `showNotification(title, text [, expirySecs])` | ✅ | Web Notifications API; gated on the Settings opt-in |
 | `spawn(...)` | ❌ stub | No subprocess in the browser; stub returns `false` with a warning |
-| `startLogging(bool)` | ✅ | Toggles the per-profile `SessionLogger`. mudix records to IndexedDB (the same store the toolbar Logs button browses) |
+| `startLogging(bool)` | ✅ | Toggles the per-profile `SessionLogger`. Mudlet Web records to IndexedDB (the same store the toolbar Logs button browses) |
 | `stopAllNamedEventHandlers([type])` | ✅ | IDManager.lua |
 | `stopMusic([channel])` | ✅ | `SoundManager` |
 | `stopNamedEventHandler(name)` | ✅ | IDManager.lua |
@@ -470,7 +470,7 @@ mudix-specific extras (not on the wiki): `getMapMode`/`setMapMode("viewing"\|"ed
 | `tempTimer(delay, code [, repeat])` | ✅ | One-shot or repeating timer |
 | `tempTrigger(pattern, code)` | ✅ | Temporary substring/regex trigger |
 
-mudix-specific extras (not on the wiki): `mudix.windows.write/setTitle/has/focus`, the `mudix.timers.after`/`mudix.aliases.add` Lua-side namespace (alongside the Mudlet API).
+> Earlier revisions of this file documented a `mudix.windows.*` / `mudix.timers.*` / `mudix.aliases.*` Lua namespace. **No such table has ever been bound** — use the Mudlet-native globals.
 
 ---
 
@@ -483,10 +483,10 @@ mudix-specific extras (not on the wiki): `mudix.windows.write/setTitle/has/focus
 | `deleteHTTP(url [, headers])` | ✅ | Bridge.lua → `HttpService.deleteHTTP` |
 | `disconnect()` | ✅ | `MudSession.disconnect` |
 | `downloadFile(url, path)` | ✅ | Bridge.lua → `HttpService.downloadFile`, writes to profile VFS |
-| `feedTelnet(data)` | ✅ | Injects raw bytes into `MudClient.processIncomingData` (telnet strip → ANSI → triggers → render). mudix feeds the live inbound pipeline (Mudlet only loops back when unconnected) |
+| `feedTelnet(data)` | ✅ | Injects raw bytes into `MudClient.processIncomingData` (telnet strip → ANSI → triggers → render). Mudlet Web feeds the live inbound pipeline (Mudlet only loops back when unconnected) |
 | `getConnectionInfo()` | ✅ | Bridge.lua → host, port, connected |
 | `getHTTP(url [, headers])` | ✅ | Bridge.lua → `HttpService.getHTTP`; fires `sysGetHttpDone`/`sysGetHttpError` |
-| `getIrcChannels()` / `getIrcConnectedHost()` / `getIrcNick()` / `getIrcServer()` | ❌ stub | No IRC client in mudix; bind as warning-emitting no-op stubs (getters return empty table / `""`) |
+| `getIrcChannels()` / `getIrcConnectedHost()` / `getIrcNick()` / `getIrcServer()` | ❌ stub | No IRC client in Mudlet Web; bind as warning-emitting no-op stubs (getters return empty table / `""`) |
 | `getNetworkLatency()` | ✅ | JS-exposed |
 | `loadReplay(fileName)` | ✅ | Plays a Mudlet binary replay (`.dat`) from the profile VFS on its recorded timeline (`src/mud/replay/`). Reads both Mudlet layouts (original 4-byte + PR-#4400 8-byte offsets). Toolbar Record button writes recordings to `log/` in Mudlet's own format |
 | `loadRawFile(fileName)` | ✅ | Legacy alias of `loadReplay` (matches Mudlet's dual registration) |
@@ -503,7 +503,7 @@ mudix-specific extras (not on the wiki): `mudix.windows.write/setTitle/has/focus
 | `sendSocket(data)` | ✅ | Literal bytes (no telnet/encoding processing) |
 | `sendTelnetChannel102(data)` | ✅ | `IAC SB 102 <data> IAC SE` via `MudClient.sendRaw` (shared `sendSubnegotiation` helper); false when the socket is closed |
 
-mudix-specific extras: `gmcp` table, `msdp` table, `gmcp.<path>` per-key event chain.
+Mudlet Web-specific extras: `gmcp` table, `msdp` table, `gmcp.<path>` per-key event chain.
 
 ---
 
@@ -581,7 +581,7 @@ Standard Lua 5.1 table functions (`table.concat`, `table.insert`, `table.maxn`, 
 
 ## Text to Speech Functions
 
-Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` for rate/pitch and `0..1` for volume; mudix maps these to Web Speech ranges at speak time.
+Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` for rate/pitch and `0..1` for volume; Mudlet Web maps these to Web Speech ranges at speak time.
 
 | Function | Status | Notes |
 |---|---|---|
@@ -667,7 +667,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `dreplace([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `dreplaceLine([window,] text)` | ✅ | Pure Lua via GUIUtils.lua |
 | `echoLink([window,] text, cmd, hint)` | ✅ | Bridge.lua maps function `cmd` to a callback id |
-| `echoUserWindow(name, text)` | ✅ | Alias for `mudix.windows.write` |
+| `echoUserWindow(name, text)` | 🚧 | Not bound. Deprecated in Mudlet in favour of `echo(window, text)`, which is implemented |
 | `echoPopup([window,] text, cmds, hints)` | ✅ | Bridge.lua flattens cmds/hints tables |
 | `enableClickthrough(name)` | ✅ | JS-exposed |
 | `enableCommandLine(name)` | ✅ | Overlay cmd lines re-enable a disabled input; per-userwindow cmd lines show the docked input; main bar is a no-op |
@@ -700,7 +700,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `getMainConsoleWidth()` | ✅ | Monospace cell width × (wrap columns + 1) |
 | `getMouseEvents()` | ✅ | `{ [uniqueName] = { ["event name"], ["display name"], ["tooltip text"] } }` from the `MouseEventRegistry` |
 | `getMousePosition()` | ✅ | Bridge.lua — last-seen cursor position in main viewport coords |
-| `getProfileTabNumber(name)` | ✅ | No tab UI in mudix; single-profile, so always returns 1 |
+| `getProfileTabNumber(name)` | ✅ | No tab UI in Mudlet Web; single-profile, so always returns 1 |
 | `getMainWindowSize()` | ✅ | Returns `window.innerWidth, window.innerHeight` |
 | `getRowCount([window])` | ✅ | JS-exposed |
 | `getScroll([window])` | ✅ | Returns the scroll position (top-most visible line) |
@@ -725,7 +725,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `insertPopup([window,] text, cmds, hints)` | ✅ | Bridge.lua flattens cmds/hints tables |
 | `insertText([window,] text)` | ✅ | JS-exposed |
 | `ioprint(...)` | ✅ | Mudlet's print-to-stdout helper; routes to the devtools `console.log` in the browser |
-| `isAnsiBgColor(idx)` / `isAnsiFgColor(idx)` | ✅ | True when the fg/bg color at the current selection start equals ANSI/xterm index `idx` (0-7 normal, 8-15 bright, 16-255 xterm-256). mudix stores rendered RGB, so it compares against the palette entry's RGB; false with no selection. Used by Other.lua |
+| `isAnsiBgColor(idx)` / `isAnsiFgColor(idx)` | ✅ | True when the fg/bg color at the current selection start equals ANSI/xterm index `idx` (0-7 normal, 8-15 bright, 16-255 xterm-256). Mudlet Web stores rendered RGB, so it compares against the palette entry's RGB; false with no selection. Used by Other.lua |
 | `loadWindowLayout()` | ✅ | Re-applies the saved snapshot — re-positions live windows and reopens saved-visible windows |
 | `lowerWindow(name)` | ✅ | JS-exposed |
 | `moveCursor([window,] x, y)` | ✅ | JS-exposed |
@@ -824,9 +824,9 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `scrollUp([window,] lines)` | ✅ | Pure Lua via GUIUtils.lua |
 | `scrollTo([window,] line)` | ✅ | Jumps the scroll position |
 | `windowType(name)` | ✅ | Bridge.lua → `__windowType` |
-| `wrapLine([window,] linenum)` | ✅ | Re-renders the line buffer (0-indexed) so embedded `\n` is interpreted; mudix renders with `white-space: pre-wrap` |
+| `wrapLine([window,] linenum)` | ✅ | Re-renders the line buffer (0-indexed) so embedded `\n` is interpreted; Mudlet Web renders with `white-space: pre-wrap` |
 
-mudix-specific extras: `color_table`, `addCmdLineSuggestion`/`removeCmdLineSuggestion`/`clearCmdLineSuggestions` Tab-completion hooks against the main bar, `mudix.windows.*`.
+Mudlet Web-specific extras: `color_table`, `addCmdLineSuggestion`/`removeCmdLineSuggestion`/`clearCmdLineSuggestions` Tab-completion hooks against the main bar.
 
 ---
 
@@ -860,7 +860,7 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 |---|---|---|
 | `sysLoadEvent` | ✅ | After the initial script load |
 | `sysExitEvent` | ✅ | Fired once at `ScriptingEngine.destroy()` (connection switch/unmount) or on `window` `beforeunload`, whichever comes first |
-| `sysConnectionEvent` | ✅ | On connect; mudix also fires native `connect` |
+| `sysConnectionEvent` | ✅ | On connect; Mudlet Web also fires native `connect` |
 | `sysDisconnectionEvent` | ✅ | On disconnect |
 | `sysProfileFocusChangeEvent` | ✅ | On `document.visibilitychange` — arg: isFocused |
 
@@ -948,11 +948,11 @@ Reconciled against the authoritative [Mudlet Event Engine](https://wiki.mudlet.o
 | `sysMediaFinished` | ✅ | Sound/music/video source ended or stopped — args: name, path |
 | `sysSettingChanged` | ✅ | Per-connection profile-settings mutation. One event per changed field — args: setting, newValue (`undefined` when unset) |
 | `sysSoundFinished` | ✅ | Pre-4.15 name, superseded by `sysMediaFinished`. Fired as a compat alias alongside it from the `SoundManager` finished path — args: name, path |
-| `sysIrcMessage` | ❌ | No IRC client in mudix; nothing fires it (no stub needed — events don't break callers when never raised) |
+| `sysIrcMessage` | ❌ | No IRC client in Mudlet Web; nothing fires it (no stub needed — events don't break callers when never raised) |
 
 > **Not Mudlet events** — do not implement under these names: `sysConnect` / `sysDisconnect` / `sysGmcpMessage` (Mudlet uses `sysConnectionEvent` / `sysDisconnectionEvent` and the `gmcp.<path>` event chain), `sysUserWindowCreated` / `sysUserWindowClosed`, `sysMapperLocationChanged`.
 >
-> **mudix-specific events** (no Mudlet equivalent): `output` (per output line), `gmcp.<path>` chain (✅, the real GMCP mechanism — args: eventName, fullKey), `sysMapLoadEvent` (✅, after a binary map ingest), `sysSaveProfileError` (✅), `sysReadModuleEvent` / `sysSyncOnModule` (✅, module-sync internals).
+> **Mudlet Web-specific events** (no Mudlet equivalent): `output` (per output line), `gmcp.<path>` chain (✅, the real GMCP mechanism — args: eventName, fullKey), `sysMapLoadEvent` (✅, after a binary map ingest), `sysSaveProfileError` (✅), `sysReadModuleEvent` / `sysSyncOnModule` (✅, module-sync internals).
 
 ---
 
@@ -975,7 +975,7 @@ Pure Lua on top of the overlay primitive API. No additional JS required.
 
 ## Not Applicable
 
-These features have no real implementation in mudix, but to keep imported Mudlet scripts/packages portable they are **still bound as warning-emitting no-op stubs** (see the legend). Stubs log once per call site and return a sensible default — see the per-section notes above for the exact return value of each stub.
+These features have no real implementation in Mudlet Web, but to keep imported Mudlet scripts/packages portable they are **still bound as warning-emitting no-op stubs** (see the legend). Stubs log once per call site and return a sensible default — see the per-section notes above for the exact return value of each stub.
 
 | Feature | Reason |
 |---|---|

@@ -1,6 +1,6 @@
 # Lua API test scripts
 
-Manual, self-contained smoke tests for mudix's Mudlet-compatible Lua API.
+Manual, self-contained smoke tests for Mudlet Web's Lua API.
 Each file is independent — **paste its full contents into the in-app Lua
 console** (or load it as a script) and read the output. A run prints one
 `[OK]`/`[FAIL]` line per assertion and a final tally:

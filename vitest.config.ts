@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import type { Plugin } from 'vite';
 import { resolve } from 'path';
+import { buildDefine } from './buildInfo';
 
 // LuaRuntime imports `wasmoon-lua5.1/dist/liblua5.1.wasm?url` and passes the
 // result to Lua.create({customWasmUri}). In the app build that `?url` is a
@@ -35,6 +36,9 @@ function wasmoonWasmFsUrl(): Plugin {
 // loaded from node's filesystem.
 export default defineConfig({
   plugins: [wasmoonWasmFsUrl()],
+  // Same build-time constants the app/lib builds inject, so src/version.ts
+  // resolves under test instead of throwing on an undefined global.
+  define: buildDefine(),
   test: {
     // Default DOM env for future component tests; runtime/Lua suites opt into
     // the node environment per-file (`// @vitest-environment node`) so the WASM

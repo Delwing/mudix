@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🗺️ mudix
+# 🗺️ Mudlet Web
 
-### A modern, web-based MUD client with Mudlet-compatible Lua scripting — running entirely in your browser.
+### Mudlet in your browser — the full Mudlet Lua scripting stack, running entirely client-side.
 
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -15,11 +15,11 @@
 
 ---
 
-## What is mudix?
+## What is Mudlet Web?
 
-**mudix** is a [MUD](https://en.wikipedia.org/wiki/Multi-user_dungeon) (Multi-User Dungeon) client that lives in the browser. It speaks the full telnet protocol stack that modern MUDs use, renders rich ANSI output, and runs **real Lua scripting** compiled to WebAssembly — with an API designed for **drop-in compatibility with [Mudlet](https://www.mudlet.org/)** packages, maps, and profiles.
+**Mudlet Web** is a browser edition of [Mudlet](https://www.mudlet.org/), the [MUD](https://en.wikipedia.org/wiki/Multi-user_dungeon) (Multi-User Dungeon) client. It speaks the full telnet protocol stack that modern MUDs use, renders rich ANSI output, and runs **real Lua scripting** compiled to WebAssembly — with an API built for **drop-in compatibility** with Mudlet packages, maps, and profiles.
 
-If you have Mudlet scripts, triggers, aliases, or maps, mudix aims to run them unchanged — anywhere you have a web browser.
+If you have Mudlet scripts, triggers, aliases, or maps, Mudlet Web aims to run them unchanged — anywhere you have a web browser. It is not a rewrite of desktop Mudlet and doesn't replace it: some things a native client can do simply aren't available inside a browser sandbox (see [Limitations](#️-limitations--known-constraints)).
 
 ## ✨ Features
 
@@ -28,10 +28,10 @@ If you have Mudlet scripts, triggers, aliases, or maps, mudix aims to run them u
 - **Telnet via proxy** — connect to any classic `host:port` MUD through the bundled telnet→WebSocket proxy.
 - Full protocol support: **GMCP**, **MSDP**, **MSSP**, **MCCP** (compression), **MSP** (sound), telnet **CHARSET**, **TTYPE/MTTS**, and GA/EOR prompt detection.
 
-### 📜 Mudlet-compatible Lua scripting
+### 📜 Mudlet Lua scripting
 - A complete **Lua 5.1** runtime (WASM) with Mudlet-native globals — `send`, `echo`/`cecho`/`decho`/`hecho`, `tempTimer`, `tempTrigger`, `tempAlias`, and [hundreds more](docs/MUDLET_API.md).
 - **Triggers, aliases, timers, keybindings, and buttons** organized in Mudlet-style folder trees.
-- **PCRE regex** powered by `pcre2-wasm` — the same engine flavor as Mudlet.
+- **PCRE regex** powered by `pcre2-wasm` — the same engine flavour as desktop Mudlet.
 - Bundled Mudlet standard library: Geyser GUI toolkit, the generic mapper, string/table utilities, and the `db:*` database API.
 - A built-in **CodeMirror** script editor with autocompletion for the entire API surface.
 
@@ -58,8 +58,8 @@ If you have Mudlet scripts, triggers, aliases, or maps, mudix aims to run them u
 ### Run the client
 
 ```bash
-git clone <repo-url> mudix
-cd mudix
+git clone <repo-url> mudlet-web
+cd mudlet-web
 yarn
 yarn dev
 ```
@@ -115,18 +115,20 @@ A deeper tour of the internals lives in [`CLAUDE.md`](./CLAUDE.md); the full Mud
 
 ## 🏷️ Branded builds
 
-mudix is also published as an npm library (`@delwing/mudix`) for shipping a **white-label client for one specific MUD** — your own name, login screen, theme, toolbar, and bundled Lua packages, without forking the repo. See [`docs/BRANDED_BUILDS.md`](docs/BRANDED_BUILDS.md) for the setup guide, or [embervale-web](https://github.com/Delwing/embervale-web) for a live example.
+Mudlet Web is also published as an npm library for shipping a **white-label client for one specific MUD** — your own name, login screen, theme, toolbar, and bundled Lua packages, without forking the repo. See [`docs/BRANDED_BUILDS.md`](docs/BRANDED_BUILDS.md) for the setup guide, or [embervale-web](https://github.com/Delwing/embervale-web) for a live example.
+
+> The package is currently published as `@delwing/mudix` and will move to a Mudlet-owned scope; the import name changes with it.
 
 ## ⚠️ Limitations & known constraints
 
-mudix runs inside a browser sandbox, which trades some of Mudlet's native reach for zero-install portability. Worth knowing before you switch:
+Mudlet Web runs inside a browser sandbox, which trades some of desktop Mudlet's native reach for zero-install portability. Worth knowing before you switch:
 
 - **Telnet MUDs need the proxy.** Browsers can't open raw TCP sockets, so classic `host:port` MUDs are reachable only through the bundled telnet→WebSocket proxy. Servers with a native `ws(s)://` endpoint connect directly.
-- **One profile per tab.** There's no Mudlet-style multi-profile tabbing *within* a tab — you open one connection per browser tab (`loadProfile()` and in-tab profile switching are no-op stubs). You can still run **different profiles in separate tabs**: each profile is locked to a single tab (opening the same one elsewhere shows a "waiting" screen until the first tab releases it), every profile's data is isolated in its own filesystem, and profiles can signal each other across tabs via Mudlet's `raiseGlobalEvent`.
+- **One profile per tab.** There's no desktop-Mudlet-style multi-profile tabbing *within* a tab — you open one connection per browser tab (`loadProfile()` and in-tab profile switching are no-op stubs). You can still run **different profiles in separate tabs**: each profile is locked to a single tab (opening the same one elsewhere shows a "waiting" screen until the first tab releases it), every profile's data is isolated in its own filesystem, and profiles can signal each other across tabs via Mudlet's `raiseGlobalEvent`.
 - **Storage is browser-scoped.** Profiles, scripts, maps, and logs live in the browser's IndexedDB/localStorage for the app's origin. Clearing site data wipes them — unless you **link a real disk folder** for that profile (see below). Different browsers/machines don't share state automatically.
 - **Disk-folder linking is Chromium-only.** The "link a folder on disk" feature uses the File System Access API, which Firefox and Safari don't implement. Those browsers fall back to IndexedDB-only storage.
 - **Secure context required.** The VFS service worker (which serves profile images/fonts/CSS) needs HTTPS or `localhost`.
-- **Clipboard access is best-effort.** The browser's OS clipboard is asynchronous and gated on a user gesture (and a secure context), whereas Mudlet's `getClipboardText`/`setClipboardText` are synchronous. mudix keeps a session-local text-clipboard mirror as the authoritative value and syncs it to the real OS clipboard opportunistically — so `setClipboardText` may not reach the system clipboard without a user gesture, and `getClipboardText` returns the last value mudix knows about (an external copy made elsewhere shows up on the *next* call, once the async read completes). This mirror is separate from the rich-text buffer used by `copy()`/`paste()`.
+- **Clipboard access is best-effort.** The browser's OS clipboard is asynchronous and gated on a user gesture (and a secure context), whereas desktop Mudlet's `getClipboardText`/`setClipboardText` are synchronous. Mudlet Web keeps a session-local text-clipboard mirror as the authoritative value and syncs it to the real OS clipboard opportunistically — so `setClipboardText` may not reach the system clipboard without a user gesture, and `getClipboardText` returns the last value Mudlet Web knows about (an external copy made elsewhere shows up on the *next* call, once the async read completes). This mirror is separate from the rich-text buffer used by `copy()`/`paste()`.
 - **Some Mudlet APIs are stubbed or partial.** Anything fundamentally native is bound as a warning-emitting no-op so imported packages still load, but does nothing: **Discord** Rich Presence, **IRC** client, OS `spawn`/subprocess, and the system dictionary. A few synchronous Mudlet calls (`invokeFileDialog`, `getImageSize`) don't map cleanly onto the browser's async pickers/loaders and are still in progress. See [`MUDLET_API.md`](docs/MUDLET_API.md) for the per-function status (✅ / ⚠️ / 🚧 / ❌).
 - **The main window is the viewport.** Calls like `setMainWindowSize` are no-ops — the browser window is the main window.
 - **The Lua↔JS boundary has a per-call cost.** Each crossing between the Lua VM and JS is cheap individually but adds up — a script that makes thousands of tiny boundary calls in a tight loop (e.g. iterating every room in a large area one `getRoom*` call at a time) will feel noticeably slower than in native Mudlet. The hot paths you actually hit constantly (line/trigger processing, GMCP) are batched and stay fast; prefer bulk/batched APIs over per-item calls when you can.
@@ -137,11 +139,11 @@ When adding a Mudlet API function, implement the JS-side method in `ScriptingAPI
 
 ## License
 
-mudix is licensed under the **GNU General Public License, version 2 or (at your option) any later version** — see [LICENSE](./LICENSE). This matches [Mudlet](https://github.com/Mudlet/Mudlet)'s license (GPL-2.0-or-later): mudix bundles Mudlet's Lua runtime files (`src/scripting/lua/mudlet-lua/` — LuaGlobal, Geyser, the generic mapper, DB utilities, and more), copyright the Mudlet contributors, so every mudix distribution is a combined work with that GPL code.
+Mudlet Web is licensed under the **GNU General Public License, version 2 or (at your option) any later version** — see [LICENSE](./LICENSE). This matches [Mudlet](https://github.com/Mudlet/Mudlet)'s license (GPL-2.0-or-later): Mudlet Web bundles Mudlet's Lua runtime files (`src/scripting/lua/mudlet-lua/` — LuaGlobal, Geyser, the generic mapper, DB utilities, and more), copyright the Mudlet contributors, so every distribution is a combined work with that GPL code.
 
-Lua scripts and packages that mudix merely *runs* (your profile scripts, installed `.mpackage`s, branded-build packages) are separate works and are not required to be GPL — the same way the Mudlet ecosystem treats its packages.
+Lua scripts and packages that Mudlet Web merely *runs* (your profile scripts, installed `.mpackage`s, branded-build packages) are separate works and are not required to be GPL — the same way the Mudlet ecosystem treats its packages.
 
-mudix also bundles **Bitstream Vera Sans Mono** (`src/assets/fonts/bitstream-vera-sans-mono/`) as the default console output and command-line font, matching Mudlet's own default console typeface. It's under the separate, permissive [Bitstream Vera license](src/assets/fonts/bitstream-vera-sans-mono/COPYRIGHT.TXT) (free redistribution and embedding; just don't sell the font standalone or rename a modified copy while keeping "Bitstream"/"Vera" in the name).
+Mudlet Web also bundles **Bitstream Vera Sans Mono** (`src/assets/fonts/bitstream-vera-sans-mono/`) as the default console output and command-line font, matching Mudlet's own default console typeface. It's under the separate, permissive [Bitstream Vera license](src/assets/fonts/bitstream-vera-sans-mono/COPYRIGHT.TXT) (free redistribution and embedding; just don't sell the font standalone or rename a modified copy while keeping "Bitstream"/"Vera" in the name).
 
 <div align="center">
 <sub>Built with React, TypeScript, and a lot of WebAssembly. Happy MUDding. 🐉</sub>
