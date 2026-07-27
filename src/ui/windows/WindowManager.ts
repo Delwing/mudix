@@ -6,7 +6,7 @@ import { MapStore } from '../../map/MapStore';
 import { parseXmlMap } from '../../map/xmlMapImport';
 import { saveMap as saveMapToStorage, loadMap as loadMapFromStorage } from '../../storage/mapStorage';
 import { readMapFromBuffer, writeMapToBuffer } from 'mudlet-map-binary-reader';
-import { parseMapInWorker, serializeMapInWorker } from '../../map/mapParserClient';
+import { serializeMapInWorker, streamMapInWorker } from '../../map/mapParserClient';
 import { Buffer } from 'buffer';
 import { OverlayLayerOrder } from '../layout/overlayLayerOrder';
 
@@ -41,6 +41,45 @@ export interface MapControl {
      *  PNG bytes via a headless renderer, leaving the live view untouched.
      *  Returns null when the area is unknown / unrenderable. */
     exportArea: (areaId: number, zLevel?: number) => Uint8Array | null;
+}
+
+/** Progress of an in-flight streamed map load, as published by
+ *  {@link WindowManager.subscribeMapLoadProgress}.
+ *
+ *  `total` is 0 until the worker has decoded the map header (the room count is
+ *  summed from the areas' room-id lists, which the header carries) — until then
+ *  the load is genuinely indeterminate and the UI should say so rather than
+ *  guess a denominator. */
+export interface MapLoadProgress {
+    /** Rooms folded into the store so far. */
+    loaded: number;
+    /** Total rooms the map declares, or 0 while the header is still decoding. */
+    total: number;
+    /**
+     * `rooms` — streaming rooms into the store; `loaded`/`total` advance.
+     *
+     * `building` — every room has landed and the renderer is indexing the map
+     * and building its first scene. That work is synchronous and, on a large
+     * map, by far the longest part of the wait, so it gets its own phase rather
+     * than leaving the bar parked at 99% looking hung.
+     */
+    phase: 'rooms' | 'building';
+}
+
+/** Resolve after the browser has had a chance to paint. Two frames: the first
+ *  callback runs before the upcoming paint, the second after it, so a state
+ *  change published just before a long synchronous block is actually on screen
+ *  by the time the block starts. Falls back to a timeout where rAF doesn't run
+ *  (headless/background tabs, tests). */
+function nextFrame(): Promise<void> {
+    return new Promise<void>(resolve => {
+        if (typeof requestAnimationFrame !== 'function') { setTimeout(resolve, 0); return; }
+        let settled = false;
+        const done = () => { if (!settled) { settled = true; resolve(); } };
+        requestAnimationFrame(() => requestAnimationFrame(done));
+        // rAF is throttled to a stop in background tabs; don't hang the load.
+        setTimeout(done, 100);
+    });
 }
 
 const DEFAULT_SCROLL_STATE: ScrollState = {
@@ -122,6 +161,12 @@ export class WindowManager {
      *  sysDropUrlEvent on viewports. */
     private readonly dropCleanups = new Map<string, () => void>();
     private mapLoadCallback: ((buf?: ArrayBuffer) => boolean) | null = null;
+    /** Live progress of a streamed map load, or null when none is running.
+     *  Held here (rather than pushed only to subscribers) so a MapPanel that
+     *  mounts mid-load — the normal case at cold start, where bootstrapMap
+     *  begins before the panel exists — can render the bar straight away. */
+    private mapLoadProgress: MapLoadProgress | null = null;
+    private readonly mapProgressSubscribers = new Set<(p: MapLoadProgress | null) => void>();
     /** Single in-flight bootstrap promise — both ScriptingEngine.start (which
      *  awaits the map before applying scripts, Mudlet parity) and MapPanel on
      *  mount call into this; whichever lands first triggers the work. */
@@ -903,6 +948,29 @@ export class WindowManager {
         this.mapLoadCallback = null;
     }
 
+    /**
+     * Subscribe to streamed map-load progress. The callback fires on every
+     * ingested batch and once with `null` when the load ends (either way), so a
+     * progress UI can drive itself entirely off this channel. Fires immediately
+     * with the current value on subscribe, so a panel mounting mid-load doesn't
+     * have to wait for the next batch to render something.
+     */
+    subscribeMapLoadProgress(cb: (progress: MapLoadProgress | null) => void): () => void {
+        this.mapProgressSubscribers.add(cb);
+        cb(this.mapLoadProgress);
+        return () => this.mapProgressSubscribers.delete(cb);
+    }
+
+    /** Current streamed-load progress, or null when no load is running. */
+    getMapLoadProgress(): MapLoadProgress | null {
+        return this.mapLoadProgress;
+    }
+
+    private publishMapLoadProgress(progress: MapLoadProgress | null): void {
+        this.mapLoadProgress = progress;
+        for (const cb of this.mapProgressSubscribers) cb(progress);
+    }
+
     setConnectionId(id: string): void {
         this._connectionId = id;
     }
@@ -924,10 +992,59 @@ export class WindowManager {
      * Async sibling of {@link ingestMapBuffer} that parses in a worker so the
      * main thread stays free for paint. `buf` is transferred — callers that
      * also need the bytes (e.g. IndexedDB persistence) must clone first.
+     *
+     * The worker streams the map room-by-room and the store folds each batch in
+     * as it lands, so neither side ever holds two copies of the room graph.
+     * Subscribers see nothing until the load completes (one notification, from
+     * `endBinaryLoad`) — a half-populated store would have the renderer draw a
+     * map with dangling exits.
+     *
+     * Batch progress is published on {@link subscribeMapLoadProgress} for the
+     * map panel's progress bar; `onProgress` is an extra per-call hook.
      */
-    async ingestMapBufferAsync(buf: ArrayBuffer): Promise<void> {
-        const mudletMap = await parseMapInWorker(buf);
-        this.mapStore.loadFromBinary(mudletMap);
+    async ingestMapBufferAsync(buf: ArrayBuffer, onProgress?: (loaded: number, total: number) => void): Promise<void> {
+        // Rooms land in one notification at the end, so without this the UI has
+        // nothing at all to show during the longest part of a big-map load.
+        this.publishMapLoadProgress({ loaded: 0, total: 0, phase: 'rooms' });
+        let ingested = 0;
+        let expected = 0;
+        try {
+            await streamMapInWorker(buf, {
+                onHeader: (header) => this.mapStore.beginBinaryLoad(header),
+                onRooms: (rooms) => this.mapStore.ingestBinaryRooms(rooms),
+                onProgress: (loaded, total) => {
+                    ingested = loaded;
+                    expected = total;
+                    this.publishMapLoadProgress({ loaded, total, phase: 'rooms' });
+                    onProgress?.(loaded, total);
+                },
+            });
+        } catch (err) {
+            // A mid-stream failure leaves the store holding a truncated map
+            // that was never finalized. Reset to a clean empty map rather than
+            // let scripts query half a world.
+            this.mapStore.newEmptyMap();
+            this.publishMapLoadProgress(null);
+            throw err;
+        }
+        try {
+            // Everything below is the renderer's problem, and on a large map it
+            // dwarfs the streaming: indexing the map and building the first
+            // scene is synchronous and can run for many seconds. Announce the
+            // phase and hand the browser a frame to paint it, or the user
+            // stares at a bar frozen mid-count with no idea anything is
+            // happening.
+            this.publishMapLoadProgress({ loaded: ingested, total: expected, phase: 'building' });
+            await nextFrame();
+            // The store's notify is microtask-coalesced, so endBinaryLoad
+            // returns before the panel has rebuilt anything; the heavy work
+            // runs in the drain right after. Yielding to a macrotask puts the
+            // progress teardown after that work rather than before it.
+            this.mapStore.endBinaryLoad();
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+        } finally {
+            this.publishMapLoadProgress(null);
+        }
     }
 
     /**
@@ -993,6 +1110,43 @@ export class WindowManager {
         // headless scripts (no MapPanel open) still receive the event.
         this.mapLoadCallback?.(buf);
         if (buf) this.onRaiseEvent?.('sysMapLoadEvent', []);
+        return true;
+    }
+
+    /**
+     * Async sibling of {@link loadMap} with identical effects — IndexedDB
+     * persistence, store ingest, panel re-render, `sysMapLoadEvent` — but the
+     * parse runs in the worker and streams into the store, publishing progress
+     * as it goes.
+     *
+     * Use this for every UI-driven load (file picker, map download, editor
+     * hand-back): the synchronous {@link loadMap} blocks the main thread for the
+     * whole parse, which on a large map means a frozen window and a progress bar
+     * that could never paint. `loadMap` stays for Lua's synchronous
+     * `loadMap()` contract.
+     *
+     * `buf` is transferred to the worker and must not be reused by the caller.
+     */
+    async loadMapAsync(buf: ArrayBuffer): Promise<boolean> {
+        if (this._connectionId) {
+            // Persist a copy before the original is transferred away. (The
+            // sync path clones for a different reason — see loadMap — but the
+            // upshot is the same: IDB must get untouched bytes.)
+            saveMapToStorage(this._connectionId, buf.slice(0)).catch(err =>
+                console.warn('[WindowManager] saveMap failed:', err));
+        }
+        try {
+            await this.ingestMapBufferAsync(buf);
+        } catch (err) {
+            console.warn('[WindowManager] loadMapAsync parse failed:', err);
+            return false;
+        }
+        // Same advisory contract as loadMap: the panel reports render success,
+        // but the event fires on successful ingest so headless scripts still
+        // see it. The buffer is detached by now, so the callback is invoked
+        // without it — every consumer re-reads through the store anyway.
+        this.mapLoadCallback?.();
+        this.onRaiseEvent?.('sysMapLoadEvent', []);
         return true;
     }
 

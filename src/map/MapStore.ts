@@ -1,4 +1,4 @@
-import type {MudletArea, MudletColor, MudletFont, MudletLabel, MudletMap, MudletRoom} from 'mudlet-map-binary-reader';
+import type {MudletArea, MudletColor, MudletFont, MudletLabel, MudletMap, MudletMapHeader, MudletRoom} from 'mudlet-map-binary-reader';
 import {readerExport} from 'mudlet-map-binary-reader';
 import {findPath, type PathfindResult} from './pathfinding';
 
@@ -250,6 +250,10 @@ export class MapStore {
     private envColors = new Map<number, number>();
     private nextRoomId = 1;
     private nextAreaId = 1;
+    // In-flight state for a three-phase binary load (beginBinaryLoad →
+    // ingestBinaryRooms* → endBinaryLoad). Empty/false outside a load.
+    private pendingBinaryHashIndex: Record<string, number> = {};
+    private pendingBinaryHadSelection = false;
     private version = 0;
     private subscribers = new Set<() => void>();
     private notifyPending = false;
@@ -414,6 +418,24 @@ export class MapStore {
      * collide. One notification fires at the end of the batch.
      */
     loadFromBinary(mudletMap: MudletMap): void {
+        this.beginBinaryLoad(mudletMap);
+        for (const [k, room] of Object.entries(mudletMap.rooms ?? {})) {
+            this.ingestBinaryRoom(Number(k), room);
+        }
+        this.endBinaryLoad();
+    }
+
+    /**
+     * Header phase of a streamed binary load — everything in a Mudlet map
+     * except the rooms (see `MudletMapReader.streamRooms`). Wipes the store and
+     * applies areas / names / labels / colours / user data, then leaves it open
+     * for {@link ingestBinaryRooms} batches. Nothing is notified until
+     * {@link endBinaryLoad}, so subscribers never observe a half-loaded map.
+     *
+     * {@link loadFromBinary} is this same three-phase sequence run eagerly over
+     * an already-materialised map.
+     */
+    beginBinaryLoad(header: MudletMapHeader): void {
         this.rooms.clear();
         this.areas.clear();
         this.areaNames.clear();
@@ -424,48 +446,28 @@ export class MapStore {
         this.roomCharColors.clear();
         if (this.hiddenRooms.size > 0) { this.hiddenRooms.clear(); this.hiddenVersion++; }
         this.roomHighlights.clear();
-        const hadSelection = this.selectedRooms.size > 0 || this.selectionCenter != null;
+        this.pendingBinaryHadSelection = this.selectedRooms.size > 0 || this.selectionCenter != null;
         this.selectedRooms.clear();
         this.selectionCenter = null;
         // Carry the whole profile→room hash so a later save preserves the
         // positions of profiles other than ours; our player room is restored
-        // from it below once the rooms exist.
-        this.mRoomIdHash = { ...(mudletMap.mRoomIdHash ?? {}) };
+        // from it in endBinaryLoad once the rooms exist.
+        this.mRoomIdHash = { ...(header.mRoomIdHash ?? {}) };
         this.playerRoomId = null;
+        // Applied in endBinaryLoad — the hash→id table is authoritative over
+        // whatever the rooms themselves claim, so it can only be folded in
+        // after every room has landed.
+        this.pendingBinaryHashIndex = header.mpRoomDbHashToRoomId ?? {};
 
-        for (const [k, room] of Object.entries(mudletMap.rooms ?? {})) {
-            const id = Number(k);
-            // v20 maps (and older) have no dedicated isHidden field on TRoom;
-            // Mudlet smuggles it through userData["system.fallback_hidden"]
-            // (TRoom.cpp:894-899). Take the key out and lift it to our
-            // side-table so the rest of the codebase only deals with the
-            // in-memory hiddenRooms set. The key is removed regardless of
-            // value, matching Mudlet's QMap::take semantics.
-            const fallback = room.userData?.[HIDDEN_FALLBACK_KEY];
-            if (fallback !== undefined) {
-                delete room.userData[HIDDEN_FALLBACK_KEY];
-                if (fallback === 'true') this.hiddenRooms.add(id);
-            }
-            this.rooms.set(id, room);
-            if (room.hash) this.hashToRoom.set(room.hash, id);
-            if (id >= this.nextRoomId) this.nextRoomId = id + 1;
-        }
-        if (this.hiddenRooms.size > 0) this.hiddenVersion++;
-        // Binary may carry hashes for rooms that haven't been parsed into
-        // `rooms` (legacy maps with orphan hash entries). Trust the explicit
-        // hash→id table as authoritative when it disagrees.
-        for (const [hash, id] of Object.entries(mudletMap.mpRoomDbHashToRoomId ?? {})) {
-            this.hashToRoom.set(hash, id);
-        }
-        for (const [k, area] of Object.entries(mudletMap.areas ?? {})) {
+        for (const [k, area] of Object.entries(header.areas ?? {})) {
             const id = Number(k);
             this.areas.set(id, area);
             if (id >= this.nextAreaId) this.nextAreaId = id + 1;
         }
-        for (const [k, name] of Object.entries(mudletMap.areaNames ?? {})) {
+        for (const [k, name] of Object.entries(header.areaNames ?? {})) {
             this.areaNames.set(Number(k), name);
         }
-        for (const [k, labels] of Object.entries(mudletMap.labels ?? {})) {
+        for (const [k, labels] of Object.entries(header.labels ?? {})) {
             // Normalize pixmaps to base64 strings up-front. Heavy Buffer
             // payloads here would later get walked by lodash.cloneDeep inside
             // readerExport on every renderer refresh — see MudixMapReader for
@@ -479,13 +481,61 @@ export class MapStore {
             });
             this.labels.set(Number(k), normalized);
         }
-        for (const [k, c] of Object.entries(mudletMap.mCustomEnvColors ?? {})) {
+        for (const [k, c] of Object.entries(header.mCustomEnvColors ?? {})) {
             this.customEnvColors.set(Number(k), c);
         }
-        for (const [k, v] of Object.entries(mudletMap.envColors ?? {})) {
+        for (const [k, v] of Object.entries(header.envColors ?? {})) {
             this.envColors.set(Number(k), v);
         }
-        this.mapUserData = { ...(mudletMap.mUserData ?? {}) };
+        this.mapUserData = { ...(header.mUserData ?? {}) };
+    }
+
+    /**
+     * Room phase of a streamed binary load. Call any number of times between
+     * {@link beginBinaryLoad} and {@link endBinaryLoad}; each batch is folded
+     * into the store as it arrives, so the worker never has to hold (nor the
+     * structured clone carry) the whole room graph at once.
+     */
+    ingestBinaryRooms(rooms: Iterable<readonly [number, MudletRoom]>): void {
+        for (const [id, room] of rooms) this.ingestBinaryRoom(id, room);
+    }
+
+    private ingestBinaryRoom(id: number, room: MudletRoom): void {
+        // v20 maps (and older) have no dedicated isHidden field on TRoom;
+        // Mudlet smuggles it through userData["system.fallback_hidden"]
+        // (TRoom.cpp:894-899). Take the key out and lift it to our
+        // side-table so the rest of the codebase only deals with the
+        // in-memory hiddenRooms set. The key is removed regardless of
+        // value, matching Mudlet's QMap::take semantics.
+        const fallback = room.userData?.[HIDDEN_FALLBACK_KEY];
+        if (fallback !== undefined) {
+            delete room.userData[HIDDEN_FALLBACK_KEY];
+            if (fallback === 'true') this.hiddenRooms.add(id);
+        }
+        this.rooms.set(id, room);
+        if (room.hash) this.hashToRoom.set(room.hash, id);
+        if (id >= this.nextRoomId) this.nextRoomId = id + 1;
+    }
+
+    /**
+     * Finalize a streamed binary load: fold in the authoritative hash index,
+     * resolve the player room, and fire the single notification the whole load
+     * is worth.
+     */
+    endBinaryLoad(): void {
+        if (this.hiddenRooms.size > 0) this.hiddenVersion++;
+        // Binary may carry hashes for rooms that haven't been parsed into
+        // `rooms` (legacy maps with orphan hash entries). Trust the explicit
+        // hash→id table as authoritative when it disagrees. Streamed rooms
+        // arrive with no `hash` field at all (it lives only in this index), so
+        // this is also where they get one — matching what readMapFromBuffer
+        // does eagerly.
+        for (const [hash, id] of Object.entries(this.pendingBinaryHashIndex)) {
+            this.hashToRoom.set(hash, id);
+            const room = this.rooms.get(id);
+            if (room && !room.hash) room.hash = hash;
+        }
+        this.pendingBinaryHashIndex = {};
         // Mudlet restores the player room from mRoomIdHash[mProfileName] on load
         // (no fallback: a missing key means no position). Only accept an id that
         // actually resolves to a loaded room.
@@ -494,7 +544,8 @@ export class MapStore {
         this.initialized = true;
         this.notify();
         this.notifyHighlights();
-        if (hadSelection) this.notifySelection();
+        if (this.pendingBinaryHadSelection) this.notifySelection();
+        this.pendingBinaryHadSelection = false;
     }
 
     /**

@@ -343,6 +343,25 @@ export interface MapperSettings {
     lineColor?: string;
     /** renderer.settings.gridEnabled — background grid overlay. */
     gridEnabled?: boolean;
+    /** renderer.settings.lodEnabled — level-of-detail for very dense planes.
+     *  Above {@link lodExitBudget} rooms on the drawn (area, z-level) the
+     *  renderer drops exit lines, and above {@link lodRoomBudget} it replaces
+     *  the vector scene with a raster overview (one box per room) until you
+     *  zoom back in. On by default: the tiers only engage at densities where
+     *  the full vector scene takes seconds per rebuild anyway. */
+    lodEnabled?: boolean;
+    /** renderer.settings.lodRoomBudget — rooms per plane above which zoomed-out
+     *  views switch to the raster overview. */
+    lodRoomBudget?: number;
+    /** renderer.settings.lodExitBudget — rooms per plane above which exit lines
+     *  are dropped but rooms still draw as real vector shapes. Set at or above
+     *  {@link lodRoomBudget} to skip this tier entirely. */
+    lodExitBudget?: number;
+    /** renderer.settings.lodHitTestBudget — rooms on screen above which the
+     *  hit-test index is skipped, so clicks and hover stop resolving to a room
+     *  until you zoom in further. Measured against what the current viewport
+     *  materialises, not the whole level. */
+    lodHitTestBudget?: number;
 }
 
 /** Mirrors the renderer's createSettings() defaults so the Settings modal can
@@ -358,6 +377,13 @@ export const MAPPER_DEFAULTS: Required<MapperSettings> = {
     backgroundColor: '#000000',
     lineColor: '#e1ffe1',
     gridEnabled: false,
+    // LOD budgets mirror the renderer's createSettings() defaults; `lodEnabled`
+    // deliberately does NOT (the renderer defaults it off for back-compat,
+    // mudix opts in — see MapperSettings.lodEnabled).
+    lodEnabled: true,
+    lodRoomBudget: 16000,
+    lodExitBudget: 12000,
+    lodHitTestBudget: 10000,
 };
 
 /** RGBA channels (0..255) for the map-info widget background. Stored in the

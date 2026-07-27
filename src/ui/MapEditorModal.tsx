@@ -34,15 +34,17 @@ export function MapEditorModal({ connectionId, connectionName, manager, onClose 
     // (sidebarTabs, swatchSets, roomPanelSections) don't tear down each render.
     const plugins = useMemo<EditorPlugin[]>(() => {
         // Sync the editor's serialised bytes back into mudix's MapStore +
-        // IndexedDB. Copy into a standalone ArrayBuffer first — manager.loadMap
-        // eventually hands the buffer to the binary parser which mutates it
-        // in-place via Buffer.swap16(); the editor still references its own.
+        // IndexedDB. Copy into a standalone ArrayBuffer first — the load hands
+        // the buffer to the worker (which takes ownership) while the editor
+        // still references its own.
         const syncBytes = (bytes: Uint8Array) => {
             const copy = new ArrayBuffer(bytes.byteLength);
             new Uint8Array(copy).set(bytes);
-            if (!manager.loadMap(copy)) {
-                console.warn('[MapEditorModal] manager.loadMap rejected editor bytes');
-            }
+            // Streamed load: saving a large map from the editor otherwise locks
+            // the window up for the whole re-parse.
+            void manager.loadMapAsync(copy).then(ok => {
+                if (!ok) console.warn('[MapEditorModal] manager.loadMapAsync rejected editor bytes');
+            });
         };
         return [{
             id: 'mudix-bridge',

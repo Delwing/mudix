@@ -1,5 +1,8 @@
-import {MapReader} from 'mudlet-map-renderer';
-import type {IArea, IMapReader} from 'mudlet-map-renderer';
+// MapReader is referenced for its types only — the concrete reader is no
+// longer constructed here — so importing it as a type keeps the renderer's
+// Konva-dependent entry point out of this module's runtime graph.
+import type {MapReader, IArea, IMapReader, ViewportBounds, ViewportDataSource, HashLookupCapable} from 'mudlet-map-renderer';
+import {buildSkeleton, SkeletonMapReader} from 'mudlet-map-renderer/bigmap';
 import {readerExport} from 'mudlet-map-binary-reader';
 import type {MudletLabel, MudletMap} from 'mudlet-map-binary-reader';
 import {Buffer} from 'buffer';
@@ -12,25 +15,55 @@ import type {MapStore} from './MapStore';
 type RoomShape = ReturnType<MapReader['getRoom']>;
 type MapShape = ConstructorParameters<typeof MapReader>[0];
 
+/** No viewport applied: every room materialises. What a fresh reader starts
+ *  with, and what the export path wants (an export narrowed to the on-screen
+ *  viewport would silently crop the image). */
+const UNBOUNDED: ViewportBounds = {
+    minX: -Infinity, maxX: Infinity, minY: -Infinity, maxY: Infinity,
+};
+
 /**
  * Live {@link IMapReader} backed by Mudix's {@link MapStore}.
  *
  * The renderer is constructed once on panel mount and held for the lifetime of
  * the panel. Whenever the store mutates (script-built rooms, binary load,
  * setRoomCoordinates, …) the panel calls {@link refresh}; this rebuilds the
- * inner concrete {@link MapReader} from the store's current snapshot. The
- * renderer's `MapState` notices the new `IArea` instance via reference
- * inequality and rebuilds the scene — no Konva stage / event listener
- * teardown.
+ * inner reader from the store's current snapshot. The renderer's `MapState`
+ * notices the new `IArea` instance via reference inequality and rebuilds the
+ * scene — no Konva stage / event listener teardown.
+ *
+ * The inner reader is a {@link SkeletonMapReader}: rooms live in compact
+ * typed-array columns and are materialised per viewport, instead of the
+ * concrete `MapReader`'s full object graph. Nothing is dropped — the skeleton
+ * is built from the complete map and keeps every room, with rooms carrying
+ * visual detail (symbols, custom lines, special exits, doors, stubs, exit
+ * locks) materialised in full — it only changes how the *renderer* holds them.
+ * That matters because the concrete reader's costs scale with the whole plane
+ * rather than what's on screen: on a 250k-room map, constructing it took ~7s
+ * and the first scene build ~9s, all synchronous on the main thread.
+ *
+ * Being a {@link ViewportDataSource} is what unlocks that: the interactive
+ * backend pushes padded camera bounds before every scene build and only
+ * rebuilds when the camera leaves the padding. The capability is detected by
+ * duck-typing (`viewportAware === true`), so this wrapper has to re-declare it
+ * and forward — a plain `IMapReader` facade would silently opt out of the
+ * virtualization and fall back to materialising everything.
  *
  * The renderer's wire format (`{mapData, colors}`) is produced via
  * `readerExport(store.toMudletMap())` — the same transformation Mudlet's own
  * binary-reader pipeline applies. Doing it inside the reader (instead of in
  * the panel) keeps `MapPanel` pure-view: it never sees the wire format.
  */
-export class MudixMapReader implements IMapReader {
-    private inner: MapReader;
+export class MudixMapReader implements IMapReader, ViewportDataSource, HashLookupCapable {
+    readonly viewportAware = true as const;
+    readonly hashLookupCapable = true as const;
+    private inner: SkeletonMapReader;
     private snapshotVersion = -1;
+    /** Last viewport the renderer pushed. Held here because a store-driven
+     *  rebuild replaces the inner reader, and a fresh one defaults to
+     *  unbounded — re-applying keeps the next scene build scoped to where the
+     *  camera actually is instead of materialising the whole plane once. */
+    private viewport: ViewportBounds = UNBOUNDED;
 
     constructor(private readonly store: MapStore) {
         this.inner = this.buildInner();
@@ -65,19 +98,18 @@ export class MudixMapReader implements IMapReader {
         return !this.store.isEmpty();
     }
 
-    private buildInner(): MapReader {
+    private buildInner(): SkeletonMapReader {
         const mudletMap = this.store.toMudletMap();
         if (Object.keys(mudletMap.rooms).length === 0) {
-            return new MapReader([], []);
+            return new SkeletonMapReader(buildSkeleton([], []));
         }
-        // readerExport internally does `lodash.cloneDeep(mapModel)`. On
-        // label-heavy maps that walks each pixMap Buffer via cloneArrayBuffer
-        // — hundreds of ms per image, paid on every store-version bump. The
-        // worker / loadFromBinary normalize pixmaps to base64 strings up-front,
-        // but readerExport's own convertLabel still re-runs `Buffer.from(...)`
-        // on whatever it gets. Strip the pixmaps to a shared empty Buffer for
-        // the clone, then patch the renderer-format output back with the
-        // already-cached base64 strings.
+        // MapStore holds label pixmaps as base64 strings (the worker normalizes
+        // them on the way in, so they stay cheap to structured-clone and JSON).
+        // readerExport's convertLabel assumes raw bytes and runs them through a
+        // byte-wise base64 encoder, which on a string reads characters as byte
+        // values and emits garbage. Hand it an empty buffer per label instead,
+        // then patch the renderer-format output back with the strings we
+        // already have.
         const emptyBuf = Buffer.alloc(0);
         const pixmapByArea = new Map<string, string[]>();
         const strippedLabels: Record<number, MudletLabel[]> = {};
@@ -103,7 +135,17 @@ export class MudixMapReader implements IMapReader {
         // RendererRoom (binary-reader output) is structurally a MapData.Room
         // with `areaId` missing — the renderer reads room.area, not
         // room.areaId, so the gap is harmless. Cast through unknown to bridge.
-        return new MapReader(mapData as unknown as MapShape, colors);
+        //
+        // `gridAreas` is deliberately not passed: it would suppress cardinal
+        // exit lines on grid-mode areas (which is what Mudlet does), and that
+        // is a rendering change, not part of moving to a skeleton. The concrete
+        // reader never had the information, so leaving it out keeps output
+        // identical to before.
+        const reader = new SkeletonMapReader(buildSkeleton(mapData as unknown as MapShape, colors));
+        // A fresh reader is unbounded; hand it the camera's last known window
+        // so the first build after a store mutation isn't a whole-plane one.
+        if (this.viewport !== UNBOUNDED) reader.setViewport(this.viewport);
+        return reader;
     }
 
     // --- IMapReader forwarding ------------------------------------------------
@@ -118,6 +160,9 @@ export class MudixMapReader implements IMapReader {
         return this.inner.getAreas();
     }
 
+    /** Note: a viewport-virtualized reader deliberately returns an empty list
+     *  here rather than materialising every room — callers that want rooms go
+     *  through a plane (which is viewport-scoped) or {@link getRoom} by id. */
     getRooms(): RoomShape[] {
         this.ensureFresh();
         return this.inner.getRooms();
@@ -136,5 +181,63 @@ export class MudixMapReader implements IMapReader {
     getSymbolColor(envId: number, opacity?: number): string {
         this.ensureFresh();
         return this.inner.getSymbolColor(envId, opacity);
+    }
+
+    // --- ViewportDataSource ---------------------------------------------------
+    // Pushed by the interactive backend before every scene build; everything
+    // below must survive a store-driven rebuild of the inner reader, hence the
+    // locally-held `viewport`.
+
+    setViewport(bounds: ViewportBounds): void {
+        this.viewport = bounds;
+        this.ensureFresh();
+        this.inner.setViewport(bounds);
+    }
+
+    getViewport(): ViewportBounds {
+        this.ensureFresh();
+        return this.inner.getViewport();
+    }
+
+    getPlaneRoomCount(areaId: number, z: number): number {
+        this.ensureFresh();
+        return this.inner.getPlaneRoomCount(areaId, z);
+    }
+
+    estimateVisibleCount(areaId: number, z: number, bounds: ViewportBounds): number {
+        this.ensureFresh();
+        return this.inner.estimateVisibleCount(areaId, z, bounds);
+    }
+
+    forEachInBounds(
+        areaId: number,
+        z: number,
+        bounds: ViewportBounds,
+        fn: (x: number, y: number, envId: number) => void,
+    ): void {
+        this.ensureFresh();
+        this.inner.forEachInBounds(areaId, z, bounds, fn);
+    }
+
+    // --- HashLookupCapable ----------------------------------------------------
+
+    /** O(1) hash → id. Needed because `getRooms()` is empty on a virtualized
+     *  reader, so the scan-based fallback the renderer would otherwise use can
+     *  never resolve anything. */
+    getRoomIdByHash(hash: string): number | undefined {
+        this.ensureFresh();
+        return this.inner.getRoomIdByHash(hash);
+    }
+
+    /**
+     * Drop any viewport narrowing, so subsequent reads materialise the whole
+     * map again. The export path needs this: an exporter driven by a reader
+     * still scoped to the on-screen camera would silently render only the
+     * rooms that happen to be visible.
+     */
+    clearViewport(): void {
+        this.viewport = UNBOUNDED;
+        this.ensureFresh();
+        this.inner.setViewport(UNBOUNDED);
     }
 }

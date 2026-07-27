@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MapRenderer, createSettings, PngBytesExporter } from 'mudlet-map-renderer';
-import type { RoomClickEventDetail, RoomContextMenuEventDetail, RoomLens, Settings as MapRendererSettings } from 'mudlet-map-renderer';
-import type { WindowManager, MapControl } from '../WindowManager';
+import type { LodEventDetail, RoomClickEventDetail, RoomContextMenuEventDetail, RoomLens, Settings as MapRendererSettings } from 'mudlet-map-renderer';
+import type { WindowManager, MapControl, MapLoadProgress } from '../WindowManager';
 import type { MapEventEntry, MapInfoResult, MapInfoContributor, MapStore } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
 import { MudletHighlightOverlay } from '../../../map/MudletHighlightOverlay';
@@ -28,6 +28,18 @@ function applyMapperSettings(target: MapRendererSettings, mapper: MapperSettings
     // generic 'sans-serif', which picks a different glyph shape per-OS for
     // Unicode room-symbol characters. Match Mudlet's fixed choice instead.
     target.fontFamily = "'Bitstream Vera Sans Mono', sans-serif";
+    // Level-of-detail: on unless the user turns it off. The renderer defaults it
+    // off for back-compat, but every tier only engages above ~12k rooms on the
+    // drawn plane — a density where the full vector scene costs seconds per
+    // rebuild. Budgets fall through to the renderer's own defaults when unset.
+    target.lodEnabled = mapper?.lodEnabled ?? true;
+    if (mapper?.lodRoomBudget !== undefined) target.lodRoomBudget = mapper.lodRoomBudget;
+    if (mapper?.lodExitBudget !== undefined) target.lodExitBudget = mapper.lodExitBudget;
+    // The hit-test budget is measured against the rooms a plane materialises,
+    // which for MudixMapReader (viewport-virtualized) is the visible slice —
+    // so it behaves as designed: picking drops out only while enough rooms are
+    // on screen to make the index expensive, and zooming in brings it back.
+    if (mapper?.lodHitTestBudget !== undefined) target.lodHitTestBudget = mapper.lodHitTestBudget;
     if (!mapper) return;
     if (mapper.roomSize !== undefined) target.roomSize = mapper.roomSize;
     if (mapper.roomShape !== undefined) target.roomShape = mapper.roomShape;
@@ -59,6 +71,42 @@ function centerOnArea(renderer: MapRenderer, mapStore: MapStore): void {
     else renderer.camera.panToMapPoint(0, 0);
 }
 
+/** How far past "the whole area exactly fills the panel" the user may keep
+ *  zooming out. The renderer's `fitToMapBounds` ends with `minZoom = zoom`, so
+ *  every fitArea() pins the zoom-out floor to that exact fit — the wheel then
+ *  stops dead with the area flush against the panel edges, and there's no way
+ *  to pull back for context or to see where an area sits relative to its
+ *  surroundings. Relaxing the floor afterwards restores that headroom. */
+const ZOOM_OUT_HEADROOM = 4;
+
+/** Fit the area, then relax the floor the fit just pinned (see
+ *  {@link ZOOM_OUT_HEADROOM}). Use everywhere instead of `renderer.fitArea()`. */
+function fitAreaWithHeadroom(renderer: MapRenderer): void {
+    renderer.fitArea();
+    renderer.minZoom = renderer.minZoom / ZOOM_OUT_HEADROOM;
+}
+
+/**
+ * Open an area at `savedZoom` (or fitted, when there is none), with a zoom-out
+ * floor derived from the area's actual extent.
+ *
+ * The fit runs even when a saved zoom is about to replace it, because fitting
+ * is the only thing that derives a floor from how big the area actually is.
+ * The camera's own default floor is a fixed 0.05 with no relation to map size —
+ * on any map larger than the viewport that sits far *above* the zoom needed to
+ * see the whole thing, so restoring a saved zoom without fitting first leaves
+ * the wheel pinned at a floor from which the map can never be framed. Every
+ * previously-opened profile takes that path, so it is the common case, not the
+ * edge one.
+ */
+function applyAreaZoom(renderer: MapRenderer, savedZoom: number | null | undefined): void {
+    fitAreaWithHeadroom(renderer);
+    if (savedZoom == null) return;
+    // Never let the floor just derived clamp a view the user actually had.
+    if (savedZoom < renderer.minZoom) renderer.minZoom = savedZoom;
+    renderer.setZoom(savedZoom);
+}
+
 /** Open an area for the first time: apply its saved zoom (or fit when none),
  *  then center on the current room. Mudlet loads the map centered on the player
  *  room — or, with no known location, a fallback room it paints the marker on
@@ -66,9 +114,7 @@ function centerOnArea(renderer: MapRenderer, mapStore: MapStore): void {
  *  this area we center on it; otherwise on the area centroid via
  *  {@link centerOnArea}. Shared by the first sync and the late layout re-apply. */
 function applyInitialView(renderer: MapRenderer, mapStore: MapStore, areaId: number): void {
-    const savedZoom = mapStore.getAreaZoom(areaId);
-    if (savedZoom != null) renderer.setZoom(savedZoom);
-    else renderer.fitArea();
+    applyAreaZoom(renderer, mapStore.getAreaZoom(areaId));
     const markerRoom = mapStore.getPlayerRoom() ?? mapStore.getFallbackRoomId();
     if (markerRoom != null && mapStore.getRoomArea(markerRoom) === areaId) {
         renderer.centerOn(markerRoom, true);
@@ -107,6 +153,13 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [status, setStatus] = useState<MapStatus>('loading');
     const [errorMsg, setErrorMsg] = useState('');
+    // Latest level-of-detail decision from the renderer. Null until the first
+    // scene build, and only surfaced in the UI once detail is actually being
+    // dropped — see the `lod` subscription below.
+    const [lod, setLod] = useState<LodEventDetail | null>(null);
+    // Streamed map-load progress, published by WindowManager. Null when no load
+    // is running.
+    const [loadProgress, setLoadProgress] = useState<MapLoadProgress | null>(null);
     const [areas, setAreas] = useState<Array<{ id: number; name: string }>>([]);
     const [currentArea, setCurrentArea] = useState<number | null>(null);
     const [levels, setLevels] = useState<number[]>([]);
@@ -414,6 +467,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // StrictMode's synthetic session swap in dev) would inherit the previous
         // renderer's "already fitted" flag and open uncentered at (0,0).
         needsFitRef.current = false;
+        setLod(null);
         const reader = new MudixMapReader(manager.mapStore);
         readerRef.current = reader;
         const settings = createSettings();
@@ -631,7 +685,23 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         };
         renderer.events.on('zoom', onZoom);
 
+        // Level-of-detail: the renderer re-decides on every scene build, so
+        // dedupe before touching React state — mode and hit-test availability
+        // only flip at a threshold crossing, and planeRoomCount only when the
+        // drawn plane changes, so this settles instead of firing per pan frame.
+        const onLod = (detail: LodEventDetail) => {
+            setLod(prev =>
+                prev
+                && prev.mode === detail.mode
+                && prev.hitTestActive === detail.hitTestActive
+                && prev.planeRoomCount === detail.planeRoomCount
+                    ? prev
+                    : detail);
+        };
+        renderer.events.on('lod', onLod);
+
         return () => {
+            renderer.events.off('lod', onLod);
             renderer.events.off('zoom', onZoom);
             panelEl?.removeEventListener('wheel', onWheelCapture, { capture: true });
             mapContainer?.removeEventListener('mousedown', onMapMouseDown);
@@ -790,7 +860,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 if (renderer && newWidth > 0 && needsFitRef.current) {
                     const areaId = currentAreaRef.current;
                     if (areaId != null) applyInitialView(renderer, manager.mapStore, areaId);
-                    else renderer.fitArea();
+                    else fitAreaWithHeadroom(renderer);
                 }
             }
             prevWidthRef.current = newWidth;
@@ -914,6 +984,11 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     // Lua loadMap() routes through WindowManager → MapStore. The store's notify
     // will trigger the subscribe handler above; this callback only needs to
     // report whether the renderer reached a ready state.
+    // Streamed loads publish per-batch progress here. Subscribing fires once
+    // immediately, so a panel opened while the cold-start bootstrap is still
+    // running picks the bar up mid-flight instead of showing a bare spinner.
+    useEffect(() => manager.subscribeMapLoadProgress(setLoadProgress), [manager]);
+
     useEffect(() => {
         manager.registerMapLoadCallback(() => {
             // loadMap replaces the whole map. Mudlet re-centers on the current
@@ -1043,8 +1118,13 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // never touched). The off-screen container only gives the Konva backend
         // real dimensions so getAreaBounds resolves an aspect ratio.
         exportArea: (areaId: number, zLevel?: number): Uint8Array | null => {
-            const reader = readerRef.current;
-            if (!reader) return null;
+            if (!readerRef.current) return null;
+            // A dedicated reader, not the live one: the live reader is scoped to
+            // the camera's viewport (that's what keeps big maps fast), and an
+            // export driven through it would contain only the rooms currently
+            // on screen. This one is never handed to the interactive backend,
+            // so nothing narrows it.
+            const reader = new MudixMapReader(manager.mapStore);
             let area;
             try { area = reader.getArea(areaId); } catch { return null; }
             if (!area) return null;
@@ -1059,6 +1139,10 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             settings.areaName = false;
             settings.highlightCurrentRoom = false;
             applyMapperSettings(settings, mapperRef.current);
+            // An export is a one-shot render of the whole area at a fixed size,
+            // not an interactive scene — always draw it at full vector detail
+            // rather than handing back a raster overview of a dense plane.
+            settings.lodEnabled = false;
             const headless = new MapRenderer(reader, settings, offscreen);
             try {
                 // Mirror viewing-mode hidden-room filtering so the export matches
@@ -1123,9 +1207,14 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             // MapStore, raises sysMapLoadEvent, and the store's notify drives
             // the panel back to status='ready' via the subscribe handler.
             // `.xml` files take the IRE-style XML importer, like Mudlet.
+            //
+            // The binary path is the streamed/async one: a big .dat parsed
+            // synchronously freezes the window for the whole load, which is both
+            // the worst moment to be unresponsive and the one case where the
+            // progress bar below would have something to say.
             const ok = file.name.toLowerCase().endsWith('.xml')
                 ? manager.loadMapXml(await file.text())
-                : manager.loadMap(await file.arrayBuffer());
+                : await manager.loadMapAsync(await file.arrayBuffer());
             if (!ok) {
                 setErrorMsg('Failed to parse map file');
                 setStatus('error');
@@ -1161,12 +1250,10 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         renderer.drawArea(id, level);
         syncPositionMarker(id, level);
         const savedZoom = manager.mapStore.getAreaZoom(id);
-        if (savedZoom != null) {
-            renderer.setZoom(savedZoom);
-            centerOnArea(renderer, manager.mapStore);
-        } else {
-            renderer.fitArea();
-        }
+        applyAreaZoom(renderer, savedZoom);
+        // Fitting already frames the area; only a restored zoom needs an
+        // explicit re-center on top of it.
+        if (savedZoom != null) centerOnArea(renderer, manager.mapStore);
         recomputeMapInfos();
     }, [getSavedView, connectionId, manager, syncPositionMarker, recomputeMapInfos]);
 
@@ -1200,6 +1287,27 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
 
     const currentAreaName = areas.find(a => a.id === currentArea)?.name ?? '';
 
+    // Only the room-streaming phase has a real denominator to fill against.
+    const determinateProgress = loadProgress?.phase === 'rooms' && loadProgress.total > 0;
+
+    // Tell the user when the renderer is dropping detail on a dense plane —
+    // without this, exits vanishing (or clicks no longer selecting a room) at a
+    // zoom threshold reads as a bug rather than a deliberate trade.
+    const lodNotice = (() => {
+        if (!lod) return null;
+        const rooms = `${lod.planeRoomCount.toLocaleString()} rooms on this level`;
+        if (lod.mode === 'raster') {
+            return { label: 'Overview — zoom in for detail', detail: `${rooms}: drawn as a pixel overview. Zoom in to restore full detail and room picking.` };
+        }
+        if (lod.mode === 'roomsOnly') {
+            return { label: 'Exits hidden — zoom in for detail', detail: `${rooms}: exit lines are skipped at this zoom. Zoom in to draw them.` };
+        }
+        if (!lod.hitTestActive) {
+            return { label: 'Room picking off — zoom in', detail: `${rooms}: the hit-test index is skipped at this zoom, so clicks and hover don't resolve to a room. Zoom in to restore it.` };
+        }
+        return null;
+    })();
+
     return (
         <div className="map-panel">
             <div ref={containerRef} className="map-canvas-container" />
@@ -1219,6 +1327,9 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                         </div>
                     ))}
                 </div>
+            )}
+            {lodNotice && (
+                <div className="map-lod-badge" title={lodNotice.detail}>{lodNotice.label}</div>
             )}
             <input ref={fileInputRef} type="file" accept=".dat,.xml" onChange={handleFileChange} hidden />
             <div className="map-panel-toolbar">
@@ -1365,7 +1476,36 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             )}
             {status === 'loading' && (
                 <div className="map-overlay">
-                    <span>Loading map…</span>
+                    <span>{loadProgress?.phase === 'building' ? 'Drawing map…' : 'Loading map…'}</span>
+                    {loadProgress && (
+                        // Determinate only while rooms are streaming and the
+                        // header has told us how many to expect. Before the
+                        // header, and again once the renderer takes over (whose
+                        // progress we can't see into), the bar sweeps instead of
+                        // parking at a number that has stopped moving.
+                        <div
+                            className={`map-progress${determinateProgress ? '' : ' map-progress--indeterminate'}`}
+                            role="progressbar"
+                            aria-valuemin={0}
+                            aria-valuemax={determinateProgress ? loadProgress.total : undefined}
+                            aria-valuenow={determinateProgress ? loadProgress.loaded : undefined}
+                            aria-label="Map load progress"
+                        >
+                            <div
+                                className="map-progress-fill"
+                                style={determinateProgress
+                                    ? { width: `${Math.min(100, (loadProgress.loaded / loadProgress.total) * 100)}%` }
+                                    : undefined}
+                            />
+                        </div>
+                    )}
+                    {loadProgress && loadProgress.total > 0 && (
+                        <span className="map-overlay-hint">
+                            {loadProgress.phase === 'building'
+                                ? `${loadProgress.total.toLocaleString()} rooms loaded — drawing`
+                                : `${loadProgress.loaded.toLocaleString()} / ${loadProgress.total.toLocaleString()} rooms`}
+                        </span>
+                    )}
                 </div>
             )}
             {status === 'empty' && (

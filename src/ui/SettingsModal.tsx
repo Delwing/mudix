@@ -180,6 +180,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const mapperBackgroundColor = mapper?.backgroundColor ?? MAPPER_DEFAULTS.backgroundColor;
     const mapperLineColor = mapper?.lineColor ?? MAPPER_DEFAULTS.lineColor;
     const mapperGridEnabled = mapper?.gridEnabled ?? MAPPER_DEFAULTS.gridEnabled;
+    const mapperLodEnabled = mapper?.lodEnabled ?? MAPPER_DEFAULTS.lodEnabled;
     const config = useAppStore(s => selectProfileField(s, connectionId, 'config'));
     const mapInfoColor = (config?.mapInfoColor as MapInfoBgColor | undefined) ?? MAP_INFO_BG_DEFAULT;
     const rawHistorySaveSize = config?.commandLineHistorySaveSize;
@@ -1369,6 +1370,21 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                                     onChange={next => patchMapper({ gridEnabled: next })}
                                 />
                             </div>
+                            <div className="settings-row">
+                                <span className="settings-label" id="mapper-lod-label">Simplify dense levels</span>
+                                <Toggle
+                                    id="mapper-lod"
+                                    aria-labelledby="mapper-lod-label"
+                                    checked={mapperLodEnabled}
+                                    onChange={next => patchMapper({ lodEnabled: next })}
+                                />
+                            </div>
+                            <p className="settings-hint">
+                                On a level with more than {MAPPER_DEFAULTS.lodExitBudget.toLocaleString()} rooms,
+                                zoomed-out views drop exit lines — and past {MAPPER_DEFAULTS.lodRoomBudget.toLocaleString()} rooms
+                                switch to a pixel overview — so panning stays responsive. Zooming in restores full detail.
+                                Turn this off to always draw everything.
+                            </p>
                             <div className="settings-colors-grid">
                                 <ColorCell
                                     label="Background"

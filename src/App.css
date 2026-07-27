@@ -2115,6 +2115,28 @@ body.is-sorting {
     margin-top: 4px;
 }
 
+/* Level-of-detail notice — sits bottom-left over the canvas, out of the way of
+   the map-info widget (top) and the panel toolbar (top-right). Same fixed dark
+   treatment as .map-info: it overlays the map canvas, not the app chrome. */
+.map-lod-badge {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    padding: 4px 8px;
+    background: rgba(12, 12, 12, 0.72);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid #383838;
+    border-radius: var(--radius);
+    color: #b0b0b0;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 11px;
+    line-height: 1.3;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 5;
+}
+
 .map-hamburger {
     position: relative;
     margin-left: auto;
@@ -2326,6 +2348,50 @@ body.is-sorting {
     text-align: center;
     max-width: 220px;
     line-height: 1.5;
+}
+
+/* Streamed map-load progress. Lives inside .map-overlay, so it follows the
+   app theme (unlike .map-info / .map-lod-badge, which sit over the canvas). */
+.map-progress {
+    position: relative;
+    width: 220px;
+    max-width: 70%;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    overflow: hidden;
+}
+
+.map-progress-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 2px;
+    background: var(--accent);
+    /* Batches land a few hundred ms apart; easing between them reads as steady
+       motion rather than a bar that lurches. */
+    transition: width 180ms linear;
+}
+
+/* Header not decoded yet, so there's no denominator — sweep instead of
+   sitting at 0% and looking stalled. */
+.map-progress--indeterminate .map-progress-fill {
+    width: 40%;
+    transition: none;
+    animation: map-progress-sweep 1.1s ease-in-out infinite;
+}
+
+@keyframes map-progress-sweep {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(250%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .map-progress-fill {
+        transition: none;
+    }
+    .map-progress--indeterminate .map-progress-fill {
+        animation-duration: 2.4s;
+    }
 }
 
 .map-load-btn {

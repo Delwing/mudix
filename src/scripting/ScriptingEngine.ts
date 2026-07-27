@@ -1728,10 +1728,12 @@ export class ScriptingEngine {
                 ok = this.session.windows.loadMapXml(new TextDecoder().decode(bytes));
             } else {
                 // Copy into a standalone ArrayBuffer — the download may be a view
-                // into a larger buffer, and loadMap's parser mutates its input.
+                // into a larger buffer, and the load transfers what it's given.
+                // The streamed load keeps the UI responsive (and drives the map
+                // panel's progress bar) while a freshly-downloaded map parses.
                 const buf = new ArrayBuffer(bytes.byteLength);
                 new Uint8Array(buf).set(bytes);
-                ok = this.session.windows.loadMap(buf);
+                ok = await this.session.windows.loadMapAsync(buf);
             }
             if (!ok) {
                 this.api.printError(`[downloadMap] failure in parsing downloaded map from ${url}`);
