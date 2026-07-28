@@ -446,6 +446,15 @@ export interface PackageManifest {
      *  requests for the same URL can be deduplicated against this manifest
      *  even when the on-disk package name differs from the filename. */
     sourceUrl?: string;
+    /** The version the *server* declared for this URL in its `Client.GUI`
+     *  message — a delivery revision, not the package's own version. Mudlet
+     *  keeps these apart too (`Host::mServerGUI_Package_version`): the package
+     *  manifest keeps whatever version its author wrote, and only this field
+     *  decides whether a `Client.GUI` request is a re-delivery of something
+     *  already installed. Writing the server's value into `version` instead
+     *  would make `getPackageInfo(name).version` report the server's counter,
+     *  breaking any package that self-updates off its own version. */
+    sourceVersion?: string;
     /** Wall-clock install time, ISO-8601. */
     installedAt: string;
     /**
