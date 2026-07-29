@@ -91,6 +91,11 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // credentials in a loop when they're wrong. Both reset on each connect.
     const autoLoginStage = useRef<'idle' | 'name' | 'password'>('idle');
     const gmcpAutoTried = useRef(false);
+    // Set when the user picks "Use text login" in the credentials popup. Servers
+    // may re-send Char.Login.Default while their text login runs (StickMUD does,
+    // once per menu step) — without this the form would keep re-appearing over
+    // the very prompts the user chose to answer by hand. Reset on each connect.
+    const gmcpLoginDeclined = useRef(false);
     // Fallback timer for MUDs that never send IAC GA/EOR around their login
     // prompt (e.g. plain FluffOS/LPMud bare-telnet banners) — see the
     // text-login auto-fill effect below.
@@ -426,6 +431,13 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                 session.sendCharLoginCredentials();
                 return;
             }
+            // The user already chose to log in by hand. Keep declining — the
+            // server withholds its next prompt until it hears back — but don't
+            // reopen the form on top of the text login.
+            if (gmcpLoginDeclined.current) {
+                session.sendCharLoginCredentials();
+                return;
+            }
             // If credentials are saved, send them straight away — no popup. The
             // guard stops wrong saved credentials from looping; a failure
             // (charLogin.result below) re-opens the popup prefilled for a retry.
@@ -443,9 +455,13 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
             setCharLogin({});
         });
         // Char.Login.Result: on failure re-open the popup with the server's
-        // message; on success the popup was already dismissed on submit.
+        // message; on success the popup was already dismissed on submit. Once the
+        // user has opted into the text login, the outcome is theirs to read in the
+        // output — a failure there must not resurrect the form.
         const unsub8 = session.events.on('charLogin.result', (result) => {
-            setCharLogin(result.success ? null : { error: result.message || 'Login failed.' });
+            if (result.success) { setCharLogin(null); return; }
+            if (gmcpLoginDeclined.current) return;
+            setCharLogin({ error: result.message || 'Login failed.' });
         });
         // A reconnect/disconnect invalidates any pending login prompt.
         const unsub9 = session.events.on('client.disconnect', () => setCharLogin(null));
@@ -579,6 +595,7 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
         };
         const onConnect = () => {
             gmcpAutoTried.current = false;
+            gmcpLoginDeclined.current = false;
             clearNameFallback();
             const { account, password } = readCreds();
             autoLoginStage.current = account && password ? 'name' : 'idle';
@@ -879,6 +896,7 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                     onCancel={() => {
                         // Empty reply → server falls back to its text login.
                         setCharLogin(null);
+                        gmcpLoginDeclined.current = true;
                         session.sendCharLoginCredentials();
                     }}
                 />

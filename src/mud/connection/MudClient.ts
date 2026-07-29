@@ -641,8 +641,14 @@ export class MudClient {
             this.eventBus.emit('charLogin.request', methods);
         } else if (p === 'char.login.result') {
             const v = (value ?? {}) as { success?: unknown; message?: unknown };
+            // `success` may arrive as the string "true" rather than a JSON
+            // boolean: some game drivers (LPMud/FluffOS and friends — StickMUD
+            // does this) parse booleans but can't serialise them back out.
+            // Mudlet accepts both spellings (GMCPAuthenticator::handleAuthResult);
+            // reading only `=== true` reports a successful login as a failure.
+            const success = v.success === true || v.success === 'true';
             this.eventBus.emit('charLogin.result', {
-                success: v.success === true,
+                success,
                 message: typeof v.message === 'string' ? v.message : undefined,
             });
         }

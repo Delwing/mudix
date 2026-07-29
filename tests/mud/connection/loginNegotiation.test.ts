@@ -259,6 +259,21 @@ describe('login-time telnet negotiation replies', () => {
     ]);
   });
 
+  it('reads a string "true" success as a successful login', () => {
+    // StickMUD (and other LPMud-family drivers) parse JSON booleans but write
+    // them back as strings. Mudlet accepts both spellings; so must we, or a
+    // successful login surfaces as "Login failed."
+    const { sock, bus } = connected();
+    const results: { success: boolean; message?: string }[] = [];
+    bus.on('charLogin.result', (r) => { results.push(r); });
+    sock.deliver(gmcpFrame('Char.Login.Result {"success":"true"}'));
+    sock.deliver(gmcpFrame('Char.Login.Result {"success":"false","message":"Nope"}'));
+    expect(results).toEqual([
+      { success: true, message: undefined },
+      { success: false, message: 'Nope' },
+    ]);
+  });
+
   it('answers all three in a single combined negotiation frame', () => {
     // Mirrors The Last Outpost's opening burst.
     const { sock } = connected({ mnesEnabled: false });
