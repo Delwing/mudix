@@ -32,6 +32,14 @@ import type { ProfileVFS } from './scripting/vfs/ProfileVFS';
 // in ProfileSession for why this fallback exists.
 const AUTO_LOGIN_USERNAME_FALLBACK_MS = 2000;
 
+// Mudlet parity (AUTO_LOGIN_PASSWORD_DELAY_MS in Mudlet's cTelnet): how long to
+// wait after sending the account name, with no ECHO-off signal seen, before
+// sending the password anyway. Mudlet's slot_send_pass is timer-driven and
+// explicitly independent of ECHO mode, because plenty of servers print a bare
+// "Password:" prompt without ever negotiating IAC WILL ECHO (Federation 2 is
+// one). Gating solely on ECHO leaves the password unsent forever on those.
+const AUTO_LOGIN_PASSWORD_FALLBACK_MS = 1000;
+
 interface Props {
     connection: MudConnection;
     /** If true, dial the WebSocket on mount. Offline mode skips this. */
@@ -87,6 +95,9 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // prompt (e.g. plain FluffOS/LPMud bare-telnet banners) — see the
     // text-login auto-fill effect below.
     const nameFallbackTimer = useRef<number | null>(null);
+    // Fallback timer for MUDs that never switch ECHO off around their password
+    // prompt — see the text-login auto-fill effect below.
+    const passFallbackTimer = useRef<number | null>(null);
 
     const outputFont = useAppStore(s => selectProfileField(s, connection.id, 'outputFont'));
     const promptTimeoutMs = useAppStore(s => selectProfileField(s, connection.id, 'promptTimeoutMs'));
@@ -536,6 +547,23 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                 nameFallbackTimer.current = null;
             }
         };
+        const clearPassFallback = () => {
+            if (passFallbackTimer.current !== null) {
+                window.clearTimeout(passFallbackTimer.current);
+                passFallbackTimer.current = null;
+            }
+        };
+        // Send the password and leave the login state machine. Reached either
+        // from the ECHO-off signal or, on servers that never send one, from the
+        // fallback timer started when the account went out. Whichever arrives
+        // first wins: the stage guard makes the loser a no-op.
+        const sendPassword = () => {
+            clearPassFallback();
+            if (autoLoginStage.current !== 'password') return;
+            const { password } = readCreds();
+            autoLoginStage.current = 'idle';
+            if (password) session.sendSecret(password);
+        };
         // First prompt ≈ the "By what name?" prompt: send the account (echoed,
         // since the server echoes it back off here just like a typed name).
         // Called either from the real 'prompt' event (IAC GA/EOR) or, absent
@@ -547,6 +575,7 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
             if (!account) { autoLoginStage.current = 'idle'; return; }
             autoLoginStage.current = 'password';
             send(account, true);
+            passFallbackTimer.current = window.setTimeout(sendPassword, AUTO_LOGIN_PASSWORD_FALLBACK_MS);
         };
         const onConnect = () => {
             gmcpAutoTried.current = false;
@@ -569,17 +598,19 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
         // secret path so it never surfaces as plaintext, even under the
         // showSentText='always' echo mode.
         const onEcho = (mask: boolean) => {
-            if (!mask || autoLoginStage.current !== 'password') return;
-            const { password } = readCreds();
-            autoLoginStage.current = 'idle';
-            if (password) session.sendSecret(password);
+            if (!mask) return;
+            sendPassword();
         };
-        const onDisconnect = () => { autoLoginStage.current = 'idle'; clearNameFallback(); };
+        const onDisconnect = () => {
+            autoLoginStage.current = 'idle';
+            clearNameFallback();
+            clearPassFallback();
+        };
         const u1 = session.events.on('client.connect', onConnect);
         const u2 = session.events.on('prompt', onPrompt);
         const u3 = session.events.on('telnet.echo', onEcho);
         const u4 = session.events.on('client.disconnect', onDisconnect);
-        return () => { u1(); u2(); u3(); u4(); clearNameFallback(); };
+        return () => { u1(); u2(); u3(); u4(); clearNameFallback(); clearPassFallback(); };
     }, [session, connection.id, send]);
 
     // Register the getCmdLine provider on the engine. Effect re-runs when the
