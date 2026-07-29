@@ -1,3 +1,4 @@
+import { strFromU8 } from 'fflate';
 import { useAppStore } from '../storage/appStore';
 import { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 import { saveProfileData } from '../storage/profileVfsData';
@@ -5,6 +6,8 @@ import { saveMap } from '../storage/mapStorage';
 import { saveFolderHandle } from '../scripting/vfs/folderHandleStore';
 import { parseMudletProfile } from './mudletHost';
 import { buildMudletProfileBundle, type MudletProfileBundle } from './mudletProfileImport';
+import { CONNECTION_SIDECAR_PATH, type ConnectionSidecar } from './mudletProfileExport';
+import type { MudConnection } from '../storage/schema';
 
 // Apply a parsed Mudlet profile bundle (see mudletProfileImport.ts) as a NEW
 // native mudix profile: create the connection, provision its VFS (copy map +
@@ -42,17 +45,52 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 /**
+ * The connection record for an imported bundle.
+ *
+ * A Mudlet `<Host>` only models a telnet host/port, so that's the default. A
+ * profile exported *from mudix* also carries `.mudix/connection.json`, which
+ * restores what Mudlet can't express — websocket mode and its ws(s):// URL, the
+ * per-profile proxy override, auto-reconnect. Unknown/aliased sidecar values are
+ * ignored field by field, so a hand-edited file can't produce a broken profile.
+ */
+export function bundleToConnectionRecord(bundle: MudletProfileBundle): Omit<MudConnection, 'id'> {
+    const base: Omit<MudConnection, 'id'> = {
+        name: bundle.name,
+        mode: 'mud',
+        host: bundle.host ?? '',
+        port: bundle.port ?? 23,
+    };
+    const raw = bundle.files[CONNECTION_SIDECAR_PATH];
+    if (!raw) return base;
+    let side: ConnectionSidecar;
+    try {
+        side = JSON.parse(strFromU8(raw)) as ConnectionSidecar;
+    } catch {
+        return base;
+    }
+    const out = { ...base };
+    if (side.mode === 'mud' || side.mode === 'websocket') out.mode = side.mode;
+    if (typeof side.url === 'string') out.url = side.url;
+    if (typeof side.host === 'string') out.host = side.host;
+    if (typeof side.port === 'number' && Number.isFinite(side.port)) out.port = side.port;
+    if (typeof side.proxyUrl === 'string') out.proxyUrl = side.proxyUrl;
+    if (typeof side.autoReconnect === 'boolean') out.autoReconnect = side.autoReconnect;
+    // A websocket profile's address lives in `url`; <Host><url> held it only so
+    // the XML stayed valid, and as `host` it would read as a telnet hostname.
+    if (out.mode === 'websocket') {
+        if (!out.url && base.host) out.url = base.host;
+        delete out.host;
+    }
+    return out;
+}
+
+/**
  * Create a new mudix profile from a Mudlet profile bundle. Returns the new
  * connection id. The profile opens offline like any other; its data is durable
  * in the new VFS (`.mudix/profile.json`) and map store before this resolves.
  */
 export async function importMudletProfile(bundle: MudletProfileBundle): Promise<string> {
-    const connectionId = useAppStore.getState().addConnection({
-        name: bundle.name,
-        mode: 'mud',
-        host: bundle.host ?? '',
-        port: bundle.port ?? 23,
-    });
+    const connectionId = useAppStore.getState().addConnection(bundleToConnectionRecord(bundle));
 
     const vfs = await ProfileVFS.mount(connectionId);
     try {

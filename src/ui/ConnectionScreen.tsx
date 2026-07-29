@@ -4,9 +4,10 @@ import { Button, useConfirm } from './components';
 import { ConnectionFormModal } from './ConnectionFormModal';
 import { ConnectionGrid } from './ConnectionGrid';
 import { AboutModal } from './AboutModal';
+import { ProfileExportModal } from './ProfileExportModal';
 import { useAppStore, type MudConnection } from '../storage';
 import { getBrand } from '../branding';
-import { extractMudletProfileZip, resolveModulesFromTree, addModuleToBundle, type MudletProfileBundle } from '../import/mudletProfileImport';
+import { extractMudletProfileZipAll, resolveModulesFromTree, addModuleToBundle, type MudletProfileBundle } from '../import/mudletProfileImport';
 import { importMudletProfile, bundleFromDirectory, linkMudletFolder } from '../import/applyMudletProfile';
 import { ModuleResolveModal, type ModuleUpload } from './ModuleResolveModal';
 import type { MudletModuleRef } from '../import/mudletHost';
@@ -30,11 +31,14 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     // null = editor closed; { connection: null } = add a new one; { connection: c } = edit c.
     const [editor, setEditor] = useState<{ connection: MudConnection | null } | null>(null);
     const [aboutOpen, setAboutOpen] = useState(false);
+    const [exportOpen, setExportOpen] = useState(false);
     const [importing, setImporting] = useState(false);
     const [importError, setImportError] = useState<string | null>(null);
-    // Set when an imported profile references modules whose files weren't found —
-    // the modal asks the user to upload or drop each before the import completes.
-    const [pendingImport, setPendingImport] = useState<{ bundle: MudletProfileBundle; unresolved: MudletModuleRef[] } | null>(null);
+    // Profiles whose modules couldn't be resolved from the imported tree — the
+    // modal asks the user to upload or drop each file before that profile is
+    // provisioned. A queue, not a single slot: one multi-profile zip can hold
+    // several profiles that each need modules, and a slot would drop all but the last.
+    const [pendingImports, setPendingImports] = useState<{ bundle: MudletProfileBundle; unresolved: MudletModuleRef[] }[]>([]);
     const zipInputRef = useRef<HTMLInputElement>(null);
     // Directory import needs the File System Access API; fall back to .zip elsewhere.
     const dirPicker = (window as unknown as { showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker;
@@ -58,7 +62,7 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
     const beginImport = async (bundle: MudletProfileBundle) => {
         const { resolved, unresolved } = resolveModulesFromTree(bundle);
         for (const r of resolved) addModuleToBundle(bundle, r.ref.key, r.xmlBytes);
-        if (unresolved.length) { setPendingImport({ bundle, unresolved }); return; }
+        if (unresolved.length) { setPendingImports(q => [...q, { bundle, unresolved }]); return; }
         await importMudletProfile(bundle);
     };
 
@@ -80,14 +84,17 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
         if (!file) return;
         void runImport(async () => {
             const bytes = new Uint8Array(await file.arrayBuffer());
-            return beginImport(extractMudletProfileZip(bytes, file.name.replace(/\.zip$/i, '')));
+            // A mudix export holds every selected profile in one archive, so a
+            // zip can yield several bundles; a plain Mudlet profile yields one.
+            const bundles = extractMudletProfileZipAll(bytes, file.name.replace(/\.zip$/i, ''));
+            for (const bundle of bundles) await beginImport(bundle);
         });
     };
 
     const finishPendingImport = (uploads: ModuleUpload[]) => {
-        const p = pendingImport;
+        const p = pendingImports[0];
         if (!p) return;
-        setPendingImport(null);
+        setPendingImports(q => q.slice(1));
         void runImport(async () => {
             for (const u of uploads) addModuleToBundle(p.bundle, u.key, u.bytes);
             await importMudletProfile(p.bundle);
@@ -162,6 +169,12 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                             Link Mudlet folder…
                         </Button>
                     )}
+                    {connections.length > 0 && (
+                        <Button variant="secondary" size="sm" onClick={() => setExportOpen(true)} disabled={connecting || importing}
+                            title="Download profiles as a Mudlet-format .zip — importable here, on another Mudlet Web address, or in desktop Mudlet">
+                            Export profiles…
+                        </Button>
+                    )}
                 </div>
                 {importError && (
                     <div className="connection-import-error" style={{ color: 'var(--danger, #e06c75)', fontSize: 12, textAlign: 'center', marginTop: 6 }}>
@@ -181,12 +194,16 @@ export function ConnectionScreen({ connections, connecting, connectingId, onConn
                 onClose={() => setEditor(null)}
             />
         )}
-        {pendingImport && (
+        {pendingImports.length > 0 && (
             <ModuleResolveModal
-                modules={pendingImport.unresolved}
+                key={pendingImports[0].bundle.name}
+                modules={pendingImports[0].unresolved}
                 onComplete={finishPendingImport}
-                onCancel={() => setPendingImport(null)}
+                onCancel={() => setPendingImports(q => q.slice(1))}
             />
+        )}
+        {exportOpen && (
+            <ProfileExportModal connections={connections} onClose={() => setExportOpen(false)} />
         )}
         {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
         </>

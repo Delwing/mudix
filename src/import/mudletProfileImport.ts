@@ -111,12 +111,11 @@ function buildManifests(names: string[], files: Record<string, Uint8Array>): Pac
  * prefers `current/autosave.xml` then the latest timestamp filename.
  * Throws if no `current/*.xml` is present (not a Mudlet profile).
  */
-export function buildMudletProfileBundle(
+/** Normalize separators and drop directory entries, keeping mtimes aligned. */
+function normalizeTree(
     files: Record<string, Uint8Array>,
-    fallbackName = 'Imported profile',
     mtimes?: Record<string, number>,
-): MudletProfileBundle {
-    // Normalize separators and index by lower-case path for matching.
+): { norm: Map<string, Uint8Array>; normMtime: Record<string, number> } {
     const norm = new Map<string, Uint8Array>();
     const normMtime: Record<string, number> = {};
     for (const [k, v] of Object.entries(files)) {
@@ -125,24 +124,61 @@ export function buildMudletProfileBundle(
         norm.set(p, v);
         if (mtimes && mtimes[k] !== undefined) normMtime[p] = mtimes[k];
     }
+    return { norm, normMtime };
+}
 
-    // Find the profile root via any current/*.xml; prefer the shallowest root so
-    // a zip that wraps the profile dir (or nests other junk) resolves correctly.
-    let root: string | null = null;
+/**
+ * Every profile root in the tree — the prefix before each `current/` directory.
+ *
+ * A tree with profiles side by side (mudix's multi-profile export) yields one
+ * root each. Nesting is resolved by depth: a root at the top wins over anything
+ * inside it, so a single profile that happens to contain another `current/*.xml`
+ * deeper down still imports as one profile, matching the old shallowest-wins
+ * behavior. Returned sorted, so import order is deterministic.
+ */
+export function findProfileRoots(files: Record<string, Uint8Array>): string[] {
+    const { norm } = normalizeTree(files);
+    const roots = new Set<string>();
     for (const p of norm.keys()) {
         const lower = p.toLowerCase();
         if (!/(^|\/)current\/[^/]+\.xml$/.test(lower)) continue;
         const r = rootOfCurrent(lower);
-        if (r !== null && (root === null || r.length < root.length)) root = r;
+        // `current/` is matched case-insensitively, but the root is returned in
+        // its original case — it's a real path prefix callers hand back to
+        // buildMudletProfileBundle (and show to users), not a match key.
+        if (r !== null) roots.add(p.slice(0, r.length));
     }
+    if (!roots.size) return [];
+    // The bare root swallows everything else — a profile zipped without its
+    // folder can't also contain sibling profiles.
+    if (roots.has('')) return [''];
+    const depth = (r: string) => r.split('/').filter(Boolean).length;
+    const shallowest = Math.min(...Array.from(roots, depth));
+    return Array.from(roots).filter(r => depth(r) === shallowest).sort();
+}
+
+export function buildMudletProfileBundle(
+    files: Record<string, Uint8Array>,
+    fallbackName = 'Imported profile',
+    mtimes?: Record<string, number>,
+    /** Import this specific root (from {@link findProfileRoots}) instead of the
+     *  shallowest one — used when one tree holds several profiles. */
+    rootOverride?: string,
+): MudletProfileBundle {
+    const { norm, normMtime } = normalizeTree(files, mtimes);
+
+    const root = rootOverride ?? findProfileRoots(files)[0] ?? null;
     if (root === null) throw new Error('Not a Mudlet profile: no current/*.xml found');
     const rootPrefix = root;
 
     // Re-key everything relative to the profile root, carrying mtimes along.
+    // Matching stays case-insensitive (zips from case-insensitive filesystems
+    // vary), while the prefix itself keeps its original case.
+    const rootLower = rootPrefix.toLowerCase();
     const rel = new Map<string, Uint8Array>();
     const relMtime: Record<string, number> = {};
     for (const [p, v] of norm) {
-        if (rootPrefix && !p.toLowerCase().startsWith(rootPrefix)) continue;
+        if (rootPrefix && !p.toLowerCase().startsWith(rootLower)) continue;
         const r = p.slice(rootPrefix.length);
         rel.set(r, v);
         if (normMtime[p] !== undefined) relMtime[r] = normMtime[p];
@@ -195,6 +231,26 @@ export function extractMudletProfileZip(
     fallbackName = 'Imported profile',
 ): MudletProfileBundle {
     return buildMudletProfileBundle(unzipSync(bytes), fallbackName);
+}
+
+/** One bundle per profile in the tree — a mudix multi-profile export, or a
+ *  single Mudlet profile (in which case this is a one-element list). */
+export function buildAllMudletProfileBundles(
+    files: Record<string, Uint8Array>,
+    fallbackName = 'Imported profile',
+    mtimes?: Record<string, number>,
+): MudletProfileBundle[] {
+    const roots = findProfileRoots(files);
+    if (!roots.length) throw new Error('Not a Mudlet profile: no current/*.xml found');
+    return roots.map(root => buildMudletProfileBundle(files, fallbackName, mtimes, root));
+}
+
+/** Every profile in a `.zip`, in folder order. */
+export function extractMudletProfileZipAll(
+    bytes: Uint8Array,
+    fallbackName = 'Imported profile',
+): MudletProfileBundle[] {
+    return buildAllMudletProfileBundles(unzipSync(bytes), fallbackName);
 }
 
 // ── modules ──────────────────────────────────────────────────────────────────
