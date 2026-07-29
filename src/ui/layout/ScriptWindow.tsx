@@ -194,7 +194,15 @@ export function ScriptWindow({
             className={`script-window${isMiniConsole ? ' script-window--miniconsole' : ''}`}
             data-window-id={id}
             style={{ left: x, top: y, width, height, zIndex, display: visible ? 'flex' : 'none' }}
-            onPointerDown={onFocus}
+            // Click-to-front applies to real windows only. A mini-console (and
+            // the embedded Geyser mapper, which is one) is a bare child widget
+            // with no chrome — in Mudlet, clicking or dragging inside such a
+            // QWidget never raises it; only an explicit raiseWindow() does.
+            // Firing onFocus here instead pushed it to the front of the flat
+            // per-viewport overlay stack it shares with the parent's labels
+            // (see overlayLayerOrder.ts), so panning the map made every label
+            // drawn on top of it vanish underneath.
+            onPointerDown={isMiniConsole ? undefined : onFocus}
         >
             {!isMiniConsole && (
                 <div className="script-window-titlebar" onPointerDown={handleTitlebarPointerDown} onContextMenu={onTitlebarContextMenu}>
