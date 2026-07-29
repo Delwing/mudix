@@ -38,7 +38,7 @@ import {ProfileVFS} from './vfs/ProfileVFS';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
 import {installModuleFromVfsPath, installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
-import {downloadFromUrl, filenameFromUrl, parseClientGuiPayload, parseClientMapPayload} from '../import/remotePackageInstall';
+import {downloadFromUrl, filenameFromUrl, isClientGuiRedelivery, parseClientGuiPayload, parseClientMapPayload} from '../import/remotePackageInstall';
 import {ensureDefaultPackages} from '../import/defaultPackages';
 import {serializeMudletXml, type SerializeInput} from '../import/mudletXmlExport';
 import {isMudletProfileVfs, readNewestParseableXml} from '../import/mudletLink';
@@ -1623,13 +1623,13 @@ export class ScriptingEngine implements EngineHost {
             return;
         }
 
-        // Same URL + same server-declared version already installed → no-op.
-        // Compared against sourceVersion (what the server said last time), not
-        // the package's own version — see PackageManifest.sourceVersion.
+        // Same URL already installed, and the server names no newer delivery
+        // revision → no-op. Compared against sourceVersion (what the server
+        // said last time), never the package's own version — see
+        // isClientGuiRedelivery for why an absent version means "skip".
         const existing = (useAppStore.getState().connectionPackages[this.connectionId] ?? [])
             .find(p => p.sourceUrl === url);
-        if (existing && version && existing.sourceVersion === version) return;
-        if (existing && !version && existing.sourceVersion) return;
+        if (isClientGuiRedelivery(existing, version)) return;
 
         const vfs = this.vfs;
         if (!vfs) {
@@ -3371,6 +3371,14 @@ export class ScriptingEngine implements EngineHost {
                 this.gmcpNegotiated = true;
                 this.emit('sysProtocolEnabled', ['GMCP']);
             }),
+            // Built-in Client.GUI handler — Mudlet semantics. One entry point
+            // for both wire formats: the client emits this after the gmcp.*
+            // event chain for the JSON shape (so scripts observe the payload
+            // before we act on it) and instead of it for the legacy shape,
+            // which Mudlet keeps out of the GMCP table entirely.
+            session.events.on('clientGui', (payload) => {
+                void this.handleClientGuiInstall(payload);
+            }),
             session.events.on('gmcp', ({ path, value }) => {
                 // Mirrors Mudlet TLuaInterpreter::parseJSON: write into the
                 // Lua `gmcp` global first (additively — only the leaf is
@@ -3389,12 +3397,6 @@ export class ScriptingEngine implements EngineHost {
                 for (const segment of path.split('.')) {
                     token += `.${segment}`;
                     this.emit(token, [token, fullKey]);
-                }
-                // Built-in Client.GUI handler — Mudlet semantics. Fires after
-                // the gmcp.* event chain so user scripts can still observe (or
-                // pre-empt by clearing) the payload before we act on it.
-                if (path.toLowerCase() === 'client.gui') {
-                    void this.handleClientGuiInstall(value);
                 }
                 // Built-in Client.Map handler — Mudlet Host::setMmpMapLocation.
                 // Records the game's published map URL; the actual download is

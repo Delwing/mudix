@@ -5,6 +5,10 @@ export interface GmcpEnvelope {
     value: unknown;
 }
 
+/** GMCP module carrying a server package-install request. Both of its wire
+ *  formats route to `onClientGui` rather than riding the normal envelope. */
+const CLIENT_GUI_MODULE = "client.gui";
+
 export type TelnetOptionHandler = (data: string) => string;
 
 export const createTelnetOptionParser = (onSubnegotiation: (data: string) => void): TelnetOptionHandler => {
@@ -32,6 +36,7 @@ export const stripTelnetSequences = (data: string, handler: TelnetOptionHandler)
 const parseGmcpPayload = (
     data: string,
     onMessage: (type: string, payload: unknown) => void,
+    onRawClientGui?: (payload: string) => void,
 ): void => {
     if (data.length === 0) return;
 
@@ -65,6 +70,16 @@ const parseGmcpPayload = (
         const gmcp = JSON.parse(payload);
         onMessage(type, gmcp);
     } catch (error) {
+        // Client.GUI has a second, pre-JSON wire format — `<version>\n<url>`
+        // — so a body that doesn't parse isn't necessarily malformed. Mudlet
+        // (cTelnet::setGMCPVariables) treats "not a JSON object" as the signal
+        // to try that form, and only this module gets the fallback. It goes out
+        // on its own channel, never as an envelope: Mudlet returns before
+        // setGMCPTable for this shape, keeping it out of the Lua `gmcp` table.
+        if (type.toLowerCase() === CLIENT_GUI_MODULE && onRawClientGui) {
+            onRawClientGui(payload);
+            return;
+        }
         // A non-conformant server can send a GMCP body that isn't valid JSON.
         // Nothing we can do but drop it — log the module name + raw body (not
         // just the error) so the offending message is identifiable, and use
@@ -89,6 +104,14 @@ export interface GmcpStreamOptions {
     onEnvelope: (payload: GmcpEnvelope) => void;
     /** Called for gmcp_msgs subnegotiations (base64-encoded text with a type field). */
     onMessage?: (text: string, type: string) => void;
+    /** Called for every `Client.GUI` request, in whichever wire format it
+     *  arrived: the parsed `{url, version}` object, or the legacy raw
+     *  `<version>\n<url>` string. Split out from `onEnvelope` so the install has
+     *  one entry point for both formats, and so the legacy one — which Mudlet
+     *  keeps out of the Lua `gmcp` table — has somewhere to go that isn't the
+     *  table-populating path. The JSON form still emits its envelope as well,
+     *  and does so first, so scripts observe it before the install runs. */
+    onClientGui?: (payload: unknown) => void;
     /** Text decoder used for gmcp_msgs payloads. Defaults to UTF-8. */
     textEncoding?: string;
 }
@@ -96,6 +119,7 @@ export interface GmcpStreamOptions {
 export const createGmcpStream = ({
     onEnvelope,
     onMessage,
+    onClientGui,
     textEncoding = 'utf-8',
 }: GmcpStreamOptions) => {
     return (data: string) => {
@@ -112,7 +136,9 @@ export const createGmcpStream = ({
                     return;
                 }
                 onEnvelope({ path: type, value: payload });
+                if (type.toLowerCase() === CLIENT_GUI_MODULE) onClientGui?.(payload);
             },
+            raw => onClientGui?.(raw),
         );
     };
 };

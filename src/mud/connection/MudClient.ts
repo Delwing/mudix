@@ -307,6 +307,9 @@ export class MudClient {
             onMessage: (text, type) => {
                 this.messageBuffer.push({ text, type });
             },
+            onClientGui: (payload) => {
+                this.eventBus.emit('clientGui', payload);
+            },
         });
 
         this.msdpStream = createMsdpStream({

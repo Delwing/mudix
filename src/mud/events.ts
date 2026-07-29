@@ -69,6 +69,12 @@ export type MudClientEvents = {
     'message': [text?: string | AnsiAwareBuffer, type?: string, timestamp?: number, isPrompt?: boolean];
     'flushLines': [groups: { text: string; type: string }[]];
     'gmcp': [payload: { path: string; value: unknown }];
+    /** A `Client.GUI` server package-install request, in either wire format:
+     *  the parsed `{url, version}` object, or the legacy raw `<version>\n<url>`
+     *  string. Carried separately from `gmcp` because the legacy form never
+     *  becomes a GMCP table entry — decoding both shapes is the install
+     *  handler's job (parseClientGuiPayload), not this bus's. */
+    'clientGui': [payload: unknown];
     'msdp': [payload: { path: string; value: unknown }];
     'mssp': [payload: { name: string; value: string }];
     'gmcp.core.ping': [value: unknown];

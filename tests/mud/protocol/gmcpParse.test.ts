@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createGmcpStream } from '../../../src/mud/protocol/gmcp';
 import { GMCP_COMMAND_CODE } from '../../../src/mud/protocol/constants';
 
@@ -38,5 +38,44 @@ describe('GMCP payload parsing', () => {
     const stream = createGmcpStream({ onEnvelope: e => seen.push(e) });
     stream(frame('Core.Ping ""'));
     expect(seen).toEqual([{ path: 'Core.Ping', value: '' }]);
+  });
+
+  // Client.GUI predates the JSON body — Mudlet's cTelnet::setGMCPVariables
+  // treats "does not parse as JSON" as the signal to try the older
+  // `<version>\n<url>` form, and returns before setGMCPTable so that shape
+  // never reaches the Lua gmcp table.
+  it('routes a non-JSON Client.GUI body to onClientGui instead of dropping it', () => {
+    const seen: unknown[] = [];
+    const gui: unknown[] = [];
+    const stream = createGmcpStream({ onEnvelope: e => seen.push(e), onClientGui: p => gui.push(p) });
+    stream(frame('Client.GUI 39\nhttps://example.com/gui.mpackage'));
+    expect(gui).toEqual(['39\nhttps://example.com/gui.mpackage']);
+    // Legacy shape stays off the envelope path — no gmcp table entry, no events.
+    expect(seen).toEqual([]);
+  });
+
+  it('sends a JSON Client.GUI body to both the envelope and onClientGui', () => {
+    const order: string[] = [];
+    const gui: unknown[] = [];
+    const stream = createGmcpStream({
+      onEnvelope: () => order.push('envelope'),
+      onClientGui: p => { order.push('clientGui'); gui.push(p); },
+    });
+    stream(frame('Client.GUI {"version":"39","url":"https://example.com/gui.mpackage"}'));
+    expect(gui).toEqual([{ version: '39', url: 'https://example.com/gui.mpackage' }]);
+    // Envelope first: scripts see the payload before the install acts on it.
+    expect(order).toEqual(['envelope', 'clientGui']);
+  });
+
+  it('still drops a non-JSON body from any other module', () => {
+    // The fallback is Client.GUI-only; everything else with an unparseable
+    // body is a server bug and stays dropped-with-a-warning.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const seen: Array<{ path: string; value: unknown }> = [];
+    const stream = createGmcpStream({ onEnvelope: e => seen.push(e) });
+    stream(frame('Char.Vitals hp=42'));
+    expect(seen).toEqual([]);
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
   });
 });
