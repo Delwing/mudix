@@ -420,6 +420,9 @@ class ScriptingLabelsAPI {
          *  (rather than captured) because the engine is bound after this API is
          *  constructed; before that it resolves to an identity rewrite. */
         private readonly cssRewriter: () => (css: string) => string,
+        /** Same lazy-resolution contract as `cssRewriter`, for the rich-text
+         *  HTML labels render (`<img src>` and inline `style` url(...) refs). */
+        private readonly htmlRewriter: () => (html: string) => string,
     ) {}
 
     create(name: string, opts: LabelCreateOptions): boolean {
@@ -439,7 +442,11 @@ class ScriptingLabelsAPI {
     show(name: string): boolean { return this.manager.show(name); }
     hide(name: string): boolean { return this.manager.hide(name); }
     setHtml(name: string, html: string): boolean {
-        return this.manager.setHtml(name, html);
+        // Qt resolves <img src="..."> in label rich text against the real
+        // filesystem; in the browser the bytes only exist behind the VFS
+        // service worker, so rebase the refs before the HTML reaches the DOM.
+        const rewrite = this.htmlRewriter();
+        return this.manager.setHtml(name, rewrite(html));
     }
     setBackgroundColor(name: string, r: number, g: number, b: number, a = 255): boolean {
         return this.manager.setBackgroundColor(name, r, g, b, a);
@@ -642,7 +649,11 @@ export class ScriptingAPI {
         // "Cannot read properties of undefined (reading 'vfs')". The predecessor
         // of this was a closure field, which carried its own binding; a
         // prototype method does not.
-        this.labels = new ScriptingLabelsAPI(session.labels, () => (css: string) => this.host.rewriteCss(css));
+        this.labels = new ScriptingLabelsAPI(
+            session.labels,
+            () => (css: string) => this.host.rewriteCss(css),
+            () => (html: string) => this.host.rewriteHtml(html),
+        );
         this.cmdLines = session.cmdLines;
         this.scrollBoxes = session.scrollBoxes;
         this.aliases = aliasEngine;

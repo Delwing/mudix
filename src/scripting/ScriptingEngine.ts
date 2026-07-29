@@ -36,6 +36,7 @@ import {LuaRuntime} from './lua/LuaRuntime';
 import type {IScriptingRuntime, LuaGlobalEntry} from './IScriptingRuntime';
 import {ProfileVFS} from './vfs/ProfileVFS';
 import {rewriteVfsUrlsInCss} from './vfs/cssRewrite';
+import {rewriteVfsUrlsInHtml} from './vfs/htmlRewrite';
 import {MapOpenNotifier} from './MapOpenNotifier';
 import {installModuleFromVfsPath, installPackageFromBytes, moduleXmlAbsolutePath, reloadModuleFromVfs, uninstallPackageFiles} from '../import/packageInstaller';
 import {downloadFromUrl, filenameFromUrl, isClientGuiRedelivery, parseClientGuiPayload, parseClientMapPayload} from '../import/remotePackageInstall';
@@ -1197,6 +1198,14 @@ export class ScriptingEngine implements EngineHost {
         const v = this.vfs;
         if (!v) return css;
         return rewriteVfsUrlsInCss(css, this.connectionId, v);
+    }
+
+    /** Rewrite VFS-relative `<img src>` / inline-style refs in Lua-supplied
+     *  HTML to service-worker paths. */
+    rewriteHtml(html: string): string {
+        const v = this.vfs;
+        if (!v) return html;
+        return rewriteVfsUrlsInHtml(html, this.connectionId, v);
     }
 
     /** Raw-bytes reader for synchronous binary consumers (setMovie's GIF

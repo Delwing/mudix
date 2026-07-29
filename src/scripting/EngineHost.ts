@@ -78,6 +78,11 @@ export interface EngineHost {
      *  the service worker serves. Returns the CSS unchanged with no VFS. */
     rewriteCss(css: string): string;
 
+    /** Rewrite profile-local asset refs (`<img src>`, inline `style` url(...))
+     *  in Lua-supplied HTML to the paths the service worker serves. Returns the
+     *  HTML unchanged with no VFS. */
+    rewriteHtml(html: string): string;
+
     /** Read raw bytes from the profile VFS, or null if missing/unreadable.
      *  Backs synchronous binary consumers such as setMovie's GIF decoder. */
     readFileBytes(path: string): Uint8Array | null;
@@ -185,6 +190,7 @@ export const NULL_ENGINE_HOST: EngineHost = Object.freeze({
     getModuleInfoRecord: () => null,
 
     rewriteCss: (css: string) => css,
+    rewriteHtml: (html: string) => html,
     readFileBytes: () => null,
 
     toggleScriptByName: () => false,

@@ -9,6 +9,27 @@ const URL_RE = /\burl\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/g;
 const PASSTHROUGH_PREFIX = /^(?:https?:|data:|blob:|\/__vfs\/)/i;
 
 /**
+ * Map one asset reference onto the URL the service worker serves, or return
+ * null when it must be left alone (empty, or already an absolute http/data/
+ * blob/__vfs URL). Paths are resolved through the VFS (honouring its cwd and
+ * profile root) and rebased onto the profile root.
+ *
+ * Shared by the stylesheet rewriter and the label-HTML rewriter so `url(...)`
+ * in a stylesheet and `<img src>` in label rich text resolve identically.
+ */
+export function vfsRefToUrl(ref: string, connectionId: string, vfs: ProfileVFS): string | null {
+    const trimmed = ref.trim();
+    if (!trimmed) return null;
+    if (PASSTHROUGH_PREFIX.test(trimmed)) return null;
+    const resolved = vfs.resolvePath(trimmed);
+    const profilePrefix = `${vfs.profilePath}/`;
+    const within = resolved.startsWith(profilePrefix)
+        ? resolved.slice(profilePrefix.length)
+        : resolved.replace(/^\//, '');
+    return vfsUrlFor(connectionId, within);
+}
+
+/**
  * Rewrite `url(<local-path>)` references in a Qt/CSS stylesheet to
  * `url(/__vfs/<connectionId>/<path>)` so the registered service worker can
  * serve the bytes from the connection's ProfileVFS. Already-absolute http/data/
@@ -19,14 +40,7 @@ const PASSTHROUGH_PREFIX = /^(?:https?:|data:|blob:|\/__vfs\/)/i;
  */
 export function rewriteVfsUrlsInCss(css: string, connectionId: string, vfs: ProfileVFS): string {
     return css.replace(URL_RE, (full, dq: string | undefined, sq: string | undefined, raw: string | undefined) => {
-        const ref = (dq ?? sq ?? raw ?? '').trim();
-        if (!ref) return full;
-        if (PASSTHROUGH_PREFIX.test(ref)) return full;
-        const resolved = vfs.resolvePath(ref);
-        const profilePrefix = `${vfs.profilePath}/`;
-        const within = resolved.startsWith(profilePrefix)
-            ? resolved.slice(profilePrefix.length)
-            : resolved.replace(/^\//, '');
-        return `url("${vfsUrlFor(connectionId, within)}")`;
+        const url = vfsRefToUrl(dq ?? sq ?? raw ?? '', connectionId, vfs);
+        return url === null ? full : `url("${url}")`;
     });
 }
