@@ -41,6 +41,7 @@ import {
     debugGaEnabled,
     debugMspEnabled,
     debugTelnetEnabled,
+    logOutboundBytes,
     logTelnetNegotiation,
 } from "./telnetDebug";
 
@@ -563,8 +564,11 @@ export class MudClient {
     }
 
     /** Encodes a Latin-1 byte-string to raw bytes and sends it as a binary
-     *  WebSocket frame. The proxy worker expects binary, not base64. */
+     *  WebSocket frame. The proxy worker expects binary, not base64. Every
+     *  outbound byte funnels through here, so it's also where `mudix.debugTelnet`
+     *  mirrors what we send. */
     private sendBytes(payload: string): void {
+        if (debugTelnetEnabled()) logOutboundBytes(payload);
         const bytes = new Uint8Array(payload.length);
         for (let i = 0; i < payload.length; i++) {
             bytes[i] = payload.charCodeAt(i) & 0xff;

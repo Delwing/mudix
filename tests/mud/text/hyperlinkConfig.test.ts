@@ -144,6 +144,24 @@ describe('extractQuery', () => {
     expect(q.userPairs).toEqual(['id=42']);
   });
 
+  it('decodes a percent-encoded config value', () => {
+    const q = extractQuery('send:1?config=%7B%22s%22:%7B%22c%22:%22red%22%7D%7D');
+    expect(q.base).toBe('send:1');
+    expect(q.configJson).toBe('{"s":{"c":"red"}}');
+  });
+
+  it('decodes a partially percent-encoded config value (literal braces)', () => {
+    const q = extractQuery('send:1?config={%22s%22:{%22c%22:%22red%22}}');
+    expect(q.configJson).toBe('{"s":{"c":"red"}}');
+  });
+
+  it('separates preset and user params around an encoded config', () => {
+    const q = extractQuery('send:p?preset=btn&config=%7B%22s%22:%7B%22b%22:true%7D%7D&id=42');
+    expect(q.presetName).toBe('btn');
+    expect(q.configJson).toBe('{"s":{"b":true}}');
+    expect(q.userPairs).toEqual(['id=42']);
+  });
+
   it('keeps user query params but drops reserved ones', () => {
     const q = extractQuery('https://x/?id=42&lang=en&config={"a":1}');
     expect(q.userPairs).toEqual(['id=42', 'lang=en']);
@@ -194,6 +212,27 @@ describe('parseOsc8Uri', () => {
     if (r?.kind !== 'link') throw new Error('expected link');
     expect(r.command).toBe('https://mudlet.org/?id=42&lang=en');
     expect(r.config.style?.bold).toBe(true);
+  });
+
+  it('applies styling from a percent-encoded config (StickMUD menu link)', () => {
+    const reg = new HyperlinkPresetRegistry();
+    const uri = 'send:1?config=%7B%22style%22:%7B%22color%22:%22#66ccff%22%2C%22hover%22:'
+      + '%7B%22color%22:%22#ffcc66%22%2C%22bold%22:true%7D%2C%22active%22:%7B%22color%22:'
+      + '%22#ffffff%22%2C%22bg%22:%22#0066cc%22%2C%22bold%22:true%7D%2C%22focus%22:'
+      + '%7B%22color%22:%22#66ccff%22%2C%22bold%22:true%2C%22underline%22:%22dotted%22%2C'
+      + '%22text-decoration-color%22:%22#66ccff%22%7D%7D%7D';
+    const r = parseOsc8Uri(uri, reg);
+    if (r?.kind !== 'link') throw new Error('expected link');
+    expect(r.command).toBe('send:1');
+    expect(r.config.style?.foreground).toEqual({ space: 'rgb', r: 0x66, g: 0xcc, b: 0xff });
+    expect(r.config.style?.states?.hover?.foreground)
+      .toEqual({ space: 'rgb', r: 0xff, g: 0xcc, b: 0x66 });
+    expect(r.config.style?.states?.hover?.bold).toBe(true);
+    expect(r.config.style?.states?.active?.background)
+      .toEqual({ space: 'rgb', r: 0x00, g: 0x66, b: 0xcc });
+    expect(r.config.style?.states?.focus?.underlineStyle).toBe('dotted');
+    expect(r.config.style?.states?.focus?.decorationColor)
+      .toEqual({ space: 'rgb', r: 0x66, g: 0xcc, b: 0xff });
   });
 
   it('returns null for an empty URI', () => {

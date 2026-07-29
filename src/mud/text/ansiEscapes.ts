@@ -147,7 +147,7 @@ export const ALLOWED_HYPERLINK_SCHEMES = ["send", "prompt", "http", "https", "ft
 /** Percent-decode a send/prompt command, like Mudlet's `QUrl::fromPercentEncoding`,
  *  so `cast%20fireball` reaches the MUD as `cast fireball`. Malformed escapes are
  *  left as-is rather than throwing. */
-function decodePercent(s: string): string {
+export function decodePercent(s: string): string {
     try {
         return decodeURIComponent(s);
     } catch {

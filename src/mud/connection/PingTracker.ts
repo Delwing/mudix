@@ -16,7 +16,7 @@ export class PingTracker {
     private readonly unsubs: Array<() => void>;
 
     constructor(
-        private readonly sendPingCommand: () => void,
+        private readonly sendPingCommand: (latencyMs: number) => void,
         private readonly onPing: (duration: number | null) => void,
         source: PingEventSource,
     ) {
@@ -64,9 +64,15 @@ export class PingTracker {
         }
     }
 
+    /** Sends the last round-trip we measured, per the GMCP spec's documented
+     *  `Core.Ping <average latency>` form — 0 on the first probe, when there is
+     *  nothing measured yet. The latency is informational to the server; what
+     *  matters here is that the request always carries a body, since a bare
+     *  `Core.Ping` makes servers that unconditionally JSON-parse the part after
+     *  the module name choke on an empty string. */
     private sendPing() {
         this.lastSentAt = performance.now();
-        this.sendPingCommand();
+        this.sendPingCommand(Math.round(this.lastDuration ?? 0));
     }
 
     private handlePingResponse() {

@@ -188,10 +188,15 @@ export class MudSession {
         if (this.windowSize) client.setWindowSize(this.windowSize.cols, this.windowSize.rows);
 
         this.pingTracker = new PingTracker(
-            // Canonical GMCP: `Core.Ping` (PascalCase) with no body. sendGmcp
-            // would append a JSON body (`core.ping {}`), which is non-standard —
-            // the spec's request is a bare name (optionally a latency number).
-            () => client.sendGmcpRaw('Core.Ping'),
+            // Canonical GMCP: `Core.Ping` (PascalCase) carrying the last measured
+            // latency — the spec's second documented request form. We used to
+            // send the bare name, which the spec also allows, but servers that
+            // JSON-parse everything after the module name unconditionally (LPC
+            // ones calling `json_parse()`, notably) fail on the empty body and
+            // print a parse error into the game output. A number is valid JSON
+            // and satisfies both. sendGmcpRaw, not sendGmcp: the latter would
+            // wrap it as an object body, which isn't this message's shape.
+            (latencyMs) => client.sendGmcpRaw(`Core.Ping ${latencyMs}`),
             (d) => this.setPing(d),
             this.events,
         );

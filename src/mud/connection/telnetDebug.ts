@@ -15,8 +15,9 @@ function gateEnabled(key: string): boolean {
 
 /**
  * `mudix.debugTelnet` — log every telnet command/subnegotiation byte seen on
- * each incoming frame. Used to investigate protocol-negotiation issues
- * (GMCP/MSDP/MCCP not enabling) by revealing exactly what the server sends.
+ * each incoming frame, and every byte-string we send. Used to investigate
+ * protocol-negotiation issues (GMCP/MSDP/MCCP not enabling) by revealing
+ * exactly what crosses the wire in both directions.
  */
 export function debugTelnetEnabled(): boolean {
     return gateEnabled('mudix.debugTelnet');
@@ -90,4 +91,54 @@ export function logTelnetNegotiation(label: string, s: string): void {
     // eslint-disable-next-line no-console
     console.debug(`[mudix.telnet ${label}] bytes=${s.length}`,
         seqs.length ? seqs.join(' | ') : '(no IAC sequences)');
+}
+
+/** GMCP module whose body carries the player's password — never logged. */
+const SECRET_GMCP_MODULE = 'char.login.credentials';
+
+/** Escape control and high bytes so a subnegotiation body reads unambiguously
+ *  in the console (a lone `\x00` separator in MSDP, say, or a stray IAC). */
+function escapeBytes(s: string): string {
+    return s.replace(/[^\x20-\x7E]/g, c =>
+        `\\x${c.charCodeAt(0).toString(16).padStart(2, '0').toUpperCase()}`);
+}
+
+/**
+ * Log an outbound byte-string: the IAC sequences it carries plus the verbatim
+ * body of every subnegotiation, so a handshake payload a server rejects (a GMCP
+ * body it refuses to parse, say) is visible exactly as we framed it — the
+ * inbound `logTelnetNegotiation` only names options, which isn't enough to tell
+ * a malformed body from a well-formed one.
+ *
+ * Bodies only: plain command text is reported as a byte count, never content,
+ * because `send()` also carries typed passwords. `Char.Login.Credentials` is
+ * redacted for the same reason.
+ */
+export function logOutboundBytes(s: string): void {
+    const parts: string[] = [];
+    let plainBytes = 0;
+    for (let i = 0; i < s.length;) {
+        if (s.charCodeAt(i) !== 0xFF) { plainBytes++; i++; continue; }
+        const cmd = s.charCodeAt(i + 1);
+        if (cmd === 250) { // SB <opt> … IAC SE
+            const opt = s.charCodeAt(i + 2);
+            const end = s.indexOf('\xFF\xF0', i + 3);
+            const body = end === -1 ? s.substring(i + 3) : s.substring(i + 3, end);
+            const name = TELNET_OPT_NAMES[opt] ?? String(opt);
+            const secret = opt === 201 && body.toLowerCase().startsWith(SECRET_GMCP_MODULE);
+            parts.push(`SB ${name} ${secret ? '<redacted>' : JSON.stringify(escapeBytes(body))}`);
+            i = end === -1 ? s.length : end + 2;
+        } else if (cmd >= 251 && cmd <= 254) { // WILL/WONT/DO/DONT <opt>
+            const opt = s.charCodeAt(i + 2);
+            parts.push(`${TELNET_CMD_NAMES[cmd]} ${TELNET_OPT_NAMES[opt] ?? opt}`);
+            i += 3;
+        } else {
+            parts.push(TELNET_CMD_NAMES[cmd] ?? `IAC ${cmd}`);
+            i += 2;
+        }
+    }
+    if (plainBytes > 0) parts.push(`<${plainBytes} text byte(s)>`);
+    // eslint-disable-next-line no-console
+    console.debug(`[mudix.telnet out] bytes=${s.length}`,
+        parts.length ? parts.join(' | ') : '(empty)');
 }

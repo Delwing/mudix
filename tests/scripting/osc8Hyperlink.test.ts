@@ -51,6 +51,13 @@ describe('createOsc8Hyperlink — OSC 8 extension query never leaks into command
     expect(hl?.title).toBe('https://mudlet.org/?id=42&lang=en');
   });
 
+  it('does not auto-underline OSC 8 links (Mudlet parity)', () => {
+    // Mudlet's HyperlinkStyling::isUnderlined defaults to false: OSC 8 links are
+    // not underlined unless their config asks. Only MXP links auto-underline.
+    expect(api.createOsc8Hyperlink('send:look')?.autoUnderline).toBeUndefined();
+    expect(api.createMxpHyperlink('command', 'look').autoUnderline).toBe(true);
+  });
+
   it('still drops disallowed schemes', () => {
     expect(api.createOsc8Hyperlink('javascript:alert(1)?config={}')).toBeUndefined();
   });

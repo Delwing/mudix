@@ -23,6 +23,7 @@
 
 import type { FormatColor } from "./FormatState";
 import { mxpColor } from "./colorParsers";
+import { decodePercent } from "./ansiEscapes";
 
 // ── Normalised config model ───────────────────────────────────────────────
 
@@ -370,6 +371,22 @@ export function extractQuery(uri: string): ExtractedQuery {
                 configJson = rest.slice("config=".length, end);
                 rest = rest[end] === "&" ? rest.slice(end + 1) : rest.slice(end);
             }
+            // A server may percent-encode the JSON body only partially (quotes
+            // escaped, braces literal). Decode when the literal text isn't valid
+            // JSON but its decoded form is.
+            configJson = decodeIfEncoded(configJson);
+            continue;
+        }
+        if (rest.startsWith("config=")) {
+            // Percent-encoded config (`config=%7B%22style%22…`). An encoded body
+            // cannot contain a raw `&`, so the value ends at the next separator
+            // and brace-matching isn't needed.
+            const value = rest.slice("config=".length);
+            const amp = value.indexOf("&");
+            const raw = amp === -1 ? value : value.slice(0, amp);
+            rest = amp === -1 ? "" : value.slice(amp + 1);
+            const decoded = decodePercent(raw);
+            if (decoded.startsWith("{")) configJson = decoded;
             continue;
         }
         const amp = rest.indexOf("&");
@@ -385,6 +402,25 @@ export function extractQuery(uri: string): ExtractedQuery {
         }
     }
     return { base, configJson, presetName, userPairs };
+}
+
+/** Return `json` unchanged when it already parses, otherwise its percent-decoded
+ *  form when that parses instead. Handles servers that escape the config body
+ *  (fully or in part) to keep the URI well-formed. */
+function decodeIfEncoded(json: string): string {
+    if (!json.includes("%")) return json;
+    try {
+        JSON.parse(json);
+        return json;
+    } catch {
+        const decoded = decodePercent(json);
+        try {
+            JSON.parse(decoded);
+            return decoded;
+        } catch {
+            return json;
+        }
+    }
 }
 
 /** Find the index just past the `}` that closes the brace opened at `from`

@@ -74,10 +74,18 @@ describe('AnsiAwareBuffer escape handling', () => {
     expect(tail.getStateAt('linkafter'.indexOf('after'))?.hyperlink).toBeUndefined();
   });
 
-  it('renders OSC 8 link text as clickable + underlined in toHtml', () => {
+  it('renders OSC 8 link text as clickable but NOT underlined in toHtml', () => {
+    // Mudlet's HyperlinkStyling::isUnderlined defaults to false — OSC 8 links
+    // are deliberately not underlined unless their config asks for it.
     const buf = new AnsiAwareBuffer(`${ESC}]8;;https://example.com${ST}go${ESC}]8;;${ST}`);
     const html = buf.toHtml();
     expect(html).toContain('data-output-clickable="true"');
+    expect(html).not.toContain('text-decoration: underline');
+  });
+
+  it('underlines an OSC 8 link when its config asks for it', () => {
+    const uri = 'send:go?config={"style":{"underline":true}}';
+    const html = new AnsiAwareBuffer(`${ESC}]8;;${uri}${ST}go${ESC}]8;;${ST}`).toHtml();
     expect(html).toContain('text-decoration: underline');
   });
 
@@ -156,8 +164,14 @@ describe('AnsiAwareBuffer.toStyledRuns (copy-as-image)', () => {
     expect(runs[0].background).toBe('var(--console-text)');
   });
 
-  it('marks OSC 8 links as underlined', () => {
+  it('does not mark a plain OSC 8 link as underlined', () => {
     const buf = new AnsiAwareBuffer(`${ESC}]8;;https://example.com${ST}go${ESC}]8;;${ST}`);
+    const runs = buf.toStyledRuns().filter(r => r.text === 'go');
+    expect(runs[0].underline).toBe(false);
+  });
+
+  it('keeps the underline an SGR run already carries under an OSC 8 link', () => {
+    const buf = new AnsiAwareBuffer(`${ESC}[4m${ESC}]8;;send:go${ST}go${ESC}]8;;${ST}${ESC}[0m`);
     const runs = buf.toStyledRuns().filter(r => r.text === 'go');
     expect(runs[0].underline).toBe(true);
   });

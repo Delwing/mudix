@@ -1946,11 +1946,12 @@ export class ScriptingAPI {
                 ?? (typeof document !== 'undefined' ? document : null);
             this.oscLinks.restyle(doc);
         };
+        // No autoUnderline — an OSC 8 link is underlined only when its config
+        // says so (see FormatHyperlink.autoUnderline).
         return withConfig({
             onClick: disabled ? undefined : activate,
             title: tooltip ?? defaultTitle,
             url: command,
-            autoUnderline: true,
         });
     }
 
