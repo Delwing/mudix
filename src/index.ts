@@ -1,15 +1,14 @@
-// Library entry point for branded builds — `import { MudixApp } from
-// '@delwing/mudix'` (the package moves to a Mudlet-owned scope with the
-// Mudlet Web transfer; the export name follows it then, not before).
-// The standalone app (`main.tsx`) renders the same `MudixApp` with no brand.
+// Library entry point for branded builds — `import { MudletWebApp } from
+// '@mudlet/mudlet-web'`. The standalone app (`main.tsx`) renders the same
+// `MudletWebApp` with no brand.
 // The CSS side-effect import makes the lib build emit the full stylesheet as
-// `styles.css` (consumers `import '@delwing/mudix/styles.css'`); the './styles.css'
+// `styles.css` (consumers `import '@mudlet/mudlet-web/styles.css'`); the './styles.css'
 // specifier survives into index.d.ts, where it resolves against the emitted
 // file of the same name.
 import './styles.css';
 
 // App root + branding (white-label builds)
-export { MudixApp } from "./MudixApp";
+export { MudletWebApp } from "./MudletWebApp";
 export {
     getBrand,
     isBrandedMode,

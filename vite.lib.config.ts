@@ -5,12 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { buildDefine } from './buildInfo';
 
 /**
- * Library build (`yarn build:lib`) — packages mudix as an importable npm
- * module (`import { MudixApp } from 'mudix'`) for branded builds, following
- * the mudlet-map-editor dual app+lib pattern. Only mudix's own source is
+ * Library build (`yarn build:lib`) — packages Mudlet Web as an importable npm
+ * module (`import { MudletWebApp } from '@mudlet/mudlet-web'`) for branded builds,
+ * following the mudlet-map-editor dual app+lib pattern. Only this repo's own source is
  * bundled (with `?raw` Lua, `import.meta.glob`, JSON and `?url` assets
  * pre-resolved); every bare-specifier dependency stays external and resolves
- * from the consumer's node_modules, where the `mudix/vite` companion plugin
+ * from the consumer's node_modules, where the `@mudlet/mudlet-web/vite` companion plugin
  * supplies the same WASM/polyfill handling the app build gets here.
  */
 

@@ -6,17 +6,17 @@ import type { Plugin, PluginOption } from 'vite';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 /**
- * The `mudix/vite` companion plugin. mudix (the library) leaves all of its
+ * The `@mudlet/mudlet-web/vite` companion plugin. The library leaves all of its
  * heavyweight dependencies external, so the consumer's Vite processes them —
- * and needs the same handling mudix's own app build has: the pcre2 WASM file
+ * and needs the same handling the app build has: the pcre2 WASM file
  * at the site root, node polyfills on the main thread and in workers, and the
  * VFS service worker emitted into the output. One plugin call supplies all of
  * it:
  *
- *     import mudix from '@delwing/mudix/vite';
- *     export default defineConfig({ plugins: [mudix(), react()] });
+ *     import mudletWeb from '@mudlet/mudlet-web/vite';
+ *     export default defineConfig({ plugins: [mudletWeb(), react()] });
  *
- * mudix's own vite.config.ts uses this plugin too (imported from source), so
+ * Mudlet Web's own vite.config.ts uses this plugin too (imported from source), so
  * the app build and consumer builds can't drift apart.
  */
 
@@ -64,7 +64,7 @@ function pcre2WasmPlugin(): Plugin {
 }
 
 /** Serves/emits the VFS service worker at the site root so
- *  `registerVfsServiceWorker()` (called by MudixApp) finds it. Skipped when
+ *  `registerVfsServiceWorker()` (called by MudletWebApp) finds it. Skipped when
  *  the consumer already ships its own copy in public/ — as the standalone
  *  mudix app does. */
 function vfsServiceWorkerPlugin(): Plugin {
@@ -108,7 +108,7 @@ export default function mudix(): PluginOption[] {
                     // dies on Windows (os error 123). Excluded, mudix is served
                     // through Vite's transform pipeline in dev, where `?url`
                     // works. Harmless in mudix's own repo (not a dep there).
-                    exclude: ['pcre2-wasm-universal', '@delwing/mudix'],
+                    exclude: ['pcre2-wasm-universal', '@mudlet/mudlet-web'],
                     // CJS deps reached from the excluded mudix entry must be
                     // pre-bundled explicitly (Vite doesn't interop CJS served
                     // raw). Extend this list if dev mode reports "does not

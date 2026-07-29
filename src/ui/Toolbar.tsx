@@ -82,7 +82,7 @@ export function Toolbar({ connectionName, status, ping, onDisconnect, onReconnec
     const fire = (cb: () => void) => () => { setMenuOpen(false); cb(); };
 
     const onReportBug = () => {
-        window.open('https://github.com/Delwing/mudix/issues/new', '_blank', 'noopener,noreferrer');
+        window.open('https://github.com/Mudlet/mudlet-web/issues/new', '_blank', 'noopener,noreferrer');
     };
 
     const isLive = status !== 'disconnected';

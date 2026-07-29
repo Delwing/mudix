@@ -5,10 +5,10 @@ import mudletLogoUrl from './assets/mudlet-logo.svg?url';
 /**
  * White-label branding for Mudlet Web builds. A branded client (a client
  * shipped for one specific MUD) passes a `BrandConfig` to
- * `<MudixApp brand={...}/>`; the config is held in a module-level singleton so
+ * `<MudletWebApp brand={...}/>`; the config is held in a module-level singleton so
  * non-React code (proxy resolution, document title, default packages) can read
  * it without prop drilling. The default brand is stock Mudlet Web — rendering
- * `<MudixApp/>` with no brand reproduces it exactly.
+ * `<MudletWebApp/>` with no brand reproduces it exactly.
  */
 
 /** The one MUD a branded build targets. Setting this switches the client into
@@ -195,12 +195,12 @@ export const DEFAULT_BRAND: BrandConfig = {
         'support, renders ANSI output, and runs Mudlet Lua scripting right in the browser — ' +
         'with drop-in support for existing Mudlet packages, maps and profiles, and nothing ' +
         'to install.',
-    repoUrl: 'https://github.com/Delwing/mudix',
+    repoUrl: 'https://github.com/Mudlet/mudlet-web',
 };
 
 let current: BrandConfig = DEFAULT_BRAND;
 
-/** Install the active brand. Called once by `MudixApp` before first render;
+/** Install the active brand. Called once by `MudletWebApp` before first render;
  *  unspecified fields fall back to the stock Mudlet Web brand. Idempotent. */
 export function setBrand(brand?: Partial<BrandConfig>): void {
     current = { ...DEFAULT_BRAND, ...brand };
@@ -251,7 +251,7 @@ export function isLightTheme(id: string): boolean {
 }
 
 /** Stylesheet text for the brand's themes — one `:root[data-theme=<id>]` rule
- *  each. Injected after the bundled CSS so it wins ties (see MudixApp). */
+ *  each. Injected after the bundled CSS so it wins ties (see MudletWebApp). */
 export function brandThemesCss(): string {
     return (current.themes ?? []).map(t => {
         const scheme = t.colorScheme ? `color-scheme: ${t.colorScheme};\n    ` : '';

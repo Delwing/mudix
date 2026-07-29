@@ -3,10 +3,10 @@
 Mudlet Web can be consumed as an npm library to ship a **white-label client for one
 specific MUD** — your own app name, login screen, theme, toolbar, and bundled
 Lua packages — without forking the Mudlet Web repo. Updates land as a version bump
-(`yarn upgrade @delwing/mudix`) instead of a rebase.
+(`yarn upgrade @mudlet/mudlet-web`) instead of a rebase.
 
-A branded build is a small standalone app: `import { MudixApp } from
-'@delwing/mudix'`, render it with a `brand` prop, and let the `@delwing/mudix/vite`
+A branded build is a small standalone app: `import { MudletWebApp } from
+'@mudlet/mudlet-web'`, render it with a `brand` prop, and let the `@mudlet/mudlet-web/vite`
 plugin handle the WASM/polyfill wiring Mudlet Web's runtime needs. Everything else
 (index.html, favicon, manifest, deployment) is your repo's own job — Mudlet Web
 doesn't impose a shell around it.
@@ -20,7 +20,7 @@ with a scripted map) deployed to GitHub Pages.
 ```bash
 yarn create vite my-brand-web --template react-ts
 cd my-brand-web
-yarn add @delwing/mudix
+yarn add @mudlet/mudlet-web
 ```
 
 `vite.config.ts`:
@@ -28,10 +28,10 @@ yarn add @delwing/mudix
 ```ts
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import mudix from '@delwing/mudix/vite';
+import mudletWeb from '@mudlet/mudlet-web/vite';
 
 export default defineConfig({
-    plugins: [mudix(), react()],
+    plugins: [mudletWeb(), react()],
 });
 ```
 
@@ -39,8 +39,8 @@ export default defineConfig({
 
 ```tsx
 import { createRoot } from 'react-dom/client';
-import { MudixApp, type BrandConfig } from '@delwing/mudix';
-import '@delwing/mudix/styles.css';
+import { MudletWebApp, type BrandConfig } from '@mudlet/mudlet-web';
+import '@mudlet/mudlet-web/styles.css';
 
 const brand: BrandConfig = {
     appName: 'My Brand',
@@ -48,7 +48,7 @@ const brand: BrandConfig = {
     mud: { mode: 'websocket', url: 'wss://mymud.example.com/ws' },
 };
 
-createRoot(document.getElementById('root')!).render(<MudixApp brand={brand} />);
+createRoot(document.getElementById('root')!).render(<MudletWebApp brand={brand} />);
 ```
 
 `yarn dev` and you have a working branded client: setting `brand.mud` switches
@@ -95,7 +95,7 @@ usually enough, but you can supply your own `Landing` component for full
 control over markup and layout:
 
 ```tsx
-import { useBrandLogin, type LandingProps } from '@delwing/mudix';
+import { useBrandLogin, type LandingProps } from '@mudlet/mudlet-web';
 
 function MyLanding({ openProfile, ensureBrandProfile, openSettings }: LandingProps) {
     const { account, setAccount, password, setPassword, enter } = useBrandLogin({ openProfile, ensureBrandProfile });
@@ -170,16 +170,16 @@ scripts can register a handler for).
 
 ## Consumer build notes
 
-- **`optimizeDeps`** — the `mudix()` plugin already excludes `@delwing/mudix`
+- **`optimizeDeps`** — the `mudletWeb()` plugin already excludes `@mudlet/mudlet-web`
   and `pcre2-wasm-universal` and pre-bundles the CJS deps Mudlet Web needs
   (`eventemitter3`, `wasmoon-lua5.1`, `@zenfs/core > readable-stream`). If dev
   mode reports `"does not provide an export named ..."` for another
   dependency, add it to that `include` list in your own `vite.config.ts`.
 - **Yarn `file:` tarballs** — if you're testing a local build via `yarn pack`
   instead of the published package, version-stamp the tarball filename
-  (`mudix-X.Y.Z.tgz`) and bump the version each time — Yarn's cache otherwise
+  (`mudlet-web-X.Y.Z.tgz`) and bump the version each time — Yarn's cache otherwise
   ignores content changes to a same-named file.
-- **`import '@delwing/mudix/styles.css'`** is required once, near your app
+- **`import '@mudlet/mudlet-web/styles.css'`** is required once, near your app
   root — the library build ships CSS separately from the JS bundle.
 
 ## What's still yours to build
@@ -187,11 +187,11 @@ scripts can register a handler for).
 Mudlet Web's library export deliberately stops at the app root. Your branded repo
 owns:
 - `index.html`, favicon, manifest, and any marketing/landing chrome outside
-  `<MudixApp/>`.
+  `<MudletWebApp/>`.
 - Deployment (GitHub Pages, Netlify, your own host — `dist/` is a static
   site).
 - The `.mpackage` content itself (scripts, triggers, aliases, maps) — build it
   in Mudlet Web like any other profile and export/zip it.
 
-See [`CLAUDE.md`](../CLAUDE.md) for the internals of `MudixApp`/`branding.ts`
+See [`CLAUDE.md`](../CLAUDE.md) for the internals of `MudletWebApp`/`branding.ts`
 if you need to go beyond what `BrandConfig` exposes.

@@ -1,6 +1,6 @@
 {
-  "name": "@delwing/mudix",
-  "version": "0.2.0",
+  "name": "@mudlet/mudlet-web",
+  "version": "0.3.0",
   "type": "module",
   "description": "Mudlet Web — Mudlet in the browser, usable standalone or as a library for branded builds",
   "license": "GPL-2.0-or-later",
@@ -12,9 +12,12 @@
     "lua",
     "game"
   ],
-  "homepage": "https://github.com/Delwing/mudix",
+  "homepage": "https://github.com/Mudlet/mudlet-web",
   "repository": {
-    "url": "git+https://github.com/Delwing/mudix.git"
+    "url": "git+https://github.com/Mudlet/mudlet-web.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "exports": {
     ".": {
