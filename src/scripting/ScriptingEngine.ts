@@ -1366,8 +1366,11 @@ export class ScriptingEngine implements EngineHost {
      * Handle a `Client.GUI` GMCP message: download the URL and install the
      * resulting package. Honors `client.allowMudPackageInstall` (default true,
      * undefined = true). Deduplicates against previously-installed packages
-     * via `manifest.sourceUrl` so the same MUD telling us to install on every
-     * connect doesn't churn the file system.
+     * via `manifest.sourceUrl` + `manifest.sourceVersion` so the same MUD
+     * telling us to install on every connect doesn't churn the file system.
+     * The server's declared version is recorded as `sourceVersion` and never
+     * overwrites the package's own `version` — matching Mudlet, which keeps it
+     * in a separate `Host::mServerGUI_Package_version`.
      */
     /**
      * Dispatch a parsed `!!SOUND` / `!!MUSIC` tag to the SoundManager. `Off`
@@ -1620,11 +1623,13 @@ export class ScriptingEngine implements EngineHost {
             return;
         }
 
-        // Same URL + same version already installed → no-op.
+        // Same URL + same server-declared version already installed → no-op.
+        // Compared against sourceVersion (what the server said last time), not
+        // the package's own version — see PackageManifest.sourceVersion.
         const existing = (useAppStore.getState().connectionPackages[this.connectionId] ?? [])
             .find(p => p.sourceUrl === url);
-        if (existing && version && existing.version === version) return;
-        if (existing && !version && existing.version) return;
+        if (existing && version && existing.sourceVersion === version) return;
+        if (existing && !version && existing.sourceVersion) return;
 
         const vfs = this.vfs;
         if (!vfs) {
@@ -1652,7 +1657,7 @@ export class ScriptingEngine implements EngineHost {
             const finalManifest: PackageManifest = {
                 ...manifest,
                 sourceUrl: url,
-                ...(version ? { version } : {}),
+                ...(version ? { sourceVersion: version } : {}),
             };
             useAppStore.getState().installPackage(this.connectionId, finalManifest, data);
             this.notifyPackageInstalled(finalManifest.name);
