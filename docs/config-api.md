@@ -57,8 +57,8 @@ Mudlet); the rest are live.
 | `specialForceCompressionOff` | `!protocols.mccp` | inverse flag — forces MCCP (option 86) off |
 | `forceNewEnvironNegotiationOff` | `!(protocols.mnes \|\| protocols.newEnviron)` | inverse flag — disables both option-39 variants |
 | `autoClearInputLine` | `autoClearInput` | live |
-| `mapRoomSize` | `mapper.roomSize` | positive number only |
-| `mapExitSize` | `mapper.lineWidth` | positive number only |
+| `mapRoomSize` | `mapper.roomSize` | positive number only; **unit-translated** — see [Map size units](#map-size-units) |
+| `mapExitSize` | `mapper.lineWidth` | positive number only; **unit-translated** — see [Map size units](#map-size-units) |
 | `mapRoundRooms` | `mapper.roomShape` | `true`→`roundedRectangle`, else `rectangle` |
 | `mapShowRoomBorders` | `mapper.borders` | |
 | `mapShowGrid` | `mapper.gridEnabled` | |
@@ -124,12 +124,66 @@ by the UI — see group 2a.)
 | `logDirectory` | `/profiles/<connectionId>/log` (Mudlet Web logs to IndexedDB, not a real folder) |
 | `specialForceMXPProcessorOn` | stored bool or `false` |
 
+## Map size units
+
+`mapRoomSize` / `mapExitSize` are the one place where a config value does **not**
+mean the same thing to Mudlet and to the map renderer, so `ScriptingAPI`
+translates between the two spaces.
+
+**Mudlet side** (`T2DMap.cpp`, `dlgMapper.cpp`, `Host.h`):
+
+- `host.mRoomSize` (default `0.5`) is a *fraction of a grid cell*; a room is
+  drawn `mRoomWidth * rSize` pixels wide.
+- `host.mLineSize` (default `10.0`) is an *inverse* divisor: the exit pen is
+  `exitWidth = 1 / eSize * mRoomWidth * rSize`. Bigger `mLineSize` → **thinner**
+  exits, and exits scale with the room size. (That inversion is also why the
+  preferences dialog shows `50 / mLineSize` in its 1–11 spinner.)
+- `setConfig` writes through the preferences slots, so it takes the **spin-box
+  scale**, while `getConfig` returns the **internal double**:
+
+  | key | `setConfig(k, n)` does | `getConfig(k)` returns |
+  |---|---|---|
+  | `mapRoomSize` | `slot_roomSize(n)` → `setRoomSize(n / 10)` | `host.mRoomSize` |
+  | `mapExitSize` | `slot_exitSize(n)` → `setExitSize(n)` | `host.mLineSize` |
+
+  So `setConfig("mapRoomSize", 5); getConfig("mapRoomSize")` yields `0.5` in real
+  Mudlet. That asymmetry is reproduced here deliberately — packages are written
+  against observed Mudlet behaviour. Mudlet's defaults are `mapRoomSize = 5`
+  and `mapExitSize = 10`.
+
+**Renderer side** (`mudlet-map-renderer` `Settings`): `roomSize` (default `0.6`)
+and `lineWidth` (default `0.025`) are both plain map-unit lengths, and
+`lineWidth` is *independent* of `roomSize`.
+
+**The translation**, with `R` = `mapper.roomSize` and `L` = `mapper.lineWidth`:
+
+| direction | formula |
+|---|---|
+| `setConfig("mapRoomSize", n)` | `R = n / 10` (and `L` is rescaled by the same factor — see below) |
+| `getConfig("mapRoomSize")` | `R` |
+| `setConfig("mapExitSize", n)` | `L = R / n` |
+| `getConfig("mapExitSize")` | `R / L` |
+
+Because Mudlet's exit width is proportional to its room size and the renderer's
+is not, `setConfig("mapRoomSize", …)` also scales `lineWidth` by the same ratio
+(`setMudletRoomSize`). That keeps the effective `mapExitSize` constant across a
+room-size change, and makes the combined table form order-independent —
+`Other.lua` iterates `setConfig{...}` with `pairs()`, so `mapExitSize` may be
+applied before or after `mapRoomSize`.
+
+The Settings modal edits `roomSize` / `lineWidth` in **renderer** units
+directly, as do the Mudlet Web-only `setMapRoomSize()` / `getMapRoomSize()`
+globals (they have no Mudlet counterpart). Only the two `*Config` keys go
+through the translation.
+
 ## Value coercion
 
 - **Booleans** (`configBool`): real booleans pass through; the strings
   `false`/`0`/`no`/`off` (any case) read as `false`; any other non-nil value is
   truthy. Matches how Lua scripts pass flags.
-- **Numbers**: `Number(value)`; mapper sizes additionally require finite `> 0`.
+- **Numbers**: `Number(value)`; mapper sizes additionally require finite `> 0`
+  (an out-of-range mapper size is ignored, but `setConfig` still returns `true`
+  — Mudlet accepts any positive int there without clamping).
 - **Enums**: `String(value)` validated against the allowed set; an invalid value
   is rejected (`setConfig` → `false`, no write).
 

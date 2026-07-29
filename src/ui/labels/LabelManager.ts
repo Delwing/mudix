@@ -117,9 +117,41 @@ function safeCoord(n: number): number {
     return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Run `fn` on the next animation frame, falling back to a macrotask where
+ * rAF doesn't exist (tests, SSR). Deliberately not a microtask: notifications
+ * can cascade — a listener may resize a label and notify again — and the
+ * browser drains the whole microtask queue before yielding, so a
+ * self-retriggering flush would freeze the tab outright. Both of these yield.
+ */
+const scheduleFlush: (fn: () => void) => void =
+    typeof requestAnimationFrame === 'function'
+        ? (fn) => { requestAnimationFrame(() => fn()); }
+        : (fn) => { setTimeout(fn, 0); };
+
 export class LabelManager {
     private readonly labels = new Map<string, LabelState>();
+    // Labels bucketed by parent, insertion-ordered within each bucket (which is
+    // the render/z order list() has always produced). Kept in sync at the four
+    // mutation points — create, destroy, setParent, clearAll — so list() costs
+    // O(labels in that parent) instead of O(all labels). A Geyser reflow calls
+    // list() once per moved widget, so the old full scan made one layout pass
+    // quadratic in the total label count.
+    private readonly byParent = new Map<string, Map<string, LabelState>>();
     private readonly listeners = new Map<string, Set<Listener>>();
+
+    private indexAdd(lbl: LabelState): void {
+        let bucket = this.byParent.get(lbl.parent);
+        if (!bucket) { bucket = new Map(); this.byParent.set(lbl.parent, bucket); }
+        bucket.set(lbl.name, lbl);
+    }
+
+    private indexRemove(parent: string, name: string): void {
+        const bucket = this.byParent.get(parent);
+        if (!bucket) return;
+        bucket.delete(name);
+        if (bucket.size === 0) this.byParent.delete(parent);
+    }
 
     // Public so LabelOverlay (and other overlay components sharing this
     // registry via the other managers) can read/subscribe to the wrapper
@@ -141,6 +173,7 @@ export class LabelManager {
             html: '',
         };
         this.labels.set(name, state);
+        this.indexAdd(state);
         this.overlayZ.touch(parent, 'labels', name);
         this.notify(parent);
         return true;
@@ -155,6 +188,7 @@ export class LabelManager {
         if (!lbl) return false;
         lbl.movie?.stop();
         this.labels.delete(name);
+        this.indexRemove(lbl.parent, name);
         this.overlayZ.forget(lbl.parent, 'labels', name);
         this.notify(lbl.parent);
         return true;
@@ -193,7 +227,9 @@ export class LabelManager {
         if (!lbl) return false;
         if (lbl.parent !== parent) {
             const old = lbl.parent;
+            this.indexRemove(old, name);
             lbl.parent = parent;
+            this.indexAdd(lbl);
             this.overlayZ.forget(old, 'labels', name);
             this.overlayZ.touch(parent, 'labels', name);
             this.notify(old);
@@ -468,9 +504,8 @@ export class LabelManager {
     }
 
     list(parent: string): LabelState[] {
-        const out: LabelState[] = [];
-        for (const l of this.labels.values()) if (l.parent === parent) out.push(l);
-        return out;
+        const bucket = this.byParent.get(parent);
+        return bucket ? [...bucket.values()] : [];
     }
 
     subscribe(parent: string, fn: Listener): () => void {
@@ -491,10 +526,44 @@ export class LabelManager {
             l.movie?.stop();
         }
         this.labels.clear();
+        this.byParent.clear();
         for (const p of parents) this.notify(p);
     }
 
+    /**
+     * Mark a parent's overlay dirty, flushed once on the next frame.
+     *
+     * A Geyser reflow re-issues moveWindow/resizeWindow for every widget in a
+     * subtree (Geyser.Container:reposition recurses into every child), and
+     * f2ce-tools' table resize walks every row and cell the same way. Notifying
+     * synchronously per call meant one overlay re-render per widget — hundreds
+     * of renders for a single layout pass. Qt has no equivalent cost, which is
+     * why the same package stays smooth in desktop Mudlet.
+     *
+     * The whole cascade is synchronous, so it collapses into one flush per
+     * parent afterwards. Listeners only ever saw the final state anyway — the
+     * intermediate values were never painted, being on the same blocked task.
+     * subscribe() keeps its synchronous first call so mounts stay immediate.
+     */
+    private dirty: Set<string> | null = null;
+    private flushScheduled = false;
+
     private notify(parent: string): void {
+        if (!this.listeners.has(parent)) return;
+        (this.dirty ??= new Set()).add(parent);
+        if (this.flushScheduled) return;
+        this.flushScheduled = true;
+        scheduleFlush(() => {
+            this.flushScheduled = false;
+            const parents = this.dirty;
+            this.dirty = null;
+            if (!parents) return;
+            for (const p of parents) this.flushParent(p);
+        });
+    }
+
+    /** Immediate, uncoalesced notification for one parent. */
+    private flushParent(parent: string): void {
         const set = this.listeners.get(parent);
         if (!set) return;
         const list = this.list(parent);

@@ -51,8 +51,47 @@ describe('setConfig / getConfig', () => {
         h.run('setConfig("mapRoundRooms", true)');
         expect(useAppStore.getState().connectionProfile[CONN]?.mapper?.roomShape).toBe('roundedRectangle');
         expect(h.run('return getConfig("mapRoundRooms")')).toBe(true);
-        h.run('setConfig("mapRoomSize", 1.5)');
-        expect(h.run('return getConfig("mapRoomSize")')).toBe(1.5);
+    });
+
+    // Mudlet's setConfig takes the preferences spin-box scale (mapRoomSize 5 →
+    // mRoomSize 0.5) while getConfig returns the internal double, and its exit
+    // pen is 1/mLineSize * cellPx * mRoomSize. The renderer instead wants plain
+    // map-unit roomSize/lineWidth. See docs/config-api.md § Map size units.
+    it('translates Mudlet map sizes into renderer map units', () => {
+        // Mudlet's own defaults.
+        h.run('setConfig("mapRoomSize", 5)');
+        h.run('setConfig("mapExitSize", 10)');
+        const mapper = () => useAppStore.getState().connectionProfile[CONN]?.mapper;
+        expect(mapper()?.roomSize).toBeCloseTo(0.5, 10);   // 5 / 10
+        expect(mapper()?.lineWidth).toBeCloseTo(0.05, 10); // roomSize / mLineSize
+
+        // getConfig reports Mudlet's internal doubles, not the setter's scale.
+        expect(h.run('return getConfig("mapRoomSize")')).toBeCloseTo(0.5, 10);
+        expect(h.run('return getConfig("mapExitSize")')).toBeCloseTo(10, 10);
+
+        // A bigger mapExitSize means *thinner* exits (inverse divisor).
+        h.run('setConfig("mapExitSize", 20)');
+        expect(mapper()?.lineWidth).toBeCloseTo(0.025, 10);
+        expect(h.run('return getConfig("mapExitSize")')).toBeCloseTo(20, 10);
+
+        // Mudlet's exits scale with the room size, so changing mapRoomSize
+        // rescales lineWidth and leaves the effective mapExitSize alone.
+        h.run('setConfig("mapRoomSize", 10)');
+        expect(mapper()?.roomSize).toBeCloseTo(1, 10);
+        expect(mapper()?.lineWidth).toBeCloseTo(0.05, 10);
+        expect(h.run('return getConfig("mapExitSize")')).toBeCloseTo(20, 10);
+
+        // ...which also makes the table form order-independent (Other.lua walks
+        // it with pairs(), so mapExitSize may land before mapRoomSize).
+        h.run('setConfig{ mapExitSize = 10, mapRoomSize = 5 }');
+        expect(mapper()?.roomSize).toBeCloseTo(0.5, 10);
+        expect(mapper()?.lineWidth).toBeCloseTo(0.05, 10);
+
+        // Non-positive sizes are ignored (but still "known key" → true).
+        expect(h.run('return setConfig("mapRoomSize", 0)')).toBe(true);
+        expect(h.run('return setConfig("mapExitSize", -1)')).toBe(true);
+        expect(mapper()?.roomSize).toBeCloseTo(0.5, 10);
+        expect(mapper()?.lineWidth).toBeCloseTo(0.05, 10);
     });
 
     it('applies showSentText as a three-state mode (never/script/always)', () => {

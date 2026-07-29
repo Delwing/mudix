@@ -8,7 +8,18 @@ yajl = {}
 yajl.null = setmetatable({}, { __tostring = function() return 'yajl.null' end })
 __yajl_set_null__(yajl.null)
 
+-- Prefer the source-emitting decoder: it crosses the wasmoon bridge as one
+-- flat string and lets Lua's C parser build the tables. Handing back a decoded
+-- object graph instead makes wasmoon walk it node by node, which measured 280s
+-- on an 8.1MB map database against 45ms for the actual JSON.parse. Falls back
+-- to the graph path when the document nests too deeply to emit as source, or if
+-- the chunk fails to compile for any reason.
 function yajl.to_value(s)
+    local src = __yajl_parse_src__(s)
+    if src then
+        local chunk = loadstring(src, "=yajl")
+        if chunk then return chunk(yajl.null) end
+    end
     return __yajl_parse__(s)
 end
 

@@ -119,6 +119,227 @@ export function makeRoom(areaId: number): MudletRoom {
     };
 }
 
+/** Exit/stub direction name → Mudlet direction number (inverse of DIR_FIELD). */
+const DIR_NUM_BY_NAME: Record<string, number> = Object.fromEntries(
+    Object.entries(DIR_FIELD).map(([num, field]) => [field, Number(num)]),
+);
+
+/** Mudlet JSON door state → the numeric encoding setDoor stores. */
+const DOOR_VALUE: Record<string, number> = { open: 1, closed: 2, locked: 3 };
+
+/** Mudlet JSON pen-style name → Qt pen enum (inverse of PEN_STYLE_NAMES). */
+const PEN_STYLE_NUM: Record<string, number> = Object.fromEntries(
+    Object.entries(PEN_STYLE_NAMES).map(([num, name]) => [name, Number(num)]),
+);
+
+/** Qt QColor from Mudlet JSON's `color24RGB` triple. */
+function colorFromRgb24(rgb: unknown, alpha = 255): MudletColor {
+    const t = Array.isArray(rgb) ? rgb : [];
+    return {
+        spec: 1, alpha,
+        r: Number(t[0]) || 0, g: Number(t[1]) || 0, b: Number(t[2]) || 0,
+    };
+}
+
+/**
+ * Convert Mudlet's own `saveJsonMap` export into the binary-reader model.
+ *
+ * This is a genuinely different shape from {@link toJsonString}'s output (which
+ * mirrors the binary model): areas are an *array* carrying their rooms nested
+ * inside, there is no top-level `rooms` map, exits are `{exitId, name}` records
+ * rather than direction fields, and a room's symbol is an OBJECT
+ * (`{color24RGB, text}`) rather than a string. Not handling it meant
+ * `loadJsonMap` rejected every map Mudlet actually writes, so packages fell
+ * back to rebuilding the map through the Lua API — and passing that symbol
+ * object straight to setRoomChar is what rendered rooms as "[LuaTable …]".
+ *
+ * Returns null when the payload isn't this format, so the caller can fall
+ * through to the binary-model path.
+ *
+ * Room `border` is the one documented field still unmapped — no map available
+ * to verify it against, and it needs the same post-load side-table treatment as
+ * symbol colours. Everything else in TRoom.cpp's writeJsonRoom is covered.
+ * Symbol colours are applied separately by applyJsonSymbolColors.
+ */
+export function mudletJsonMapToMudletMap(src: unknown): MudletMap | null {
+    if (!src || typeof src !== 'object') return null;
+    const doc = src as Record<string, unknown>;
+    if (!Array.isArray(doc.areas)) return null;
+
+    const areas: Record<number, MudletArea> = {};
+    const areaNames: Record<number, string> = {};
+    const rooms: Record<number, MudletRoom> = {};
+    const hashes: Record<string, number> = {};
+
+    for (const rawArea of doc.areas as Record<string, unknown>[]) {
+        if (!rawArea || typeof rawArea !== 'object') continue;
+        const areaId = Number(rawArea.id);
+        if (!Number.isFinite(areaId)) continue;
+
+        const area = makeArea();
+        area.userData = (rawArea.userData as Record<string, string>) ?? {};
+        areas[areaId] = area;
+        areaNames[areaId] = typeof rawArea.name === 'string' ? rawArea.name : '';
+
+        const zLevels = new Set<number>();
+        for (const rawRoom of (Array.isArray(rawArea.rooms) ? rawArea.rooms : []) as Record<string, unknown>[]) {
+            if (!rawRoom || typeof rawRoom !== 'object') continue;
+            const roomId = Number(rawRoom.id);
+            if (!Number.isFinite(roomId)) continue;
+
+            const room = makeRoom(areaId);
+            room.name = typeof rawRoom.name === 'string' ? rawRoom.name : '';
+            const coords = Array.isArray(rawRoom.coordinates) ? rawRoom.coordinates : [];
+            room.x = Number(coords[0]) || 0;
+            room.y = Number(coords[1]) || 0;
+            room.z = Number(coords[2]) || 0;
+            room.environment = Number(rawRoom.environment) || 0;
+            room.weight = Number(rawRoom.weight) || 1;
+            room.isLocked = !!rawRoom.locked;
+            room.userData = (rawRoom.userData as Record<string, string>) ?? {};
+
+            // The symbol object is the whole reason this converter exists —
+            // take its text, and keep the colour via the store's side-table.
+            const sym = rawRoom.symbol;
+            if (typeof sym === 'string') room.symbol = sym;
+            else if (sym && typeof sym === 'object') {
+                const text = (sym as Record<string, unknown>).text;
+                room.symbol = typeof text === 'string' ? text : '';
+            }
+
+            for (const rawExit of (Array.isArray(rawRoom.exits) ? rawRoom.exits : []) as Record<string, unknown>[]) {
+                const name = String(rawExit?.name ?? '');
+                const dest = Number(rawExit?.exitId);
+                if (!name || !Number.isFinite(dest)) continue;
+                const dirNum = DIR_NUM_BY_NAME[name];
+                const isStock = dirNum !== undefined;
+                if (isStock) {
+                    (room as unknown as Record<string, number>)[name] = dest;
+                } else {
+                    // Anything not one of the twelve stock directions is a
+                    // special exit keyed by its verbatim command string.
+                    room.mSpecialExits[name] = dest;
+                }
+
+                // Doors key off the canonical long name (setDoor's convention).
+                const door = DOOR_VALUE[String(rawExit.door ?? '')];
+                if (door) room.doors[name] = door;
+
+                // Weights key off the SHORT name for stock exits, and off the
+                // verbatim command for special ones (setExitWeight's convention).
+                const weight = Number(rawExit.weight);
+                if (Number.isFinite(weight) && weight > 0) {
+                    room.exitWeights[isStock ? DIR_SHORT[dirNum] : name] = weight;
+                }
+
+                // Stock locks are direction numbers; special-exit locks are
+                // recorded by destination id (see getSpecialExits).
+                if (rawExit.locked) {
+                    if (isStock) room.exitLocks.push(dirNum);
+                    else room.mSpecialExitLocks.push(dest);
+                }
+
+                applyCustomLine(room, name, rawExit.customLine);
+            }
+
+            for (const rawStub of (Array.isArray(rawRoom.stubExits) ? rawRoom.stubExits : []) as unknown[]) {
+                const name = typeof rawStub === 'string'
+                    ? rawStub
+                    : String((rawStub as Record<string, unknown>)?.name ?? '');
+                const dir = DIR_NUM_BY_NAME[name];
+                if (!dir) continue;
+                room.stubs.push(dir);
+                // A stub can carry a door/lock too, on the same keys as a real
+                // exit — it just has no destination.
+                const stub = typeof rawStub === 'object' ? rawStub as Record<string, unknown> : {};
+                const door = DOOR_VALUE[String(stub.door ?? '')];
+                if (door) room.doors[name] = door;
+                if (stub.locked) room.exitLocks.push(dir);
+            }
+
+            // Mudlet smuggles the hidden flag through userData on v20 maps;
+            // ingestBinaryRoom lifts this key into the hiddenRooms side-table.
+            if (rawRoom.hidden) room.userData[HIDDEN_FALLBACK_KEY] = 'true';
+
+            if (typeof rawRoom.hash === 'string' && rawRoom.hash) hashes[rawRoom.hash] = roomId;
+
+            rooms[roomId] = room;
+            area.rooms.push(roomId);
+            zLevels.add(room.z);
+        }
+        area.zLevels = [...zLevels].sort((a, b) => a - b);
+    }
+
+    const mCustomEnvColors: Record<number, MudletColor> = {};
+    for (const entry of (Array.isArray(doc.customEnvColors) ? doc.customEnvColors : []) as Record<string, unknown>[]) {
+        const id = Number(entry?.id);
+        if (Number.isFinite(id)) mCustomEnvColors[id] = colorFromRgb24(entry.color24RGB);
+    }
+
+    // `playersRoomId` is Mudlet's per-profile saved room map (mRoomIdHash).
+    const mRoomIdHash: Record<string, number> = {};
+    const players = doc.playersRoomId;
+    if (players && typeof players === 'object' && !Array.isArray(players)) {
+        for (const [profile, id] of Object.entries(players as Record<string, unknown>)) {
+            const n = Number(id);
+            if (Number.isFinite(n)) mRoomIdHash[profile] = n;
+        }
+    }
+
+    return {
+        version: 20,
+        envColors: {}, areaNames, mCustomEnvColors,
+        mpRoomDbHashToRoomId: hashes,
+        mUserData: {},
+        mapSymbolFont: DEFAULT_FONT,
+        mapFontFudgeFactor: Number(doc.mapSymbolFontFudgeFactor) || 1,
+        useOnlyMapFont: !!doc.onlyMapSymbolFontToBeUsed,
+        areas, mRoomIdHash, labels: {}, rooms,
+    };
+}
+
+/**
+ * Attach one exit's `customLine` to the room's four parallel line records.
+ * Keyed like setCustomLine: canonical long name for a stock direction, the
+ * verbatim command for a special exit — which is exactly the JSON's `name`.
+ */
+function applyCustomLine(room: MudletRoom, key: string, raw: unknown): void {
+    if (!raw || typeof raw !== 'object') return;
+    const line = raw as Record<string, unknown>;
+    const coords = Array.isArray(line.coordinates) ? line.coordinates : [];
+    const points = coords
+        .filter((p): p is unknown[] => Array.isArray(p))
+        .map(p => [Number(p[0]) || 0, Number(p[1]) || 0] as [number, number]);
+    if (points.length === 0) return;
+    room.customLines[key] = points;
+    room.customLinesColor[key] = colorFromRgb24(line.color24RGB);
+    room.customLinesArrow[key] = !!line.endsInArrow;
+    // Mudlet omits `style` for the default solid line.
+    room.customLinesStyle[key] = PEN_STYLE_NUM[String(line.style ?? 'solid line')] ?? 1;
+}
+
+/**
+ * Apply `symbol.color24RGB` from a Mudlet JSON map onto the store's per-room
+ * char-colour side table. Separate from the conversion above because
+ * MudletRoom carries no charColor field, so this can only run once
+ * loadFromBinary has created the rooms.
+ */
+function applyJsonSymbolColors(src: unknown, store: MapStore): void {
+    const doc = src as Record<string, unknown> | null;
+    if (!doc || !Array.isArray(doc.areas)) return;
+    for (const area of doc.areas as Record<string, unknown>[]) {
+        for (const room of (Array.isArray(area?.rooms) ? area.rooms : []) as Record<string, unknown>[]) {
+            const sym = room?.symbol;
+            if (!sym || typeof sym !== 'object') continue;
+            const rgb = (sym as Record<string, unknown>).color24RGB;
+            if (!Array.isArray(rgb)) continue;
+            const id = Number(room.id);
+            if (!Number.isFinite(id)) continue;
+            store.setRoomCharColor(id, Number(rgb[0]) || 0, Number(rgb[1]) || 0, Number(rgb[2]) || 0);
+        }
+    }
+}
+
 export function makeArea(): MudletArea {
     return {
         rooms: [], zLevels: [], mAreaExits: {}, gridMode: false,
@@ -605,9 +826,18 @@ export class MapStore {
         catch { return false; }
         if (!parsed || typeof parsed !== 'object') return false;
         const map = parsed as Partial<MudletMap>;
-        if (!map.rooms || !map.areas) return false;
-        try { this.loadFromBinary(map as MudletMap); }
+        // Mudlet's own saveJsonMap output has no top-level `rooms` and keeps
+        // them nested inside an `areas` array — convert that shape first, and
+        // only then fall through to the binary-model shape toJsonString emits.
+        const source = (!map.rooms || Array.isArray(map.areas))
+            ? mudletJsonMapToMudletMap(parsed)
+            : (map.areas ? map as MudletMap : null);
+        if (!source) return false;
+        try { this.loadFromBinary(source); }
         catch { return false; }
+        // Symbol colours live in a side-table (MudletRoom has no charColor
+        // field), so they can only be applied once the rooms exist.
+        applyJsonSymbolColors(parsed, this);
         return true;
     }
 

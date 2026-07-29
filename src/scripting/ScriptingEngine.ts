@@ -425,6 +425,9 @@ export class ScriptingEngine implements EngineHost {
             let freshlyInstalledPackages: string[] = [];
             if (this.vfs) {
                 freshlyInstalledPackages = await ensureDefaultPackages(this.connectionId, this.vfs);
+                // See the disposal note below — the same race applies to this
+                // await, and reloadModulesFromVfs() mutates the store.
+                if (this.disposed) return;
             }
 
             // Modules are loaded from disk on every profile open — XML on disk is the
@@ -439,6 +442,18 @@ export class ScriptingEngine implements EngineHost {
             // sees an initialized map — hashes via getRoomIDbyHash and map-level
             // user data via getMapUserData are immediately queryable.
             const mapLoaded = await this.session.windows.bootstrapMap();
+
+            // Closing the profile — or React's StrictMode remount, or a fast
+            // profile switch — can destroy this engine while the awaits above are
+            // still in flight. destroy() has then already closed the Lua VM and
+            // dropped the store subscription, but this continuation is still
+            // queued and would run the whole profile's script bodies anyway:
+            // applyScriptsFromStore → reloadScript → (runtimes.lua now null) →
+            // runtimeReady.then(...) → a full 198-script load into a dead engine.
+            // Observed as N concurrent zombie engines per open, each re-running
+            // every script, and intermittently as a hard main-thread freeze when
+            // a load lands on a freed lua_State. Bail instead.
+            if (this.disposed) return;
 
             // Saved Lua globals go back into _G before any script runs, so script
             // bodies and sysLoadEvent handlers see their persisted state.
@@ -1659,9 +1674,20 @@ export class ScriptingEngine implements EngineHost {
                 sourceUrl: url,
                 ...(version ? { sourceVersion: version } : {}),
             };
+            // Make the extracted files durable BEFORE registering the package.
+            // ZenFS keeps writes in memory until sync() (ProfileVFS.flush), so a
+            // fire-and-forget flush is lost if the page is killed or wedges
+            // first — leaving the package recorded in profile.json with nothing
+            // on disk. Scripts then load fine (they live in the store) while the
+            // package's data files are simply gone, which is how f2ce-tools'
+            // bundled map databases went missing and its importer reported
+            // "File not found". Registering only after the bytes have landed
+            // means the failure mode is "not installed", which the next
+            // Client.GUI delivery repairs, instead of a half-install that
+            // dedupe treats as complete.
+            await vfs.flush();
             useAppStore.getState().installPackage(this.connectionId, finalManifest, data);
             this.notifyPackageInstalled(finalManifest.name);
-            void vfs.flush();
             const versionSuffix = finalManifest.version ? ` v${finalManifest.version}` : '';
             this.session.events.emit('message',
                 mudletInfo(`installed ${finalManifest.name}${versionSuffix}`),
@@ -2474,10 +2500,17 @@ export class ScriptingEngine implements EngineHost {
      * an empty handler set.
      */
     reloadScript(script: ScriptNode): void {
+        // destroy() closes the Lua VM synchronously, so anything that reaches
+        // here afterwards would load into a freed lua_State. The deferred branch
+        // below is the dangerous one: it survives teardown by construction, so it
+        // re-checks after the await as well as before.
+        if (this.disposed) return;
         if (script.language !== 'lua' || !script.code) return;
         const rt = this.runtimes.lua;
         if (rt) { this.runScriptLoad(rt, script); return; }
-        this.runtimeReady.then(rt => this.runScriptLoad(rt, script)).catch(() => {});
+        this.runtimeReady
+            .then(rt => { if (!this.disposed) this.runScriptLoad(rt, script); })
+            .catch(() => {});
     }
 
     /**

@@ -128,6 +128,12 @@ function parseBlankLinesBehaviour(value: unknown): BlankLinesBehaviour | null {
     return s === 'show' || s === 'hide' || s === 'replacewithspace' ? s : null;
 }
 
+/** Divisor between the value `setConfig("mapRoomSize", …)` takes (Mudlet's
+ *  preferences spin-box scale, 1..20) and the internal `mRoomSize` fraction of
+ *  a grid cell it ends up storing: `dlgMapper::slot_roomSize` does
+ *  `setRoomSize(size / 10.0)`. Mudlet's default spinner value is 5 → 0.5. */
+const MUDLET_ROOM_SIZE_SCALE = 10;
+
 /** Mudlet config keys persisted in the {@link ProfileSettings.config} bag rather
  *  than a dedicated structured field. Each entry gives the value type and the
  *  default `getConfig` returns before the key has been set, so first reads match
@@ -246,11 +252,25 @@ if (typeof document !== 'undefined') {
  * size which matches the line-height Qt's QFontMetrics reports for common
  * fonts.
  */
+// Geyser calls calcFontSize on the per-constraint path (character-unit
+// constraints), so a single re-layout of a large widget tree can reach it
+// thousands of times. Allocating a canvas + 2D context per call costs ~41µs;
+// the result depends only on (family, size), so measure once and reuse both the
+// context and the answer. Measured over 5000 calls: 207ms → 0.1ms.
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+const measureCache = new Map<string, [number, number]>();
+
 function measureMonospaceCell(family: string, size: number): [number, number] {
     const px = size * 4 / 3;
     const fallback: [number, number] = [Math.round(px * 0.6), Math.round(px * 1.2)];
     if (typeof document === 'undefined') return fallback;
-    const ctx = document.createElement('canvas').getContext('2d');
+    const cacheKey = `${family}|${size}`;
+    const hit = measureCache.get(cacheKey);
+    if (hit) return hit;
+    if (measureCtx === undefined) {
+        measureCtx = document.createElement('canvas').getContext('2d');
+    }
+    const ctx = measureCtx;
     if (!ctx) return fallback;
     const stack = family && family.trim()
         ? `"${family.trim().replace(/"/g, '\\"')}", ${DEFAULT_MONO_STACK}`
@@ -262,7 +282,9 @@ function measureMonospaceCell(family: string, size: number): [number, number] {
     const height = (typeof ascent === 'number' && typeof descent === 'number')
         ? ascent + descent
         : px * 1.2;
-    return [Math.round(m.width), Math.round(height)];
+    const cell: [number, number] = [Math.round(m.width), Math.round(height)];
+    measureCache.set(cacheKey, cell);
+    return cell;
 }
 
 // ── Windows ───────────────────────────────────────────────────────────────────
@@ -908,6 +930,34 @@ export class ScriptingAPI {
         useAppStore.getState().patchConnectionProfile(this.connectionId, { mapper: { ...prev, [key]: value } });
     }
 
+    /** Applies a Mudlet-space room size (`mRoomSize` — a fraction of a grid
+     *  cell, same unit as `renderer.settings.roomSize`) while holding the
+     *  *effective* Mudlet exit size constant.
+     *
+     *  Mudlet's exit pen is `(1 / mLineSize) * cellPx * mRoomSize`
+     *  (`T2DMap::paintEvent`), i.e. exits scale with the room size; the
+     *  renderer's `lineWidth` is an independent map-unit width. Rescaling
+     *  `lineWidth` by the same factor reproduces that coupling — and makes a
+     *  combined `setConfig{mapRoomSize=…, mapExitSize=…}` order-independent,
+     *  which matters because `Other.lua` walks the table with `pairs()`. */
+    private setMudletRoomSize(roomSize: number): void {
+        const store = useAppStore.getState();
+        const prev = store.connectionProfile[this.connectionId]?.mapper ?? {};
+        const prevRoomSize = prev.roomSize ?? MAPPER_DEFAULTS.roomSize;
+        const prevLineWidth = prev.lineWidth ?? MAPPER_DEFAULTS.lineWidth;
+        const lineWidth = prevRoomSize > 0 ? prevLineWidth * (roomSize / prevRoomSize) : prevLineWidth;
+        store.patchConnectionProfile(this.connectionId, { mapper: { ...prev, roomSize, lineWidth } });
+    }
+
+    /** The renderer's `lineWidth` expressed in Mudlet's `mLineSize` space —
+     *  the inverse-thickness divisor `getConfig("mapExitSize")` reports. */
+    private mudletExitSize(): number {
+        const roomSize = this.getMapperField('roomSize') ?? MAPPER_DEFAULTS.roomSize;
+        const lineWidth = this.getMapperField('lineWidth') ?? MAPPER_DEFAULTS.lineWidth;
+        if (!(lineWidth > 0)) return MAPPER_DEFAULTS.roomSize / MAPPER_DEFAULTS.lineWidth;
+        return roomSize / lineWidth;
+    }
+
     /** Mudlet `getConfig(key)`. Returns the option's value, or `undefined`
      *  (→ Lua nil) for an unknown key. The no-arg / table forms are handled by
      *  the Lua wrapper in Other.lua, which calls this once per key. */
@@ -938,8 +988,11 @@ export class ScriptingAPI {
             case 'autoClearInputLine':
                 return selectProfileField(useAppStore.getState(), this.connectionId, 'autoClearInput') ?? false;
             // structured — mapper
+            // Mudlet's getConfig reports the *internal* doubles (host.mRoomSize /
+            // host.mLineSize), not the spin-box scale its setConfig takes — see
+            // setConfig below for the (deliberately asymmetric) write side.
             case 'mapRoomSize':        return this.getMapperField('roomSize');
-            case 'mapExitSize':        return this.getMapperField('lineWidth');
+            case 'mapExitSize':        return this.mudletExitSize();
             case 'mapRoundRooms':      return this.getMapperField('roomShape') === 'roundedRectangle';
             case 'mapShowRoomBorders': return this.getMapperField('borders');
             case 'mapShowGrid':        return this.getMapperField('gridEnabled');
@@ -997,14 +1050,33 @@ export class ScriptingAPI {
             case 'autoClearInputLine':
                 useAppStore.getState().patchConnectionProfile(this.connectionId, { autoClearInput: configBool(value) });
                 return true;
+            // Mudlet's setConfig for these two routes through the *preferences*
+            // slots, so the accepted values are the spin-box scale, not the
+            // internal doubles getConfig hands back:
+            //   setConfig("mapRoomSize", n) → dlgMapper::slot_roomSize(n)
+            //                               → T2DMap::setRoomSize(n / 10)
+            //   setConfig("mapExitSize", n) → dlgMapper::slot_exitSize(n)
+            //                               → T2DMap::setExitSize(n), i.e. mLineSize = n
+            // Mudlet's defaults are mapRoomSize 5 (mRoomSize 0.5) and
+            // mapExitSize 10 (mLineSize 10). Both then have to be converted out
+            // of Mudlet's draw-time formulas into the renderer's map units.
             case 'mapRoomSize': {
                 const n = Number(value);
-                if (Number.isFinite(n) && n > 0) this.setMapperField('roomSize', n);
+                // Mudlet's room size is a fraction of a grid cell — the same
+                // unit as renderer.settings.roomSize — once the /10 spin-box
+                // scaling is undone.
+                if (Number.isFinite(n) && n > 0) this.setMudletRoomSize(n / MUDLET_ROOM_SIZE_SCALE);
                 return true;
             }
             case 'mapExitSize': {
                 const n = Number(value);
-                if (Number.isFinite(n) && n > 0) this.setMapperField('lineWidth', n);
+                // mLineSize is an inverse divisor: Mudlet's exit pen is
+                // (1 / mLineSize) * cellPx * mRoomSize, so in renderer map units
+                // lineWidth = roomSize / mLineSize. Bigger mapExitSize → thinner
+                // exits, which is why the preferences spinner shows 50/mLineSize.
+                if (Number.isFinite(n) && n > 0) {
+                    this.setMapperField('lineWidth', (this.getMapperField('roomSize') ?? MAPPER_DEFAULTS.roomSize) / n);
+                }
                 return true;
             }
             case 'mapRoundRooms':
