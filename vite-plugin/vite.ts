@@ -113,7 +113,25 @@ export default function mudix(): PluginOption[] {
                     // pre-bundled explicitly (Vite doesn't interop CJS served
                     // raw). Extend this list if dev mode reports "does not
                     // provide an export named ..." for another dependency.
-                    include: ['eventemitter3', 'wasmoon-lua5.1', '@zenfs/core > readable-stream'],
+                    //
+                    // 'mudlet-map-editor' stands for its whole subtree rather
+                    // than the individual CJS leaves: the editor pulls in
+                    // react-i18next, whose own deps (use-sync-external-store,
+                    // html-parse-stringify > void-elements) are CJS, and which
+                    // of them trips first depends on evaluation order. Listing
+                    // the editor pre-bundles the lot in one go — and mirrors
+                    // mudix's own dev server, where the scanner finds the
+                    // `import('mudlet-map-editor')` in MapEditorModal and
+                    // pre-bundles it anyway. Bare package names only, no
+                    // subpaths: `mudlet-map-renderer/bigmap` and friends only
+                    // exist in newer versions, and an unresolvable `include`
+                    // entry is a hard dev-server startup failure.
+                    include: [
+                        'eventemitter3',
+                        'wasmoon-lua5.1',
+                        '@zenfs/core > readable-stream',
+                        'mudlet-map-editor',
+                    ],
                 },
                 // Workers don't inherit `plugins`; re-declare nodePolyfills so
                 // the map parser worker (Buffer) gets the same shim it gets on
