@@ -85,10 +85,12 @@ export function installPackageBindings({ lua, api }: BindingContext): void {
         api.setModulePriority(n, Number.isFinite(p) ? p : 0);
         return true;
     });
-    lua.global.set('getModulePriority', (name: unknown) => {
+    // getModulePriority reports an unknown module as a VALUE failure
+    // (warnArgumentValue) rather than raising, unlike its setter; the null is
+    // shaped into (nil, "module doesn't exist") by Bridge.lua.
+    lua.global.set('__getModulePriority', (name: unknown) => {
         const n = String(name ?? '');
-        requireModule(n, 'getModulePriority');
-        return api.getModulePriority(n);
+        return api.getModuleInfo(n) ? api.getModulePriority(n) : null;
     });
     lua.global.set('__getModules', () => api.getModules());
     // Mudlet getModuleInfo(name [, key]). The Bridge.lua wrapper handles the
@@ -109,7 +111,7 @@ export function installPackageBindings({ lua, api }: BindingContext): void {
     // Mudlet getModulePath(name) → absolute VFS path of the module's XML, or
     // nil. Like getModuleInfo, returns nil gracefully for an unknown module
     // (no requireModule raise) so probing scripts don't error.
-    lua.global.set('getModulePath', (name: unknown) =>
-        api.getModulePath(String(name ?? '')) ?? false);
+    lua.global.set('__getModulePath', (name: unknown) =>
+        api.getModulePath(String(name ?? '')) ?? null);
 }
 

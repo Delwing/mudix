@@ -183,6 +183,12 @@ export class LabelManager {
         return this.labels.has(name);
     }
 
+    /** Read-only handle on a label's stored state, for the geometry/visibility/
+     *  text getters (getWindowGeometry, windowVisible, getLabelText). */
+    get(name: string): Readonly<LabelState> | undefined {
+        return this.labels.get(name);
+    }
+
     destroy(name: string): boolean {
         const lbl = this.labels.get(name);
         if (!lbl) return false;

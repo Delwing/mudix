@@ -98,7 +98,10 @@ describe('setConfig / getConfig', () => {
         // Boolean false → 'never': echoCommand emits nothing.
         h.run('setConfig("showSentText", false)');
         expect(h.session.showSentText).toBe('never');
-        expect(h.run('return getConfig("showSentText")')).toBe('never');
+        // The bare getConfig reads the legacy on/off form; the three-mode
+        // string is the opt-in getConfig(key, true) shape.
+        expect(h.run('return getConfig("showSentText")')).toBe(false);
+        expect(h.run('return getConfig("showSentText", true)')).toBe('never');
         let before = h.mainOutput.length;
         h.session.echoCommand('look');
         expect(h.mainOutput.length).toBe(before);
@@ -116,7 +119,7 @@ describe('setConfig / getConfig', () => {
         // 'always' → echoes even when the per-call echo flag is false.
         expect(h.run('return setConfig("showSentText", "always")')).toBe(true);
         expect(h.session.showSentText).toBe('always');
-        expect(h.run('return getConfig("showSentText")')).toBe('always');
+        expect(h.run('return getConfig("showSentText", true)')).toBe('always');
         before = h.mainOutput.length;
         h.session.send('look', false);
         expect(h.mainOutput.length).toBe(before + 1);
@@ -124,7 +127,7 @@ describe('setConfig / getConfig', () => {
         // Explicit 'never' string round-trips; a bogus mode string is rejected.
         expect(h.run('return setConfig("showSentText", "never")')).toBe(true);
         expect(h.session.showSentText).toBe('never');
-        expect(h.run('return setConfig("showSentText", "bogus")')).toBe(false);
+        expect(h.run('return setConfig("showSentText", "bogus")')).toBeNull();
         expect(h.session.showSentText).toBe('never');
 
         // Restore the default so later tests aren't affected.
@@ -213,7 +216,7 @@ describe('setConfig / getConfig', () => {
         expect(h.run('return setConfig("caretShortcut", "ctrltab")')).toBe(true);
         expect(h.run('return getConfig("caretShortcut")')).toBe('ctrltab');
         // out-of-range enum value is rejected
-        expect(h.run('return setConfig("caretShortcut", "bogus")')).toBe(false);
+        expect(h.run('return setConfig("caretShortcut", "bogus")')).toBeNull();
         expect(h.run('return getConfig("caretShortcut")')).toBe('ctrltab');
     });
 
@@ -252,7 +255,7 @@ describe('setConfig / getConfig', () => {
         expect(h.session.blankLinesBehaviour).toBe('replacewithspace');
 
         // Unknown mode string is rejected, leaving the live value unchanged.
-        expect(h.run('return setConfig("blankLinesBehaviour", "bogus")')).toBe(false);
+        expect(h.run('return setConfig("blankLinesBehaviour", "bogus")')).toBeNull();
         expect(h.session.blankLinesBehaviour).toBe('replacewithspace');
 
         // Restore the default so later tests / rendering aren't affected.
@@ -260,13 +263,13 @@ describe('setConfig / getConfig', () => {
     });
 
     it('rejects writes to read-only keys and returns a value for them', () => {
-        expect(h.run('return setConfig("logDirectory", "/x")')).toBe(false);
+        expect(h.run('return setConfig("logDirectory", "/x")')).toBeNull();
         expect(typeof h.run('return getConfig("logDirectory")')).toBe('string');
     });
 
     it('returns nil for unknown keys and false when setting them', () => {
         expect(h.run('return getConfig("totallyMadeUpKey")')).toBeNull();
-        expect(h.run('return setConfig("totallyMadeUpKey", 1)')).toBe(false);
+        expect(h.run('return setConfig("totallyMadeUpKey", 1)')).toBeNull();
     });
 
     it('round-trips mapInfoColor as an {r,g,b,a} table with default alpha', () => {
@@ -284,9 +287,10 @@ describe('setConfig / getConfig', () => {
         expect(useAppStore.getState().connectionProfile[CONN]?.config?.mapInfoColor)
             .toEqual({ r: 1, g: 2, b: 3, a: 255 });
         // Out-of-range channel is rejected (Mudlet validates 0..255).
-        expect(h.run('return setConfig("mapInfoColor", {300, 0, 0, 0})')).toBe(false);
-        // Non-table value is rejected.
-        expect(h.run('return setConfig("mapInfoColor", "nope")')).toBe(false);
+        expect(h.run('return setConfig("mapInfoColor", {300, 0, 0, 0})')).toBeNull();
+        // A non-table value is the wrong TYPE, which Mudlet raises on rather
+        // than reporting as a refusal.
+        expect(() => h.run('return setConfig("mapInfoColor", "nope")')).toThrow();
     });
 
     it('supports the Other.lua table form and no-arg dump', () => {

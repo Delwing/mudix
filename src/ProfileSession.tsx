@@ -641,6 +641,15 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
         return () => engine.setCmdLineProvider(null);
     }, [session, connection.id, engineRef]);
 
+    // Mirror every command-bar edit into the engine. Lua's getCmdLine() reads
+    // that mirror rather than this state, because a script that stages text
+    // (printCmdLine / sendCmdLine) and reads it back in the same chunk cannot
+    // wait for a re-render — the staging call updates the mirror itself. The two
+    // writers are last-write-wins, which is correct in both directions.
+    useEffect(() => {
+        engineRef.current?.setCmdLineValue(command);
+    }, [command, engineRef]);
+
     // Drain disk-backed VFS writes before navigation. Folder-linked profiles
     // use async write-through; without this, edits made just before close can
     // be lost. visibilitychange fires more reliably on mobile/PWA than unload.

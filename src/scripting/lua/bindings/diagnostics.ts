@@ -45,7 +45,9 @@ export function installDiagnosticsBindings({ lua, api }: BindingContext): void {
     // Enter. The cmdLineName arg is ignored — mudix has a single command
     // bar.
     lua.global.set('sendCmdLine', (a: unknown, b?: unknown) => {
-        const text = b !== undefined ? String(b ?? '') : String(a ?? '');
+        // wasmoon hands an omitted Lua argument over as `null`, not `undefined`,
+        // so `== null` is what distinguishes "no cmdLineName given".
+        const text = b == null ? String(a ?? '') : String(b);
         api.printCmdLine(text);
     });
 }

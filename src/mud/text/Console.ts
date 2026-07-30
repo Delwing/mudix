@@ -309,7 +309,11 @@ export class Console {
         if (this.history.length === 0) return false;
         if (!Number.isFinite(line) || line < 0) return false;
         if (!Number.isFinite(col) || col < 0) return false;
-        this.cursorIdx = Math.min(Math.trunc(line), this.history.length - 1);
+        // A line past the end of the buffer is refused outright rather than
+        // clamped — Mudlet's TBuffer::moveCursor returns false for it, and a
+        // script that asks for a line that isn't there wants to hear so.
+        if (Math.trunc(line) > this.history.length - 1) return false;
+        this.cursorIdx = Math.trunc(line);
         this.cursorCol = Math.trunc(col);
         return true;
     }
@@ -355,6 +359,18 @@ export class Console {
         return this.cursorIdx;
     }
     getLineCount(): number  { return this.history.length - 1; }
+
+    /**
+     * Mudlet `moveCursorEnd` — park the cursor on the empty line past the last
+     * complete one, which is where Mudlet's buffer always keeps its "current"
+     * entry (so `getLineNumber() == getLineCount()` right after). That slot is
+     * one past `history`, which {@link moveTo} deliberately refuses, so it is
+     * set here rather than routed through it.
+     */
+    moveToEnd(): void {
+        this.cursorIdx = this.history.length;
+        this.cursorCol = 0;
+    }
 
     getLines(from: number, to: number): string[] {
         return this.history.slice(from - 1, to).map(b => b.text);

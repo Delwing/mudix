@@ -158,9 +158,12 @@ describe('loadJsonMap — Mudlet saveJsonMap format', () => {
     // These per-exit attributes were verified in bulk against a real 26,988-room
     // Mudlet export: every count (308 doors, 11,794 weights, 248 locks, 2,671
     // custom lines) matched the source file exactly.
-    it('maps exit doors onto the long direction name', () => {
+    // Doors key off the SHORT exit name ("n"/"ne"/…/"up"/"down"/"in"/"out") —
+    // the keys TRoom::auditExits writes and the only ones setDoor/getDoors
+    // accept, so a door written here is readable through the Lua API.
+    it('maps exit doors onto the short direction name', () => {
         const rooms = load().toMudletMap().rooms;
-        expect(rooms[1].doors).toMatchObject({ east: 2 });   // closed
+        expect(rooms[1].doors).toMatchObject({ e: 2 });      // closed
         expect(rooms[1].doors.out).toBe(1);                  // open, from a stub
     });
 

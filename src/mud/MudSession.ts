@@ -281,6 +281,11 @@ export class MudSession {
         return this.client?.sendSocket(data) ?? false;
     }
 
+    /** True when there is no live socket — see MudClient.isSocketUnconnected. */
+    isSocketUnconnected(): boolean {
+        return this.client?.isSocketUnconnected() ?? true;
+    }
+
     feedTelnet(data: string): void {
         this.client?.feedTelnet(data);
     }
@@ -291,6 +296,12 @@ export class MudSession {
 
     sendTelnetChannel102(msg: string): boolean {
         return this.client?.sendTelnetChannel102(msg) ?? false;
+    }
+
+    /** Whether MSP was negotiated on the live connection. False with no client,
+     *  which is what a never-connected profile should report. */
+    isMspNegotiated(): boolean {
+        return this.client?.isMspNegotiated() ?? false;
     }
 
     // ── Mudlet replay (record + playback) ───────────────────────────────────

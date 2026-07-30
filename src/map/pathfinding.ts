@@ -14,6 +14,25 @@ const DIR_SHORT: Record<number, string> = {
     11: 'in', 12: 'out',
 };
 
+/**
+ * Verdict from a `setExitWeightFilter` callback for one candidate exit.
+ * `blocked` drops the edge from the graph entirely; `weightOverride` replaces
+ * the edge cost that the exit weight / target room weight would have given.
+ * Both unset means "leave this exit alone".
+ */
+export interface ExitWeightFilterResult {
+    blocked?: boolean;
+    weightOverride?: number;
+}
+
+/**
+ * Called once per candidate exit while the graph is explored, with the room
+ * being expanded and the exit's key — the short direction name ("e", "up") for
+ * stock exits, or the verbatim command for special exits. Mirrors Mudlet's
+ * `applyExitWeightFilter(source, exitKey)` (TMap.cpp).
+ */
+export type ExitWeightFilter = (roomId: number, exitCommand: string) => ExitWeightFilterResult;
+
 export interface PathfindResult {
     /** Room ids visited in order, excluding the start room. Matches Mudlet's
      *  speedWalkPath, which prepends each step until reaching `from` but never
@@ -38,10 +57,11 @@ export interface PathfindResult {
  * (clamped to ≥1 to keep the heap monotonic).
  *
  * Skips locked rooms (`isLocked`), locked stock-direction exits (`exitLocks`
- * carries the 1-12 dir codes), and locked special exits. The binary reader
- * keys special-exit locks by destination room id (`mSpecialExitLocks` is an
- * array of target ids) — its round-trip loses per-command resolution when
- * multiple cmds share a destination, but that's the on-disk representation.
+ * carries the 1-12 dir codes), and locked special exits. Special-exit locks are
+ * per COMMAND in Mudlet; pass `isSpecialExitLocked` to resolve them that way.
+ * Without it the room's `mSpecialExitLocks` is used, which the binary reader
+ * keys by destination room id — that loses per-command resolution when several
+ * commands share a destination, but it is the on-disk representation.
  *
  * Trivial `from == to` returns an empty path with totalWeight 0 (also
  * Mudlet's behavior). Returns null when either room is missing or no route
@@ -51,6 +71,8 @@ export function findPath(
     rooms: ReadonlyMap<number, MudletRoom>,
     from: number,
     to: number,
+    exitFilter?: ExitWeightFilter | null,
+    isSpecialExitLocked?: (roomId: number, command: string) => boolean,
 ): PathfindResult | null {
     const startRoom = rooms.get(from);
     const goalRoom = rooms.get(to);
@@ -128,47 +150,61 @@ export function findPath(
         if (curG === undefined || f - heuristic(current) > curG + 1e-9) continue;
 
         const room = rooms.get(current);
-        if (!room || room.isLocked) continue;
+        if (!room) continue;
+        // Without a filter a locked source room kills every exit, so bail early
+        // as before. With one, a numeric weight override rescues individual
+        // exits (Mudlet's `filterOverridesBlocks`), so the check moves per-exit.
+        if (room.isLocked && !exitFilter) continue;
 
         const exitWeights = room.exitWeights ?? {};
         const lockedDirs = room.exitLocks ?? [];
 
+        // Relax one candidate edge, consulting the exit weight filter exactly
+        // where Mudlet does (TMap.cpp): "block" drops the edge outright, while
+        // a numeric override both replaces the cost and bypasses every lock —
+        // source room, exit, and target room alike.
+        const relax = (target: number, exitKey: string, exitLocked: boolean): void => {
+            if (!target || target <= 0 || target === current) return;
+            let override: number | undefined;
+            if (exitFilter) {
+                const verdict = exitFilter(current, exitKey);
+                if (verdict.blocked) return;
+                override = verdict.weightOverride;
+            }
+            const bypassesLocks = override !== undefined;
+            if (!bypassesLocks && (room.isLocked || exitLocked)) return;
+            const targetRoom = rooms.get(target);
+            if (!targetRoom) return;
+            if (!bypassesLocks && targetRoom.isLocked) return;
+            const rawCost = bypassesLocks ? override! : (exitWeights[exitKey] ?? targetRoom.weight ?? 1);
+            const cost = rawCost > 0 ? rawCost : 1;
+            const tentative = curG + cost;
+            if (tentative < (gScore.get(target) ?? Infinity)) {
+                gScore.set(target, tentative);
+                came.set(target, { from: current, dir: exitKey, cost });
+                heapPush([tentative + heuristic(target), target]);
+            }
+        };
+
         // Stock 12 directions
         for (const dirIntStr of Object.keys(DIR_FIELD)) {
             const di = Number(dirIntStr);
-            if (lockedDirs.includes(di)) continue;
             const field = DIR_FIELD[di];
-            const target = (room as unknown as Record<string, number>)[field];
-            if (!target || target <= 0 || target === current) continue;
-            const targetRoom = rooms.get(target);
-            if (!targetRoom || targetRoom.isLocked) continue;
-            const shortKey = DIR_SHORT[di];
-            const rawCost = exitWeights[shortKey] ?? targetRoom.weight ?? 1;
-            const cost = rawCost > 0 ? rawCost : 1;
-            const tentative = curG + cost;
-            if (tentative < (gScore.get(target) ?? Infinity)) {
-                gScore.set(target, tentative);
-                came.set(target, { from: current, dir: shortKey, cost });
-                heapPush([tentative + heuristic(target), target]);
-            }
+            relax(
+                (room as unknown as Record<string, number>)[field],
+                DIR_SHORT[di],
+                lockedDirs.includes(di),
+            );
         }
 
-        // Special exits — keyed by command string. Lock filter is by
-        // destination id (binary-reader convention; see function docs).
+        // Special exits — keyed by command string; see the function docs for
+        // how the lock is resolved.
         const lockedSpecialTargets = room.mSpecialExitLocks ?? [];
         for (const [cmd, target] of Object.entries(room.mSpecialExits ?? {})) {
-            if (!target || target <= 0 || target === current) continue;
-            if (lockedSpecialTargets.includes(target)) continue;
-            const targetRoom = rooms.get(target);
-            if (!targetRoom || targetRoom.isLocked) continue;
-            const rawCost = exitWeights[cmd] ?? targetRoom.weight ?? 1;
-            const cost = rawCost > 0 ? rawCost : 1;
-            const tentative = curG + cost;
-            if (tentative < (gScore.get(target) ?? Infinity)) {
-                gScore.set(target, tentative);
-                came.set(target, { from: current, dir: cmd, cost });
-                heapPush([tentative + heuristic(target), target]);
-            }
+            const locked = isSpecialExitLocked
+                ? isSpecialExitLocked(current, cmd)
+                : lockedSpecialTargets.includes(target);
+            relax(target, cmd, locked);
         }
     }
     return null;

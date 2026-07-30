@@ -13,6 +13,9 @@ interface TimerEntry {
     start: number;
     /** Delay/interval in ms (Mudlet stores seconds; we store the resolved ms). */
     intervalMs: number;
+    /** What the timer runs when it comes due. Held so {@link pumpDue} can fire a
+     *  timer without going through the (blocked) event loop. */
+    fire: () => void;
 }
 
 export class TimerEngine {
@@ -36,15 +39,54 @@ export class TimerEngine {
         const start = Date.now();
         if (repeat) {
             const handle = setInterval(fn, intervalMs) as unknown as ReturnType<typeof setTimeout>;
-            this.temp.set(id, { handle, repeat: true, start, intervalMs });
+            this.temp.set(id, { handle, repeat: true, start, intervalMs, fire: fn });
         } else {
             const handle = setTimeout(() => {
                 this.temp.delete(id);
                 fn();
             }, intervalMs);
-            this.temp.set(id, { handle, repeat: false, start, intervalMs });
+            this.temp.set(id, { handle, repeat: false, start, intervalMs, fire: fn });
         }
         return id;
+    }
+
+    /**
+     * Fire every one-shot timer that has come due, without waiting for the
+     * event loop to deliver its setTimeout.
+     *
+     * This exists for `waitForEvent`, the busted-only helper Mudlet implements
+     * by spinning a nested QEventLoop. A browser can't re-enter its event loop,
+     * so a synchronous wait would block the very setTimeout it is waiting on and
+     * deadlock; pumping the due timers by hand is the equivalent of Qt draining
+     * its timer queue inside that nested loop.
+     *
+     * Repeating timers are deliberately skipped: their setInterval is still
+     * armed, and firing them here would double-fire each tick. A repeat timer
+     * therefore misses ticks across a synchronous wait — the same thing that
+     * happens whenever the main thread is busy.
+     *
+     * Returns the number of timers fired.
+     */
+    pumpDue(now = Date.now()): number {
+        let fired = 0;
+        // Snapshot first: a callback can add or kill timers, and mutating the
+        // map underneath a live iteration would skip or revisit entries.
+        const due: Array<() => void> = [];
+        for (const [id, entry] of this.temp) {
+            if (entry.repeat || now < entry.start + entry.intervalMs) continue;
+            clearTimeout(entry.handle);
+            this.temp.delete(id);
+            due.push(entry.fire);
+        }
+        for (const [id, entry] of this.perm) {
+            if (entry.repeat || now < entry.start + entry.intervalMs) continue;
+            clearTimeout(entry.handle);
+            // entry.fire retires the perm bookkeeping itself.
+            due.push(entry.fire);
+            void id;
+        }
+        for (const fire of due) { fire(); fired++; }
+        return fired;
     }
 
     killTimer(id: number): boolean {
@@ -118,17 +160,20 @@ export class TimerEngine {
         const start = Date.now();
         if (timer.repeat) {
             const handle = setInterval(fire, intervalMs) as unknown as ReturnType<typeof setTimeout>;
-            this.perm.set(timer.id, { handle, repeat: true, start, intervalMs });
+            this.perm.set(timer.id, { handle, repeat: true, start, intervalMs, fire });
         } else {
-            const handle = setTimeout(() => {
+            const retire = () => {
                 this.perm.delete(timer.id);
                 this.prevDesc.delete(timer.id);
                 if (this.permNameToId.get(timer.name) === timer.id) {
                     this.permNameToId.delete(timer.name);
                 }
-                fire();
-            }, intervalMs);
-            this.perm.set(timer.id, { handle, repeat: false, start, intervalMs });
+            };
+            const handle = setTimeout(() => { retire(); fire(); }, intervalMs);
+            this.perm.set(timer.id, {
+                handle, repeat: false, start, intervalMs,
+                fire: () => { retire(); fire(); },
+            });
         }
     }
 

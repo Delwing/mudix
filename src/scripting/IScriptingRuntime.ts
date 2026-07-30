@@ -87,6 +87,13 @@ export interface IScriptingRuntime {
      * (unlike permanent items) don't live in the persisted store.
      */
     tempItemExists(id: number, type: string): boolean;
+    /** Publish one use of a server-defined MXP element as `mxp.<element>`. */
+    setMxpElement(name: string, attrs: Record<string, string>): void;
+    /** Whether a live temp item is enabled — backs `isActive(id, type)`. */
+    tempItemEnabled(id: number): boolean;
+    /** enable/disable a live temp item by id — backs enableTrigger/disableTrigger
+     *  (and the alias pair) when handed the numeric id rather than a name. */
+    setTempItemEnabled(id: number, enabled: boolean): boolean;
     /** Rebuild saved Lua globals (a Mudlet `<VariablePackage>` tree) into `_G`. */
     restoreVariables(vars: MudletVariable[]): void;
     /** Snapshot the save-listed globals out of `_G` into a variable tree. */

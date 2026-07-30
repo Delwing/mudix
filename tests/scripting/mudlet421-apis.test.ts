@@ -68,19 +68,28 @@ describe('Mudlet 4.21 API additions', () => {
     it('mudlet.supports.mmcp is false', () => {
       expect(env.run('return mudlet.supports.mmcp')).toBe(false);
     });
-    it('mmcp.* is a table of callable no-ops', () => {
+    // No peer can ever connect in a browser, so mmcp reports an empty peer list
+    // in Mudlet's shape — (nil, reason) — rather than a bare false. That is the
+    // genuine state of the client list, and what scripts branch on.
+    it('mmcp.* reports an empty peer list in Mudlet\'s shape', () => {
       expect(env.run('return type(mmcp)')).toBe('table');
-      expect(env.run('return mmcp.chatAll("hi")')).toBe(false);
-      expect(env.run('return type(mmcp.getClientFlags())')).toBe('table');
+      expect(env.run('local _, e = mmcp.chatAll("hi") return e')).toMatch(/no connected clients/);
+      expect(env.run('local _, e = mmcp.getClientFlags("x") return e')).toMatch(/no connected clients/);
+      expect(env.run('local _, e = mmcp.chatTo("nobody", "hi") return e'))
+        .toMatch(/no client by that name or id/);
+      expect(env.run('return mmcp.getClientList()')).toBeNull();
       expect(env.run('return mmcp.chatName()')).toBe('');
     });
   });
 
   describe('permExactMatchTrigger binding', () => {
-    it('is callable and returns a number (flatten/split path works)', () => {
-      // -1 here because ScriptingEngine's CRUD callback isn't wired in this
-      // harness; the point is the Bridge.lua flatten + JS split runs cleanly.
-      expect(typeof env.run('return permExactMatchTrigger("t", "", {"exact"}, "")')).toBe('number');
+    it('is callable and runs the flatten/split path', () => {
+      // Creation fails because ScriptingEngine's CRUD callback isn't wired in
+      // this harness, and Mudlet's perm* report that by raising. The raise
+      // happens after Bridge.lua's flatten and the JS split, so this still
+      // exercises the path it is here to cover.
+      expect(() => env.run('return permExactMatchTrigger("t", "", {"exact"}, "")'))
+        .toThrow(/permExactMatchTrigger: cannot create trigger/);
     });
   });
 

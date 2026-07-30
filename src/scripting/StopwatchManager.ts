@@ -232,11 +232,24 @@ export class StopwatchManager {
      * a watch. Returns false for an unknown watch, an empty new name, or when
      * another watch already uses the new name (Mudlet rejects duplicate names).
      */
-    setName(arg: number | string, newName: string): boolean {
+    /**
+     * Mudlet `setStopWatchName(id|name, newName)`. Refuses a name another
+     * stopwatch already carries, naming that one — the reason has to reach the
+     * caller, so this returns the message (null on success) rather than a bare
+     * boolean the binding would have to guess a reason for.
+     */
+    setName(arg: number | string, newName: string): boolean | string {
         const w = this.resolve(arg);
-        if (!w || typeof newName !== 'string' || newName.length === 0) return false;
-        for (const other of this.watches.values()) {
-            if (other !== w && other.name === newName) return false;
+        // false is reserved for "no such stopwatch" so the Lua guard can phrase
+        // that miss the way it phrases every other one (by id or by name).
+        if (!w) return false;
+        for (const [otherId, other] of this.watches) {
+            if (other !== w && other.name === newName && newName.length > 0) {
+                return `the name '${newName}' is already in use for another stopwatch (id:${otherId})`;
+            }
+        }
+        if (typeof newName !== 'string' || newName.length === 0) {
+            return 'the stopwatch name cannot be empty';
         }
         w.name = newName;
         if (w.persistent) this.persist();

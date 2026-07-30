@@ -58,6 +58,30 @@ end
 local function make_conn(conn_id)
     local conn = {}
 
+    -- Transaction handling mirrors LuaSQL's sqlite3 driver: autocommit is on
+    -- until setautocommit(false), which opens a transaction there and then and
+    -- re-opens one after every commit/rollback. db:create turns it off for every
+    -- database it makes, so db.Database:_begin (which only stops db:add from
+    -- committing each row) leaves the rows inside the open transaction for
+    -- _rollback to discard. Treating commit/rollback as no-ops — as this shim
+    -- used to — made _rollback silently keep every "discarded" row.
+    local auto_commit = true
+    local in_transaction = false
+    local function begin_transaction()
+        if not in_transaction then
+            __sql_exec(conn_id, "BEGIN")
+            in_transaction = true
+        end
+    end
+    local function finish(verb)
+        if in_transaction then
+            __sql_exec(conn_id, verb)
+            in_transaction = false
+        end
+        if not auto_commit then begin_transaction() end
+        return true
+    end
+
     function conn:execute(sql)
         local result = __sql_exec(conn_id, sql)
         if result == nil then
@@ -89,13 +113,29 @@ local function make_conn(conn_id)
     end
 
     function conn:close()
+        -- Commit rather than drop: closing with work pending should persist it,
+        -- which is what a caller that never called commit() expects.
+        auto_commit = true
+        finish("COMMIT")
         __sql_close(conn_id)
         return true
     end
 
-    function conn:commit() return true end
-    function conn:rollback() return true end
-    function conn:setautocommit() return true end
+    function conn:commit() return finish("COMMIT") end
+    function conn:rollback() return finish("ROLLBACK") end
+
+    function conn:setautocommit(on)
+        auto_commit = on ~= false
+        if auto_commit then
+            if in_transaction then
+                __sql_exec(conn_id, "COMMIT")
+                in_transaction = false
+            end
+        else
+            begin_transaction()
+        end
+        return true
+    end
 
     return conn
 end

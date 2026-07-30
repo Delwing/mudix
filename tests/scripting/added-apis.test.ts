@@ -131,10 +131,15 @@ describe('sendMSDP / sendSocket / feedTelnet / disconnect — wiring', () => {
   beforeEach(async () => { env = await createTestRuntime(); });
   afterEach(() => env.dispose());
 
-  it('sendMSDP / sendSocket return false when disconnected', () => {
-    expect(env.run('return (sendMSDP("ROOM"))')).toBe(false);
-    expect(env.run('return (sendMSDP("REPORT", "HP", "MP"))')).toBe(false);
-    expect(env.run('return (sendSocket("\\255\\250\\240"))')).toBe(false);
+  // Mudlet reports a refused send as (nil, errMsg) rather than a bare false,
+  // and names the reason — scripts branch on the message.
+  it('sendMSDP / sendSocket return nil and a reason when disconnected', () => {
+    expect(env.run('local _, e = sendMSDP("ROOM") return e'))
+      .toMatch(/not connected to game server/);
+    expect(env.run('local _, e = sendMSDP("REPORT", "HP", "MP") return e'))
+      .toMatch(/not connected to game server/);
+    expect(env.run('local _, e = sendSocket("\\255\\250\\240") return e'))
+      .toMatch(/unable to send/);
   });
 
   it('feedTelnet and disconnect are callable without a connection', () => {
@@ -186,16 +191,18 @@ describe('getMapZoom / setMapZoom / updateMap — wiring', () => {
   beforeEach(async () => { env = await createTestRuntime(); });
   afterEach(() => env.dispose());
 
-  it('report no-map and do not throw with no panel open', () => {
-    expect(env.run('return (getMapZoom())')).toBe(false);
-    // A valid zoom (>= 3.0) still reports false because no panel is mounted.
-    expect(env.run('return (setMapZoom(5))')).toBe(false);
+  // Mudlet keeps the zoom on the area (TArea::mLast2DMapZoom), so it answers
+  // with no mapper mounted — an area that has never been zoomed reads back the
+  // default, and setting one succeeds whether or not a panel is showing it.
+  it('answer from the area with no panel open, and do not throw', () => {
+    expect(env.run('return (getMapZoom())')).toBe(20);
+    expect(env.run('return (setMapZoom(5))')).toBe(true);
     expect(() => env.run('updateMap()')).not.toThrow();
   });
 
   it('rejects a zoom below the Mudlet minimum of 3.0', () => {
-    expect(env.run('return (setMapZoom(2))')).toBe(false);
-    expect(env.run('return (setMapZoom(0))')).toBe(false);
+    expect(env.run('return (setMapZoom(2))')).toBeNull();
+    expect(env.run('return (setMapZoom(0))')).toBeNull();
   });
 });
 
@@ -205,8 +212,11 @@ describe('connectToServer — port validation', () => {
   afterEach(() => env.dispose());
 
   it('rejects out-of-range ports before attempting a connection', () => {
-    expect(env.run('return (connectToServer("example.org", 0))')).toBe(false);
-    expect(env.run('return (connectToServer("example.org", 99999))')).toBe(false);
+    // Mudlet's contract is (nil, errMsg) naming the bad port.
+    expect(env.run('local _, e = connectToServer("example.org", 0) return e'))
+      .toMatch(/invalid port number 0/);
+    expect(env.run('local _, e = connectToServer("example.org", 99999) return e'))
+      .toMatch(/invalid port number 99999/);
   });
 });
 
@@ -294,15 +304,19 @@ describe('room user data — getAllRoomUserData / clearRoomUserData(Item) / rese
   });
 
   it('reports the miss for a non-existent room', () => {
-    expect(env.run('return (getAllRoomUserData(999))')).toBe(false);
-    expect(env.run('return (clearRoomUserData(999))')).toBe(false);
-    expect(env.run('return (clearRoomUserDataItem(999, "x"))')).toBe(false);
-    expect(env.run('return (resetRoomArea(999))')).toBe(false);
+    // Mudlet reports every one of these misses as (nil, errMsg).
+    expect(env.run('return (getAllRoomUserData(999))')).toBeNull();
+    expect(env.run('return (clearRoomUserData(999))')).toBeNull();
+    expect(env.run('return (clearRoomUserDataItem(999, "x"))')).toBeNull();
+    expect(env.run('return (resetRoomArea(999))')).toBeNull();
   });
 
   it('resetRoomArea moves a room to the void area (-1)', () => {
-    env.run('addRoom(20, 5)');
-    expect(env.run('return getRoomArea(20)')).toBe(5);
+    // addRoom's areaID must name an existing area — Mudlet does not create one
+    // on demand, it parks the room in -1 and reports the failed placement.
+    const aid = env.run('return (addAreaName("Vault"))') as number;
+    env.run(`addRoom(20, ${aid})`);
+    expect(env.run('return getRoomArea(20)')).toBe(aid);
     expect(env.run('return (resetRoomArea(20))')).toBe(true);
     expect(env.run('return getRoomArea(20)')).toBe(-1);
   });
@@ -320,15 +334,15 @@ describe('area user data + grid mode + getAreaTableSwap', () => {
     expect(env.run(`return (getAreaUserData(${aid}, "music"))`)).toBe('birds.mp3');
     expect(env.run(`return (getAllAreaUserData(${aid})).music`)).toBe('birds.mp3');
     expect(env.run(`return (clearAreaUserDataItem(${aid}, "music"))`)).toBe(true);
-    expect(env.run(`return (getAreaUserData(${aid}, "music"))`)).toBe(false);
+    expect(env.run(`return (getAreaUserData(${aid}, "music"))`)).toBeNull();
     expect(env.run(`return (clearAreaUserData(${aid}))`)).toBe(false); // already empty
   });
 
   it('reports the miss for a non-existent area', () => {
-    expect(env.run('return (getAreaUserData(999, "k"))')).toBe(false);
-    expect(env.run('return (getAllAreaUserData(999))')).toBe(false);
-    expect(env.run('return (setAreaUserData(999, "k", "v"))')).toBe(false);
-    expect(env.run('return (getGridMode(999))')).toBe(false);
+    expect(env.run('return (getAreaUserData(999, "k"))')).toBeNull();
+    expect(env.run('return (getAllAreaUserData(999))')).toBeNull();
+    expect(env.run('return (setAreaUserData(999, "k", "v"))')).toBeNull();
+    expect(env.run('return (getGridMode(999))')).toBeNull();
     expect(env.run('return (setGridMode(999, true))')).toBe(false);
   });
 
@@ -365,7 +379,7 @@ describe('special exits — clearSpecialExits / lockSpecialExit / hasSpecialExit
     env.run('addRoom(1)');
     expect(env.run('return (hasSpecialExitLock(1, 2, "nope"))')).toBe(null);      // no such command
     expect(env.run('return (hasSpecialExitLock(999, 2, "x"))')).toBe(null);       // no such room
-    expect(env.run('return (lockSpecialExit(999, 2, "x", true))')).toBe(false);   // no such room
+    expect(env.run('return (lockSpecialExit(999, 2, "x", true))')).toBeNull();    // no such room
   });
 
   it('clears all special exits on a room', () => {
@@ -395,7 +409,7 @@ describe('getAllRoomEntrances', () => {
   });
 
   it('reports the miss for an unknown room', () => {
-    expect(env.run('return (getAllRoomEntrances(999))')).toBe(false);
+    expect(env.run('return (getAllRoomEntrances(999))')).toBeNull();
   });
 });
 
@@ -417,7 +431,7 @@ describe('getAreaExits', () => {
   });
 
   it('reports the miss for an unknown area', () => {
-    expect(env.run('return (getAreaExits(999))')).toBe(false);
+    expect(env.run('return (getAreaExits(999))')).toBeNull();
   });
 });
 
@@ -441,7 +455,7 @@ describe('1-indexed mapper wrappers — getAreaRooms1 / getRoomsByPosition1 / ge
     env.run('setExitStub(1, "north", true); setExitStub(1, 4, true)'); // north + east
     expect(env.run('return (getExitStubsNames(1))[1]')).toBe('north');
     expect(env.run('return (getExitStubsNames(1))[2]')).toBe('east');
-    expect(env.run('return (getExitStubsNames(999))')).toBe(false);
+    expect(env.run('return (getExitStubsNames(999))')).toBeNull();
   });
 });
 
@@ -473,7 +487,7 @@ describe('searchRoom / searchRoomUserData / searchAreaUserData', () => {
     env.run('addRoom(2); setRoomName(2, "Town Gate")');
     env.run('addRoom(3); setRoomName(3, "Forest")');
     expect(env.run('return (searchRoom(1))')).toBe('Town Square');
-    expect(env.run('return (searchRoom(999))')).toBe(false);
+    expect(env.run('return (searchRoom(999))')).toBeNull();
     // case-insensitive substring by default
     expect(env.run('return (searchRoom("town"))[1]')).toBe('Town Square');
     expect(env.run('return (searchRoom("town"))[2]')).toBe('Town Gate');
@@ -536,7 +550,7 @@ describe('connectExitStub', () => {
 
   it('reports an error when there is no stub in the given direction', () => {
     env.run('addRoom(1); addRoom(2)');
-    expect(env.run('return (connectExitStub(1, 2, "up"))')).toBe(false);
+    expect(env.run('return (connectExitStub(1, 2, "up"))')).toBeNull();
   });
 });
 
@@ -561,12 +575,14 @@ describe('raw map getters — getRooms / getRoomCoordinates', () => {
     expect(env.run('local n=0 for _ in pairs(getRooms()) do n=n+1 end return n')).toBe(2);
   });
 
-  it('getRoomCoordinates unpacks to x, y, z (and false on a miss)', () => {
+  it('getRoomCoordinates unpacks to x, y, z (and three nils on a miss)', () => {
     env.run('addRoom(9); setRoomCoordinates(9, 3, -4, 2)');
     expect(env.run('return (select(1, getRoomCoordinates(9)))')).toBe(3);
     expect(env.run('return (select(2, getRoomCoordinates(9)))')).toBe(-4);
     expect(env.run('return (select(3, getRoomCoordinates(9)))')).toBe(2);
-    expect(env.run('return (getRoomCoordinates(999))')).toBe(false);
+    // Mudlet pushes nothing for an unknown room, so all three destructure to nil.
+    expect(env.run('return (getRoomCoordinates(999))')).toBeNull();
+    expect(env.run('return (select(3, getRoomCoordinates(999)))')).toBeNull();
   });
 });
 
@@ -607,9 +623,9 @@ describe('setRoomHidden / getRoomHidden / getHiddenRooms', () => {
   });
 
   it('reports errors for unknown room or area', () => {
-    expect(env.run('return (setRoomHidden(999, true))')).toBe(false);
-    expect(env.run('return (getRoomHidden(999))')).toBe(false);
-    expect(env.run('return (getHiddenRooms(999))')).toBe(false);
+    expect(env.run('return (setRoomHidden(999, true))')).toBeNull();
+    expect(env.run('return (getRoomHidden(999))')).toBeNull();
+    expect(env.run('return (getHiddenRooms(999))')).toBeNull();
   });
 
   it('round-trips through binary save+load via the v20 fallback userData key', () => {
@@ -650,12 +666,14 @@ describe('gotoRoom', () => {
 
   it('fails when the current room is unknown', () => {
     env.run('addRoom(1); addRoom(2); setExit(1, 2, "north")'); // no centerview
-    expect(env.run('return (gotoRoom(2))')).toBe(false);
+    // Mudlet's gotoRoom reports a bad argument as (nil, errMsg); only the
+    // no-path-found case uses warnArgumentValue's false form.
+    expect(env.run('return (gotoRoom(2))')).toBeNull();
   });
 
   it('fails for an invalid target room', () => {
     env.run('addRoom(1); centerview(1)');
-    expect(env.run('return (gotoRoom(999))')).toBe(false);
+    expect(env.run('return (gotoRoom(999))')).toBeNull();
   });
 });
 
@@ -671,7 +689,7 @@ describe('stopwatches — setStopWatchName / getStopWatchBrokenDownTime', () => 
     expect(env.run('return (getStopWatchBrokenDownTime("w1")).minutes')).toBe(1);
     expect(env.run('return (getStopWatchBrokenDownTime("w1")).seconds')).toBe(1);
     expect(env.run('return (getStopWatchBrokenDownTime("w1")).milliSeconds')).toBe(500);
-    expect(env.run('return (getStopWatchBrokenDownTime(99999))')).toBe(false);
+    expect(env.run('return (getStopWatchBrokenDownTime(99999))')).toBeNull();
   });
 
   it('setStopWatchName assigns and rejects duplicates / unknown watches', () => {
@@ -680,8 +698,8 @@ describe('stopwatches — setStopWatchName / getStopWatchBrokenDownTime', () => 
     // resolvable by the new name now
     expect(env.run('return type(getStopWatchBrokenDownTime("combat"))')).toBe('table');
     const id2 = env.run('return (createStopWatch())') as number;
-    expect(env.run(`return (setStopWatchName(${id2}, "combat"))`)).toBe(false); // duplicate
-    expect(env.run('return (setStopWatchName(88888, "x"))')).toBe(false);       // unknown
+    expect(env.run(`return (setStopWatchName(${id2}, "combat"))`)).toBeNull(); // duplicate
+    expect(env.run('return (setStopWatchName(88888, "x"))')).toBeNull();        // unknown
   });
 });
 
@@ -813,7 +831,7 @@ describe('lockExit / hasExitLock', () => {
     env.run('addRoom(300)');
     expect(env.run('return (lockExit(300, "sideways", true))')).toBe(false);
     expect(env.run('return (lockExit(9999, "north", true))')).toBe(false);
-    expect(env.run('return (hasExitLock(9999, "north"))')).toBe(false);
+    expect(env.run('return (hasExitLock(9999, "north"))')).toBeNull();
   });
 
   it('honoured by pathfinding (locked direction is routed around)', () => {
@@ -948,10 +966,18 @@ describe('trigger constructors — permPromptTrigger / permBeginOfLineStringTrig
   // The perm* tree-creation callbacks live in ScriptingEngine (not wired here),
   // so these return -1 — the point is the Lua binding + Bridge.lua wrapper run
   // cleanly and produce the documented miss value.
-  it('permPromptTrigger / permBeginOfLineStringTrigger return -1 without engine wiring', () => {
-    expect(env.run('return (permPromptTrigger("p", "", [[echo("x")]]))')).toBe(-1);
-    expect(env.run('return (permBeginOfLineStringTrigger("b", "", {"hp"}, [[echo("x")]]))')).toBe(-1);
-    expect(env.run('return (permBeginOfLineStringTrigger("g", "", {}, ""))')).toBe(-1); // empty → group
+  // Mudlet's perm* raise when creation fails rather than returning the -1 the
+  // JS layer reports — mudlet-lua's permGroup pcalls them and turns the raise
+  // into a `false` return. This harness doesn't wire ScriptingEngine's CRUD
+  // callback, so every creation fails; the argument marshalling still runs
+  // before the failure, which is what these cover.
+  it('permPromptTrigger / permBeginOfLineStringTrigger raise without engine wiring', () => {
+    expect(() => env.run('return (permPromptTrigger("p", "", [[echo("x")]]))'))
+      .toThrow(/permPromptTrigger: cannot create trigger/);
+    expect(() => env.run('return (permBeginOfLineStringTrigger("b", "", {"hp"}, [[echo("x")]]))'))
+      .toThrow(/permBeginOfLineStringTrigger: cannot create trigger/);
+    expect(() => env.run('return (permBeginOfLineStringTrigger("g", "", {}, ""))'))
+      .toThrow(/permBeginOfLineStringTrigger: cannot create trigger/); // empty → group
   });
 
   it('tempAnsiColorTrigger registers and returns a numeric id', () => {
@@ -968,13 +994,19 @@ describe('map menus — addMapMenu / getMapMenus / removeMapMenu', () => {
   beforeEach(async () => { env = await createTestRuntime(); });
   afterEach(() => env.dispose());
 
-  it('registers, lists (keyed by name → parent), and removes submenus', () => {
+  it('registers, lists (keyed by display name → parent), and removes submenus', () => {
     env.run('addMapMenu("combat", nil, "Combat")');
     env.run('addMapMenu("sub", "combat")');
-    // Mudlet's getMapMenus() shape: { [menuName] = parentName }, where a
-    // top-level menu's value is the string "top-level".
-    expect(env.run('return (getMapMenus()).combat')).toBe('top-level');
+    // Mudlet's getMapMenus() shape: { [displayName] = parentName }, where a
+    // top-level menu's value is the string "top-level". A menu registered
+    // without a display name keys by its unique name (they're the same string).
+    expect(env.run('return (getMapMenus()).Combat')).toBe('top-level');
+    expect(env.run('return (getMapMenus()).combat')).toBeNull();
     expect(env.run('return (getMapMenus()).sub')).toBe('combat');
+    // getMapMenus(true) keys by unique name instead, so entries can be matched
+    // to the `parent` getMapEvents reports.
+    expect(env.run('return (getMapMenus(true)).combat["display name"]')).toBe('Combat');
+    expect(env.run('return (getMapMenus(true)).combat.parent')).toBe('top-level');
     expect(env.api.map.getMapMenus().length).toBe(2);
     expect(env.run('return next(getMapMenus()) ~= nil')).toBe(true);
     // removal
@@ -1292,15 +1324,15 @@ describe('exportAreaImage — Lua binding', () => {
   beforeEach(async () => { env = await createTestRuntime(); });
   afterEach(() => env.dispose());
 
-  it('returns (false, errMsg) when no exporter/VFS is wired', () => {
-    expect(env.run('return (exportAreaImage(1, "area1.png"))')).toBe(false);
+  it('returns (nil, errMsg) when no exporter/VFS is wired', () => {
+    expect(env.run('return (exportAreaImage(1, "area1.png"))')).toBeNull();
     const msg = env.run('local _, m = exportAreaImage(1, "area1.png"); return m');
     expect(typeof msg).toBe('string');
     expect((msg as string).length).toBeGreaterThan(0);
   });
 
   it('rejects a non-numeric areaID', () => {
-    expect(env.run('return (exportAreaImage("nope", "a.png"))')).toBe(false);
+    expect(env.run('return (exportAreaImage("nope", "a.png"))')).toBeNull();
   });
 
   it('delegates to ScriptingAPI.exportAreaImage with coerced args', () => {

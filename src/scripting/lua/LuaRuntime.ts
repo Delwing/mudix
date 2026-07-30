@@ -23,7 +23,7 @@ import {setupYajl, type LuaValueTransform} from './yajl';
 import {parseImageSize} from './imageSize';
 import {getSqliteClient, sqliteReady} from '../../db/sqliteClient';
 import {QT_CURSOR_NAME_TO_INT, QT_CURSOR_TO_CSS} from '../../ui/labels/cursorShapes';
-import {qtKeyToDomCode, qtModifiersToList, domCodeToQtKey} from '../../mud/keybindings/qtKeys';
+import {qtKeyToDomCode, qtModifiersToList, domCodeToQtKey, listToQtModifiers} from '../../mud/keybindings/qtKeys';
 import xterm256 from '../../mud/text/xterm256';
 import {HttpService} from '../http/HttpService';
 import {TtsManager} from '../../ui/tts/TtsManager';
@@ -314,7 +314,11 @@ export class LuaRuntime implements IScriptingRuntime {
     // Temp alias/trigger IDs → { kill fn, type }. Engines return unsub, not
     // numeric IDs; the type lets exists(id, "alias"/"trigger") recognise
     // script-created temp items the way Mudlet does.
-    private readonly tempIds = new Map<number, { kill: () => void; type: 'alias' | 'trigger' }>();
+    // Script-created (temp) aliases and triggers, by the id handed back to Lua.
+    //  backs enableTrigger/disableTrigger/isActive with a numeric id —
+    // Mudlet toggles temp items exactly like saved ones, so the dispatch checks
+    // it before firing.
+    private readonly tempIds = new Map<number, { kill: () => void; type: 'alias' | 'trigger'; enabled: boolean }>();
     private nextTempId = 1;
     // Tracks label callback ids per slot so re-binds can free the prior Lua-
     // registry slot via __mudix_unregister_cb (avoids the leak the audit flagged
@@ -464,6 +468,8 @@ export class LuaRuntime implements IScriptingRuntime {
             registerRawGlobal: (name, fn) => this.registerRawGlobal(name, fn),
             evaluateMapInfo: (cbId, roomId, selectionSize, areaId, displayedAreaId) =>
                 this.evaluateMapInfo(cbId, roomId, selectionSize, areaId, displayedAreaId),
+            evaluateExitWeightFilter: (cbId, roomId, exitCommand) =>
+                this.evaluateExitWeightFilter(cbId, roomId, exitCommand),
         };
 
         this.lua.global.set('setFgColor', (winOrR: unknown, rOrG: unknown, gOrB?: unknown, b?: unknown) => {
@@ -560,9 +566,15 @@ export class LuaRuntime implements IScriptingRuntime {
         // MUST be bound before LuaGlobal.lua/Other.lua run (they are: this whole
         // block precedes the bundle doString calls). getConfig returns nil for
         // unknown keys; setConfig returns false for unknown/read-only keys.
-        this.lua.global.set('getConfig', (key: unknown) => this.api.getConfig(String(key ?? '')));
+        this.lua.global.set('getConfig', (key: unknown, useStringFormat?: unknown) =>
+            this.api.getConfig(String(key ?? ''), !!useStringFormat));
         this.lua.global.set('setConfig', (key: unknown, value: unknown) =>
             this.api.setConfig(String(key ?? ''), value));
+        // Which value type an option takes (or null for an unknown key) — the
+        // Bridge.lua wrappers need it to tell Mudlet's raise-on-wrong-type apart
+        // from its (nil, errMsg) refuse-on-bad-value.
+        this.lua.global.set('__mudix_config_kind', (key: unknown) =>
+            this.api.configKeyKind(String(key ?? '')));
 
         // Mudlet profile description (single free-text slot). The optional
         // profile-name argument of the Mudlet overloads is ignored — mudix is
@@ -1084,10 +1096,14 @@ export class LuaRuntime implements IScriptingRuntime {
             let killed = false;
             // Empty-string substring trigger fires once per line; the colour
             // check then runs against the live buffer to gate the callback.
-            const unsub = this.api.triggers.addTemp('', (lineMatches) => {
-                if (killed) return;
-                if (!this.api.currentLineMatchesColor(wantFg, wantBg)) return;
-                this.setMatches([lineMatches[0] ?? '']);
+            const unsub = this.api.triggers.addTemp('', () => {
+                if (killed || this.tempIds.get(id)?.enabled === false) return;
+                // matches[1] is the coloured RUN, not the whole line — the
+                // empty-substring pattern this rides on has no match text of
+                // its own, so the colour lookup supplies it.
+                const run = this.api.currentLineColorMatch(wantFg, wantBg);
+                if (run === null) return;
+                this.setMatches([run]);
                 dispatchCb(cbId, 'tempColorTrigger');
                 fires++;
                 if (max > 0 && fires >= max) {
@@ -1097,7 +1113,7 @@ export class LuaRuntime implements IScriptingRuntime {
                     this.tempIds.delete(id);
                 }
             }, 'substring');
-            this.tempIds.set(id, { kill: () => { unsub(); releaseCb(cbId); }, type: 'trigger' });
+            this.tempIds.set(id, { kill: () => { unsub(); releaseCb(cbId); }, type: 'trigger', enabled: true });
             return id;
         });
 
@@ -1144,7 +1160,8 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         // Mudlet `sendSocket(data)`: send literal bytes over the socket, no
         // telnet/encoding processing.
-        this.lua.global.set('sendSocket', (data: unknown) => this.api.sendSocket(String(data ?? '')));
+        // `sendSocket` itself is a Bridge.lua wrapper over __mudix_sendSocket,
+        // which adds Mudlet's type check and (nil, errMsg) failure return.
         // Mudlet getServerEncoding/setServerEncoding/getServerEncodingsList —
         // the CHARSET (RFC 2066) decoder MudClient negotiates. The list is built
         // 1-indexed (sparse array → wasmoon lands it at t[1..n]).
@@ -1158,13 +1175,29 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         // Mudlet sendATCP(message) / sendTelnetChannel102(msg) — raw telnet
         // subnegotiations (options 200 and 102).
-        this.lua.global.set('sendATCP', (message: unknown) => this.api.sendATCP(String(message ?? '')));
-        this.lua.global.set('sendTelnetChannel102', (msg: unknown) => this.api.sendTelnetChannel102(String(msg ?? '')));
+        // sendATCP takes an optional second `what`, appended after a space
+        // exactly as Mudlet frames it (TLuaInterpreterNetworking.cpp). Argument
+        // validation and the (nil, errMsg) contracts live in the Bridge.lua
+        // wrappers; these primitives just report success as a boolean.
+        this.lua.global.set('__mudix_sendATCP', (message: unknown, what?: unknown) => {
+            const body = String(message ?? '');
+            const tail = what != null && String(what) !== '' ? ' ' + String(what) : '';
+            return this.api.sendATCP(body + tail);
+        });
+        this.lua.global.set('__mudix_sendTelnetChannel102', (msg: unknown) =>
+            this.api.sendTelnetChannel102(String(msg ?? '')));
+        this.lua.global.set('__mudix_sendSocket', (data: unknown) => this.api.sendSocket(String(data ?? '')));
+        /** Whether the session currently has a live connection — drives the
+         *  "not connected to game server" guards Mudlet applies before sending
+         *  ATCP/GMCP/MSDP. */
+        this.lua.global.set('__mudix_is_connected', () => this.api.getConnectionInfo().connected);
         // Mudlet reconnect() — disconnect and redial the last URL.
         this.lua.global.set('reconnect', () => this.api.reconnect());
         // Mudlet `feedTelnet(data)`: inject raw server bytes into the inbound
         // pipeline as if received from the MUD.
-        this.lua.global.set('feedTelnet', (data: unknown) => { this.api.feedTelnet(String(data ?? '')); });
+        // Returns the refusal message (or nil when the data was fed); the
+        // Bridge.lua wrapper shapes that into Mudlet's (nil, errMsg) / true.
+        this.lua.global.set('__feedTelnet', (data: unknown) => this.api.feedTelnet(String(data ?? '')));
         // Mudlet `loadReplay(fileName)` — play back a binary replay (.dat) from
         // the profile VFS. The format parse + chunk scheduling live in
         // MudSession; this binding just reads the bytes. Returns an
@@ -1182,7 +1215,10 @@ export class LuaRuntime implements IScriptingRuntime {
         });
         // Mudlet `receiveMSP(text)`: parse an MSP payload and dispatch its
         // sound/music commands as if the server had sent them.
-        this.lua.global.set('receiveMSP', (data: unknown) => this.api.receiveMSP(String(data ?? '')));
+        // The MSP-enabled guard and argument check live in the Bridge.lua
+        // wrapper, matching Mudlet's order (enabled first, then type).
+        this.lua.global.set('__mudix_receiveMSP', (data: unknown) => this.api.receiveMSP(String(data ?? '')));
+        this.lua.global.set('__mudix_is_msp_enabled', () => this.api.isMspNegotiated());
         // Mudlet `disconnect()`: drop the current connection.
         this.lua.global.set('disconnect', () => { this.api.disconnect(); });
         // Mudlet `closeMudlet()`: mudix closes the active profile — disconnect
@@ -1211,7 +1247,9 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('clearVisitedLinks', () => {});
         // Mudlet `connectToServer(host, port [, save])`: (re)connect through the
         // proxy; `save` persists host/port onto the active connection.
-        this.lua.global.set('connectToServer', (host: unknown, port?: unknown, save?: unknown) =>
+        // Argument validation and the invalid-port (nil, errMsg) return live in
+        // the Bridge.lua wrapper, matching Mudlet's contract.
+        this.lua.global.set('__mudix_connectToServer', (host: unknown, port?: unknown, save?: unknown) =>
             this.api.connectToServer(String(host ?? ''), port === undefined ? 23 : Number(port), !!save));
         // Cancels the in-flight sysDataSendRequest dispatch. Only meaningful while
         // a sysDataSendRequest handler is on the stack — flag is reset before each send.
@@ -1305,10 +1343,11 @@ export class LuaRuntime implements IScriptingRuntime {
         this.lua.global.set('__mudix_tempAlias', (pattern: string, cbId: number) => {
             const id = this.nextTempId++;
             const unsub = this.api.aliases.addTemp(pattern, (m: RegExpMatchArray) => {
+                if (this.tempIds.get(id)?.enabled === false) return;
                 this.setMatches(Array.from(m));
                 dispatchCb(cbId, 'tempAlias');
             });
-            this.tempIds.set(id, { kill: () => { unsub(); releaseCb(cbId); }, type: 'alias' });
+            this.tempIds.set(id, { kill: () => { unsub(); releaseCb(cbId); }, type: 'alias', enabled: true });
             return id;
         });
         this.lua.global.set('killAlias', (idOrName: number | string) => {
@@ -1344,7 +1383,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 this.tempIds.delete(id);
             };
             unsub = this.api.triggers.addTemp(pattern, (matches, spans, namedGroups) => {
-                if (killed) return;
+                if (killed || this.tempIds.get(id)?.enabled === false) return;
                 const prevSpans = this.currentCaptureSpans;
                 const prevNamed = this.currentNamedSpans;
                 const prevMatches = this.currentMatches;
@@ -1365,7 +1404,7 @@ export class LuaRuntime implements IScriptingRuntime {
                 fires++;
                 if (max > 0 && fires >= max) kill();
             }, kind);
-            this.tempIds.set(id, { kill, type: 'trigger' });
+            this.tempIds.set(id, { kill, type: 'trigger', enabled: true });
             return id;
         };
         this.lua.global.set('__mudix_tempTrigger', (pattern: string, cbId: number, expirationCount?: number) =>
@@ -1400,13 +1439,13 @@ export class LuaRuntime implements IScriptingRuntime {
                 this.tempIds.delete(id);
             };
             unsub = this.api.triggers.addTempLine(Number(from), Number(howMany), (matches) => {
-                if (killed) return;
+                if (killed || this.tempIds.get(id)?.enabled === false) return;
                 this.setMatches(matches);
                 dispatchCb(cbId, 'tempLineTrigger');
                 fires++;
                 if (fires >= total) kill();
             });
-            this.tempIds.set(id, { kill, type: 'trigger' });
+            this.tempIds.set(id, { kill, type: 'trigger', enabled: true });
             return id;
         });
         this.lua.global.set('killTrigger', (idOrName: number | string) => {
@@ -1444,7 +1483,18 @@ export class LuaRuntime implements IScriptingRuntime {
             if (typeof arg !== 'number' && typeof arg !== 'string') {
                 throw new Error('getKeyCode: bad argument #1 (key id number or name string expected)');
             }
-            const info = this.api.keys.getKeyCode(arg);
+            let info = this.api.keys.getKeyCode(arg);
+            // A numeric id can also name a PERMANENT key (the id permKey
+            // returned); the key engine indexes those by name only.
+            if (!info && typeof arg === 'number') {
+                const node = this.api.keyNodeByNumericId(arg);
+                if (node) {
+                    info = {
+                        keyCode: domCodeToQtKey(node.key) ?? 0,
+                        modifiers: listToQtModifiers(node.modifiers),
+                    };
+                }
+            }
             if (!info) {
                 return [null, typeof arg === 'number'
                     ? `getKeyCode: no key binding with id ${arg}`
@@ -1547,6 +1597,22 @@ export class LuaRuntime implements IScriptingRuntime {
         // success/error via sysXxxHttp* events. The JS bindings below just kick
         // off the background request; the (true, url) tuple is added by the
         // Bridge.lua wrappers that call these `__` primitives.
+        // Mudlet refuses a malformed url locally — QUrl::fromUserInput(...) then
+        // !isValid() — and returns (nil, "<fn>: url is invalid, reason: ...")
+        // without issuing a request. Report the reason here (a real parser lives
+        // on this side) and let the Bridge.lua wrappers shape the tuple. The
+        // scheme test mirrors fromUserInput's leniency: a bare "localhost/x" is
+        // a valid url that means http://localhost/x.
+        this.lua.global.set('__mudix_url_invalid_reason', (url: unknown) => {
+            const s = String(url ?? '').trim();
+            if (!s) return 'empty url';
+            try {
+                new URL(/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(s) ? s : `http://${s}`);
+                return false;
+            } catch (e) {
+                return e instanceof Error ? e.message : 'malformed url';
+            }
+        });
         this.lua.global.set('__downloadFile', (saveTo: unknown, url: unknown) => {
             this.http.downloadFile(String(saveTo ?? ''), String(url ?? ''));
         });
@@ -1757,6 +1823,20 @@ end`,
         return this.tempIds.get(id)?.type === type;
     }
 
+    /** enableTrigger/disableTrigger/enableAlias/disableAlias with a numeric id.
+     *  False when no temp item of that id is live. */
+    setTempItemEnabled(id: number, enabled: boolean): boolean {
+        const entry = this.tempIds.get(id);
+        if (!entry) return false;
+        entry.enabled = enabled;
+        return true;
+    }
+
+    /** Whether a live temp item is enabled — backs isActive(id, type). */
+    tempItemEnabled(id: number): boolean {
+        return this.tempIds.get(id)?.enabled === true;
+    }
+
     // ── busted bridge (VITE_BUSTED builds only) ──────────────────────────────
     // Puts the vendored busted runtime + spec corpus on require()'s search path
     // and exposes window.__runBusted(pattern) -> results object. The runner is
@@ -1766,6 +1846,39 @@ end`,
         // The mudlet-lua builtins are loaded by explicit dofile('/lua/...') paths,
         // so /lua was never on package.path. busted uses require(), so add it.
         this.lua.doStringSync('package.path = "/lua/?.lua;/lua/?/init.lua;" .. package.path');
+
+        // ── waitForEvent's pump ───────────────────────────────────────────────
+        // Mudlet's waitForEvent blocks in a nested QEventLoop, which keeps Qt
+        // delivering timers while the Lua C function sits on the stack. A browser
+        // cannot re-enter its event loop, and the whole busted run happens inside
+        // one synchronous doStringSync — so a blocking wait would starve the very
+        // setTimeout it waits on and could only ever time out.
+        //
+        // Instead Lua spins on this: each call fires the timers that have come
+        // due (bypassing the blocked event loop) and then burns a short slice of
+        // real time so the next ones become due. Busy-waiting is unavoidable —
+        // any sleep would need the event loop we are blocking — but it is bounded
+        // by the caller's timeout and only ever runs in a test build.
+        //
+        // Registered only here, so it ships in VITE_BUSTED builds alone; Mudlet
+        // likewise gates waitForEvent behind MUDLET_TEST_MODE.
+        // Clock readings are relative to this origin, NOT epoch ms: wasmoon
+        // truncates numbers to 32-bit signed on the way into Lua, so a raw
+        // Date.now() (~1.79e12) arrives as a negative garbage value and every
+        // deadline computed from it is already in the past. Milliseconds since
+        // the bridge was built stay comfortably inside int32.
+        const clockOrigin = Date.now();
+        this.lua.global.set('__mudix_now', () => Date.now() - clockOrigin);
+        this.lua.global.set('__mudix_pump', (deadlineMs: unknown) => {
+            const deadline = clockOrigin + Number(deadlineMs);
+            this.api.timers.pumpDue();
+            if (Date.now() >= deadline) return true;
+            // Let real time advance a little so pending timers come due, without
+            // overshooting the caller's deadline.
+            const until = Math.min(deadline, Date.now() + 2);
+            while (Date.now() < until) { /* spin */ }
+            return Date.now() >= deadline;
+        });
 
         if (typeof window === 'undefined') return;
         const specPaths = bustedSpecVfsPaths();
@@ -1831,6 +1944,13 @@ end`,
 
         const scheduleSnapshot = (dbId: number): void => {
             if (!this.vfs) return;
+            // The very first write goes out immediately: DB.lua's
+            // db:_isActiveDBName (which db:close and db:create both consult)
+            // tests io.exists on the database path, so a database that only
+            // existed in memory read back as "not open" until the debounce
+            // fired half a second later.
+            const path = dbPaths.get(dbId);
+            if (path && !this.vfs.exists(path)) { snapshotNow(dbId); return; }
             const prev = pendingTimers.get(dbId);
             if (prev) clearTimeout(prev);
             const t = setTimeout(() => {
@@ -2594,6 +2714,11 @@ end`,
             this.lua.global.set('__mws_h', args[1]);
         }
         this.lua.global.set('__mudix_evt_args', args);
+        // Explicit count: a nil/false-carrying payload (raiseEvent("x", nil,
+        // false, "y")) lands in Lua as a table with holes, and neither `#` nor a
+        // nil-terminated walk can recover the caller's real arity. Mudlet passes
+        // every argument through positionally, so the count has to travel too.
+        this.lua.global.set('__mudix_evt_argc', args.length);
         this.lua.global.set('__mudix_evt_name', event);
         this.runChunk('__mudix_dispatch_event()', `event "${event}"`);
         this.api.flushOutput();
@@ -2636,6 +2761,25 @@ end`,
         this.lua.global.set('__mudix_mssp_name', name);
         this.lua.global.set('__mudix_mssp_val', value);
         this.runChunk('__mudix_set_mssp(__mudix_mssp_name, __mudix_mssp_val)', `set-mssp "${name}"`);
+    }
+
+    /**
+     * Bridges one use of a server-defined MXP element into the Lua `mxp` global
+     * as `mxp.<element>` — a fresh table each time, with every attribute key
+     * lowercased and a `text` field, exactly as Mudlet's signalMXPEvent builds
+     * it. Values keep their case.
+     */
+    setMxpElement(name: string, attrs: Record<string, string>): void {
+        if (this.destroyed || !name) return;
+        this.lua.global.set('__mudix_mxp_name', name.toLowerCase());
+        // Flattened rather than handed over as an object: wasmoon's table proxy
+        // is unreliable to iterate from Lua, and the keys are arbitrary server
+        // text. \x01 separates entries, \x02 a key from its value.
+        const flat = Object.entries(attrs)
+            .map(([k, v]) => `${k.toLowerCase()}\x02${v}`)
+            .join('\x01');
+        this.lua.global.set('__mudix_mxp_attrs', flat);
+        this.runChunk('__mudix_set_mxp(__mudix_mxp_name, __mudix_mxp_attrs)', `set-mxp "${name}"`);
     }
 
     /**
@@ -2759,6 +2903,35 @@ end`,
         const rr = ch(r), gg = ch(g), bb = ch(b);
         const color = rr !== null && gg !== null && bb !== null ? { r: rr, g: gg, b: bb } : undefined;
         return { text, isBold, isItalic, color };
+    }
+
+    /**
+     * Invoke a `setExitWeightFilter` callback for a single candidate exit.
+     * The Lua dispatcher pcalls the stashed callback and normalises its return
+     * into two scalar globals, mirroring Mudlet's applyExitWeightFilter
+     * (TLuaInterpreterMapper.cpp): boolean `false` or the string "block"
+     * (case-insensitive) blocks the exit; a number becomes a weight override
+     * clamped to [1, INT_MAX]; nil, `true` and anything else are ignored.
+     *
+     * Runs re-entrantly — findPath calls this while Lua is already suspended
+     * inside the `__getPath` JS call — so it must not touch the output queue or
+     * any other state a live Lua frame could also be mutating.
+     */
+    private evaluateExitWeightFilter(
+        cbId: number,
+        roomId: number,
+        exitCommand: string,
+    ): { blocked?: boolean; weightOverride?: number } {
+        if (this.destroyed || !cbId) return {};
+        this.lua.global.set('__mudix_ewf_cmd', exitCommand);
+        this.runChunk(
+            `__mudix_dispatch_exit_weight_filter(${cbId}, ${roomId | 0}, __mudix_ewf_cmd)`,
+            'setExitWeightFilter callback',
+        );
+        if (this.lua.global.get('__mudix_ewf_blocked') === true) return { blocked: true };
+        const w = this.lua.global.get('__mudix_ewf_weight');
+        if (typeof w === 'number' && Number.isFinite(w)) return { weightOverride: w };
+        return {};
     }
 
     /**

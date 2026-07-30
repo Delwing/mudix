@@ -1,8 +1,8 @@
 import type {MudletArea, MudletColor, MudletFont, MudletLabel, MudletMap, MudletMapHeader, MudletRoom} from 'mudlet-map-binary-reader';
 import {readerExport} from 'mudlet-map-binary-reader';
-import {findPath, type PathfindResult} from './pathfinding';
+import {findPath, type ExitWeightFilter, type PathfindResult} from './pathfinding';
 
-export type {PathfindResult} from './pathfinding';
+export type {ExitWeightFilter, PathfindResult} from './pathfinding';
 
 export type MapRendererData = ReturnType<typeof readerExport>;
 
@@ -221,9 +221,12 @@ export function mudletJsonMapToMudletMap(src: unknown): MudletMap | null {
                     room.mSpecialExits[name] = dest;
                 }
 
-                // Doors key off the canonical long name (setDoor's convention).
+                // Doors key off the SHORT name for stock exits and off the
+                // verbatim command for special ones — the exact keys Mudlet's
+                // TRoom::auditExits writes ("n"/"ne"/…/"up"/"down"/"in"/"out")
+                // and the only ones setDoor/getDoors accept.
                 const door = DOOR_VALUE[String(rawExit.door ?? '')];
-                if (door) room.doors[name] = door;
+                if (door) room.doors[isStock ? DIR_SHORT[dirNum] : name] = door;
 
                 // Weights key off the SHORT name for stock exits, and off the
                 // verbatim command for special ones (setExitWeight's convention).
@@ -253,7 +256,7 @@ export function mudletJsonMapToMudletMap(src: unknown): MudletMap | null {
                 // exit — it just has no destination.
                 const stub = typeof rawStub === 'object' ? rawStub as Record<string, unknown> : {};
                 const door = DOOR_VALUE[String(stub.door ?? '')];
-                if (door) room.doors[name] = door;
+                if (door) room.doors[DIR_SHORT[dir]] = door;
                 if (stub.locked) room.exitLocks.push(dir);
             }
 
@@ -471,6 +474,8 @@ export class MapStore {
     private envColors = new Map<number, number>();
     private nextRoomId = 1;
     private nextAreaId = 1;
+    /** Installed by `setExitWeightFilter`; consulted per exit in findPath. */
+    private exitWeightFilter: ExitWeightFilter | null = null;
     // In-flight state for a three-phase binary load (beginBinaryLoad →
     // ingestBinaryRooms* → endBinaryLoad). Empty/false outside a load.
     private pendingBinaryHashIndex: Record<string, number> = {};
@@ -500,6 +505,9 @@ export class MapStore {
     private mapEvents = new Map<string, MapEventEntry>();
     private mapMenus = new Map<string, MapMenuEntry>();
     private customEnvColors = new Map<number, MudletColor>();
+    /** roomID → the special-exit COMMANDS locked on it. See
+     *  {@link lockedSpecialCommands}. */
+    private specialExitLocks = new Map<number, Set<string>>();
     private roomHighlights = new Map<number, RoomHighlight>();
     private mapUserData: Record<string, string> = {};
     // Player's current room id, mirrors Mudlet's mRoomIdHash[host.getName()].
@@ -537,6 +545,7 @@ export class MapStore {
 
     constructor() {
         this.seedBuiltinMapInfo();
+        this.restore16ColorSet();
     }
 
     subscribe(cb: () => void): () => void {
@@ -610,6 +619,7 @@ export class MapStore {
         this.labels.clear();
         this.envColors.clear();
         this.customEnvColors.clear();
+        this.restore16ColorSet();
         this.roomCharColors.clear();
         if (this.hiddenRooms.size > 0) { this.hiddenRooms.clear(); this.hiddenVersion++; }
         this.roomHighlights.clear();
@@ -664,6 +674,7 @@ export class MapStore {
         this.labels.clear();
         this.envColors.clear();
         this.customEnvColors.clear();
+        this.restore16ColorSet();
         this.roomCharColors.clear();
         if (this.hiddenRooms.size > 0) { this.hiddenRooms.clear(); this.hiddenVersion++; }
         this.roomHighlights.clear();
@@ -898,20 +909,27 @@ export class MapStore {
 
     // ── Room CRUD ─────────────────────────────────────────────────────────────
 
-    addRoom(id: number, areaId?: number): boolean {
+    /**
+     * Mudlet `addRoom(roomID [, areaID])`. The room is always created; the
+     * areaID is a placement *request*. An areaID naming an area that doesn't
+     * exist is not created on demand (Mudlet's TLuaInterpreter::addRoom parks
+     * the room in the default area -1 and reports the failed placement as
+     * `(nil, errMsg)` instead), so this returns the message for the binding to
+     * shape and leaves the room in -1.
+     *
+     * Returns false only when the roomID is already taken.
+     */
+    addRoom(id: number, areaId?: number): boolean | { err: string } {
         if (this.rooms.has(id)) return false;
-        const initialArea = areaId != null && Number.isFinite(areaId) ? Number(areaId) : 0;
-        this.rooms.set(id, makeRoom(initialArea));
-        if (areaId != null && Number.isFinite(areaId)) {
-            const aid = Number(areaId);
-            if (!this.areas.has(aid)) {
-                this.areas.set(aid, makeArea());
-                if (!this.areaNames.has(aid)) this.areaNames.set(aid, `Area ${aid}`);
-                if (aid >= this.nextAreaId) this.nextAreaId = aid + 1;
-            }
-            this.areas.get(aid)!.rooms.push(id);
-        }
+        const requested = areaId != null && Number.isFinite(areaId) ? Number(areaId) : undefined;
+        const known = requested !== undefined && this.areas.has(requested);
+        this.rooms.set(id, makeRoom(known ? requested : (requested === undefined ? 0 : -1)));
+        if (known) this.areas.get(requested)!.rooms.push(id);
         this.notify();
+        if (requested !== undefined && !known) {
+            return { err: `addRoom: created roomID ${id} but failed to place it in areaID ${requested},`
+                + ' does that area actually exist? (Room has been placed in areaID -1 instead.)' };
+        }
         return true;
     }
 
@@ -989,38 +1007,58 @@ export class MapStore {
     }
 
     /** Mudlet `getRoomArea(id)` — area id of the room, or -1 if the room is missing. */
-    getRoomArea(id: number): number { return this.rooms.get(id)?.area ?? -1; }
+    /** Mudlet `getRoomArea(roomID)` — the area the room belongs to (-1 is the
+     *  default area), or undefined when the room itself doesn't exist. */
+    getRoomArea(id: number): number | undefined { return this.rooms.get(id)?.area; }
 
     /**
      * Mudlet `setRoomArea(roomID|{ids}, areaID|areaName)`. Accepts either a
      * single room ID or an array of room IDs, and either a numeric area ID or
-     * an area-name string. Returns false if the area name cannot be resolved.
+     * an area-name string.
+     *
+     * The area must already exist — Mudlet does not create one on demand, and
+     * an areaID below 1 is refused outright (resetRoomArea is the documented
+     * way to park a room in the default area -1). Every refusal is a
+     * `(nil, errMsg)` return there, so the message is handed back here and null
+     * means success (see {@link setDoor}).
      */
-    setRoomArea(id: number | number[], areaIdOrName: number | string): boolean {
-        const aid = this.resolveAreaId(areaIdOrName);
-        if (aid == null) return false;
-        const ids = Array.isArray(id) ? id.map(n => Number(n)).filter(n => Number.isFinite(n)) : [Number(id)];
-        let touched = false;
+    setRoomArea(id: number | number[], areaIdOrName: number | string): string | null {
+        const ids = Array.isArray(id) ? id.map(n => Number(n)) : [Number(id)];
         for (const rid of ids) {
-            const room = this.rooms.get(rid);
-            if (!room) continue;
+            if (!Number.isFinite(rid) || !this.rooms.has(rid)) {
+                return `setRoomArea: number ${rid} is not a valid roomID`;
+            }
+        }
+        let aid: number;
+        if (typeof areaIdOrName === 'string' && !/^-?\d+$/.test(areaIdOrName.trim())) {
+            if (areaIdOrName.length === 0) return 'setRoomArea: area name cannot be empty';
+            const resolved = this.resolveAreaId(areaIdOrName);
+            if (resolved == null) return `setRoomArea: area name '${areaIdOrName}' does not exist`;
+            aid = resolved;
+        } else {
+            aid = Number(areaIdOrName);
+            if (!Number.isFinite(aid) || aid < 1) {
+                return `setRoomArea: number ${areaIdOrName} is not a valid areaID greater than zero.`
+                    + " To remove a room's area, use resetRoomArea(roomID)";
+            }
+            if (!this.areaNames.has(aid)) {
+                return `setRoomArea: number ${aid} is not a valid areaID`;
+            }
+        }
+        for (const rid of ids) {
+            const room = this.rooms.get(rid)!;
             const oldArea = this.areas.get(room.area);
             if (oldArea) {
                 oldArea.rooms = oldArea.rooms.filter(r => r !== rid);
                 this.updateAreaBounds(room.area);
             }
-            if (!this.areas.has(aid)) {
-                this.areas.set(aid, makeArea());
-                if (!this.areaNames.has(aid)) this.areaNames.set(aid, `Area ${aid}`);
-                if (aid >= this.nextAreaId) this.nextAreaId = aid + 1;
-            }
+            if (!this.areas.has(aid)) this.areas.set(aid, makeArea());
             this.areas.get(aid)!.rooms.push(rid);
             room.area = aid;
             this.updateAreaBounds(aid);
-            touched = true;
         }
-        if (touched) this.notify();
-        return touched;
+        this.notify();
+        return null;
     }
 
     /** Resolve area-id-or-name → numeric id, or undefined if unknown. */
@@ -1177,9 +1215,11 @@ export class MapStore {
 
     // ── Coordinates / position ────────────────────────────────────────────────
 
-    getRoomsByPosition(areaId: number, x: number, y: number, z: number): number[] {
+    /** Mudlet `getRoomsByPosition(areaID, x, y, z)` — undefined for an unknown
+     *  area, matching {@link getAreaRooms}. */
+    getRoomsByPosition(areaId: number, x: number, y: number, z: number): number[] | undefined {
         const area = this.areas.get(areaId);
-        if (!area) return [];
+        if (!area) return undefined;
         return area.rooms.filter(id => {
             const r = this.rooms.get(id);
             return r && r.x === x && r.y === y && r.z === z;
@@ -1203,9 +1243,11 @@ export class MapStore {
 
     // ── Exits ─────────────────────────────────────────────────────────────────
 
-    getRoomExits(id: number): Record<string, number> {
+    /** Mudlet `getRoomExits(roomID)` — `{ direction = toRoomID }`. Undefined
+     *  for an unknown room (Mudlet pushes nothing at all in that case). */
+    getRoomExits(id: number): Record<string, number> | undefined {
         const room = this.rooms.get(id);
-        if (!room) return {};
+        if (!room) return undefined;
         const exits: Record<string, number> = {};
         for (const field of Object.values(DIR_FIELD)) {
             const val = (room as unknown as Record<string, number>)[field];
@@ -1230,7 +1272,12 @@ export class MapStore {
         return true;
     }
 
-    getExitStubs(id: number): number[] { return [...(this.rooms.get(id)?.stubs ?? [])]; }
+    /** Mudlet `getExitStubs(roomID)` — the room's stub direction codes, or
+     *  undefined for an unknown room (reported as `(nil, errMsg)` in Lua). */
+    getExitStubs(id: number): number[] | undefined {
+        const room = this.rooms.get(id);
+        return room ? [...room.stubs] : undefined;
+    }
 
     /**
      * Mudlet `getExitStubsNames(roomID)` — the room's exit stubs as direction
@@ -1248,7 +1295,15 @@ export class MapStore {
     /** Mudlet `findPath(from, to)` — see {@link findPath} in `./pathfinding`
      *  for the algorithm (A* with Mudlet's Euclidean-or-1 heuristic). */
     findPath(from: number, to: number): PathfindResult | null {
-        return findPath(this.rooms, from, to);
+        return findPath(this.rooms, from, to, this.exitWeightFilter,
+            (roomId, command) => this.isSpecialExitLocked(roomId, command));
+    }
+
+    /** Mudlet `setExitWeightFilter(fn|nil)` — the callback consulted for every
+     *  candidate exit during pathfinding, or null when none is installed. Set
+     *  by the Lua binding; read only by {@link findPath}. */
+    setExitWeightFilter(filter: ExitWeightFilter | null): void {
+        this.exitWeightFilter = filter;
     }
 
     setExitStub(id: number, dir: number | string, set: boolean): boolean {
@@ -1294,21 +1349,38 @@ export class MapStore {
         return (room.exitLocks ?? []).includes(dirInt);
     }
 
-    addSpecialExit(from: number, to: number, cmd: string): boolean {
+    /**
+     * Mudlet `addSpecialExit(exitRoomID, entranceRoomID, command)`. Both rooms
+     * must exist and the command must be non-empty; each failure is a
+     * `(nil, errMsg)` return in Mudlet, so the message is handed back here and
+     * null means success (same shape as {@link setDoor}).
+     */
+    addSpecialExit(from: number, to: number, cmd: string): string | null {
         const r = this.rooms.get(from);
-        if (!r) return false;
+        if (!r) return `addSpecialExit: number ${from} is not a valid exit roomID`;
+        if (!this.rooms.has(to)) return `addSpecialExit: number ${to} is not a valid entrance roomID`;
+        if (typeof cmd !== 'string' || cmd.length === 0) {
+            return 'addSpecialExit: the special exit name/command cannot be empty';
+        }
         r.mSpecialExits[cmd] = to;
         this.notify();
-        return true;
+        return null;
     }
 
-    removeSpecialExit(from: number, cmd: string): boolean {
+    /** Mudlet `removeSpecialExit(exitRoomID, command)` — see {@link addSpecialExit}
+     *  for the message/null return shape. */
+    removeSpecialExit(from: number, cmd: string): string | null {
         const r = this.rooms.get(from);
-        if (!r) return false;
-        if (!(cmd in r.mSpecialExits)) return false;
+        if (!r) return `removeSpecialExit: number ${from} is not a valid exit roomID`;
+        if (typeof cmd !== 'string' || cmd.length === 0) {
+            return 'removeSpecialExit: the exit command cannot be empty';
+        }
+        if (!(cmd in r.mSpecialExits)) {
+            return `removeSpecialExit: the special exit name/command '${cmd}' does not exist in exit roomID ${from}`;
+        }
         delete r.mSpecialExits[cmd];
         this.notify();
-        return true;
+        return null;
     }
 
     getSpecialExitsSwap(id: number): Record<string, number> {
@@ -1324,10 +1396,9 @@ export class MapStore {
      * room. The lock flag follows this client's data model (special-exit locks
      * are tracked by destination room id, see pathfinding.ts).
      */
-    getSpecialExits(id: number, listAllExits = false): Record<number, Record<string, string>> {
+    getSpecialExits(id: number, listAllExits = false): Record<number, Record<string, string>> | undefined {
         const room = this.rooms.get(id);
-        if (!room) return {};
-        const locks = room.mSpecialExitLocks ?? [];
+        if (!room) return undefined;
         const weights = room.exitWeights ?? {};
         // Group the commands leading to each destination room.
         const byDest = new Map<number, string[]>();
@@ -1336,23 +1407,28 @@ export class MapStore {
             if (list) list.push(cmd);
             else byDest.set(dest, [cmd]);
         }
+        const lockFlag = (cmd: string) => (this.isSpecialExitLocked(id, cmd) ? '1' : '0');
         const out: Record<number, Record<string, string>> = {};
         for (const [dest, cmds] of byDest) {
-            const lock = locks.includes(dest) ? '1' : '0';
             const inner: Record<string, string> = {};
             if (listAllExits || cmds.length === 1) {
-                for (const cmd of cmds) inner[cmd] = lock;
+                for (const cmd of cmds) inner[cmd] = lockFlag(cmd);
             } else {
-                // Pick the lowest-weight command to this destination (locks are
-                // per-destination here, so the unlocked/locked split Mudlet does
-                // is degenerate — every command shares the same lock state).
-                let best: string | null = null;
-                let bestWeight = Infinity;
+                // Mudlet's rule: the cheapest UNLOCKED command wins, and only if
+                // every command to this room is locked does the cheapest locked
+                // one get reported.
+                let bestUnlocked: string | null = null, bestUnlockedWeight = Infinity;
+                let bestLocked: string | null = null, bestLockedWeight = Infinity;
                 for (const cmd of cmds) {
                     const w = weights[cmd] ?? 1;
-                    if (w < bestWeight) { bestWeight = w; best = cmd; }
+                    if (this.isSpecialExitLocked(id, cmd)) {
+                        if (w < bestLockedWeight) { bestLockedWeight = w; bestLocked = cmd; }
+                    } else if (w < bestUnlockedWeight) {
+                        bestUnlockedWeight = w; bestUnlocked = cmd;
+                    }
                 }
-                if (best != null) inner[best] = lock;
+                const best = bestUnlocked ?? bestLocked;
+                if (best != null) inner[best] = lockFlag(best);
             }
             out[dest] = inner;
         }
@@ -1374,29 +1450,27 @@ export class MapStore {
      * of a single exit. `exitCommand` is a stock direction (1-12 or a name) or a
      * special-exit command. A weight of 0 resets the override (pathfinding falls
      * back to the destination room's weight); negative weights are rejected.
-     * Returns false when the room doesn't exist, the exit can't be identified,
-     * or the weight is invalid.
+     * Each refusal is a `(nil, errMsg)` return in Mudlet, so the message is
+     * handed back here and null means success (see {@link setDoor}).
      */
-    setExitWeight(id: number, exitCommand: number | string, weight: number): boolean {
+    setExitWeight(id: number, exitCommand: number | string, weight: number): string | null {
         const room = this.rooms.get(id);
-        if (!room) return false;
-        if (!Number.isFinite(weight) || weight < 0) return false;
+        if (!room) return `setExitWeight: number ${id} is not a valid roomID`;
         const dirInt = parseDirection(exitCommand);
-        let key: string;
-        if (dirInt != null) {
-            // Stock direction: the exit must actually exist on the room.
-            const field = DIR_FIELD[dirInt];
-            if ((room as unknown as Record<string, number>)[field] === -1) return false;
-            key = DIR_SHORT[dirInt];
-        } else if (typeof exitCommand === 'string' && exitCommand in room.mSpecialExits) {
-            key = exitCommand;
-        } else {
-            return false;
+        const key = dirInt != null ? DIR_SHORT[dirInt] : String(exitCommand ?? '');
+        // Mudlet checks the exit before the weight, so a bad direction on a
+        // negative weight reports the direction.
+        if (!this.hasExitOrSpecialExit(room, dirInt, key)) {
+            return `setExitWeight: roomID ${id} does not have an exit that can be identified from '${String(exitCommand)}'`;
+        }
+        if (!Number.isFinite(weight) || weight < 0) {
+            return `setExitWeight: weight ${weight} is outside of the usable range of 0`
+                + ' (which resets the weight back to that of the destination room) to 2147483647';
         }
         if (weight === 0) delete room.exitWeights[key];
         else room.exitWeights[key] = weight;
         this.notify();
-        return true;
+        return null;
     }
 
     /**
@@ -1418,6 +1492,7 @@ export class MapStore {
         }
         room.mSpecialExits = {};
         room.mSpecialExitLocks = [];
+        this.specialExitLocks.delete(id);
         this.notify();
         return true;
     }
@@ -1425,12 +1500,11 @@ export class MapStore {
     /**
      * Mudlet `lockSpecialExit(fromRoomID, toRoomID, command, lockIfTrue)` — lock
      * or unlock a special exit so pathfinding skips it. Mudlet ignores the
-     * `toRoomID` argument (kept for signature compatibility); the exit is keyed
-     * by its command. This client's data model tracks special-exit locks by
-     * destination room id (`mSpecialExitLocks`), so we resolve the command to
-     * its destination and toggle that. Returns true on success or an error
-     * string (room missing / no such command) the binding turns into
-     * `(false, errMsg)`.
+     * `toRoomID` argument (kept for signature compatibility); the lock is keyed
+     * by the COMMAND (TRoom::mSpecialExitLocks is a `QSet<QString>`), so two
+     * commands leading to the same room lock independently. Returns true on
+     * success or an error string (room missing / no such command) the binding
+     * turns into `(nil, errMsg)`.
      */
     lockSpecialExit(fromId: number, command: string, lock: boolean): true | string {
         const room = this.rooms.get(fromId);
@@ -1438,13 +1512,50 @@ export class MapStore {
         if (!Object.prototype.hasOwnProperty.call(room.mSpecialExits, command)) {
             return `lockSpecialExit: the special exit name/command '${command}' does not exist in roomID ${fromId}`;
         }
-        const dest = room.mSpecialExits[command];
-        const locks = room.mSpecialExitLocks;
-        const idx = locks.indexOf(dest);
-        if (lock) { if (idx === -1) locks.push(dest); }
-        else if (idx !== -1) locks.splice(idx, 1);
+        const locked = this.lockedSpecialCommands(fromId);
+        if (lock) locked.add(command);
+        else locked.delete(command);
+        // Keep the destination-keyed mirror in step: it is what the binary
+        // writer repacks into the on-disk "1"+command form, and what
+        // pathfinding's per-destination check reads.
+        this.syncSpecialExitLockMirror(fromId);
         this.notify();
         return true;
+    }
+
+    /**
+     * Per-command special-exit locks for a room, created on first use. Seeded
+     * from the destination-keyed list a loaded map arrives with, since the
+     * binary reader collapses Mudlet's per-command locks down to the rooms they
+     * lead to (`MudletRoom.mSpecialExitLocks` is `number[]`) — so an imported
+     * map starts out with every command to a locked destination locked, exactly
+     * as it renders today, and diverges only as scripts lock individual
+     * commands.
+     */
+    private lockedSpecialCommands(roomId: number): Set<string> {
+        let set = this.specialExitLocks.get(roomId);
+        if (!set) {
+            set = new Set();
+            const room = this.rooms.get(roomId);
+            for (const [cmd, dest] of Object.entries(room?.mSpecialExits ?? {})) {
+                if ((room?.mSpecialExitLocks ?? []).includes(dest)) set.add(cmd);
+            }
+            this.specialExitLocks.set(roomId, set);
+        }
+        return set;
+    }
+
+    /** Rebuild a room's destination-keyed `mSpecialExitLocks` from the
+     *  authoritative per-command set. */
+    private syncSpecialExitLockMirror(roomId: number): void {
+        const room = this.rooms.get(roomId);
+        if (!room) return;
+        const dests = new Set<number>();
+        for (const cmd of this.specialExitLocks.get(roomId) ?? []) {
+            const dest = room.mSpecialExits[cmd];
+            if (dest !== undefined) dests.add(dest);
+        }
+        room.mSpecialExitLocks = [...dests];
     }
 
     /**
@@ -1460,7 +1571,12 @@ export class MapStore {
         if (!Object.prototype.hasOwnProperty.call(room.mSpecialExits, command)) {
             return `hasSpecialExitLock: the special exit name/command '${command}' does not exist in roomID ${fromId}`;
         }
-        return room.mSpecialExitLocks.includes(room.mSpecialExits[command]);
+        return this.isSpecialExitLocked(fromId, command);
+    }
+
+    /** Whether one special-exit COMMAND is locked. */
+    isSpecialExitLocked(roomId: number, command: string): boolean {
+        return this.lockedSpecialCommands(roomId).has(command);
     }
 
     /**
@@ -1682,62 +1798,121 @@ export class MapStore {
         style: string,
         color: { r: number; g: number; b: number },
         arrow: boolean,
-    ): boolean {
+    ): string | null {
         const room = this.rooms.get(id);
-        if (!room) return false;
+        if (!room) return `number ${id} is not a valid roomID`;
 
         let points: Array<[number, number]>;
         if (typeof target === 'number') {
             const to = this.rooms.get(target);
-            if (!to || to.area !== room.area) return false;
+            if (!to) return `number ${target} is not a valid target roomID`;
+            if (to.area !== room.area) {
+                return `target room is in area ID ${to.area}, which is not the one (ID: ${room.area})`
+                    + ' in which this custom line is to be drawn';
+            }
             points = [[to.x, to.y]];
         } else {
-            if (!Array.isArray(target) || target.length === 0) return false;
+            if (!Array.isArray(target) || target.length === 0) {
+                return 'the coordinate list is empty, at least one {x, y, z} point is needed';
+            }
+            // Mudlet's #5272 crash guard: an entry like `{}` carries no
+            // coordinates and must be rejected rather than stored as NaN.
+            if (target.some(p => !Number.isFinite(Number(p?.[0])) || !Number.isFinite(Number(p?.[1])))) {
+                return 'every coordinate must be a {x, y, z} triple of numbers';
+            }
             points = target.map(p => [Number(p[0]), Number(p[1])] as [number, number]);
+        }
+
+        for (const [channel, value] of [['red', color.r], ['green', color.g], ['blue', color.b]] as const) {
+            if (!Number.isFinite(Number(value)) || Number(value) < 0 || Number(value) > 255) {
+                return `${channel} value ${value} needs to be between 0-255`;
+            }
         }
 
         const styleNum = Number(
             Object.keys(PEN_STYLE_NAMES).find(k => PEN_STYLE_NAMES[Number(k)] === style),
         );
-        if (!styleNum) return false;
+        if (!styleNum) return `"${style}" is not a valid line style`;
 
-        // Resolve the direction key the same way removeCustomLine reads it:
-        // a stock direction → its canonical long name; anything else (a
-        // special-exit command) → the raw string.
+        // Key by the SHORT direction name ("e", "up", …), which is what Mudlet
+        // normalises to via dirToString and what its saved maps carry — keying
+        // by the long name made getCustomLines unable to read back a line this
+        // very function had just written. Anything unrecognised (a special-exit
+        // command) is stored verbatim, as Mudlet does.
         const dirInt = parseDirection(direction);
-        const key = dirInt != null ? DIR_FIELD[dirInt] : String(direction);
-        if (!key) return false;
+        const key = dirInt != null ? DIR_SHORT[dirInt] : String(direction);
+        if (!key) return `"${direction}" is not a direction this room has an exit for`;
+        if (!this.hasExitOrSpecialExit(room, dirInt, key)) {
+            return `roomID ${id} does not have an exit in a direction that can be identified from "${direction}"`;
+        }
 
         room.customLines[key] = points;
         room.customLinesColor[key] = { spec: 1, alpha: 255, r: color.r, g: color.g, b: color.b };
         room.customLinesStyle[key] = styleNum;
         room.customLinesArrow[key] = arrow;
         this.notify();
-        return true;
+        return null;
+    }
+
+    /**
+     * Whether a room has a stock exit in `dirInt`, or a special exit whose
+     * command is `key`. Mirrors Mudlet's TRoom::hasExitOrSpecialExit, which
+     * addCustomLine consults before drawing — a custom line is a decoration for
+     * an existing exit, not a way to invent one.
+     */
+    private hasExitOrSpecialExit(room: MudletRoom, dirInt: number | null | undefined, key: string): boolean {
+        if (dirInt != null) {
+            const field = DIR_FIELD[dirInt];
+            const target = field ? (room as unknown as Record<string, number>)[field] : 0;
+            if (target && target > 0) return true;
+            // A stub counts as an exit for drawing purposes.
+            if ((room.stubs ?? []).includes(dirInt)) return true;
+            return false;
+        }
+        return Object.prototype.hasOwnProperty.call(room.mSpecialExits ?? {}, key);
     }
 
     // ── Doors ─────────────────────────────────────────────────────────────────
 
-    getDoors(id: number): Record<string, number> {
-        return { ...(this.rooms.get(id)?.doors ?? {}) };
+    /** Mudlet `getDoors(roomID)` — `{ exitCmd = doorType }`. Undefined for an
+     *  unknown room, which the Lua binding reports as `(nil, errMsg)`. */
+    getDoors(id: number): Record<string, number> | undefined {
+        const room = this.rooms.get(id);
+        return room ? { ...room.doors } : undefined;
     }
 
     /**
      * Mudlet `setDoor(roomID, exitCmd, status)`. exitCmd is either a stock
-     * direction (numeric 1-12 or name like "north"/"n"), in which case the
-     * door is keyed by the canonical field name ("north"/"northeast"/...), or
-     * an arbitrary special-exit command string, which is used as-is.
+     * direction — spelled exactly as Mudlet keys its door map ("n"/"ne"/…/
+     * "up"/"down"/"in"/"out"), which is also what a saved map carries — or an
+     * arbitrary special-exit command string, used as-is.
+     *
+     * Mudlet refuses a direction the room has no exit *or stub* for, and a
+     * status outside 0-3; both are `(nil, errMsg)` returns rather than a bare
+     * false, so the failure is reported here as the message string and success
+     * as null (same shape as {@link addCustomLine}).
      */
-    setDoor(id: number, dir: number | string, val: number): boolean {
+    setDoor(id: number, dir: number | string, val: number): string | null {
         const room = this.rooms.get(id);
-        if (!room) return false;
+        if (!room) return `setDoor: number ${id} is not a valid roomID`;
         const dirInt = parseDirection(dir);
-        const key = dirInt != null ? DIR_FIELD[dirInt] : (typeof dir === 'string' ? dir : '');
-        if (!key) return false;
+        const key = dirInt != null ? DIR_SHORT[dirInt] : (typeof dir === 'string' ? dir : '');
+        if (!key) return `setDoor: "${String(dir)}" is not a valid door command`;
+        if (dirInt != null) {
+            const target = (room as unknown as Record<string, number>)[DIR_FIELD[dirInt]];
+            if (!(target > 0) && !(room.stubs ?? []).includes(dirInt)) {
+                return `setDoor: roomID ${id} does not have a normal exit or a stub exit in direction '${key}'`;
+            }
+        } else if (!Object.prototype.hasOwnProperty.call(room.mSpecialExits ?? {}, key)) {
+            return `setDoor: roomID ${id} does not have a special exit in direction '${key}'`;
+        }
+        if (!Number.isFinite(val) || val < 0 || val > 3) {
+            return `setDoor: door type ${val} is not one of 0='none', 1='open', 2='closed' or 3='locked'`;
+        }
         if (val <= 0) delete room.doors[key];
         else room.doors[key] = val;
         this.notify();
-        return true;
+        return null;
     }
 
     // ── User data ─────────────────────────────────────────────────────────────
@@ -1817,12 +1992,22 @@ export class MapStore {
 
     /**
      * Mudlet `resetRoomArea(roomID)` — move the room back to the default "void"
-     * area (-1), matching Mudlet's `setRoomArea(id, -1)`. Returns `true` on
-     * success, `undefined` when the room doesn't exist (Lua → `(false,errMsg)`).
+     * area (-1). Returns `true` on success, `undefined` when the room doesn't
+     * exist (Lua → `(nil, errMsg)`). Doesn't go through {@link setRoomArea},
+     * which refuses an areaID below 1 — resetRoomArea is Mudlet's documented
+     * way to reach the default area.
      */
     resetRoomArea(id: number): boolean | undefined {
-        if (!this.rooms.has(id)) return undefined;
-        return this.setRoomArea(id, -1);
+        const room = this.rooms.get(id);
+        if (!room) return undefined;
+        const oldArea = this.areas.get(room.area);
+        if (oldArea) {
+            oldArea.rooms = oldArea.rooms.filter(r => r !== id);
+            this.updateAreaBounds(room.area);
+        }
+        room.area = -1;
+        this.notify();
+        return true;
     }
 
     // ── Map-level user data ───────────────────────────────────────────────────
@@ -1883,12 +2068,16 @@ export class MapStore {
      * Mudlet `addAreaName(name)` returns a numeric area ID on success or
      * `(false, errMsg)` when the name is empty or already in use.
      */
-    addAreaName(name: string): number | { ok: false; err: string } {
-        if (typeof name !== 'string' || name.length === 0) {
-            return { ok: false, err: 'addAreaName: area name must be a non-empty string' };
+    addAreaName(rawName: string): number | { ok: false; err: string } {
+        // Mudlet trims the name before validating and stores the trimmed form.
+        const name = typeof rawName === 'string' ? rawName.trim() : '';
+        if (name.length === 0) {
+            return { ok: false, err: 'addAreaName: area names may not be empty strings (and spaces are trimmed from the ends)' };
         }
-        for (const [, n] of this.areaNames) {
-            if (n === name) return { ok: false, err: `addAreaName: an area called "${name}" already exists` };
+        for (const [aid, n] of this.areaNames) {
+            if (n === name) {
+                return { ok: false, err: `addAreaName: area names may not be duplicated and areaID ${aid} already has the name '${name}'` };
+            }
         }
         const id = this.nextAreaId++;
         this.areas.set(id, makeArea());
@@ -1899,14 +2088,30 @@ export class MapStore {
 
     /**
      * Mudlet `deleteArea(areaID|areaName)` — deletes the area record and the
-     * rooms it contained. Returns true on success, false if the area can't be
-     * resolved.
+     * rooms it contained. The default area cannot be deleted and an areaID
+     * below 1 names it, so every refusal (unknown id/name, empty name, the
+     * default area) is a `(nil, errMsg)` return there: the message is handed
+     * back here and null means success (see {@link setDoor}).
      */
-    deleteArea(idOrName: number | string): boolean {
-        const id = this.resolveAreaId(idOrName);
-        if (id == null) return false;
+    deleteArea(idOrName: number | string): string | null {
+        let id: number;
+        if (typeof idOrName === 'string' && !/^-?\d+$/.test(idOrName.trim())) {
+            if (idOrName.length === 0) return 'deleteArea: an empty string is not a valid area name';
+            const resolved = this.resolveAreaId(idOrName);
+            if (resolved == null) return `deleteArea: string '${idOrName}' is not a valid area name`;
+            // Reached by name, the default area is still off limits.
+            if (resolved < 1) return "deleteArea: you can't delete the default area";
+            id = resolved;
+        } else {
+            id = Number(idOrName);
+            if (!Number.isFinite(id) || id < 1) {
+                // Area 0/-1 is the default area, which Mudlet refuses to delete.
+                return `deleteArea: number ${idOrName} is not a valid areaID greater than zero`;
+            }
+            if (!this.areaNames.has(id)) return `deleteArea: number ${id} is not a valid areaID`;
+        }
         const area = this.areas.get(id);
-        if (!area) return false;
+        if (!area) return `deleteArea: number ${id} is not a valid areaID`;
         for (const roomId of area.rooms) {
             const r = this.rooms.get(roomId);
             if (r?.hash) this.hashToRoom.delete(r.hash);
@@ -1915,7 +2120,7 @@ export class MapStore {
         this.areas.delete(id);
         this.areaNames.delete(id);
         this.notify();
-        return true;
+        return null;
     }
 
     getAreaTable(): Record<string, number> {
@@ -1937,6 +2142,16 @@ export class MapStore {
 
     /** True when an area with this id exists. */
     hasArea(id: number): boolean { return this.areas.has(id); }
+
+    // Mudlet keeps the 2D zoom on the area itself (TArea::mLast2DMapZoom,
+    // reached through TRoomDB::get2DMapZoom) rather than on the widget, so
+    // getMapZoom/setMapZoom answer even with no mapper mounted and each area
+    // remembers its own. mudix already stores it per area — see
+    // {@link getAreaZoom} / {@link setAreaZoom} further down, which persist it
+    // into the area's userData so it round-trips with the map file.
+    /** Mudlet's T2DMap::csmDefaultXYZoom / csmMinXYZoom. */
+    static readonly DEFAULT_MAP_ZOOM = 20;
+    static readonly MIN_MAP_ZOOM = 3;
 
     // ── Area user data ────────────────────────────────────────────────────────
     // Mudlet getAreaUserData/setAreaUserData/getAllAreaUserData/clearAreaUserData
@@ -2125,8 +2340,40 @@ export class MapStore {
         return true;
     }
 
-    getAreaRooms(areaId: number): number[] {
-        return [...(this.areas.get(areaId)?.rooms ?? [])];
+    /** Mudlet `getAreaRooms(areaID)` — the area's room ids, or undefined for an
+     *  unknown area (Mudlet pushes nil, with no message). */
+    getAreaRooms(areaId: number): number[] | undefined {
+        const area = this.areas.get(areaId);
+        return area ? [...area.rooms] : undefined;
+    }
+
+    /**
+     * Mudlet `getCollisionLocationsInArea(areaID)` — the (x, y, z) coordinates
+     * in an area occupied by more than one room, which render on top of each
+     * other on the 2D map. Mirrors TArea::getCollisionNodes (TArea.cpp).
+     * Returns null for an unknown area so the Lua wrapper can produce Mudlet's
+     * (nil, errMsg) pair; an area with no overlaps yields an empty list.
+     */
+    getCollisionLocationsInArea(areaId: number): Array<[number, number, number]> | null {
+        const area = this.areas.get(areaId);
+        if (!area) return null;
+        const seen = new Set<string>();
+        const collisions: Array<[number, number, number]> = [];
+        for (const roomId of area.rooms ?? []) {
+            const room = this.rooms.get(roomId);
+            if (!room) continue;
+            const key = `${room.x},${room.y},${room.z}`;
+            if (seen.has(key)) {
+                // Only report each shared coordinate once, however many rooms
+                // pile up on it.
+                if (!collisions.some(([x, y, z]) => x === room.x && y === room.y && z === room.z)) {
+                    collisions.push([room.x, room.y, room.z]);
+                }
+            } else {
+                seen.add(key);
+            }
+        }
+        return collisions;
     }
 
     /**
@@ -2714,6 +2961,39 @@ export class MapStore {
         this.notify();
     }
 
+    /**
+     * Seed env IDs 257-272 with the profile's 16 mapper colours, mirroring
+     * TMap::restore16ColorSet. Mudlet keeps that block permanently present in
+     * mCustomEnvColors — `setCustomEnvColor(257, …)` is documented as *also*
+     * changing the profile's dark-red, and `getCustomEnvColorTable()[257]`
+     * reads back even on a brand-new map — so it is re-applied whenever the
+     * map is wiped rather than treated as user data.
+     */
+    private restore16ColorSet(): void {
+        // Qt's colour constants, in TMap::restore16ColorSet's 257→272 order.
+        const palette: Array<[number, number, number]> = [
+            [128, 0, 0],       // 257 dark red
+            [0, 128, 0],       // 258 dark green
+            [128, 128, 0],     // 259 dark yellow
+            [0, 0, 128],       // 260 dark blue
+            [128, 0, 128],     // 261 dark magenta
+            [0, 128, 128],     // 262 dark cyan
+            [192, 192, 192],   // 263 light gray
+            [0, 0, 0],         // 264 black
+            [255, 0, 0],       // 265 red
+            [0, 255, 0],       // 266 green
+            [255, 255, 0],     // 267 yellow
+            [0, 0, 255],       // 268 blue
+            [255, 0, 255],     // 269 magenta
+            [0, 255, 255],     // 270 cyan
+            [255, 255, 255],   // 271 white
+            [128, 128, 128],   // 272 dark gray
+        ];
+        palette.forEach(([r, g, b], i) => {
+            this.customEnvColors.set(257 + i, { spec: 1, alpha: 255, r, g, b });
+        });
+    }
+
     getCustomEnvColor(envId: number): { r: number; g: number; b: number; a: number } | undefined {
         const c = this.customEnvColors.get(envId);
         return c ? { r: c.r, g: c.g, b: c.b, a: c.alpha } : undefined;
@@ -2849,12 +3129,14 @@ export class MapStore {
     getHiddenVersion(): number { return this.hiddenVersion; }
 
     /**
-     * Mudlet `getHiddenRooms(areaID)` — array of room ids in the area that
-     * are currently hidden. Returns `undefined` when the area doesn't exist
-     * so the Lua binding can distinguish "no such area" from "no hidden
-     * rooms here".
+     * Mudlet `getHiddenRooms()` — the hidden rooms of the whole map. Mudlet
+     * takes no argument at all (TLuaInterpreter::getHiddenRooms walks the
+     * entire room map); mudix additionally accepts an areaID to scope the
+     * answer, in which case `undefined` distinguishes "no such area" from "no
+     * hidden rooms here".
      */
-    getHiddenRooms(areaId: number): number[] | undefined {
+    getHiddenRooms(areaId?: number): number[] | undefined {
+        if (areaId === undefined) return [...this.hiddenRooms];
         const area = this.areas.get(areaId);
         if (!area) return undefined;
         const out: number[] = [];

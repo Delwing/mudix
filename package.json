@@ -47,7 +47,8 @@
     "dev:busted": "vite --mode busted --port 5174 --strictPort",
     "pretest:e2e": "npm run gen:busted-manifest",
     "test:e2e": "playwright test",
-    "gen:busted-manifest": "playwright test -c playwright.manifest.config.ts"
+    "gen:busted-manifest": "playwright test -c playwright.manifest.config.ts",
+    "sync:mudlet-specs": "node scripts/sync-mudlet-specs.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

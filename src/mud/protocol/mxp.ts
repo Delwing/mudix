@@ -170,7 +170,10 @@ const MAX_PENDING = 256;
 const MAX_DEPTH = 8;
 
 export class MxpParser {
-    private readonly opts: { send: (raw: string) => void };
+    private readonly opts: {
+        send: (raw: string) => void;
+        onElementEvent?: (name: string, attrs: Record<string, string>) => void;
+    };
 
     // --- persistent across the whole session ---
     private elements = new Map<string, ElementDef>();
@@ -213,9 +216,28 @@ export class MxpParser {
     private destOut: BufferSegment[] = [];
     private destPlain = "";
 
-    constructor(opts: { send: (raw: string) => void; presets?: HyperlinkPresetRegistry }) {
+    constructor(opts: {
+        send: (raw: string) => void;
+        presets?: HyperlinkPresetRegistry;
+        /** Fired whenever a server-defined custom element is used, with the
+         *  tag's attributes resolved the way Mudlet resolves them (see
+         *  {@link elementEventAttrs}). Backs the Lua `mxp` table. */
+        onElementEvent?: (name: string, attrs: Record<string, string>) => void;
+    }) {
         this.opts = opts;
         this.presets = opts.presets ?? new HyperlinkPresetRegistry();
+    }
+
+    /**
+     * Lock the parser to secure line mode (or release the lock). Mudlet does
+     * this whenever the MXP processor is forced on without an option-91
+     * handshake (ctelnet.cpp: MXP_MODE_CODE_LOCK_SECURE): such servers are
+     * IRE-style and never send mode switches, they just use secure tags — and
+     * without the lock every definition tag would be ignored as unsafe.
+     */
+    lockSecureMode(locked: boolean): void {
+        this.lockedMode = locked ? "secure" : null;
+        this.lineMode = this.lockedMode ?? "open";
     }
 
     /** Clear all cross-line state. Called on (re)connect so a new session starts
@@ -833,6 +855,7 @@ export class MxpParser {
     private expandElement(def: ElementDef, attrStr: string, depth: number): void {
         if (depth >= MAX_DEPTH) return;
         const { named, positional } = parseAttrs(attrStr);
+        this.opts.onElementEvent?.(def.name, elementEventAttrs(def, named, positional));
         const before = this.fmt.toSnapshot();
         this.flushRun();
         // Push the close marker *below* the tags the template will open, so
@@ -1024,6 +1047,35 @@ function tokenizeAttrs(s: string): AttrToken[] {
 
 function isSpace(c: string): boolean {
     return c === " " || c === "\t" || c === "\n" || c === "\r";
+}
+
+/**
+ * The attribute map a custom-element use publishes to scripts, mirroring
+ * Mudlet's TMxpMudlet::enqueueMxpEvent:
+ *  - every attribute the tag actually carried, under its own name — for a
+ *    positional token that IS the token text, which is why a tag written as
+ *    `RItem "Sword"` shows up as `mxp.ritem.sword`;
+ *  - each attribute name the element DECLARED via `ATT=`, resolved positionally,
+ *    so declaring `ATT="Name"` makes the first positional token reachable as
+ *    `mxp.rmob.name` with the value's case intact, falling back to the declared
+ *    default.
+ * Keys are lowercased where they land in Lua, not here.
+ */
+function elementEventAttrs(
+    def: ElementDef,
+    named: Map<string, string>,
+    positional: string[],
+): Record<string, string> {
+    const attrs: Record<string, string> = {};
+    for (const token of positional) attrs[token] = '';
+    for (const [k, v] of named) attrs[k] = v;
+    def.atts.forEach((attrName, idx) => {
+        const lower = attrName.toLowerCase();
+        if (named.has(lower)) attrs[attrName] = named.get(lower)!;
+        else if (positional[idx] !== undefined) attrs[attrName] = positional[idx];
+        else if (lower in def.attDefaults) attrs[attrName] = def.attDefaults[lower];
+    });
+    return attrs;
 }
 
 /** Split a tag's attribute string into named and positional values. */

@@ -1,54 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { MapRenderer, createSettings, PngBytesExporter } from 'mudlet-map-renderer';
-import type { LodEventDetail, RoomClickEventDetail, RoomContextMenuEventDetail, RoomLens, Settings as MapRendererSettings } from 'mudlet-map-renderer';
+import { MapRenderer, createSettings } from 'mudlet-map-renderer';
+import type { LodEventDetail, RoomClickEventDetail, RoomContextMenuEventDetail, RoomLens } from 'mudlet-map-renderer';
 import type { WindowManager, MapControl, MapLoadProgress } from '../WindowManager';
 import type { MapEventEntry, MapInfoResult, MapInfoContributor, MapStore } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
+import { applyMapperSettings, exportAreaImage } from '../../../map/mapImageExport';
 import { MudletHighlightOverlay } from '../../../map/MudletHighlightOverlay';
 import { MapSelectionOverlay } from '../../../map/MapSelectionOverlay';
 import { useAppStore, selectProfileField, MAP_INFO_BG_DEFAULT, type MapperSettings, type MapInfoBgColor } from '../../../storage';
 import { MapEditorModal } from '../../MapEditorModal';
 import { QT_OBJECT_NAMES } from '../../labels/qtCss';
 
-/**
- * Copy user-set fields from MapperSettings onto a live renderer settings
- * object. Anything left undefined in `mapper` is intentionally not touched
- * so the renderer's own createSettings() defaults stay in effect.
- */
-function applyMapperSettings(target: MapRendererSettings, mapper: MapperSettings | undefined): void {
-    // Mudlet's 2D map renders on an OPAQUE BLACK background (the renderer's own
-    // default). Honour that rather than a transparent canvas: transparency made
-    // the map composite over whatever was behind it, so a map opened into a user
-    // window showed the page/window through it. A user-picked colour in the
-    // Mapper tab still wins.
-    target.backgroundColor = mapper?.backgroundColor ?? '#000000';
-    // Mudlet always draws room symbols (and, in mudix, the area-name header)
-    // with its bundled "Bitstream Vera Sans Mono" (TMap.h: mMapSymbolFont) —
-    // never the profile's console font. The renderer's own default is a
-    // generic 'sans-serif', which picks a different glyph shape per-OS for
-    // Unicode room-symbol characters. Match Mudlet's fixed choice instead.
-    target.fontFamily = "'Bitstream Vera Sans Mono', sans-serif";
-    // Level-of-detail: on unless the user turns it off. The renderer defaults it
-    // off for back-compat, but every tier only engages above ~12k rooms on the
-    // drawn plane — a density where the full vector scene costs seconds per
-    // rebuild. Budgets fall through to the renderer's own defaults when unset.
-    target.lodEnabled = mapper?.lodEnabled ?? true;
-    if (mapper?.lodRoomBudget !== undefined) target.lodRoomBudget = mapper.lodRoomBudget;
-    if (mapper?.lodExitBudget !== undefined) target.lodExitBudget = mapper.lodExitBudget;
-    // The hit-test budget is measured against the rooms a plane materialises,
-    // which for MudixMapReader (viewport-virtualized) is the visible slice —
-    // so it behaves as designed: picking drops out only while enough rooms are
-    // on screen to make the index expensive, and zooming in brings it back.
-    if (mapper?.lodHitTestBudget !== undefined) target.lodHitTestBudget = mapper.lodHitTestBudget;
-    if (!mapper) return;
-    if (mapper.roomSize !== undefined) target.roomSize = mapper.roomSize;
-    if (mapper.roomShape !== undefined) target.roomShape = mapper.roomShape;
-    if (mapper.borders !== undefined) target.borders = mapper.borders;
-    if (mapper.lineWidth !== undefined) target.lineWidth = mapper.lineWidth;
-    if (mapper.lineColor !== undefined) target.lineColor = mapper.lineColor;
-    if (mapper.gridEnabled !== undefined) target.gridEnabled = mapper.gridEnabled;
-}
 
 type MapStatus = 'loading' | 'empty' | 'ready' | 'error';
 
@@ -310,9 +273,11 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         const center = manager.mapStore.getSelectionCenter();
         const playerRoomId = manager.mapStore.getPlayerRoom();
         const focusRoomId = center ?? playerRoomId ?? manager.mapStore.getFallbackRoomId();
-        const focusRoomArea = focusRoomId != null
+        // getRoomArea is undefined for a room that no longer exists; fall back
+        // to the displayed area so the info panel keeps rendering.
+        const focusRoomArea = (focusRoomId != null
             ? manager.mapStore.getRoomArea(focusRoomId)
-            : areaId;
+            : areaId) ?? areaId;
         const next = manager.mapStore.evaluateMapInfos(
             focusRoomId,
             manager.mapStore.getMapSelectionSize(),
@@ -1121,72 +1086,10 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             }
         },
         // Mudlet `exportAreaImage` — rasterize an area to PNG bytes without
-        // disturbing the visible map. A throwaway headless renderer reuses the
-        // live reader (MapStore-backed) and the current Mapper settings; the
-        // PNG export itself is fully off-screen (the renderer's CanvasExporter
-        // rebuilds the scene pipeline from state, so the on-screen view is
-        // never touched). The off-screen container only gives the Konva backend
-        // real dimensions so getAreaBounds resolves an aspect ratio.
-        exportArea: (areaId: number, zLevel?: number): Uint8Array | null => {
-            if (!readerRef.current) return null;
-            // A dedicated reader, not the live one: the live reader is scoped to
-            // the camera's viewport (that's what keeps big maps fast), and an
-            // export driven through it would contain only the rooms currently
-            // on screen. This one is never handed to the interactive backend,
-            // so nothing narrows it.
-            const reader = new MudixMapReader(manager.mapStore);
-            let area;
-            try { area = reader.getArea(areaId); } catch { return null; }
-            if (!area) return null;
-            const levels = area.getZLevels().slice().sort((a, b) => a - b);
-            const z = (zLevel != null && levels.includes(zLevel))
-                ? zLevel
-                : levels.includes(0) ? 0 : (levels[0] ?? 0);
-            const offscreen = document.createElement('div');
-            offscreen.style.cssText = 'position:fixed;left:-100000px;top:0;width:1200px;height:900px;pointer-events:none;';
-            document.body.appendChild(offscreen);
-            const settings = createSettings();
-            settings.areaName = false;
-            settings.highlightCurrentRoom = false;
-            applyMapperSettings(settings, mapperRef.current);
-            // An export is a one-shot render of the whole area at a fixed size,
-            // not an interactive scene — always draw it at full vector detail
-            // rather than handing back a raster overview of a dense plane.
-            settings.lodEnabled = false;
-            const headless = new MapRenderer(reader, settings, offscreen);
-            try {
-                // Mirror viewing-mode hidden-room filtering so the export matches
-                // what the on-screen map shows (editing mode reveals all rooms).
-                const exportLens: RoomLens = {
-                    isVisible: (room) =>
-                        manager.mapStore.getMapMode() === 'editing' || !manager.mapStore.isRoomHidden(room.id),
-                    getExitTreatment: (_exit, a, b) => {
-                        if (manager.mapStore.getMapMode() === 'editing') return 'full';
-                        return (manager.mapStore.isRoomHidden(a.id) || manager.mapStore.isRoomHidden(b.id)) ? 'hidden' : 'full';
-                    },
-                    getVersion: () => manager.mapStore.getHiddenVersion(),
-                };
-                headless.setLens(exportLens);
-                headless.drawArea(areaId, z);
-                // Mudlet renders at a fixed 2.0x zoom; the exporter fits the whole
-                // area into width×height, so this picks a resolution-per-map-unit
-                // and an aspect ratio from the area bounds, clamped to a sane max.
-                const b = headless.getAreaBounds();
-                const PX_PER_UNIT = 48;
-                const PAD = 3;
-                const spanX = b ? Math.max(1, b.maxX - b.minX) : 12;
-                const spanY = b ? Math.max(1, b.maxY - b.minY) : 12;
-                const width = Math.min(8192, Math.max(128, Math.round((spanX + PAD * 2) * PX_PER_UNIT)));
-                const height = Math.min(8192, Math.max(128, Math.round((spanY + PAD * 2) * PX_PER_UNIT)));
-                return headless.export(new PngBytesExporter({ width, height, padding: PAD })) ?? null;
-            } catch (err) {
-                console.warn('[MapPanel] exportArea failed:', err);
-                return null;
-            } finally {
-                headless.destroy();
-                offscreen.remove();
-            }
-        },
+        // disturbing the visible map. The whole render is standalone (see
+        // mapImageExport); the panel only forwards its current Mapper settings.
+        exportArea: (areaId: number, zLevel?: number): Uint8Array | null =>
+            exportAreaImage(manager.mapStore, mapperRef.current, areaId, zLevel),
     };
     useEffect(() => {
         const ctrl: MapControl = {

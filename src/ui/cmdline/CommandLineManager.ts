@@ -87,6 +87,12 @@ export class CommandLineManager {
         return this.cmdLines.has(name);
     }
 
+    /** Read-only handle on a command line's stored state, for the geometry and
+     *  visibility getters (getWindowGeometry, windowVisible). */
+    get(name: string): Readonly<CmdLineState> | undefined {
+        return this.cmdLines.get(name);
+    }
+
     destroy(name: string): boolean {
         const cl = this.cmdLines.get(name);
         if (!cl) return false;

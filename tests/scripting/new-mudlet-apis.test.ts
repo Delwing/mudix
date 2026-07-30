@@ -86,17 +86,25 @@ describe('addCustomLine', () => {
 
   it('adds a point-list custom line that round-trips through getCustomLines', () => {
     rt.run('addRoom(1)');
+    // A custom line decorates an exit the room already has — Mudlet refuses a
+    // direction with no exit (a stub counts), so give it one first.
+    rt.run('setExitStub(1, "north", true)');
     expect(rt.run('return addCustomLine(1, {{0,0,0},{5,5,0}}, "north", "dot line", {255,0,0}, true)')).toBe(true);
-    expect(rt.run('return getCustomLines(1).north.attributes.style')).toBe('dot line');
-    expect(rt.run('return getCustomLines(1).north.attributes.arrow')).toBe(true);
-    expect(rt.run('return getCustomLines(1).north.attributes.color.r')).toBe(255);
+    // Keyed by the SHORT direction name, which is what Mudlet's dirToString
+    // normalises to and what its saved maps carry.
+    expect(rt.run('return getCustomLines(1).n.attributes.style')).toBe('dot line');
+    expect(rt.run('return getCustomLines(1).n.attributes.arrow')).toBe(true);
+    expect(rt.run('return getCustomLines(1).n.attributes.color.r')).toBe(255);
     // points are 0-indexed in getCustomLines
-    expect(rt.run('return getCustomLines(1).north.points[1].x')).toBe(5);
+    expect(rt.run('return getCustomLines(1).n.points[1].x')).toBe(5);
   });
 
   it('rejects an unknown pen-style name', () => {
     rt.run('addRoom(2)');
-    expect(rt.run('return addCustomLine(2, {{0,0,0}}, "north", "squiggle", {0,0,0}, false)')).toBe(false);
+    rt.run('setExitStub(2, "north", true)');
+    // Mudlet reports the refusal as (nil, errMsg), not a bare false.
+    expect(rt.run('local _, e = addCustomLine(2, {{0,0,0}}, "north", "squiggle", {0,0,0}, false) return e'))
+      .toMatch(/not a valid line style/);
   });
 });
 
@@ -131,8 +139,12 @@ describe('setWindowWrap / getWindowWrap (main window)', () => {
     expect(rt.run('return getWindowWrap("main")')).toBe(0);
   });
 
-  it('reports -1 for an unknown named window', () => {
-    expect(rt.run('return getWindowWrap("nope")')).toBe(-1);
+  // Mudlet reports a console call against a window that doesn't exist as
+  // (nil, 'window "X" not found') — UI_spec asserts that message verbatim for
+  // the whole family (getLineCount, moveCursor, insertText, ...).
+  it('reports a not-found message for an unknown named window', () => {
+    expect(rt.run('local _, e = getWindowWrap("nope") return e'))
+      .toBe('window "nope" not found');
   });
 });
 
@@ -154,9 +166,18 @@ describe('receiveMSP', () => {
   beforeAll(async () => { rt = await createTestRuntime(); });
   afterAll(() => rt.dispose());
 
+  // Mudlet refuses receiveMSP unless MSP was negotiated with the server
+  // (ctelnet::isMSPEnabled — the negotiated latch, not the profile's enableMSP
+  // config). This runtime has no connection, so the Lua global reports that.
+  it('refuses through Lua while MSP has not been negotiated', () => {
+    expect(rt.run('local _, e = receiveMSP("!!SOUND(test.wav V=80)") return e'))
+      .toMatch(/MSP is not currently enabled/);
+  });
+
+  // The parsing behind the gate is unchanged; exercise it directly.
   it('parses an MSP payload (true) and ignores plain text (false)', () => {
-    expect(rt.run('return receiveMSP("!!SOUND(test.wav V=80)")')).toBe(true);
-    expect(rt.run('return receiveMSP("just some text")')).toBe(false);
+    expect(rt.api.receiveMSP('!!SOUND(test.wav V=80)')).toBe(true);
+    expect(rt.api.receiveMSP('just some text')).toBe(false);
   });
 });
 

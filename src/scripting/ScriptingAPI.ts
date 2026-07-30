@@ -34,6 +34,7 @@ import {
     primeLocalFontsCache,
 } from '../utils/fontLoader';
 import { ProfilesPresence } from './profilesPresence';
+import { MapStore } from '../map/MapStore';
 import { type EngineHost, NULL_ENGINE_HOST } from './EngineHost';
 
 // Mudlet's TChar always carries baked-in fg/bg colors (the rendered pair), so
@@ -43,6 +44,24 @@ import { type EngineHost, NULL_ENGINE_HOST } from './EngineHost';
 // (App.css :root --text / --bg).
 const DEFAULT_FG_RGB: [number, number, number] = [0xd4, 0xd4, 0xd4];
 const DEFAULT_BG_RGB: [number, number, number] = [0x09, 0x09, 0x09];
+
+/**
+ * The ANSI palette index (0-15) a segment colour corresponds to, or -2 when it
+ * has none. Colour triggers compare palette indices — Mudlet keeps the ANSI
+ * number on every TChar — but mudix stores SGR 30-37/40-47 as the hex value
+ * they render as, so those are resolved back through the same palette here.
+ * A 256-colour (38;5;N) segment already carries its index.
+ */
+function ansiPaletteIndex(color: FormatColor | undefined): number {
+    if (!color) return -2;
+    if (color.space === 'indexed') return color.index;
+    if (color.space !== 'hex') return -2;
+    const hex = color.color.toLowerCase();
+    const dark = colorCodes.ansi.dark.findIndex(c => c.toLowerCase() === hex);
+    if (dark >= 0) return dark;
+    const bright = colorCodes.ansi.bright.findIndex(c => c.toLowerCase() === hex);
+    return bright >= 0 ? bright + 8 : -2;
+}
 
 const HEX_RE = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i;
 function parseHexToRgb(hex: string | undefined): [number, number, number] | null {
@@ -429,6 +448,8 @@ class ScriptingLabelsAPI {
         return this.manager.create(name, opts);
     }
     has(name: string): boolean { return this.manager.has(name); }
+    /** Read-only state for the geometry/visibility/text getters. */
+    get(name: string) { return this.manager.get(name); }
     destroy(name: string): boolean { return this.manager.destroy(name); }
     move(name: string, x: number, y: number): boolean {
         return this.manager.move(name, x, y);
@@ -744,8 +765,16 @@ export class ScriptingAPI {
     /** Mudlet `feedTelnet(data)`. Injects raw server bytes into the inbound
      *  pipeline as if received from the MUD (telnet stripping → ANSI →
      *  triggers → render). */
-    feedTelnet(data: string): void {
+    /** Mudlet `feedTelnet(data)` — inject imitation server bytes. Refused while
+     *  a socket exists in any state but unconnected, so replayed data can never
+     *  interleave with a live stream; the message is returned for the binding to
+     *  shape into Mudlet's `(nil, errMsg)`, and null means it was fed. */
+    feedTelnet(data: string): string | null {
+        if (!this.session.isSocketUnconnected()) {
+            return 'feedTelnet: refused, telnet connection socket is not in the unconnected state';
+        }
         this.session.feedTelnet(data);
+        return null;
     }
 
     /** Mudlet `loadReplay(fileName)` core. Starts playback of a Mudlet binary
@@ -765,6 +794,13 @@ export class ScriptingAPI {
         const { commands } = new MspParser().feed(text);
         for (const cmd of commands) this.session.events.emit('msp', cmd);
         return commands.length > 0;
+    }
+
+    /** Whether MSP is live on this connection — negotiated with the server, not
+     *  merely permitted by the profile's `enableMSP` config. Mudlet gates
+     *  receiveMSP on this (ctelnet::isMSPEnabled). */
+    isMspNegotiated(): boolean {
+        return this.session.isMspNegotiated();
     }
 
     /** Mudlet `sendATCP(message)`. Frames + sends an ATCP (telnet 200)
@@ -969,10 +1005,13 @@ export class ScriptingAPI {
         return roomSize / lineWidth;
     }
 
-    /** Mudlet `getConfig(key)`. Returns the option's value, or `undefined`
-     *  (→ Lua nil) for an unknown key. The no-arg / table forms are handled by
-     *  the Lua wrapper in Other.lua, which calls this once per key. */
-    getConfig(key: string): unknown {
+    /** Mudlet `getConfig(key [, useStringFormat])`. Returns the option's value,
+     *  or `undefined` (→ Lua nil, plus a message from the Bridge wrapper) for an
+     *  unknown key. `useStringFormat` is Mudlet's opt-in for options that kept a
+     *  legacy boolean reading alongside a newer enum — currently `showSentText`.
+     *  The no-arg / table forms are handled by the Lua wrapper in Other.lua,
+     *  which calls this once per key. */
+    getConfig(key: string, useStringFormat = false): unknown {
         switch (key) {
             // structured — protocol toggles
             case 'enableGMCP': return this.getProtocol('gmcp');
@@ -1013,7 +1052,11 @@ export class ScriptingAPI {
                 return `${c.r},${c.g},${c.b},${c.a}`;
             }
             // live
-            case 'showSentText':       return this.session.showSentText;
+            // Mudlet's legacy key was a plain on/off toggle and still reads back
+            // as one; the three-mode string is the opt-in `getConfig(key, true)`
+            // form. 'never' is the only mode that reads false.
+            case 'showSentText':
+                return useStringFormat ? this.session.showSentText : this.session.showSentText !== 'never';
             case 'blankLinesBehaviour': return this.session.blankLinesBehaviour;
             // Mudlet's mShowPanel — the mapper's *control bar*, not the map
             // window (that's openMapWidget/closeMapWidget). Default true.
@@ -1032,6 +1075,44 @@ export class ScriptingAPI {
             return stored !== undefined ? stored : spec.default;
         }
         return undefined;
+    }
+
+    /**
+     * What kind of value `setConfig(key, …)` takes, or null when the key names
+     * no option at all. Mudlet reads each option with a `getVerified*` helper,
+     * so a value of the wrong TYPE raises while a value that is merely out of
+     * range is a `(nil, errMsg)` return — the Bridge wrapper needs to know which
+     * of the two applies before it calls through, and only the type is knowable
+     * ahead of the call.
+     *
+     * `'readonly'` keys exist for `getConfig` but refuse every write.
+     */
+    configKeyKind(key: string): 'bool' | 'num' | 'str' | 'readonly' | null {
+        switch (key) {
+            case 'enableGMCP': case 'enableMSDP': case 'enableMSP': case 'enableMSSP':
+            case 'enableMTTS': case 'enableMXP': case 'enableMNES':
+            case 'enableNEWENVIRON': case 'enableNewEnviron':
+            case 'enableCHARSET': case 'enableNAWS':
+            case 'specialForceMxpNegotiationOff': case 'specialForceCharsetNegotiationOff':
+            case 'specialForceCompressionOff': case 'forceNewEnvironNegotiationOff':
+            case 'autoClearInputLine': case 'mapRoundRooms': case 'mapShowRoomBorders':
+            case 'mapShowGrid': case 'muteMediaAPI': case 'muteMediaGame':
+            case 'mapperPanelVisible':
+                return 'bool';
+            case 'mapRoomSize': case 'mapExitSize':
+                return 'num';
+            // showSentText still accepts its legacy boolean alongside the enum,
+            // and mapInfoColor takes a table, so neither can be type-checked up
+            // front — they validate their own value and report it as a refusal.
+            case 'showSentText': case 'blankLinesBehaviour': case 'mapInfoColor':
+                return 'str';
+            case 'logDirectory':
+                return 'readonly';
+            case 'specialForceMXPProcessorOn':
+                return 'bool';
+        }
+        const spec = CONFIG_PERSIST_ONLY[key];
+        return spec ? spec.type : null;
     }
 
     /** Mudlet `setConfig(key, value)`. Returns true when the key is known and
@@ -1145,9 +1226,18 @@ export class ScriptingAPI {
                 });
                 return true;
             }
+            // Mudlet Host::setForceMXPProcessorOn — run the in-band MXP parser
+            // without an option-91 handshake. Writable (dlgProfilePreferences and
+            // setConfig both drive it); the handshake replies stay off, since no
+            // server confirmed it speaks MXP.
+            case 'specialForceMXPProcessorOn': {
+                const on = configBool(value);
+                this.host.setForceMxpProcessorOn(on);
+                this.patchConfigBag('specialForceMXPProcessorOn', on);
+                return true;
+            }
             // read-only keys — present in the catalogue but not writable
             case 'logDirectory':
-            case 'specialForceMXPProcessorOn':
                 return false;
         }
         const spec = CONFIG_PERSIST_ONLY[key];
@@ -1378,12 +1468,16 @@ export class ScriptingAPI {
         return this.host.toggleScriptByName(name, false);
     }
 
-    enableTrigger(name: string): boolean {
-        return this.host.toggleTriggerByName(name, true);
+    // A numeric argument names a script-created temp item, which lives in the
+    // runtime rather than the saved tree; Mudlet toggles either kind.
+    enableTrigger(nameOrId: string | number): boolean {
+        if (typeof nameOrId === 'number') return this.host.setTempItemEnabled(nameOrId, true);
+        return this.host.toggleTriggerByName(nameOrId, true);
     }
 
-    disableTrigger(name: string): boolean {
-        return this.host.toggleTriggerByName(name, false);
+    disableTrigger(nameOrId: string | number): boolean {
+        if (typeof nameOrId === 'number') return this.host.setTempItemEnabled(nameOrId, false);
+        return this.host.toggleTriggerByName(nameOrId, false);
     }
 
     enableTimer(name: string): boolean {
@@ -1394,20 +1488,33 @@ export class ScriptingAPI {
         return this.host.toggleTimerByName(name, false);
     }
 
-    enableAlias(name: string): boolean {
-        return this.host.toggleAliasByName(name, true);
+    enableAlias(nameOrId: string | number): boolean {
+        if (typeof nameOrId === 'number') return this.host.setTempItemEnabled(nameOrId, true);
+        return this.host.toggleAliasByName(nameOrId, true);
     }
 
-    disableAlias(name: string): boolean {
-        return this.host.toggleAliasByName(name, false);
+    disableAlias(nameOrId: string | number): boolean {
+        if (typeof nameOrId === 'number') return this.host.setTempItemEnabled(nameOrId, false);
+        return this.host.toggleAliasByName(nameOrId, false);
     }
 
-    enableKey(name: string): boolean {
-        return this.host.toggleKeyByName(name, true);
+    /** The saved keybinding carrying this numeric id, or null. Backs
+     *  getKeyCode() for a permanent key referenced by the id permKey returned. */
+    keyNodeByNumericId(numericId: number): { key: string; modifiers: string[] } | null {
+        return this.host.keyNodeByNumericId(numericId);
     }
 
-    disableKey(name: string): boolean {
-        return this.host.toggleKeyByName(name, false);
+    // A numeric argument names a script-created temp key, which lives in the key
+    // engine rather than the saved tree; Mudlet's enableKey/disableKey toggle
+    // either kind.
+    enableKey(nameOrId: string | number): boolean {
+        if (typeof nameOrId === 'number') return this.keys.setTempEnabled(nameOrId, true);
+        return this.host.toggleKeyByName(nameOrId, true);
+    }
+
+    disableKey(nameOrId: string | number): boolean {
+        if (typeof nameOrId === 'number') return this.keys.setTempEnabled(nameOrId, false);
+        return this.host.toggleKeyByName(nameOrId, false);
     }
 
     /**
@@ -1601,7 +1708,7 @@ export class ScriptingAPI {
      *  exists. `modifier` is the Qt keyboard-modifier int (1=shift, 2=ctrl,
      *  4=alt, 8=meta) — -1 means "no modifier" (Mudlet's convention; used by
      *  `permGroup("name","key")`). */
-    permKey(name: string, parent: string, modifier: number, key: string, code: string): number {
+    permKey(name: string, parent: string, modifier: number, key: string | number, code: string): number {
         return this.host.createPermKey(name, parent, modifier, key, code);
     }
 
@@ -2169,7 +2276,7 @@ export class ScriptingAPI {
         this.setBgColor(c.r, c.g, c.b, undefined, win);
     }
 
-    resetFormat(windowName?: string): void {
+    resetFormat(windowName?: string): boolean {
         // Mudlet TConsole::reset(): deselect + reset pen state to defaults.
         // It does NOT touch the buffer — selections lose their pointer here,
         // but characters keep whatever format was applied to them. Selection is
@@ -2180,6 +2287,7 @@ export class ScriptingAPI {
         // unrelated output goes to main in between.
         if (this.selectionMatches(windowName)) this.selection = null;
         this.outputConsole(windowName).resetFormat();
+        return true;
     }
 
     // ── Selection ─────────────────────────────────────────────────────────────
@@ -2451,6 +2559,17 @@ export class ScriptingAPI {
      */
     beginLine(buffer: AnsiAwareBuffer, isPrompt = false): void {
         buffer.isPrompt = isPrompt;
+        // Snapshot the colours the SERVER sent, before any trigger runs. Mudlet
+        // matches colour triggers against the line as it arrived, so a trigger
+        // that recolours the line cannot change what a later (or nested) colour
+        // trigger sees — while the display still shows the recoloured version.
+        // Pushed, not assigned: a trigger may call feedTriggers itself, and the
+        // outer line's snapshot has to survive the nested pass.
+        this.lineColorSnapshots.push(buffer.getSegments().map(seg => ({
+            fg: ansiPaletteIndex(seg.state?.foreground),
+            bg: ansiPaletteIndex(seg.state?.background),
+            text: seg.text ?? '',
+        })));
         this.mainConsole.appendLine(buffer);
         this.inTriggerProcessing = true;
         this.selection = null;
@@ -2468,6 +2587,7 @@ export class ScriptingAPI {
      * flushDeferredEcho() is called.
      */
     endLine(): void {
+        this.lineColorSnapshots.pop();
         this.inTriggerProcessing = false;
         this.echoOnMatchedLine = false;
         // NB: the trigger selection is intentionally NOT cleared here. Mudlet
@@ -2489,20 +2609,37 @@ export class ScriptingAPI {
      * palette-only semantics.
      */
     currentLineMatchesColor(wantFg: number, wantBg: number): boolean {
-        const buf = this.mainConsole.getBuffer();
-        if (!buf) return false;
-        for (const seg of buf.getSegments()) {
-            if (!seg.text) continue;
-            const fg = seg.state?.foreground;
-            const bg = seg.state?.background;
-            const segFg = fg?.space === 'indexed' ? fg.index : -2;
-            const segBg = bg?.space === 'indexed' ? bg.index : -2;
-            const fgOk = wantFg === -1 || segFg === wantFg;
-            const bgOk = wantBg === -1 || segBg === wantBg;
-            if (fgOk && bgOk) return true;
-        }
-        return false;
+        return this.currentLineColorMatch(wantFg, wantBg) !== null;
     }
+
+    /**
+     * The text of the first run on the current line carrying the wanted ANSI
+     * colours, or null when none does. A colour trigger reports that run as
+     * `matches[1]` — Mudlet matches a contiguous same-coloured run, not the
+     * whole line — so adjacent segments sharing the colours are joined.
+     *
+     * Reads the snapshot beginLine took, not the live buffer: an earlier trigger
+     * may already have recoloured the line, and Mudlet still matches against the
+     * colours the server sent.
+     */
+    currentLineColorMatch(wantFg: number, wantBg: number): string | null {
+        const snapshot = this.lineColorSnapshots[this.lineColorSnapshots.length - 1];
+        if (!snapshot) return null;
+        let run: string | null = null;
+        for (const seg of snapshot) {
+            const hit = (wantFg === -1 || seg.fg === wantFg)
+                && (wantBg === -1 || seg.bg === wantBg);
+            if (hit && seg.text) run = (run ?? '') + seg.text;
+            else if (run !== null) return run;
+        }
+        return run;
+    }
+
+    /** Per-segment ANSI palette indices (and text) of each line currently being
+     *  processed, as it arrived — see {@link beginLine}. -2 marks a segment with
+     *  no palette colour (RGB or default), which never matches a requested
+     *  index. A stack, because a trigger can feedTriggers another line. */
+    private lineColorSnapshots: { fg: number; bg: number; text: string }[][] = [];
 
     /**
      * Flush echo output collected during the just-processed line's trigger run.
@@ -2531,29 +2668,49 @@ export class ScriptingAPI {
 
     // ── Triggers ──────────────────────────────────────────────────────────────
 
+    /** Raw tail of the last {@link feedTriggers} call that had no trailing
+     *  newline, carried into the next one — see there. */
+    private feedTriggersRemainder = '';
+
     /**
      * Feed `text` through the trigger pipeline as if it arrived from the MUD.
      * Routes complete lines through ScriptingEngine.processFlushBatch (same
      * code path as network-driven flushLines) so trigger ordering, ANSI carry,
      * and deferred-echo placement match exactly.
      */
-    feedTriggers(text: string): void {
-        const lines = text.split('\n');
+    feedTriggers(text: string): boolean {
+        // Trigger reloads are coalesced onto a microtask, which cannot run while
+        // the calling Lua chunk is still on the stack. Mudlet applies perm* and
+        // enable/disableTrigger immediately, so a script that creates or toggles
+        // a trigger and feeds a line in the same chunk must see the new state.
+        this.host.flushPendingApplies();
+        // A line the caller left unterminated is carried, as RAW text, into the
+        // next call: Mudlet feeds every call into the same TBuffer, so an escape
+        // sequence split across two feedTriggers is still parsed as one. Only
+        // re-joining the raw bytes reproduces that — the rendered partial has
+        // already lost the half-consumed sequence. It stays on screen meanwhile
+        // (echoed below) and is re-emitted from the batch once completed, which
+        // is why the display copy is cleared before the batch runs.
+        const lines = (this.feedTriggersRemainder + text).split('\n');
         const remainder = lines[lines.length - 1];
         const completeLines = lines.slice(0, -1);
+        this.feedTriggersRemainder = remainder;
 
         if (completeLines.length === 0) {
+            // Only the new bytes: whatever was carried in is already displayed.
             this.mainConsole.echo(text);
             this.drainMain();
             const partial = this.mainConsole.currentPartial;
             if (partial.length > 0) this.session.events.emit('message', partial, 'script-partial');
-            return;
+            return true;
         }
 
-        // Drop any stray partial left by direct echo() calls so trigger echo
-        // accumulates fresh during batch processing — but keep history, so
-        // successive feedTriggers calls accumulate lines the way Mudlet appends
-        // fed text to the buffer (a full clear() would strand earlier lines).
+        // Drop any stray partial left by direct echo() calls (and the displayed
+        // copy of the carried-over remainder, which the batch below re-emits) so
+        // trigger echo accumulates fresh during batch processing — but keep
+        // history, so successive feedTriggers calls accumulate lines the way
+        // Mudlet appends fed text to the buffer (a full clear() would strand
+        // earlier lines).
         this.mainConsole.clearPartial();
 
         // With no engine bound yet (early init) the default host falls back to
@@ -2566,6 +2723,8 @@ export class ScriptingAPI {
         }
         const partial = this.mainConsole.currentPartial;
         if (partial.length > 0) this.session.events.emit('message', partial, 'script-partial');
+        // Mudlet answers true once the text has been handed to the display.
+        return true;
     }
 
     // ── Cursor / line access ──────────────────────────────────────────────────
@@ -2941,8 +3100,7 @@ export class ScriptingAPI {
     moveCursorEnd(windowName?: string): void {
         const con = this.getConsole(windowName);
         if (!con) return;
-        const lastLine = con.getLineCount();
-        con.moveTo(lastLine);
+        con.moveToEnd();
         con.setCursorColumn(con.getLine().length);
         con.markCursorAtEnd();
     }
@@ -3168,6 +3326,76 @@ export class ScriptingAPI {
      * `show` is true. Userwindow bases themselves can't be moved (as in
      * Mudlet, where they anchor a dock widget).
      */
+    /**
+     * Mudlet `getWindowGeometry(name)` → x, y, width, height. Reads back the
+     * stored geometry the move/resizeWindow setters write, following the same
+     * routing precedence they use (labels → command lines → text edits →
+     * scroll boxes → user windows/miniconsoles). Null when no widget of any
+     * kind owns the name; `"main"` is deliberately excluded because
+     * moveWindow/resizeWindow don't act on it either.
+     */
+    getWindowGeometry(name: string): { x: number; y: number; width: number; height: number } | null {
+        if (name === 'main') return null;
+        const overlay = this.labels.get(name) ?? this.cmdLines.get(name)
+            ?? this.textEdits.get(name) ?? this.scrollBoxes.get(name);
+        if (overlay) {
+            const { x, y, width, height } = overlay;
+            return { x, y, width, height };
+        }
+        return this.session.windows.getGeometry(name);
+    }
+
+    /**
+     * Mudlet `windowVisible(name)` — *effective* visibility: a widget whose
+     * own flag is set still reports false when any ancestor is hidden. Walks
+     * the parent chain (overlay widgets carry a `parent` name, user windows
+     * resolve theirs through WindowManager) up to `"main"`, which is always
+     * visible. Null when the name belongs to no widget, or is `"main"`.
+     */
+    windowVisible(name: string): boolean | null {
+        if (name === 'main') return null;
+        // Own flag first — a name owned by nothing has no visibility to report.
+        const own = this.ownVisibility(name);
+        if (own === null) return null;
+        if (!own) return false;
+        // Then every ancestor, bounded by the widget count so a corrupt parent
+        // cycle can't spin here.
+        const seen = new Set<string>([name]);
+        let parent = this.parentOf(name);
+        while (parent && parent !== 'main' && !seen.has(parent)) {
+            seen.add(parent);
+            if (this.ownVisibility(parent) === false) return false;
+            parent = this.parentOf(parent);
+        }
+        return true;
+    }
+
+    /** A widget's own visible flag, ignoring ancestors. Null when unknown. */
+    private ownVisibility(name: string): boolean | null {
+        const overlay = this.labels.get(name) ?? this.cmdLines.get(name)
+            ?? this.textEdits.get(name) ?? this.scrollBoxes.get(name);
+        if (overlay) return overlay.visible;
+        if (this.session.windows.has(name)) return this.session.windows.isVisible(name);
+        return null;
+    }
+
+    /** The name a widget is nested under, or null once the chain reaches a root. */
+    private parentOf(name: string): string | null {
+        const overlay = this.labels.get(name) ?? this.cmdLines.get(name)
+            ?? this.textEdits.get(name) ?? this.scrollBoxes.get(name);
+        if (overlay) return overlay.parent || null;
+        return this.session.windows.parentOf(name);
+    }
+
+    /**
+     * Mudlet `getLabelText(name)` — the HTML/text last written to a label via
+     * echo()/setLabelText. Null when the name is unknown *or* names a non-label
+     * widget, which Mudlet reports as an error rather than an empty string.
+     */
+    getLabelText(name: string): string | null {
+        return this.labels.get(name)?.html ?? null;
+    }
+
     setWindow(windowName: string, name: string, x = 0, y = 0, show = true): boolean {
         const wm = this.session.windows;
         if (windowName !== 'main' && !wm.has(windowName) && !this.scrollBoxes.has(windowName)) {
@@ -3255,15 +3483,24 @@ export class ScriptingAPI {
         con.deleteLine();
     }
 
+    // The three staging calls below reach the command bar through an event, so
+    // the new text only lands in React state on the next render. A script that
+    // stages text and reads it straight back (`sendCmdLine("look")` then
+    // `getCmdLine()`) would see the pre-staging value, so each one also updates
+    // the script-side mirror getCmdLine reads — see {@link setCmdLineValue}.
+
     appendCmdLine(text: string): void {
+        this.cmdLineValue = this.getCmdLine() + text;
         this.session.events.emit('script.appendcmd', text);
     }
 
     printCmdLine(text: string): void {
+        this.cmdLineValue = text;
         this.session.events.emit('script.setcmd', text);
     }
 
     clearCmdLine(): void {
+        this.cmdLineValue = '';
         this.session.events.emit('script.clearcmd');
     }
 
@@ -3302,19 +3539,31 @@ export class ScriptingAPI {
         return true;
     }
 
-    // ── Command-line value provider (Mudlet getCmdLine) ────────────────────────
-    // The current input string lives in React state inside ProfileSession.
-    // ProfileSession registers a getter via setCmdLineProvider so the script
-    // API can read the value synchronously without round-tripping through an
-    // event. Provider is cleared when no command bar is mounted.
+    // ── Command-line value (Mudlet getCmdLine) ────────────────────────────────
+    // The input string lives in React state inside ProfileSession, which mirrors
+    // every change into `cmdLineValue` so the script API can read it
+    // synchronously. The mirror — not the React state — is what getCmdLine
+    // answers with, because a script that stages text through printCmdLine and
+    // reads it back in the same chunk cannot wait for a re-render. Both writers
+    // are last-write-wins, which is the right order in both directions: the user
+    // typing after a script staged text overwrites it, and vice versa.
+    private cmdLineValue: string | null = null;
     private cmdLineProvider: (() => string) | null = null;
 
+    /** Registered by ProfileSession while a command bar is mounted; read only
+     *  before the first {@link setCmdLineValue} has mirrored anything. */
     setCmdLineProvider(fn: (() => string) | null): void {
         this.cmdLineProvider = fn;
+        if (fn === null) this.cmdLineValue = null;
+    }
+
+    /** Mirror a command-bar edit (user typing, history recall, submit-clear). */
+    setCmdLineValue(text: string): void {
+        this.cmdLineValue = text;
     }
 
     getCmdLine(): string {
-        return this.cmdLineProvider?.() ?? '';
+        return this.cmdLineValue ?? this.cmdLineProvider?.() ?? '';
     }
 
     // ── Command-line tab-completion suggestions ───────────────────────────────
@@ -3524,25 +3773,50 @@ export class ScriptingAPI {
     }
 
     /**
-     * Mudlet `getMapZoom([areaID])`. mudix renders one area at a time through a
-     * single shared 2D view, so `areaID` has no per-area analogue — the current
-     * view's zoom is returned regardless. The value is Mudlet-compatible: the
-     * number of map units visible across the viewport's shorter edge. Returns
-     * false when no map panel is mounted (the Lua binding turns that into nil).
+     * Mudlet `getMapZoom([areaID])` — the number of map units visible across the
+     * viewport's shorter edge. Mudlet keeps this on the area (TArea's
+     * `mLast2DMapZoom`, reached via TRoomDB::get2DMapZoom), so it answers with
+     * no mapper mounted and each area remembers its own; mudix stores it the
+     * same way. Without an areaID the live renderer's current zoom wins when one
+     * is mounted. Undefined for an areaID that doesn't exist — the binding
+     * reports that as `(nil, errMsg)`.
      */
-    getMapZoom(_areaID?: number): number | false {
-        return this.session.windows.getMapZoom() ?? false;
+    getMapZoom(areaID?: number): number | undefined {
+        if (areaID !== undefined) {
+            if (!this.map.hasArea(areaID)) return undefined;
+            return this.map.getAreaZoom(areaID) ?? MapStore.DEFAULT_MAP_ZOOM;
+        }
+        return this.session.windows.getMapZoom()
+            ?? this.map.getAreaZoom(this.currentMapArea())
+            ?? MapStore.DEFAULT_MAP_ZOOM;
     }
 
     /**
-     * Mudlet `setMapZoom(zoom [, areaID])`. `zoom` is the number of map units to
-     * fit across the viewport's shorter edge (larger = more map shown / zoomed
-     * out); like Mudlet it must be at least 3.0. Returns false for an invalid
-     * zoom or when no map panel is mounted to receive it.
+     * Mudlet `setMapZoom(zoom [, areaID])`. Like Mudlet the zoom must be at
+     * least 3.0, and an areaID that doesn't exist is refused. Stored on the area
+     * and pushed to the live renderer when one is mounted. Returns the refusal
+     * message, or null on success, for the binding to shape.
      */
-    setMapZoom(zoom: number, _areaID?: number): boolean {
-        if (!Number.isFinite(zoom) || zoom < 3) return false;
-        return this.session.windows.setMapZoom(zoom);
+    setMapZoom(zoom: number, areaID?: number): string | null {
+        if (!Number.isFinite(zoom) || zoom < MapStore.MIN_MAP_ZOOM) {
+            return `setMapZoom: zoom ${zoom} is too small, it must be at least ${MapStore.MIN_MAP_ZOOM}`;
+        }
+        if (areaID !== undefined && !this.map.hasArea(areaID)) {
+            return `setMapZoom: number ${areaID} is not a valid areaID`;
+        }
+        this.map.setAreaZoom(areaID ?? this.currentMapArea(), zoom);
+        // Only the currently displayed area's zoom is visible right now.
+        if (areaID === undefined || areaID === this.currentMapArea()) {
+            this.session.windows.setMapZoom(zoom);
+        }
+        return null;
+    }
+
+    /** The area the 2D view is showing — the player's room's area, falling back
+     *  to the default area when there is no player room yet. */
+    private currentMapArea(): number {
+        const player = this.map.getPlayerRoom();
+        return player != null ? (this.map.getRoomArea(player) ?? -1) : -1;
     }
 
     /** Mudlet `updateMap()` — force the map to re-read MapStore and redraw. */

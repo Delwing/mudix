@@ -30,6 +30,9 @@ interface TempKey {
     // getKeyCode() round-trips exactly (the DOM-code translation is lossy).
     qtKey?: number;
     qtModifier?: number;
+    /** Temp keys can be toggled by id, exactly like permanent ones — Mudlet's
+     *  enableKey/disableKey and isActive() see no difference between them. */
+    enabled: boolean;
 }
 
 export class KeyEngine {
@@ -46,8 +49,22 @@ export class KeyEngine {
 
     addTemp(key: string, modifiers: string[], fn: TempFn, qt?: { keyCode: number; modifier: number }): number {
         const id = this.nextId++;
-        this.temp.set(id, { key, modifiers, fn, qtKey: qt?.keyCode, qtModifier: qt?.modifier });
+        this.temp.set(id, { key, modifiers, fn, qtKey: qt?.keyCode, qtModifier: qt?.modifier, enabled: true });
         return id;
+    }
+
+    /** Whether a temp key with this id is live — backs exists(id, "key"). */
+    hasTemp(id: number): boolean { return this.temp.has(id); }
+
+    /** Whether a live temp key is enabled — backs isActive(id, "key"). */
+    isTempEnabled(id: number): boolean { return this.temp.get(id)?.enabled === true; }
+
+    /** enableKey/disableKey with a numeric id. False when no temp key matches. */
+    setTempEnabled(id: number, enabled: boolean): boolean {
+        const t = this.temp.get(id);
+        if (!t) return false;
+        t.enabled = enabled;
+        return true;
     }
 
     /**
@@ -76,8 +93,8 @@ export class KeyEngine {
     }
 
     processTemp(event: KeyboardEvent): boolean {
-        for (const { key, modifiers, fn } of this.temp.values()) {
-            if (matchesEvent(key, modifiers, event)) {
+        for (const { key, modifiers, fn, enabled } of this.temp.values()) {
+            if (enabled && matchesEvent(key, modifiers, event)) {
                 fn();
                 return true;
             }

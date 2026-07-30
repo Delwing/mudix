@@ -467,6 +467,7 @@ export class MudClient {
                 this.echoHandler.reset();
                 this.pendingSubneg = "";
                 this.mspParser.reset();
+                this.negotiator.clearMspNegotiated();
             };
 
             this.socket.onopen = (event: Event) => {
@@ -522,6 +523,20 @@ export class MudClient {
         this.echoHandler.reset();
         this.pendingSubneg = '';
         this.mspParser.reset();
+        this.negotiator.clearMspNegotiated();
+    }
+
+    /** Whether MSP is live on this connection (negotiated, not merely allowed
+     *  by the profile config) — gates Mudlet's receiveMSP. */
+    isMspNegotiated(): boolean {
+        return this.negotiator.isMspNegotiated();
+    }
+
+    /** Qt's QAbstractSocket::UnconnectedState — no socket at all, or one that
+     *  has finished closing. CONNECTING/OPEN/CLOSING are all "not unconnected",
+     *  which is the state feedTelnet refuses to inject into. */
+    isSocketUnconnected(): boolean {
+        return !this.socket || this.socket.readyState === WebSocket.CLOSED;
     }
 
     isSocketOpen(): boolean {

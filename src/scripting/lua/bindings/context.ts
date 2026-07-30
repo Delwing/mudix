@@ -1,5 +1,6 @@
 import type { Lua } from 'wasmoon-lua5.1';
 import type { ScriptingAPI } from '../../ScriptingAPI';
+import type { ExitWeightFilterResult } from '../../../map/pathfinding';
 import type { ProfileVFS } from '../../vfs/ProfileVFS';
 
 /** wasmoon doesn't re-export its opaque lua_State pointer type; derive it from
@@ -94,4 +95,13 @@ export interface BindingContext {
         areaId: number,
         displayedAreaId: number,
     ): MapInfoEvaluation | null;
+
+    /** Run a `setExitWeightFilter` callback for one candidate exit and read
+     *  back its verdict. Called from inside findPath — i.e. re-entrantly,
+     *  while Lua is already suspended in the `__getPath` JS call. */
+    evaluateExitWeightFilter(
+        cbId: number,
+        roomId: number,
+        exitCommand: string,
+    ): ExitWeightFilterResult;
 }

@@ -85,12 +85,15 @@ export function installAutomationBindings({ lua, api }: BindingContext): void {
     // Qt::KeyboardModifier int; -1 means "no modifier" (group form). key is
     // either a Qt::Key int or a string keycode — the JS side translates.
     lua.global.set('__mudix_permKey', (name: unknown, parent: unknown, mod: unknown, key: unknown, code: unknown) => {
+        // A Qt::Key int must stay a NUMBER: stringifying it here made it look
+        // like a DOM code, so "F9" was stored as the literal "16777272" and
+        // getKeyCode could never map it back.
         const k = typeof key === 'number' ? key : String(key ?? '');
         return api.permKey(
             String(name ?? ''),
             String(parent ?? ''),
             Number.isFinite(mod as number) ? Number(mod) : -1,
-            typeof k === 'number' ? String(k) : k,
+            k,
             String(code ?? ''),
         );
     });
@@ -134,8 +137,11 @@ export function installAutomationBindings({ lua, api }: BindingContext): void {
         const n = typeof pos === 'number' && Number.isFinite(pos) ? pos : 1;
         return api.getScript(String(name ?? ''), n);
     });
-    lua.global.set('enableTrigger', (name: string) => api.enableTrigger(String(name ?? '')));
-    lua.global.set('disableTrigger', (name: string) => api.disableTrigger(String(name ?? '')));
+    // A numeric argument targets a script-created temp trigger/alias by id.
+    const itemTarget = (v: unknown): string | number =>
+        (typeof v === 'number' ? v : String(v ?? ''));
+    lua.global.set('enableTrigger', (name: unknown) => api.enableTrigger(itemTarget(name)));
+    lua.global.set('disableTrigger', (name: unknown) => api.disableTrigger(itemTarget(name)));
     // Mudlet setTriggerStayOpen(name, lines). Keeps every trigger sharing
     // the name open for `lines` more lines this run only (transient chain
     // state, not the persisted fireLength); pass 0 to close after this line.
@@ -143,10 +149,13 @@ export function installAutomationBindings({ lua, api }: BindingContext): void {
         api.setTriggerStayOpen(String(name ?? ''), Number(lines)));
     lua.global.set('enableTimer', (name: string) => api.enableTimer(String(name ?? '')));
     lua.global.set('disableTimer', (name: string) => api.disableTimer(String(name ?? '')));
-    lua.global.set('enableAlias', (name: string) => api.enableAlias(String(name ?? '')));
-    lua.global.set('disableAlias', (name: string) => api.disableAlias(String(name ?? '')));
-    lua.global.set('enableKey', (name: string) => api.enableKey(String(name ?? '')));
-    lua.global.set('disableKey', (name: string) => api.disableKey(String(name ?? '')));
+    lua.global.set('enableAlias', (name: unknown) => api.enableAlias(itemTarget(name)));
+    lua.global.set('disableAlias', (name: unknown) => api.disableAlias(itemTarget(name)));
+    // A numeric argument targets a script-created temp key by id.
+    const keyTarget = (v: unknown): string | number =>
+        (typeof v === 'number' ? v : String(v ?? ''));
+    lua.global.set('enableKey', (name: unknown) => api.enableKey(keyTarget(name)));
+    lua.global.set('disableKey', (name: unknown) => api.disableKey(keyTarget(name)));
 
     // Mudlet `exists(nameOrId, type)`. With a string, returns the count of
     // items matching the name; with a number, returns 1 if a perm item

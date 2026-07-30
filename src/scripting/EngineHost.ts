@@ -44,6 +44,13 @@ export interface EngineHost {
      *  output, so `feedTriggers` shares ordering semantics with real data. */
     processFlushBatch(groups: { text: string; type: string }[]): void;
 
+    /** Apply any coalesced trigger/alias reloads immediately instead of on the
+     *  scheduled microtask. The Mudlet `perm…`, `enableTrigger` and
+     *  `disableTrigger` families take effect at once, so a script that creates
+     *  or toggles a trigger and then feeds a line in the same chunk must see the
+     *  new state — the microtask cannot run until that chunk returns. */
+    flushPendingApplies(): void;
+
     /** Raise a Mudlet event with the given arguments. */
     raiseEvent(event: string, args: unknown[]): void;
 
@@ -99,8 +106,20 @@ export interface EngineHost {
 
     // ── Automation tree: queries ─────────────────────────────────────────────
 
+    /** The saved keybinding carrying this numeric id, or null — getKeyCode
+     *  resolves a permanent key by the id permKey returned, not only by name. */
+    keyNodeByNumericId(numericId: number): { key: string; modifiers: string[] } | null;
+
+    /** Mudlet's Host::setForceMXPProcessorOn — run the in-band MXP parser with
+     *  no option-91 handshake. */
+    setForceMxpProcessorOn(on: boolean): void;
+
     /** Mudlet `exists(nameOrId, type)` — count of matching items. */
     existsByName(nameOrId: string | number, type: string): number;
+    /** enable/disable a script-created temp trigger or alias by its numeric id.
+     *  False when no live temp item has that id. */
+    setTempItemEnabled(id: number, enabled: boolean): boolean;
+
     /** Mudlet `isActive(nameOrId, type)` — count of matching *active* items. */
     isActiveByName(nameOrId: string | number, type: string, checkAncestors: boolean): number;
     ancestorsById(
@@ -125,7 +144,7 @@ export interface EngineHost {
     createPermTimer(name: string, parent: string, delay: number, code: string): number;
     /** `modifier` arrives as a Qt::KeyboardModifier int; the engine translates
      *  it back into `["ctrl", …]` strings to store on the KeyNode. */
-    createPermKey(name: string, parent: string, modifier: number, key: string, code: string): number;
+    createPermKey(name: string, parent: string, modifier: number, key: string | number, code: string): number;
     createTempButton(toolbar: string, name: string, code: string, orientation: number): number;
     createTempButtonToolbar(name: string, orientation: number, location: number): number;
 
@@ -168,6 +187,7 @@ export const NULL_ENGINE_HOST: EngineHost = Object.freeze({
     requestConnect: () => {},
     requestReconnect: () => false,
     processFlushBatch: () => {},
+    flushPendingApplies: () => {},
     raiseEvent: () => {},
 
     installPackageFromVfsPath: () => ({ ok: false, error: 'no package installer available' }),
@@ -201,7 +221,10 @@ export const NULL_ENGINE_HOST: EngineHost = Object.freeze({
     toggleToolBarByName: () => false,
     setTriggerStayOpenByName: () => false,
 
+    keyNodeByNumericId: () => null,
+    setForceMxpProcessorOn: () => {},
     existsByName: () => 0,
+    setTempItemEnabled: () => false,
     isActiveByName: () => 0,
     ancestorsById: () => null,
     findItemsByName: () => [],

@@ -54,7 +54,13 @@ export function installOutputBindings({ lua, api, channel }: BindingContext): vo
         const cmd = hasWindow ? (c as string) : (b as string);
         const tooltip = hasWindow ? (d as string) : (c as string);
         const useCurrentFormat = !!(hasWindow ? e : d);
+        // Mudlet validates each argument up front and raises when the call is
+        // missing them outright; returns true once the span is written.
+        if (typeof text !== 'string' || typeof cmd !== 'string') {
+            throw new Error('echoLink: bad argument (text and command as strings expected)');
+        }
         api.echoLink(text, cmd, tooltip, win, useCurrentFormat);
+        return true;
     });
 
     // insertLink primitive — same overload set as echoLink, but inserts at the
@@ -68,7 +74,11 @@ export function installOutputBindings({ lua, api, channel }: BindingContext): vo
         const cmd = hasWindow ? (c as string) : (b as string);
         const tooltip = hasWindow ? (d as string) : (c as string);
         const useCurrentFormat = !!(hasWindow ? e : d);
+        if (typeof text !== 'string' || typeof cmd !== 'string') {
+            throw new Error('insertLink: bad argument (text and command as strings expected)');
+        }
         api.insertLink(text, cmd, tooltip, win, useCurrentFormat);
+        return true;
     });
 
     // Mudlet `setLink([window,] cmd, hint)` — applies the link to the current
@@ -92,6 +102,7 @@ export function installOutputBindings({ lua, api, channel }: BindingContext): vo
         const hintsArr = split(hints);
         const winStr = (win && win !== 'main') ? win as string : undefined;
         api.echoPopup(textStr, cmdsArr, hintsArr, winStr, !!fmt);
+        return true;
     });
 
     // insertPopup primitive — same \x01-flatten convention as echoPopup, but
@@ -104,6 +115,7 @@ export function installOutputBindings({ lua, api, channel }: BindingContext): vo
         const split = (s: unknown) => s ? String(s).split('\x01').filter(Boolean) : [];
         const winStr = (win && win !== 'main') ? win as string : undefined;
         api.insertPopup(textStr, split(cmds), split(hints), winStr, !!fmt);
+        return true;
     });
 
     // setPopup primitive — attaches a popup to the current selection. The Lua

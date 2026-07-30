@@ -144,6 +144,11 @@ export class TelnetNegotiator {
     /** True once the server has accepted NAWS (IAC DO NAWS). Gates whether a
      *  window-size change is pushed to the server. */
     private nawsNegotiated = false;
+    /** True once MSP has actually been negotiated (either direction) this
+     *  connection. Mirrors Mudlet's `ctelnet::enableMSP` — the profile config
+     *  only decides whether we're willing to negotiate; this records that we
+     *  did. See {@link isMspNegotiated}. */
+    private mspNegotiated = false;
     /** Latest known main output window size in character columns × rows, fed in
      *  by the session's resize observer via setWindowSize(). Null until the UI
      *  has measured the grid at least once. Deliberately NOT cleared by reset()
@@ -169,7 +174,23 @@ export class TelnetNegotiator {
         this.mxpStarted = false;
         this.nawsWillSent = false;
         this.nawsNegotiated = false;
+        this.mspNegotiated = false;
         this.serverRequestedSGA = false;
+    }
+
+    /** Whether MSP was actually negotiated with the server this connection —
+     *  Mudlet's `ctelnet::enableMSP`, distinct from the profile's `enableMSP`
+     *  config (which only decides whether we agree to negotiate at all). Gates
+     *  `receiveMSP`, which Mudlet refuses unless the option is live. */
+    isMspNegotiated(): boolean {
+        return this.mspNegotiated;
+    }
+
+    /** Drop the negotiated-MSP latch without resetting the rest of the
+     *  negotiation state — used on disconnect, where the option dies with the
+     *  connection but reset() isn't otherwise run. */
+    clearMspNegotiated(): void {
+        this.mspNegotiated = false;
     }
 
     /** Whether the server has asked us to suppress go-ahead this connection
@@ -433,12 +454,20 @@ export class TelnetNegotiator {
                 if (!f.mspEnabled) return;
                 if (cmd === WILL) {
                     this.hooks.sendRaw(MSP_DO);
+                    this.mspNegotiated = true;
                     this.eventBus.emit('msp.negotiated');
                     if (debugMspEnabled()) console.debug('[mudix.msp] negotiated: server WILL → client DO');
                 } else if (cmd === DO) {
                     this.hooks.sendRaw(MSP_WILL);
+                    this.mspNegotiated = true;
                     this.eventBus.emit('msp.negotiated');
                     if (debugMspEnabled()) console.debug('[mudix.msp] negotiated: server DO → client WILL');
+                } else if (cmd === WONT || cmd === DONT) {
+                    // The server can withdraw MSP mid-session; Mudlet clears its
+                    // enableMSP here too, so the latch must be able to go false
+                    // without waiting for a disconnect.
+                    this.mspNegotiated = false;
+                    if (debugMspEnabled()) console.debug('[mudix.msp] server withdrew MSP');
                 }
                 return;
             case OPT_MXP:

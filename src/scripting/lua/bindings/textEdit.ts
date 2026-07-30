@@ -118,6 +118,20 @@ export function installTextEditBindings({ lua, api, channel }: BindingContext): 
         else if (api.scrollBoxes.has(name)) api.scrollBoxes.resize(name, wn, hn);
         else if (api.windows.has(name)) api.windows.resize(name, wn, hn);
     });
+    // Window state getters. Each returns null for "no such widget" so the
+    // Bridge.lua wrapper can build Mudlet's (nil, errMsg) pair; geometry comes
+    // back as an object the wrapper spreads into four return values.
+    lua.global.set('__getWindowGeometry', (name: unknown) =>
+        (typeof name === 'string' ? api.getWindowGeometry(name) : null));
+    // Wrapped in an object rather than returned bare: a bare `false` (hidden)
+    // and `null` (no such window) would both arrive on the Lua side as falsy,
+    // and the two cases have to stay distinguishable.
+    lua.global.set('__windowVisible', (name: unknown) => {
+        const v = typeof name === 'string' ? api.windowVisible(name) : null;
+        return v === null ? null : { visible: v };
+    });
+    lua.global.set('__getLabelText', (name: unknown) =>
+        (typeof name === 'string' ? api.getLabelText(name) : null));
     // Mudlet setWindow(windowName, name[, x, y, show]) → bool. Reparents a
     // label / cmdline / scroll box / miniconsole into another window
     // ('main', a userwindow, or a scroll box). Geyser's setContainerWindow

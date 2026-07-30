@@ -30,6 +30,12 @@ export class TextEditManager {
         return this.edits.has(name);
     }
 
+    /** Read-only handle on a text edit's stored state, for the geometry and
+     *  visibility getters (getWindowGeometry, windowVisible). */
+    get(name: string): Readonly<TextEditState> | undefined {
+        return this.edits.get(name);
+    }
+
     /** Create (or replace) a text edit. Returns true (Mudlet always succeeds). */
     create(
         name: string,

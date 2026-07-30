@@ -4,6 +4,8 @@ import type { AnsiAwareBuffer } from '../../mud/text/FormatState';
 import type { DockSide, WindowHandle, WindowOpenOptions, ScriptWindowRenderData } from './types';
 import { MapStore } from '../../map/MapStore';
 import { parseXmlMap } from '../../map/xmlMapImport';
+import { exportAreaImage } from '../../map/mapImageExport';
+import { useAppStore, selectProfileField } from '../../storage';
 import { saveMap as saveMapToStorage, loadMap as loadMapFromStorage } from '../../storage/mapStorage';
 import { readMapFromBuffer, writeMapToBuffer } from 'mudlet-map-binary-reader';
 import { serializeMapInWorker, streamMapInWorker } from '../../map/mapParserClient';
@@ -928,14 +930,19 @@ export class WindowManager {
     }
 
     /** Mudlet `exportAreaImage(areaID, filePath[, zLevel])` — render an area to
-     *  PNG bytes through the mounted map widget's renderer. Returns null when no
-     *  mapper is open (Mudlet requires the mapper open) or the area is unknown. */
+     *  PNG bytes. Prefers a mounted map widget so the export picks up that
+     *  panel's live Mapper settings, but falls back to a standalone render off
+     *  the same MapStore: the export never needed a panel (see mapImageExport),
+     *  and requiring one would make the API unreachable from a script that runs
+     *  before React has mounted the widget. Null when the area is unknown or the
+     *  render fails. */
     exportAreaImage(areaId: number, zLevel?: number): Uint8Array | null {
         for (const c of this.mapControls.values()) {
             const bytes = c.exportArea(areaId, zLevel);
             if (bytes) return bytes;
         }
-        return null;
+        const mapper = selectProfileField(useAppStore.getState(), this._connectionId, 'mapper');
+        return exportAreaImage(this.mapStore, mapper, areaId, zLevel);
     }
 
     /** Set by MapPanel on mount; cleared on unmount. The callback parses+renders
@@ -2091,6 +2098,23 @@ export class WindowManager {
 
     isVisible(id: string): boolean {
         return this.windows.get(id)?.visible ?? false;
+    }
+
+    /** Stored geometry for a user window / miniconsole — deliberately the saved
+     *  x/y/width/height rather than {@link getSize}'s live DOM rect, so it is an
+     *  exact inverse of moveWindow/resizeWindow (Mudlet's getWindowGeometry
+     *  reads back through the dock widget the same way). Null if unknown. */
+    getGeometry(id: string): { x: number; y: number; width: number; height: number } | null {
+        const win = this.windows.get(id);
+        if (!win) return null;
+        return { x: win.x, y: win.y, width: win.width, height: win.height };
+    }
+
+    /** The window this one nests inside, or null for a root floating window.
+     *  Used by the ancestor-aware windowVisible walk. */
+    parentOf(id: string): string | null {
+        const win = this.windows.get(id);
+        return win ? this.overlayParentId(win) : null;
     }
 
     write(id: string, text: string): void {

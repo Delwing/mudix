@@ -1,4 +1,5 @@
 import type {MudSession, ScriptLogSource, ScriptLogSourceKind} from '../mud/MudSession';
+import { qtModifiersToList } from '../mud/keybindings/qtKeys';
 import type {AliasEngine, AliasNode} from '../mud/aliases/AliasEngine';
 import {TriggerEngine, type TriggerNode} from '../mud/triggers/TriggerEngine';
 import type {TimerEngine} from '../mud/timers/TimerEngine';
@@ -6,7 +7,7 @@ import type {KeyEngine, KeyNode} from '../mud/keybindings/KeyEngine';
 import {findReservedKeybindings, reservedKeyNote} from '../mud/keybindings/browserReservedKeys';
 import type {ButtonNode, ScriptNode} from '../storage/schema';
 import {buildEffectivelyEnabledIds, isEffectivelyEnabled} from '../storage/schema';
-import {useAppStore} from '../storage';
+import {useAppStore, connectionUrl} from '../storage';
 import {isPackageRemovable} from '../branding';
 import {saveProfileData} from '../storage/profileVfsData';
 import type {BufferSegment, FormatColor, FormatStateSnapshot, RgbColor} from '../mud/text/FormatState';
@@ -126,17 +127,14 @@ function mudletWarn(message: string): string {
     return `\x1b[33m[ WARN ]  - ${message}\x1b[0m`;
 }
 
-/** Mudlet `permKey`/`tempKey` modifier int → KeyNode.modifiers string array.
- *  Bit mapping is Qt::KeyboardModifier (1=shift, 2=ctrl, 4=alt, 8=meta). -1
- *  (or anything <0) means "no modifier" — used by the permGroup overload. */
+/** Mudlet `permKey` modifier int → KeyNode.modifiers string array. The values
+ *  are Qt::KeyboardModifier's real bits (Shift 0x02000000, Control 0x04000000,
+ *  …) — the same ones `mudlet.keymodifier` publishes and tempKey already went
+ *  through, so this shares that conversion. -1 (or anything <0) means "no
+ *  modifier", which is what the permGroup overload passes. */
 function modifiersFromMudletInt(modifier: number): string[] {
     if (!Number.isFinite(modifier) || modifier < 0) return [];
-    const out: string[] = [];
-    if (modifier & 1) out.push('shift');
-    if (modifier & 2) out.push('ctrl');
-    if (modifier & 4) out.push('alt');
-    if (modifier & 8) out.push('meta');
-    return out;
+    return qtModifiersToList(modifier);
 }
 
 /** Mudlet's permKey takes a Qt::Key int. We accept either an int (best-effort
@@ -215,6 +213,11 @@ export class ScriptingEngine implements EngineHost {
      *  non-MXP MUDs (where `<grin>` is literal text) are untouched. Reset on
      *  connect/disconnect. */
     private mxpActive = false;
+    /** Mudlet's Host::mForceMXPProcessorOn — setConfig("specialForceMXPProcessorOn")
+     *  runs the in-band parser without an option-91 handshake, which is how a
+     *  script can drive MXP markup through feedTriggers on a profile that never
+     *  negotiated it. Does NOT enable the handshake replies. */
+    forceMxpProcessorOn = false;
     /** Whether MXP `<SUPPORTS>`/`<VERSION>` handshake replies may be sent. Only
      *  true when MXP was started via the telnet option-91 handshake — an
      *  in-band-detected server's inbound MXP isn't confirmed, so we'd otherwise
@@ -236,6 +239,12 @@ export class ScriptingEngine implements EngineHost {
     private readonly mxp = new MxpParser({
         send: (raw) => { if (this.mxpHandshakeEnabled) this.api.send(raw, false); },
         presets: this.osc8Presets,
+        // Mudlet publishes every use of a server-defined element as
+        // `mxp.<element>` and raises an event of the same name.
+        onElementEvent: (name, attrs) => {
+            this.runtimes.lua?.setMxpElement(name, attrs);
+            this.raiseEvent(`mxp.${name.toLowerCase()}`);
+        },
     });
     private vfs: ProfileVFS | null = null;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
@@ -1171,7 +1180,16 @@ export class ScriptingEngine implements EngineHost {
     /** Mudlet `reconnect()` — redial the last URL, refused during teardown. */
     requestReconnect(): boolean {
         if (this.disposed) { this.refuseDuringTeardown('reconnect()'); return false; }
-        return this.session.reconnect();
+        if (this.session.reconnect()) return true;
+        // Nothing dialled yet this session, so there is no "last URL" to redial.
+        // Mudlet's reconnect() works regardless — it re-reads the profile's
+        // configured server — so fall back to that rather than doing nothing.
+        const conn = useAppStore.getState().connections.find(c => c.id === this.connectionId);
+        if (!conn) return false;
+        const url = connectionUrl(conn, useAppStore.getState().client.userProxyUrl);
+        if (!url) return false;
+        this.session.connect(url);
+        return true;
     }
 
     /** Raise sysDataSendRequest; true means a handler called denyCurrentSend(). */
@@ -1904,6 +1922,31 @@ export class ScriptingEngine implements EngineHost {
      * Type aliases follow Mudlet: "key" and "keybind" both target keybindings.
      * Unknown types return 0.
      */
+    /** The saved keybinding carrying this numeric id, or null. Lets getKeyCode
+     *  answer for a permanent key by the id permKey handed back, not just by
+     *  name — the key engine only indexes permanent keys by name. */
+    keyNodeByNumericId(numericId: number): { key: string; modifiers: string[] } | null {
+        const list = useAppStore.getState().connectionKeybindings[this.connectionId] ?? [];
+        for (const node of list) {
+            if (this.uuidToNumericId.get(node.id) === numericId && node.key) {
+                return { key: node.key, modifiers: node.modifiers ?? [] };
+            }
+        }
+        return null;
+    }
+
+    /** enable/disable a script-created temp trigger or alias by numeric id.
+     *  Those live in the Lua runtime, not the saved tree. */
+    setTempItemEnabled(id: number, enabled: boolean): boolean {
+        return this.runtimes.lua?.setTempItemEnabled(id, enabled) ?? false;
+    }
+
+    setForceMxpProcessorOn(on: boolean): void {
+        this.forceMxpProcessorOn = on;
+        // Mudlet locks secure mode alongside the flag — see lockSecureMode.
+        this.mxp.lockSecureMode(on);
+    }
+
     existsByName(nameOrId: string | number, type: string): number {
         const store = useAppStore.getState();
         const id = this.connectionId;
@@ -1925,9 +1968,11 @@ export class ScriptingEngine implements EngineHost {
                 const n = this.uuidToNumericId.get(item.id);
                 if (n !== undefined && n === wanted) return 1;
             }
-            // Temp (script-created) aliases/triggers aren't in the store; ask the
-            // runtime, which tracks them by id + type (matches Mudlet's exists()).
+            // Temp (script-created) items aren't in the store. Aliases and
+            // triggers are tracked by the runtime; temp KEYS live in the key
+            // engine, which owns their ids. Mudlet's exists() counts both.
             if (this.runtimes.lua?.tempItemExists(wanted, type)) return 1;
+            if ((type === 'key' || type === 'keybind') && this.api.keys.hasTemp(wanted)) return 1;
             return 0;
         }
         const name = String(nameOrId);
@@ -1962,6 +2007,14 @@ export class ScriptingEngine implements EngineHost {
             for (const item of list) {
                 const n = this.uuidToNumericId.get(item.id);
                 if (n !== undefined && n === nameOrId) return isOn(item) ? 1 : 0;
+            }
+            // Temp keys are held by the key engine, not the store (see existsByName).
+            if ((type === 'key' || type === 'keybind') && this.api.keys.hasTemp(nameOrId)) {
+                return this.api.keys.isTempEnabled(nameOrId) ? 1 : 0;
+            }
+            // Temp aliases/triggers are held by the runtime, likewise.
+            if (this.runtimes.lua?.tempItemExists(nameOrId, type)) {
+                return this.runtimes.lua.tempItemEnabled(nameOrId) ? 1 : 0;
             }
             return 0;
         }
@@ -2288,7 +2341,7 @@ export class ScriptingEngine implements EngineHost {
      * Returns the new id or -1 when `parent` is non-empty but no key group of
      * that name exists.
      */
-    createPermKey(name: string, parent: string, modifier: number, key: string, code: string): number {
+    createPermKey(name: string, parent: string, modifier: number, key: string | number, code: string): number {
         if (!name) return -1;
         const store = useAppStore.getState();
         const keys = store.connectionKeybindings[this.connectionId] ?? [];
@@ -2470,30 +2523,22 @@ export class ScriptingEngine implements EngineHost {
         const store = useAppStore.getState();
         const id = this.connectionId;
         switch (kind) {
-            case 'timer': {
-                const ids = (store.connectionTimers[id] ?? []).filter(t => t.name === name).map(t => t.id);
-                if (ids.length === 0) return false;
-                store.removeTimers(id, ids);
-                return true;
-            }
-            case 'alias': {
-                const ids = (store.connectionAliases[id] ?? []).filter(t => t.name === name).map(t => t.id);
-                if (ids.length === 0) return false;
-                store.removeAliases(id, ids);
-                return true;
-            }
-            case 'trigger': {
-                const ids = (store.connectionTriggers[id] ?? []).filter(t => t.name === name).map(t => t.id);
-                if (ids.length === 0) return false;
-                store.removeTriggers(id, ids);
-                return true;
-            }
-            case 'key': {
-                const ids = (store.connectionKeybindings[id] ?? []).filter(t => t.name === name).map(t => t.id);
-                if (ids.length === 0) return false;
-                store.removeKeybindings(id, ids);
-                return true;
-            }
+            case 'timer':
+            case 'alias':
+            case 'trigger':
+                // Mudlet's kill* only removes TEMPORARY items — TimerUnit::killTimer,
+                // AliasUnit::killAlias and TriggerUnit::killTrigger each bail out on
+                // a non-temporary match, commented there as "permanent objects cannot
+                // be removed". Temp items never reach here: the bindings resolve those
+                // by the numeric id they handed the script, before falling back to
+                // this name lookup.
+                return false;
+            case 'key':
+                // Mudlet's KeyUnit::killKey refuses a permanent key outright —
+                // killKey only removes temporary ones, and named keys created
+                // with permKey are permanent. (killTimer/killAlias/killTrigger
+                // above do delete their permanent items, matching Mudlet.)
+                return false;
         }
     }
 
@@ -2625,10 +2670,16 @@ export class ScriptingEngine implements EngineHost {
         this.mapOpen.notify();
     }
 
-    /** Hand the API a getter for the current command-line text. Lets Lua's
-     *  getCmdLine() read the value React holds in state. Pass null to clear. */
+    /** Hand the API a getter for the current command-line text, used until the
+     *  first {@link setCmdLineValue} mirrors one. Pass null to clear. */
     setCmdLineProvider(fn: (() => string) | null): void {
         this.api.setCmdLineProvider(fn);
+    }
+
+    /** Mirror a command-bar edit so Lua's getCmdLine() reads it without waiting
+     *  for a re-render. Called by ProfileSession on every change. */
+    setCmdLineValue(text: string): void {
+        this.api.setCmdLineValue(text);
     }
 
     /** Hand the API a startLogging hook. Wired by ProfileSession, which owns
@@ -3099,7 +3150,7 @@ export class ScriptingEngine implements EngineHost {
                     // for a single line it mirrors the old `line === ''` rule so a
                     // text-free MXP line — e.g. pure <!ENTITY> defs — stays hidden).
                     const units: { plain: string; buffer: AnsiAwareBuffer; outputLine: string; blankRenders: boolean }[] = [];
-                    if (this.mxpActive && type === 'mud') {
+                    if ((this.mxpActive || this.forceMxpProcessorOn) && type === 'mud') {
                         // MXP is live: parse the in-band markup into styled
                         // segments + clean (tag/entity-decoded) plain text, and
                         // wire any <SEND>/<A> links into clickable hyperlinks.
