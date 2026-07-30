@@ -48,6 +48,14 @@ export function MapEditorModal({ connectionId, connectionName, manager, onClose 
         };
         return [{
             id: 'mudix-bridge',
+            // Editor 1.0 added pluggable map formats and a "Save as…" dropdown,
+            // and the picked format becomes the editor's *active* one — which
+            // is what `getMapBytes()` below serialises with. mudix's bridge
+            // feeds those bytes straight back into the binary map reader, so a
+            // single "save as JSON" would silently break every later save.
+            // Pin the editor to Mudlet's own .dat codec, the one format that
+            // round-trips through MapStore.
+            mapFormats: (formats) => formats.filter(f => f.id === 'mudlet-dat'),
             // Replace the editor's built-in Mudlet logo (a logo.png served
             // from the editor's public folder, which 404s when embedded)
             // with mudix's own wordmark. `.brand` carries mudix's accent
@@ -72,7 +80,10 @@ export function MapEditorModal({ connectionId, connectionName, manager, onClose 
                         ...a,
                         onClick: async () => {
                             const { getMapBytes, store } = await import('mudlet-map-editor');
-                            const bytes = getMapBytes();
+                            // Async since editor 1.0 — a map format's serialize
+                            // may be async, so this resolves the active format's
+                            // bytes rather than returning them outright.
+                            const bytes = await getMapBytes();
                             if (!bytes) return;
                             syncBytes(bytes);
                             store.setState((s) => ({ savedUndoLength: s.undo.length }));
