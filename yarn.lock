@@ -789,10 +789,10 @@ domain-browser@4.22.0:
   resolved "https://registry.npmjs.org/domain-browser/-/domain-browser-4.22.0.tgz"
   integrity sha512-IGBwjF7tNk3cwypFNH/7bfzBcgSCbaMOD3GsaY1AU/JRrnHnYgEM0+9kQt52iZxjNsjBtJYtao146V+f8jFZNw==
 
-dompurify@3.2.7:
-  version "3.2.7"
-  resolved "https://registry.npmjs.org/dompurify/-/dompurify-3.2.7.tgz"
-  integrity sha512-WhL/YuveyGXJaerVlMYGWhvQswa7myDG17P7Vu65EWC05o8vfeNbvNf4d/BOvH99+ZW+LlQsc1GDKMa1vNK6dw==
+dompurify@3.4.8:
+  version "3.4.8"
+  resolved "https://registry.yarnpkg.com/dompurify/-/dompurify-3.4.8.tgz#6c54f8c207160e7f83fcb7f4fd05a82ac36b1cdc"
+  integrity sha512-yb1cEmaOum7wFvOCSQxyfgVlv5D47Rc30iZWoMpbDIWTnJ6grDDQyu2KFJzB2k7u0pMuJcQ1zphH//fFnw2tjQ==
   optionalDependencies:
     "@types/trusted-types" "^2.0.7"
 
@@ -1039,22 +1039,20 @@ hmac-drbg@^1.0.1:
     minimalistic-assert "^1.0.0"
     minimalistic-crypto-utils "^1.0.1"
 
-html-parse-stringify@^3.0.1:
-  version "3.0.1"
-  resolved "https://registry.npmjs.org/html-parse-stringify/-/html-parse-stringify-3.0.1.tgz"
-  integrity sha512-KknJ50kTInJ7qIScF3jeaFRpMpE8/lfiTdzf/twXyPBLAGrLRTmkz3AdTnKeh40X8k9L2fdYwEp/42WGXIRGcg==
-  dependencies:
-    void-elements "3.1.0"
+html-parse-stringify@^4.0.1:
+  version "4.0.1"
+  resolved "https://registry.yarnpkg.com/html-parse-stringify/-/html-parse-stringify-4.0.1.tgz#7264be901df0fef8829eb04632191be0aa94f55e"
+  integrity sha512-0zHsZJrK7S3K2aucXWL6ycoYJ/iNtIcFHC/nYQgFklPtrv5LpJctIiSCroWZWeuoXvuyFdzp6KzjJQ+OT5MfFw==
 
 https-browserify@^1.0.0:
   version "1.0.0"
   resolved "https://registry.npmjs.org/https-browserify/-/https-browserify-1.0.0.tgz"
   integrity sha512-J+FkSdyD+0mA0N+81tMotaRMfSL9SGi+xpD3T6YApKsc3bGSXJlfXri3VyFOeYkfLRQisDk1W+jIFFKBeUBbBg==
 
-i18next@^26.0.8:
-  version "26.3.0"
-  resolved "https://registry.npmjs.org/i18next/-/i18next-26.3.0.tgz"
-  integrity sha512-gHSgGpUXVmuqE2El1W61DmxeyeTlFfZgdJRWMo9jScAn5pu7TuTuiccb1zh3E2J9hEBVGJ23+96x0ieBhfuIHA==
+i18next@^26.3.6:
+  version "26.3.6"
+  resolved "https://registry.yarnpkg.com/i18next/-/i18next-26.3.6.tgz#599db275c50b66d28a69d8f6c5162c245ce9296b"
+  integrity sha512-Bu5Z2nAXgfVyM8xvW3jk9EKRIuX37PudsrBViThNFx7CR7aaYTpP01cxNB/E4c4UUzTDiAZRstEhsRfPOL/8xA==
 
 ieee754@^1.1.13, ieee754@^1.2.1:
   version "1.2.1"
@@ -1144,7 +1142,7 @@ kerium@^1.3.2, kerium@^1.3.4:
   dependencies:
     utilium "^3.0.0"
 
-konva@^10.2.4, konva@^10.2.5:
+konva@^10.2.4, konva@^10.3.0:
   version "10.3.0"
   resolved "https://registry.npmjs.org/konva/-/konva-10.3.0.tgz"
   integrity sha512-gt19K2gzY4lHbnkvsku7eSmB+A9PTS2jG4F9coBMsdjM1UKfJNxJbDbXVpeCW1wjEGRwBD3nBamcHnqJhAeKlg==
@@ -1297,20 +1295,13 @@ minimalistic-crypto-utils@^1.0.1:
   resolved "https://registry.npmjs.org/minimalistic-crypto-utils/-/minimalistic-crypto-utils-1.0.1.tgz"
   integrity sha512-JIYlbt6g8i5jKfJ3xz7rF0LXmv2TkDxBLUkiBeZ7bAx4GnnNMr8xFpGnOxn6GhTEHx3SjRrZEoU+j04prX1ktg==
 
-monaco-editor@^0.55.1:
-  version "0.55.1"
-  resolved "https://registry.npmjs.org/monaco-editor/-/monaco-editor-0.55.1.tgz"
-  integrity sha512-jz4x+TJNFHwHtwuV9vA9rMujcZRb0CEilTEwG2rRSpe/A7Jdkuj8xPKttCgOh+v/lkHy7HsZ64oj+q3xoAFl9A==
+monaco-editor@^0.56.0:
+  version "0.56.0"
+  resolved "https://registry.yarnpkg.com/monaco-editor/-/monaco-editor-0.56.0.tgz#e85ac00b7ab7092ca1d077894504919af5073cf0"
+  integrity sha512-sXboRm3BeBeLm938eaiyLMe0OxzfXIlZvbv4ir/jVgQy1zDhWjgmny0WoN45fuDKhCCQsYMbBJrv/A6jd8aCUg==
   dependencies:
-    dompurify "3.2.7"
+    dompurify "3.4.8"
     marked "14.0.0"
-
-mudlet-map-binary-reader@^1.0.3:
-  version "1.1.0"
-  resolved "https://registry.npmjs.org/mudlet-map-binary-reader/-/mudlet-map-binary-reader-1.1.0.tgz"
-  integrity sha512-SMMmHNH7pTceutfTUPfsMOG2b6RYJULZNJo1L94hMwXDwl6c3J1EBt81bm17GA1qIOCl+vqsPVLuuoZSnQVnHg==
-  dependencies:
-    qtdatastream-web "^0.0.1"
 
 mudlet-map-binary-reader@^1.2.0:
   version "1.2.0"
@@ -1319,20 +1310,20 @@ mudlet-map-binary-reader@^1.2.0:
   dependencies:
     qtdatastream-web "^0.0.1"
 
-mudlet-map-editor@^1.3.0:
-  version "1.3.0"
-  resolved "https://registry.npmjs.org/mudlet-map-editor/-/mudlet-map-editor-1.3.0.tgz"
-  integrity sha512-dMxAkZuRWJdHzciOxsVkjOPm3KqQHTZLgD1eYq2KY/8n380U/P7gVNqB9eKPLb843Bw/9E6g6+IEryartbCwaQ==
+mudlet-map-editor@^1.3.1:
+  version "1.3.1"
+  resolved "https://registry.yarnpkg.com/mudlet-map-editor/-/mudlet-map-editor-1.3.1.tgz#482c2e9913facc09f29ef54130bc28434f4a4b5b"
+  integrity sha512-ii8ct7rCni59v6AmJyZAMKVRUhuz4pkwthA2sw1PZKvXLcsJppNqgGBzypzybHkB9I8lR+oXAa9n9MM6xApv+w==
   dependencies:
     "@monaco-editor/react" "^4.7.0"
-    i18next "^26.0.8"
-    konva "^10.2.5"
-    monaco-editor "^0.55.1"
-    mudlet-map-binary-reader "^1.0.3"
+    i18next "^26.3.6"
+    konva "^10.3.0"
+    monaco-editor "^0.56.0"
+    mudlet-map-binary-reader "^1.2.0"
     mudlet-map-renderer "^2.6.1"
-    react "^19.2.5"
-    react-dom "^19.2.5"
-    react-i18next "^17.0.6"
+    react "^19.2.8"
+    react-dom "^19.2.8"
+    react-i18next "^17.0.11"
 
 mudlet-map-renderer@^2.6.1:
   version "2.6.1"
@@ -1602,26 +1593,38 @@ randomfill@^1.0.4:
     randombytes "^2.0.5"
     safe-buffer "^5.1.0"
 
-react-dom@^19.2.0, react-dom@^19.2.5:
+react-dom@^19.2.0:
   version "19.2.6"
   resolved "https://registry.npmjs.org/react-dom/-/react-dom-19.2.6.tgz"
   integrity sha512-0prMI+hvBbPjsWnxDLxlCGyM8PN6UuWjEUCYmZhO67xIV9Xasa/r/vDnq+Xyq4Lo27g8QSbO5YzARu0D1Sps3g==
   dependencies:
     scheduler "^0.27.0"
 
-react-i18next@^17.0.6:
-  version "17.0.8"
-  resolved "https://registry.npmjs.org/react-i18next/-/react-i18next-17.0.8.tgz"
-  integrity sha512-0ooKbGLU8JXhe1zwpQUWIeXSgLPOfwJmgheWRIUpcoA0CpyabpGhayjdG+/eA5esC1AQ8h2jWpXjJfzQzeDOCw==
+react-dom@^19.2.8:
+  version "19.2.8"
+  resolved "https://registry.yarnpkg.com/react-dom/-/react-dom-19.2.8.tgz#3b46b9eeda877cdff2cf13d2770fff4ae36c2ec2"
+  integrity sha512-rVprimfGBG3DR+Tq0IQG2DT5PxKth1WIGDmj5yPmlzr4YBe7uyE+Du4oVqTDXZSHGGGXRtTJEGSSePyQCMBglQ==
+  dependencies:
+    scheduler "^0.27.0"
+
+react-i18next@^17.0.11:
+  version "17.0.11"
+  resolved "https://registry.yarnpkg.com/react-i18next/-/react-i18next-17.0.11.tgz#62e93cbc4cd336554f018ac05a677c26886a0f72"
+  integrity sha512-cDtkXgxjuFTWUH6V+aQn1Ve5vDiUztCNPWW5GtSHDccsgRXO1nE6QFWCEmc1KAutrb3OUv87wFShJL5RhUwPXg==
   dependencies:
     "@babel/runtime" "^7.29.2"
-    html-parse-stringify "^3.0.1"
+    html-parse-stringify "^4.0.1"
     use-sync-external-store "^1.6.0"
 
-react@^19.2.0, react@^19.2.5:
+react@^19.2.0:
   version "19.2.6"
   resolved "https://registry.npmjs.org/react/-/react-19.2.6.tgz"
   integrity sha512-sfWGGfavi0xr8Pg0sVsyHMAOziVYKgPLNrS7ig+ivMNb3wbCBw3KxtflsGBAwD3gYQlE/AEZsTLgToRrSCjb0Q==
+
+react@^19.2.8:
+  version "19.2.8"
+  resolved "https://registry.yarnpkg.com/react/-/react-19.2.8.tgz#a80663dbb58d69c6fe3fd291d3cb324e8a7dff2d"
+  integrity sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw==
 
 readable-stream@^2.3.8:
   version "2.3.8"
@@ -2017,11 +2020,6 @@ vm-browserify@^1.0.1:
   version "1.1.2"
   resolved "https://registry.npmjs.org/vm-browserify/-/vm-browserify-1.1.2.tgz"
   integrity sha512-2ham8XPWTONajOR0ohOKOHXkm3+gaBmGut3SRuu75xLd/RRaY6vqgh8NBYYk7+RW3u5AtzPQZG8F10LHkl0lAQ==
-
-void-elements@3.1.0:
-  version "3.1.0"
-  resolved "https://registry.npmjs.org/void-elements/-/void-elements-3.1.0.tgz"
-  integrity sha512-Dhxzh5HZuiHQhbvTW9AMetFfBHDMYpo23Uo9btPXgdYP+3T5S+p+jgNy7spra+veYhBP2dCSgxR/i2Y02h5/6w==
 
 w3c-keyname@^2.2.4:
   version "2.2.8"

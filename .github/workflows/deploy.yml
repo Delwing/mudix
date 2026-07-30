@@ -15,7 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # test, e2e and build run concurrently; deploy waits on all three.
+  test:
+    name: Unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -23,14 +25,50 @@ jobs:
         with:
           node-version: 24
           cache: yarn
-      - run: yarn install
+      - run: yarn install --frozen-lockfile
+      - run: yarn test
+
+  e2e:
+    name: E2E (busted)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn playwright install --with-deps chromium
+      # `yarn playwright test` on purpose, not `yarn test:e2e`: the latter's
+      # pretest hook regenerates e2e/busted.manifest.json, which would double the
+      # run time and silently paper over drift. The committed manifest is the
+      # contract here — busted.spec.ts's drift guard fails if it went stale.
+      - run: yarn playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: yarn
+      - run: yarn install --frozen-lockfile
       - run: yarn build
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
-    needs: build
+    needs: [test, e2e, build]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
