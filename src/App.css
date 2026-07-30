@@ -2011,6 +2011,48 @@ body.is-sorting {
     flex-shrink: 0;
 }
 
+/* Holds the control bar plus Mudlet's collapse arrow, which mapper.ui nests as
+   the bar's *sibling* rather than its child (so collapsing the bar via a package
+   stylesheet leaves the arrow). Positioned so the arrow can anchor to whatever
+   height the bar currently has. */
+.map-panel-bottom {
+    position: relative;
+    flex-shrink: 0;
+}
+
+/* Mudlet's dlgMapper collapse arrow (mapper.ui: toolButton_togglePanel) — shows
+   and hides the control bar. Floats just above the bar, over the canvas, and
+   drops to the panel's bottom edge when the bar is hidden or collapsed to 0px. */
+.map-panel-toggle {
+    position: absolute;
+    right: 8px;
+    bottom: 100%;
+    margin-bottom: 4px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border-radius: var(--radius);
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    /* Sits over the map canvas, not the app chrome, so it takes the same fixed
+       dark treatment as .map-info / .map-lod-badge to stay legible. */
+    background: rgba(12, 12, 12, 0.72);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid #383838;
+    color: #b0b0b0;
+}
+
+.map-panel-toggle:hover {
+    background: rgba(12, 12, 12, 0.9);
+    color: #e8e8e8;
+}
+
 .map-area-dropdown {
     position: relative;
     flex-shrink: 0;

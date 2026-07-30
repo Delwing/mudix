@@ -9,6 +9,7 @@ import { MudletHighlightOverlay } from '../../../map/MudletHighlightOverlay';
 import { MapSelectionOverlay } from '../../../map/MapSelectionOverlay';
 import { useAppStore, selectProfileField, MAP_INFO_BG_DEFAULT, type MapperSettings, type MapInfoBgColor } from '../../../storage';
 import { MapEditorModal } from '../../MapEditorModal';
+import { QT_OBJECT_NAMES } from '../../labels/qtCss';
 
 /**
  * Copy user-set fields from MapperSettings onto a live renderer settings
@@ -223,6 +224,15 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
     const connectionName = useAppStore(s => s.connections.find(c => c.id === connectionId)?.name ?? 'map');
     const mapperRef = useRef(mapper);
     mapperRef.current = mapper;
+
+    // Mudlet's Host::mShowPanel — whether the control bar is up. Toggled by the
+    // collapse arrow below and by setConfig("mapperPanelVisible", …); shared by
+    // every map panel of this profile, as in Mudlet (one host-level flag).
+    // Undefined = shown, matching Mudlet's default.
+    const panelVisible = useAppStore(s => selectProfileField(s, connectionId, 'mapperPanelVisible')) ?? true;
+    const togglePanel = useCallback(() => {
+        useAppStore.getState().patchConnectionProfile(connectionId, { mapperPanelVisible: !panelVisible });
+    }, [connectionId, panelVisible]);
 
     // Read a saved per-area view directly from the store. Always reads live so
     // a write done moments earlier (flushSave on area switch) is visible.
@@ -1308,6 +1318,22 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         return null;
     })();
 
+    // Mudlet's dlgMapper collapse arrow (mapper.ui: toolButton_togglePanel).
+    // A *sibling* of the control bar, not a child — that's how mapper.ui nests
+    // them, so a package stylesheet that collapses `widget_panel` alone still
+    // leaves a way to bring the bar back (and one that wants the arrow gone too
+    // targets `toolButton_togglePanel`, as Mudlet packages do). Floated just
+    // above the bar, so it tracks whatever height the bar currently has.
+    const panelToggle = (
+        <button
+            className="map-panel-toggle"
+            data-qt-object={QT_OBJECT_NAMES.mapperPanelToggle}
+            onClick={togglePanel}
+            title={panelVisible ? 'Hide map controls' : 'Show map controls'}
+            aria-label={panelVisible ? 'Hide map controls' : 'Show map controls'}
+        >{panelVisible ? '▾' : '▴'}</button>
+    );
+
     return (
         <div className="map-panel">
             <div ref={containerRef} className="map-canvas-container" />
@@ -1332,9 +1358,12 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 <div className="map-lod-badge" title={lodNotice.detail}>{lodNotice.label}</div>
             )}
             <input ref={fileInputRef} type="file" accept=".dat,.xml" onChange={handleFileChange} hidden />
-            <div className="map-panel-toolbar">
+            <div className="map-panel-bottom">
+            {panelToggle}
+            {panelVisible && (
+            <div className="map-panel-toolbar" data-qt-object={QT_OBJECT_NAMES.mapperPanel}>
                 {status === 'ready' && areas.length > 1 && (
-                    <div className="map-area-dropdown" ref={dropdownRef}>
+                    <div className="map-area-dropdown" ref={dropdownRef} data-qt-object={QT_OBJECT_NAMES.mapperAreaSelector}>
                         <button
                             className="map-area-dropdown-btn"
                             onClick={() => setDropdownOpen(v => !v)}
@@ -1363,6 +1392,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                     <div className="map-level-controls">
                         <button
                             className="btn btn--secondary btn--sm"
+                            data-qt-object={QT_OBJECT_NAMES.mapperShiftZup}
                             onClick={() => handleLevelChange(1)}
                             disabled={levels.indexOf(currentLevel) >= levels.length - 1}
                             title="Level up"
@@ -1394,6 +1424,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                         </div>
                         <button
                             className="btn btn--secondary btn--sm"
+                            data-qt-object={QT_OBJECT_NAMES.mapperShiftZdown}
                             onClick={() => handleLevelChange(-1)}
                             disabled={levels.indexOf(currentLevel) <= 0}
                             title="Level down"
@@ -1403,6 +1434,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                 <div className="map-hamburger" ref={menuRef}>
                     <button
                         className="map-hamburger-btn"
+                        data-qt-object={QT_OBJECT_NAMES.mapperMenu}
                         onClick={() => setMenuOpen(v => !v)}
                         title="Map options"
                     >
@@ -1445,6 +1477,8 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                         </div>
                     )}
                 </div>
+            </div>
+            )}
             </div>
             {menuOpen && infoOverlaysOpen && createPortal(
                 <div

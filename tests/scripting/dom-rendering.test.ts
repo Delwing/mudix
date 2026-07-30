@@ -59,25 +59,45 @@ describe('wrapLine — in-place DOM re-render', () => {
 });
 
 describe('setProfileStyleSheet — installs a <style> block in document.head', () => {
+  // The tags are keyed per connection (and stamped with data-mudix-style-owner)
+  // so a closed profile's CSS can be torn down instead of following the tab into
+  // the next profile — look them up by kind rather than a fixed global id.
+  const profileTags = () =>
+    [...env.body.ownerDocument.querySelectorAll('style[data-mudix-profile-stylesheet]')] as HTMLStyleElement[];
+
   it('creates a single profile-keyed style tag and replaces its content on re-call', () => {
     expect(env.run('return (setProfileStyleSheet(".foo { color: red; }"))')).toBe(true);
-    const el = env.body.ownerDocument.getElementById('mudix-profile-stylesheet') as HTMLStyleElement | null;
+    const el = profileTags()[0];
     expect(el).toBeTruthy();
-    expect(el!.tagName).toBe('STYLE');
-    expect(el!.parentElement).toBe(env.body.ownerDocument.head);
-    expect(el!.textContent).toBe('.foo { color: red; }');
+    expect(el.tagName).toBe('STYLE');
+    expect(el.parentElement).toBe(env.body.ownerDocument.head);
+    expect(el.textContent).toBe('.foo { color: red; }');
+    // Owned by this profile, so destroy() can find it.
+    expect(el.dataset.mudixStyleOwner).toBeTruthy();
 
     // A second call replaces the content in place — no duplicate tag.
     env.run('setProfileStyleSheet(".bar { color: blue; }")');
-    const all = env.body.ownerDocument.querySelectorAll('#mudix-profile-stylesheet');
-    expect(all.length).toBe(1);
-    expect((all[0] as HTMLStyleElement).textContent).toBe('.bar { color: blue; }');
+    expect(profileTags().length).toBe(1);
+    expect(profileTags()[0].textContent).toBe('.bar { color: blue; }');
 
-    // It's distinct from the setAppStyleSheet block (different ids coexist).
+    // It's distinct from the setAppStyleSheet block (both coexist).
     env.run('setAppStyleSheet(".app { margin: 0; }")');
-    expect(env.body.ownerDocument.getElementById('mudix-profile-stylesheet')).toBeTruthy();
-    expect((env.body.ownerDocument.getElementById('mudix-profile-stylesheet') as HTMLStyleElement).textContent)
-      .toBe('.bar { color: blue; }');
+    expect(profileTags().length).toBe(1);
+    expect(profileTags()[0].textContent).toBe('.bar { color: blue; }');
+    const appTags = env.body.ownerDocument.querySelectorAll('style[data-mudix-app-stylesheet]');
+    expect(appTags.length).toBe(1);
+  });
+
+  it('rewrites Qt objectName selectors so package CSS reaches the DOM', () => {
+    // The real-world case: a package that embeds the mapper collapses
+    // dlgMapper's control bar by objectName. `QWidget#widget_panel` parses as
+    // valid CSS but matches nothing, so it has to be redirected onto the
+    // data-qt-object hook MapPanel renders.
+    env.run('setProfileStyleSheet("QWidget#widget_panel { max-height: 0px; }")');
+    const css = profileTags()[0].textContent ?? '';
+    expect(css).toContain('[data-qt-object="widget_panel"]');
+    expect(css).not.toContain('QWidget#');
+    env.run('setProfileStyleSheet("")');
   });
 
   it('raises sysAppStyleSheetChange with tag "profile"', () => {

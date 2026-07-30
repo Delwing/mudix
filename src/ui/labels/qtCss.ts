@@ -282,6 +282,211 @@ function qtWidgetSelectorToPseudo(sel: string): string | null {
     return QT_TO_CSS[pseudo] ?? pseudo;
 }
 
+// ── App/profile stylesheets: Qt objectName selectors ─────────────────────────
+//
+// `setAppStyleSheet` / `setProfileStyleSheet` install a QApplication-level
+// stylesheet in Mudlet, so packages address individual Mudlet widgets by their
+// Qt objectName — e.g. a package that embeds the mapper in its own layout does
+//
+//     QWidget#widget_panel { max-height: 0px; min-height: 0px; padding: 0px; }
+//
+// to collapse dlgMapper's control bar (`mapper.ui`, objectName `widget_panel`).
+// That form is *syntactically* valid CSS — a `QWidget` type selector plus an id
+// — so the browser parses it without complaint and it matches nothing, because
+// no `<QWidget>` element exists. Qt also accepts the bare `#widget_panel` form.
+//
+// Themes go further and style whole widget *classes* — `QDockWidget { … }` for
+// every user window, `QToolButton:hover { … }`, and so on.
+//
+// Two tables cover the two forms: {@link QT_OBJECT_NAMES} lists the Mudlet
+// widgets that have a mudix DOM stand-in (each such node carries
+// `data-qt-object="<objectName>"`), and {@link QT_TYPE_MAP} maps widget types and
+// their subcontrols onto mudix selectors. {@link rewriteQtSelectors} applies both.
+//
+// The rewrite is deliberately surgical: only a `Q<Type>#name` prefix, a bare
+// `#name` naming one of the widgets we expose, or a *mapped* widget type is
+// touched. Anything else — an unmapped Qt type, a `.mudix-*` rule — passes
+// through untouched, because app stylesheets are also mudix's documented
+// brand-styling hook and already carry real CSS.
+
+/** Qt objectNames (from Mudlet's `.ui` files) that mudix mirrors onto a DOM node
+ *  via `data-qt-object`, so package stylesheets addressing them keep working.
+ *  Reference these instead of writing the raw string at the render site. */
+export const QT_OBJECT_NAMES = {
+    /** dlgMapper's collapsible control bar — area picker, z-level buttons,
+     *  options menu (`mapper.ui`: `widget_panel`). */
+    mapperPanel: 'widget_panel',
+    /** The arrow that shows/hides that bar (`mapper.ui`: `toolButton_togglePanel`). */
+    mapperPanelToggle: 'toolButton_togglePanel',
+    /** Area selector (`mapper.ui`: `comboBox_showArea`). */
+    mapperAreaSelector: 'comboBox_showArea',
+    /** Z-level up / down buttons (`mapper.ui`: `toolButton_shiftZup/down`). */
+    mapperShiftZup: 'toolButton_shiftZup',
+    mapperShiftZdown: 'toolButton_shiftZdown',
+    /** The mapper's hamburger / options button (`mapper.ui`: `toolButton_mapperMenu`). */
+    mapperMenu: 'toolButton_mapperMenu',
+} as const;
+
+const QT_OBJECT_NAME_SET: ReadonlySet<string> = new Set(Object.values(QT_OBJECT_NAMES));
+
+/**
+ * Qt *widget-type* selectors mapped onto the mudix DOM. Mudlet themes style
+ * whole widget classes rather than named instances — `QDockWidget { … }` for
+ * every user window, `QDockWidget::title { … }` for its title bars — so these
+ * rules are what a pasted Mudlet app stylesheet actually spends most of its
+ * lines on.
+ *
+ * `self` is the element(s) standing in for the widget; `sub` maps Qt subcontrols
+ * (`::title`, `::close-button`) onto the DOM nodes that play those parts. A type
+ * that isn't listed here is left alone — the selector stays in the sheet, inert,
+ * exactly as it is today. Extending coverage is a table entry, not new code.
+ *
+ * Deliberately *not* mapped: bare `QWidget`, which in Qt matches every widget
+ * and would repaint the entire app from one declaration block. That needs its
+ * own decision about which mudix surfaces count as "every widget".
+ */
+const QT_TYPE_MAP: Record<string, { self: readonly string[]; sub?: Record<string, readonly string[]> }> = {
+    // Mudlet user windows are QDockWidgets, floating or docked. mudix renders
+    // the two as separate components with parallel chrome.
+    QDockWidget: {
+        self: ['.script-window', '.docked-panel'],
+        sub: {
+            title: ['.script-window-titlebar', '.docked-panel-titlebar'],
+            'close-button': ['.script-window-btn.close'],
+            'float-button': ['.script-window-btn.popout'],
+        },
+    },
+};
+
+// A Qt type selector: `QDockWidget`, `QDockWidget::title`, `QDockWidget:hover`,
+// `QTabBar::tab:top:selected` — a type, an optional subcontrol, then any number
+// of pseudo-states.
+const QT_TYPE_SELECTOR_RE = /^(Q[A-Z][A-Za-z0-9_]*)(::[\w-]+)?((?::{1,2}!?[\w-]+)*)$/;
+
+/** Translate one Qt pseudo-state token (`:hover`, `::hover`, `:!pressed`) into
+ *  its CSS equivalent. Qt writes pseudo-classes with one or two colons; `:!x` is
+ *  negation; `pressed` is CSS's `active`. */
+function qtPseudoToCss(pseudo: string): string {
+    let out = pseudo.startsWith('::') ? pseudo.slice(1) : pseudo;
+    if (out.startsWith(':!')) out = `:not(:${out.slice(2)})`;
+    return out === ':pressed' ? ':active'
+        : out === ':not(:pressed)' ? ':not(:active)'
+        : out;
+}
+
+/** Split a trailing pseudo-state run (`:top:selected`) into CSS tokens. */
+function qtPseudoRunToCss(run: string): string {
+    const tokens = run.match(/:{1,2}!?[\w-]+/g);
+    return tokens ? tokens.map(qtPseudoToCss).join('') : '';
+}
+
+/** Expand one comma-separated Qt type selector into DOM selectors, or null when
+ *  the type (or the named subcontrol) has no mudix stand-in. */
+function expandQtTypeSelector(part: string): string | null {
+    const m = part.trim().match(QT_TYPE_SELECTOR_RE);
+    if (!m) return null;
+    const entry = QT_TYPE_MAP[m[1]];
+    if (!entry) return null;
+    const targets = m[2] ? entry.sub?.[m[2].slice(2)] : entry.self;
+    if (!targets || targets.length === 0) return null;
+    const pseudo = qtPseudoRunToCss(m[3] ?? '');
+    return targets.map(t => `${t}${pseudo}`).join(', ');
+}
+
+// `QWidget#name`, `QToolButton#name`, … — an unmistakably-Qt type prefix, so the
+// id is safe to reinterpret as an objectName whatever it names.
+const QT_TYPED_OBJECT_RE = /\bQ[A-Z][A-Za-z0-9_]*#([A-Za-z_][\w-]*)/g;
+// Bare `#name` (Qt's other accepted form). Only rewritten for names we publish,
+// so a genuine DOM id in a brand stylesheet is never hijacked.
+const BARE_OBJECT_RE = /(^|[\s,>+~(])#([A-Za-z_][\w-]*)/g;
+// Qt clips a widget to its geometry, so `max-height: 0` really does hide the
+// widget *and its children*; the DOM keeps painting overflowing children unless
+// told otherwise. Detected per-rule so `overflow: hidden` is only added where
+// the stylesheet asked for a collapse.
+const ZERO_MAX_SIZE_RE = /\bmax-(?:width|height)\s*:\s*0(?:\.0+)?(?:px)?\s*(?:;|$)/i;
+
+function rewriteSelectorText(selector: string): string {
+    // objectName forms first: they consume the `Q<Type>#name` prefix, so what
+    // reaches the type pass below is a bare type selector or something we leave
+    // alone.
+    let out = selector.replace(QT_TYPED_OBJECT_RE, (_m, name: string) => `[data-qt-object="${cssEscape(name)}"]`);
+    out = out.replace(BARE_OBJECT_RE, (m, lead: string, name: string) =>
+        QT_OBJECT_NAME_SET.has(name) ? `${lead}[data-qt-object="${cssEscape(name)}"]` : m);
+    // Widget-type forms, per comma-separated part. When no part maps to
+    // anything, leave the selector exactly as it was: an unmapped Qt type stays
+    // inert in the sheet, and — because the caller keys off whether the selector
+    // changed — its declarations are left alone too.
+    if (out.indexOf('Q') >= 0) {
+        const parts = out.split(',');
+        const expanded = parts.map(expandQtTypeSelector);
+        if (expanded.some(e => e !== null)) {
+            // Surrounding whitespace is part of the sheet's formatting (and the
+            // space before `{`), so only the inter-part spacing is normalized.
+            const lead = out.match(/^\s*/)?.[0] ?? '';
+            const tail = out.match(/\s*$/)?.[0] ?? '';
+            out = lead + parts.map((p, i) => expanded[i] ?? p.trim()).join(', ') + tail;
+        }
+    }
+    return out;
+}
+
+const COMMENT_RE = /\/\*[\s\S]*?\*\//g;
+
+/**
+ * Rewrite the Qt selectors in an app/profile-level stylesheet — objectName forms
+ * (`QWidget#widget_panel`) and mapped widget types (`QDockWidget::title`) — onto
+ * the DOM they correspond to in mudix. Returns the input unchanged when it holds
+ * no Qt selector at all, which is the common case for CSS written against
+ * mudix's own `.mudix-*` classes.
+ *
+ * A rule whose selector we rewrote also gets its *declarations* translated
+ * (`qtDeclarationsToCss`): that body was written for Qt, so it may carry
+ * `QLinearGradient(…)`, Qt's 0–255 `rgba()` alpha, or unitless lengths. Rules we
+ * left alone keep their declarations verbatim. Comments are stripped up front —
+ * they're inert, and an unbalanced brace or stray `#` inside one would otherwise
+ * confuse the scan.
+ */
+export function rewriteQtSelectors(qss: string): string {
+    // A rule needs a '{'; a rewritable selector needs either a '#' (objectName
+    // form) or a Qt widget-type name.
+    if (!qss || qss.indexOf('{') < 0) return qss;
+    if (qss.indexOf('#') < 0 && !/\bQ[A-Z]/.test(qss)) return qss;
+    const src = qss.indexOf('/*') < 0 ? qss : qss.replace(COMMENT_RE, '');
+    const parts: string[] = [];
+    let i = 0;
+    let chunkStart = 0;
+    while (i < src.length) {
+        const c = src[i];
+        if (c === '(') {
+            const close = matchingClose(src, i);
+            if (close < 0) break;
+            i = close + 1;
+            continue;
+        }
+        if (c === '{') {
+            const selector = src.slice(chunkStart, i);
+            const close = matchingBrace(src, i);
+            const end = close < 0 ? src.length : close;
+            const body = src.slice(i + 1, end);
+            const rewritten = rewriteSelectorText(selector);
+            let outBody = body;
+            if (rewritten !== selector) {
+                // Qt clips a widget to its geometry, so a zero max-height really
+                // does hide it and its children; the DOM needs telling.
+                const clip = ZERO_MAX_SIZE_RE.test(body) ? '; overflow: hidden' : '';
+                outBody = ` ${qtDeclarationsToCss(body)}${clip} `;
+            }
+            parts.push(rewritten, '{', outBody, close < 0 ? '' : '}');
+            i = end + 1;
+            chunkStart = i;
+            continue;
+        }
+        i++;
+    }
+    parts.push(src.slice(chunkStart));
+    return parts.join('');
+}
+
 // CSS.escape polyfill for attribute selector values — IE/older Safari don't
 // expose it, and window/label names can contain hyphens/spaces/quotes a script
 // writer might choose. Cheap identifier-only fallback when CSS.escape is gone.

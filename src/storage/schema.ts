@@ -160,6 +160,14 @@ export interface ProfileSettings {
      *  area on panel mount; the matching {@link mapViewStates} entry drives
      *  the initial level. Falls through to the first area in the map. */
     mapLastAreaId?: number;
+    /** Whether the map widget's control bar — area picker, z-level buttons,
+     *  options menu — is shown. Mudlet's `Host::mShowPanel`: toggled by the
+     *  collapse arrow drawn over the map, readable/writable from Lua as
+     *  `getConfig`/`setConfig("mapperPanelVisible", …)`, and persisted per
+     *  profile (Mudlet keeps it in the profile XML as `mShowPanel`). Treat
+     *  `undefined` as true, matching Mudlet's default. Note this hides only the
+     *  bar — the map window itself is `openMapWidget`/`closeMapWidget`. */
+    mapperPanelVisible?: boolean;
     /** Record gameplay output (and your echoed commands) to the persistent log
      *  store, browsable via the toolbar's Logs button. Treat `undefined` as
      *  enabled so existing profiles opt in without a migration; set to `false`

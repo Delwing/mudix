@@ -13,7 +13,7 @@ import { resolveSvgIntrinsicSize } from '../ui/labels/backgroundImageSize';
 import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
 import type { ScrollBoxManager } from '../ui/scrollbox/ScrollBoxManager';
 import { TextEditManager } from '../ui/textedit/TextEditManager';
-import { userWindowQssToScopedCss, cssEscape } from '../ui/labels/qtCss';
+import { userWindowQssToScopedCss, cssEscape, rewriteQtSelectors } from '../ui/labels/qtCss';
 import { AnsiAwareBuffer, type FormatColor, type FormatStateSnapshot, type FormatHyperlink, type RgbColor } from '../mud/text/FormatState';
 import { classifyHyperlinkUri } from '../mud/text/ansiEscapes';
 import { extractQuery } from '../mud/text/hyperlinkConfig';
@@ -1015,7 +1015,10 @@ export class ScriptingAPI {
             // live
             case 'showSentText':       return this.session.showSentText;
             case 'blankLinesBehaviour': return this.session.blankLinesBehaviour;
-            case 'mapperPanelVisible': return this.session.windows.isVisible('map');
+            // Mudlet's mShowPanel — the mapper's *control bar*, not the map
+            // window (that's openMapWidget/closeMapWidget). Default true.
+            case 'mapperPanelVisible':
+                return selectProfileField(useAppStore.getState(), this.connectionId, 'mapperPanelVisible') ?? true;
             case 'muteMediaAPI':       return this.session.sounds.isOriginMuted('api');
             case 'muteMediaGame':      return this.session.sounds.isOriginMuted('game');
             // read-only
@@ -1132,16 +1135,14 @@ export class ScriptingAPI {
                 this.patchConfigBag('muteMediaGame', muted);
                 return true;
             }
-            // Live window-visibility toggle (mirrors the toolbar's map button):
-            // opening (re)loads the map via the onMapOpen hook; hiding keeps it.
+            // Mudlet dlgMapper::slot_setMapperPanelVisible → Host::mShowPanel:
+            // shows/hides the mapper's control bar (area picker, z-level
+            // buttons, options menu) on every map panel, leaving the map itself
+            // alone. Persisted per profile, like Mudlet's profile XML.
             case 'mapperPanelVisible': {
-                if (configBool(value)) {
-                    if (!this.session.windows.isVisible('map')) {
-                        this.session.windows.open('map', { kind: 'map', title: 'Map', position: 'right', autoOpen: true });
-                    }
-                } else {
-                    this.session.windows.hide('map');
-                }
+                useAppStore.getState().patchConnectionProfile(this.connectionId, {
+                    mapperPanelVisible: configBool(value),
+                });
                 return true;
             }
             // read-only keys — present in the catalogue but not writable
@@ -3409,7 +3410,10 @@ export class ScriptingAPI {
     // ── Stylesheets (Mudlet setAppStyleSheet / setUserWindowStyleSheet) ───────
     // Real Mudlet APIs that scripts (theme switchers, package CSS) depend on.
     // Browser equivalent: install or replace a `<style>` tag in document.head
-    // keyed by `tag` (app-wide) or window name (per-window). Per-window CSS is
+    // keyed by `tag` (app-wide) or window name (per-window). App/profile-level
+    // CSS goes in verbatim apart from `rewriteQtSelectors`, which
+    // redirects Qt objectName selectors (`QWidget#widget_panel { … }`) onto the
+    // `data-qt-object` hooks mudix's DOM carries — see qtCss.ts. Per-window CSS is
     // translated through `userWindowQssToScopedCss`: `QWidget { … }` (the
     // canonical Mudlet selector) auto-scopes to `[data-mudix-window="name"]`,
     // so a stylesheet like `QWidget { padding: 15 20; }` actually pads the
@@ -3420,31 +3424,49 @@ export class ScriptingAPI {
 
 
 
-    setAppStyleSheet(css: string, tag?: string): boolean {
-        const key = tag && tag.length > 0 ? tag : 'default';
-        const id = `mudix-app-stylesheet-${key}`;
+    /**
+     * Get (or create) a `<style>` tag in `document.head` owned by this profile.
+     *
+     * Every tag mudix installs on a script's behalf is stamped with the owning
+     * connection id, both in its element id and in `data-mudix-style-owner`, so
+     * {@link destroy} can take them all down again. Mudlet's `setAppStyleSheet`
+     * is genuinely application-wide (a QApplication stylesheet shared by every
+     * open profile), but a mudix tab hosts one profile at a time: leaving a
+     * closed profile's CSS installed silently restyled the *next* profile opened
+     * in that tab. So all three setters — app, profile and per-window — are
+     * profile-local here, and torn down with the profile.
+     */
+    private styleTag(kind: string, key: string, dataKey: string, dataValue: string): HTMLStyleElement {
+        const id = `mudix-${kind}-stylesheet--${this.connectionId}--${key}`;
         let el = document.getElementById(id) as HTMLStyleElement | null;
         if (!el) {
             el = document.createElement('style');
             el.id = id;
-            el.dataset.mudixAppStylesheet = key;
+            el.dataset[dataKey] = dataValue;
+            el.dataset.mudixStyleOwner = this.connectionId;
             document.head.appendChild(el);
         }
-        el.textContent = css ?? '';
+        return el;
+    }
+
+    /** Remove every `<style>` tag this profile's scripts installed. */
+    private removeOwnedStyleTags(): void {
+        const owned = document.querySelectorAll(`style[data-mudix-style-owner="${cssEscape(this.connectionId)}"]`);
+        for (const el of owned) el.remove();
+    }
+
+    setAppStyleSheet(css: string, tag?: string): boolean {
+        const key = tag && tag.length > 0 ? tag : 'default';
+        const el = this.styleTag('app', key, 'mudixAppStylesheet', key);
+        el.textContent = rewriteQtSelectors(css ?? '');
+        // The event carries what the script passed, not the rewrite.
         this.host.raiseEvent('sysAppStyleSheetChange', [css ?? '', tag ?? '']);
         return true;
     }
 
     setUserWindowStyleSheet(name: string, css: string): boolean {
         if (!name) return false;
-        const id = `mudix-userwindow-stylesheet--${name}`;
-        let el = document.getElementById(id) as HTMLStyleElement | null;
-        if (!el) {
-            el = document.createElement('style');
-            el.id = id;
-            el.dataset.mudixUserwindowStylesheet = name;
-            document.head.appendChild(el);
-        }
+        const el = this.styleTag('userwindow', name, 'mudixUserwindowStylesheet', name);
         const scope = `[data-mudix-window="${cssEscape(name)}"]`;
         el.textContent = userWindowQssToScopedCss(css ?? '', scope);
         return true;
@@ -3459,15 +3481,8 @@ export class ScriptingAPI {
      * the app-level setter. Always returns true.
      */
     setProfileStyleSheet(css: string): boolean {
-        const id = 'mudix-profile-stylesheet';
-        let el = document.getElementById(id) as HTMLStyleElement | null;
-        if (!el) {
-            el = document.createElement('style');
-            el.id = id;
-            el.dataset.mudixProfileStylesheet = 'true';
-            document.head.appendChild(el);
-        }
-        el.textContent = css ?? '';
+        const el = this.styleTag('profile', 'default', 'mudixProfileStylesheet', 'true');
+        el.textContent = rewriteQtSelectors(css ?? '');
         this.host.raiseEvent('sysAppStyleSheetChange', [css ?? '', 'profile']);
         return true;
     }
@@ -4445,6 +4460,10 @@ export class ScriptingAPI {
     destroy(): void {
         for (const unsub of this.apiUnsubs) unsub();
         this.apiUnsubs.length = 0;
+        // Script-installed CSS is profile-local (see styleTag): a closed
+        // profile's app/profile/window stylesheets must not follow the tab into
+        // the next profile opened in it.
+        this.removeOwnedStyleTags();
         this.presence.destroy();
         this.flushOutput();
     }

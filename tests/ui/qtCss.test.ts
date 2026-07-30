@@ -8,7 +8,103 @@ import {
     extractQtScaledContents,
     userWindowQssToScopedCss,
     patchStyleSheetBackgroundColor,
+    rewriteQtSelectors,
+    QT_OBJECT_NAMES,
 } from '../../src/ui/labels/qtCss';
+
+// App/profile stylesheets: packages address Mudlet widgets by Qt objectName
+// (`QWidget#widget_panel`) and themes style whole widget types (`QDockWidget`).
+// Both parse as valid CSS but match nothing in the DOM, so they're redirected
+// onto our `data-qt-object` hooks / mudix classes. Anything we don't recognise
+// must pass through untouched — app stylesheets double as mudix's `.mudix-*`
+// brand-styling surface.
+describe('qtCss Qt selector rewrite', () => {
+    it('redirects a Q<Type>#objectName selector onto the data-qt-object hook', () => {
+        const out = rewriteQtSelectors('QWidget#widget_panel { padding: 0px; }');
+        expect(out).toBe('[data-qt-object="widget_panel"] { padding: 0px }');
+    });
+
+    it('adds overflow clipping for a zero max-height collapse (Qt clips, CSS does not)', () => {
+        // The real-world case: a package embedding the mapper in its own layout
+        // collapses dlgMapper's control bar. Without overflow:hidden the DOM
+        // keeps painting the overflowing buttons over the map.
+        const out = rewriteQtSelectors(
+            'QWidget#widget_panel { max-height: 0px; min-height: 0px; padding: 0px; border: none; }',
+        );
+        expect(out).toContain('[data-qt-object="widget_panel"]');
+        expect(out).toContain('overflow: hidden');
+        expect(out).toContain('max-height: 0px');
+    });
+
+    it('rewrites the bare #objectName form for names we publish, and only those', () => {
+        // Qt's unitless `0` also picks up a unit on the way through.
+        expect(rewriteQtSelectors(`#${QT_OBJECT_NAMES.mapperPanel} { padding: 0; }`))
+            .toBe('[data-qt-object="widget_panel"] { padding: 0px }');
+        // A genuine DOM id in a brand stylesheet must not be hijacked.
+        expect(rewriteQtSelectors('#some-real-dom-id { padding: 0; }'))
+            .toBe('#some-real-dom-id { padding: 0; }');
+    });
+
+    it('carries pseudo-states and compound selectors through the rewrite', () => {
+        expect(rewriteQtSelectors('QToolButton#toolButton_mapperMenu:hover { color: red; }'))
+            .toBe('[data-qt-object="toolButton_mapperMenu"]:hover { color: red }');
+        expect(rewriteQtSelectors('QWidget#widget_panel, QToolButton#toolButton_togglePanel { padding: 0px; }'))
+            .toBe('[data-qt-object="widget_panel"], [data-qt-object="toolButton_togglePanel"] { padding: 0px }');
+    });
+
+    it('maps QDockWidget (Mudlet user windows) onto both floating and docked chrome', () => {
+        expect(rewriteQtSelectors('QDockWidget { background: #26192f; }'))
+            .toBe('.script-window, .docked-panel { background: #26192f }');
+        // Subcontrols land on the DOM node playing that part…
+        expect(rewriteQtSelectors('QDockWidget::title { padding: 4px; }'))
+            .toBe('.script-window-titlebar, .docked-panel-titlebar { padding: 4px }');
+        // …and Qt pseudo-states distribute across every expansion, with
+        // Qt-only spellings translated (`:pressed` → `:active`).
+        expect(rewriteQtSelectors('QDockWidget:hover { color: red; }'))
+            .toBe('.script-window:hover, .docked-panel:hover { color: red }');
+        expect(rewriteQtSelectors('QDockWidget::close-button:pressed { color: red; }'))
+            .toBe('.script-window-btn.close:active { color: red }');
+    });
+
+    it('translates Qt-only declaration values in rules it rewrote', () => {
+        // Qt's rgba() alpha is 0–255; CSS wants 0–1.
+        expect(rewriteQtSelectors('QDockWidget { background-color: rgba(20,20,20,230); }'))
+            .toContain('rgba(20, 20, 20, 0.902)');
+        // Unitless lengths are legal in Qt, not in CSS.
+        expect(rewriteQtSelectors('QDockWidget { border-radius: 5; }'))
+            .toContain('border-radius: 5px');
+    });
+
+    it('leaves an unmapped Qt widget type alone rather than guessing', () => {
+        // QWidget deliberately isn't mapped — in Qt it matches *every* widget.
+        expect(rewriteQtSelectors('QWidget { color: red; }'))
+            .toBe('QWidget { color: red; }');
+        expect(rewriteQtSelectors('QTabBar::tab:top:selected { color: red; }'))
+            .toBe('QTabBar::tab:top:selected { color: red; }');
+    });
+
+    it('leaves CSS with no Qt selector byte-identical', () => {
+        const css = '.mudix-toolbar { background: #222; }\n.mudix-output a:hover { color: #8cf; }';
+        expect(rewriteQtSelectors(css)).toBe(css);
+        // Untouched rules keep their own semantics — no overflow fix-up.
+        const zero = '.mudix-thing { max-height: 0px; }';
+        expect(rewriteQtSelectors(zero)).toBe(zero);
+        expect(rewriteQtSelectors('')).toBe('');
+    });
+
+    it('does not mistake a # inside a declaration value for a selector', () => {
+        expect(rewriteQtSelectors('QWidget#widget_panel { background: #26192f; color: #e5ae69; }'))
+            .toBe('[data-qt-object="widget_panel"] { background: #26192f; color: #e5ae69 }');
+    });
+
+    it('strips comments, which real Mudlet themes are full of', () => {
+        // A commented-out declaration must not survive as a broken one — the
+        // declaration splitter would otherwise emit `/*font-size: 13px` verbatim.
+        const out = rewriteQtSelectors('QDockWidget { /*font-size: 13px;*/ color: #e5ae69; }');
+        expect(out).not.toContain('font-size');
+        expect(out).toContain('color: #e5ae69');
+    });
+});
 
 describe('qtCss rgba alpha normalization', () => {
     it('rescales Qt 0–255 alpha to CSS 0–1 on a solid background-color', () => {

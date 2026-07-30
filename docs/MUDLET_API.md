@@ -760,7 +760,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `selectCurrentLine([window])` | ✅ | JS-exposed |
 | `selectSection([window,] col, len)` | ✅ | JS-exposed |
 | `selectString([window,] text, n)` | ✅ | JS-exposed |
-| `setAppStyleSheet(css)` | ✅ | Installs/replaces a CSS block in `document.head`; raises `sysAppStyleSheetChange` |
+| `setAppStyleSheet(css)` | ✅ | Installs/replaces a CSS block in `document.head`; raises `sysAppStyleSheetChange`. **Profile-local** (Mudlet's is QApplication-wide, but a Mudlet Web tab hosts one profile at a time, so leaving it installed restyled the next profile opened in that tab) — the tag is keyed by connection id and removed with the profile. Qt selectors are bridged to the DOM by `rewriteQtSelectors` (`ui/labels/qtCss.ts`): objectName forms (`QWidget#widget_panel`) map onto the `data-qt-object` hooks components render, and mapped widget types (`QDockWidget`, plus its `::title` / `::close-button` / `::float-button` subcontrols) onto the matching classes. Rewritten rules also get their declarations Qt→CSS translated (0–255 `rgba()` alpha, unitless lengths, `QLinearGradient`); unmapped Qt types and plain `.mudix-*` CSS pass through untouched |
 | `setBackgroundColor([window,] r,g,b,a)` | ✅ | JS-exposed |
 | `setBackgroundImage(name, path)` | ✅ | Pure Lua via GUIUtils.lua → `setLabelStyleSheet` |
 | `setBgColor([window,] r, g, b)` | ✅ | JS-exposed |
@@ -800,7 +800,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setMovie(name, path)` / `setMovieFrame(name, n)` / `setMovieSpeed(name, factor)` / `startMovie(name)` | ✅ | QMovie replaced by an in-browser GIF decoder (`gifMovie.ts`) rendering to a `<canvas>` in the label — full pause/frame/speed/scale control; path resolves through the profile VFS. Animated WebP / APNG also decode via WebCodecs `ImageDecoder` where available (Chromium/Safari; frames land async into a pending player). Geyser `Label:setMovie` etc. work via the bundled wrappers. mp4 is NOT a QMovie format — video goes through `playVideoFile` (already ✅) |
 | `setOverline([window,] bool)` | ✅ | FormatState `overline` channel (ANSI SGR 53/55) → CSS `text-decoration: overline`; selection-aware like the other style setters. `setTextFormat`/`getTextFormat` carry it too |
 | `setPopup([window,] cmds, hints)` | ✅ | Right-click popup on the current selection (preserves formatting, like `setLink`) |
-| `setProfileStyleSheet(css)` | ✅ | Installs/replaces a profile-wide `<style>` block in `document.head` (keyed apart from `setAppStyleSheet`); raises `sysAppStyleSheetChange` with tag `"profile"` |
+| `setProfileStyleSheet(css)` | ✅ | Installs/replaces a profile-wide `<style>` block in `document.head` (keyed apart from `setAppStyleSheet`, and removed with the profile); raises `sysAppStyleSheetChange` with tag `"profile"`. Same Qt-selector bridge as `setAppStyleSheet` |
 | `setReverse([window,] bool)` | ✅ | Sets `FormatState.inverse` on pen + selection (renderer swaps fg/bg) |
 | `setStrikeOut([window,] bool)` | ✅ | JS-exposed |
 | `setTextFormat([window,] ...)` | ✅ | `r1,g1,b1,r2,g2,b2,bold,underline,italics[,strikeout,overline,reverse,blink]` |

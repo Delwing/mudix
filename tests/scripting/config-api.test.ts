@@ -144,17 +144,23 @@ describe('setConfig / getConfig', () => {
         h.run('setConfig("showSentText", "script")');
     });
 
-    it('routes mapperPanelVisible to the live map window', () => {
-        // No map window yet → false.
-        expect(h.run('return getConfig("mapperPanelVisible")')).toBe(false);
-        // Opening shows it.
-        expect(h.run('return setConfig("mapperPanelVisible", true)')).toBe(true);
-        expect(h.session.windows.isVisible('map')).toBe(true);
+    // Mudlet's mShowPanel: this hides dlgMapper's control bar (widget_panel),
+    // NOT the map widget — that's openMapWidget/closeMapWidget. It must persist
+    // per profile, as Mudlet keeps it in the profile XML.
+    it('routes mapperPanelVisible to the persisted control-bar flag', () => {
+        // Unset → Mudlet's default (shown).
         expect(h.run('return getConfig("mapperPanelVisible")')).toBe(true);
-        // Hiding it.
-        h.run('setConfig("mapperPanelVisible", false)');
-        expect(h.session.windows.isVisible('map')).toBe(false);
+
+        expect(h.run('return setConfig("mapperPanelVisible", false)')).toBe(true);
         expect(h.run('return getConfig("mapperPanelVisible")')).toBe(false);
+        expect(useAppStore.getState().connectionProfile[CONN]?.mapperPanelVisible).toBe(false);
+        // The map window is a separate concern and must not have been touched.
+        expect(h.session.windows.isVisible('map')).toBe(false);
+
+        expect(h.run('return setConfig("mapperPanelVisible", true)')).toBe(true);
+        expect(h.run('return getConfig("mapperPanelVisible")')).toBe(true);
+        expect(useAppStore.getState().connectionProfile[CONN]?.mapperPanelVisible).toBe(true);
+        expect(h.session.windows.isVisible('map')).toBe(false);
     });
 
     it('routes muteMediaAPI / muteMediaGame to the SoundManager per origin', () => {
