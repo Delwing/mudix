@@ -6,9 +6,11 @@ import {
     stockDefaults,
     resolveDefaultPackages,
     connectionHost,
+    ensureDefaultPackages,
     IRE_MAPPER_GAMES,
 } from '../../src/import/defaultPackages';
 import { installPackageFromBytes } from '../../src/import/packageInstaller';
+import { useAppStore } from '../../src/storage/appStore';
 import type { ProfileVFS } from '../../src/scripting/vfs/ProfileVFS';
 
 /**
@@ -166,6 +168,27 @@ describe('default packages', () => {
             });
         });
     }
+
+    describe('ensureDefaultPackages skips Mudlet-originated profiles', () => {
+        // A profile imported or linked from Mudlet carries its own package set,
+        // which is authoritative — we must never backfill the stock defaults it
+        // deliberately lacks. The skip returns before any fetch/VFS write, so a
+        // VFS that throws on every method proves nothing was installed.
+        const explodingVfs = new Proxy({}, {
+            get() { throw new Error('ensureDefaultPackages must not touch the VFS for imported/linked profiles'); },
+        }) as unknown as ProfileVFS;
+
+        for (const flag of ['mudletImported', 'mudletLinked'] as const) {
+            it(`installs nothing for a ${flag} profile with no packages`, async () => {
+                const id = useAppStore.getState().addConnection({
+                    name: flag, mode: 'mud', host: 'elephant.org', port: 23, [flag]: true,
+                });
+                const installed = await ensureDefaultPackages(id, explodingVfs);
+                expect(installed).toEqual([]);
+                expect(useAppStore.getState().connectionPackages[id] ?? []).toEqual([]);
+            });
+        }
+    });
 
     it('generic_mapper ships the mapping entry points', () => {
         const def = ALL_DEFAULTS.find(d => d.name === 'generic_mapper')!;
