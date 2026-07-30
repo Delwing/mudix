@@ -108,6 +108,9 @@ export function connectionHost(conn: { mode?: string; host?: string; url?: strin
  * Which packages those are: `brand.packages` when a brand declares one (an
  * exact list — `[]` installs nothing), otherwise `stockDefaults(host)`.
  *
+ * Profiles imported or linked from Mudlet are exempt entirely — their own
+ * package set is authoritative, so nothing is added (returns `[]`).
+ *
  * A default the user explicitly uninstalled stays uninstalled: the store's
  * `uninstallPackage` tombstones the name in the profile's
  * `uninstalledPackages` (Mudlet's `deletedDefaultMuds` equivalent), and this
@@ -127,10 +130,18 @@ export function connectionHost(conn: { mode?: string; host?: string; url?: strin
  */
 export async function ensureDefaultPackages(connectionId: string, vfs: ProfileVFS): Promise<string[]> {
     const state = useAppStore.getState();
+    const conn = state.connections.find(c => c.id === connectionId);
+    // A profile imported or linked from Mudlet brings its own package set, which
+    // is authoritative: Mudlet only preinstalls the stock defaults into brand-new
+    // profiles (setupPreInstallPackages), so their absence here is a deliberate
+    // state to preserve, not a gap to backfill. Adding a mapper or run-lua-code
+    // the source profile never had would diverge from Mudlet and, for a second
+    // mapper, fight the profile's own over centerview(). Install nothing.
+    if (conn?.mudletImported || conn?.mudletLinked) return [];
     const installedPackages = state.connectionPackages[connectionId] ?? [];
     const removedByUser = new Set(state.connectionProfile[connectionId]?.uninstalledPackages ?? []);
     // BrandPackage is shape-compatible with DefaultPackage, plus `removable`.
-    const host = connectionHost(state.connections.find(c => c.id === connectionId));
+    const host = connectionHost(conn);
     const defaults = resolveDefaultPackages(getBrand().packages, host);
     const installed: string[] = [];
     for (const def of defaults) {
