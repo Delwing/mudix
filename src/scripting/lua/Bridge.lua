@@ -1663,6 +1663,29 @@ end
 -- saving a script doesn't accumulate duplicate handlers. JS calls the same
 -- helper on disable/remove via LuaRuntime.killScriptHandlers.
 __mudix_script_handlers = __mudix_script_handlers or {}
+
+-- Resolve a script's event-handler function from its name.
+--
+-- Mudlet evaluates the script name as a Lua expression to find the function
+-- (TLuaInterpreter::callEventHandler runs `return <name>`), so a script named
+-- `mmp.centerRoominfo` resolves through the `mmp` table. A flat `_G[name]`
+-- lookup misses those and the handler silently never fires — which is exactly
+-- how mudlet-mapper's `gmcp.Room` follow handler went dead, leaving the map
+-- not tracking movement.
+--
+-- Walk the dotted path instead of loadstring()ing the name: same result for the
+-- names packages actually use, without letting a script name execute code.
+-- Returns nil unless the whole path resolves to a function.
+function __mudix_resolve_handler(name)
+    local target = _G
+    for part in string.gmatch(name, '[^.]+') do
+        if type(target) ~= 'table' then return nil end
+        target = target[part]
+    end
+    if type(target) == 'function' then return target end
+    return nil
+end
+
 function __mudix_kill_script_handlers(sid)
     local ids = __mudix_script_handlers[sid]
     if not ids then return end

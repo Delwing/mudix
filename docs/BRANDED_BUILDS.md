@@ -77,10 +77,11 @@ that file as the source of truth.
 - **`profileMode`** — `'single'` (default: one shared profile regardless of
   the account entered) or `'perLogin'` (find-or-create a profile per account
   name, so each login keeps its own scripts/layout/files).
-- **`packages`** — `BrandPackage[]` preinstalled into every profile on first
-  open (see [Bundling Lua packages](#bundling-lua-packages) below).
-- **`stockPackages`** — set `false` to skip Mudlet Web's own stock defaults
-  (`run-lua-code`) when your brand fully controls the package set.
+- **`packages`** — the exact `BrandPackage[]` preinstalled into every profile on
+  first open, **replacing** Mudlet Web's stock defaults rather than adding to
+  them. Leave it unset to get the stock defaults (`run-lua-code` plus one
+  mapper); set `[]` to preinstall nothing; list packages to get exactly those.
+  See [Bundling Lua packages](#bundling-lua-packages) below.
 - **`themes`** / **`availableThemes`** / **`defaultTheme`** — brand color
   themes and picker configuration (see [Theming](#theming) below).
 - **`toolbar`** — hide stock buttons, add brand buttons, restyle via

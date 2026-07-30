@@ -2929,10 +2929,15 @@ export class ScriptingEngine implements EngineHost {
 
     // Mudlet TScript semantics: the body runs at load time (defining e.g.
     // `function MyScript(event, ...) ... end` as a global), and each event
-    // handler fires by looking up the global named after the script and
-    // calling it. We dispatch via _G[name] (not a direct function reference)
-    // so re-saving the script picks up the new function, and so missing/
-    // mistyped function names silently no-op like Mudlet.
+    // handler fires by looking up the function named after the script and
+    // calling it. We resolve by name on every dispatch (not by capturing a
+    // function reference) so re-saving the script picks up the new function,
+    // and so missing/mistyped names silently no-op like Mudlet.
+    //
+    // The lookup goes through __mudix_resolve_handler, which walks dotted names
+    // the way Mudlet's `return <name>` evaluation does — packages commonly name
+    // a script after the table field it defines (`mmp.centerRoominfo`), and a
+    // flat _G[name] lookup would never find those.
     //
     // The wrapper also kills any previously-registered handlers for this
     // script (Bridge.lua's __mudix_script_handlers tracks IDs by script id)
@@ -2945,8 +2950,8 @@ export class ScriptingEngine implements EngineHost {
             .map(e =>
                 `__mudix_script_handlers[${sidLiteral}][#__mudix_script_handlers[${sidLiteral}]+1] = ` +
                 `registerAnonymousEventHandler(${JSON.stringify(e)}, function(...) ` +
-                `local __fn = _G[${nameLiteral}]; ` +
-                `if type(__fn) == 'function' then return __fn(...) end ` +
+                `local __fn = __mudix_resolve_handler(${nameLiteral}); ` +
+                `if __fn then return __fn(...) end ` +
                 `end)`)
             .join('\n');
         return [

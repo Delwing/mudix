@@ -163,12 +163,21 @@ export interface BrandConfig {
      *    name) — each login keeps its own scripts, layout and files. There is
      *    still no picker: selection happens by logging in. */
     profileMode?: 'single' | 'perLogin';
-    /** Packages preinstalled into every profile on first open. */
+    /**
+     * The exact set of packages preinstalled into every profile on first open,
+     * replacing the stock defaults rather than adding to them:
+     *
+     * - unset — no opinion; the stock defaults install (`run-lua-code` plus one
+     *   mapper, chosen per game — see `stockDefaults`).
+     * - `[]` — nothing is preinstalled.
+     * - a list — exactly these, and none of the stock ones.
+     *
+     * So a brand shipping its own mapper just lists it here and ours never
+     * appears; nothing arbitrates between them at install time, which is why the
+     * list is exact rather than additive (two mappers would both drive
+     * `centerview` off the same movement).
+     */
     packages?: BrandPackage[];
-    /** Whether the stock default packages (run-lua-code) install too
-     *  (default true). Set false for a brand that fully controls the package
-     *  set via `packages`. */
-    stockPackages?: boolean;
     /** Brand-defined themes, offered in the picker alongside (or instead of)
      *  the stock ones. A theme reusing a stock id overrides it. */
     themes?: BrandTheme[];

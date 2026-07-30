@@ -19,10 +19,12 @@ import { buildDefine } from './buildInfo';
  *  mudix, so consumers can't resolve them); externalize every other bare
  *  import. Virtual modules (\0-prefixed) are plugin-internal — keep those. */
 function isExternal(id: string): boolean {
-    // Binary package assets stay external so the consumer's Vite emits them
-    // as real files (library mode would inline them as base64 data URIs).
+    // Default-package assets stay external so the consumer's Vite emits them
+    // as real files (library mode would inline them as base64 data URIs — the
+    // vendored mudlet-mapper.xml alone is ~490 kB, ~650 kB once base64'd).
     // The files ship in dist-lib at the same relative path (see build:lib).
-    if (id.includes('.mpackage')) return true;
+    const path = id.replace(/\\/g, '/');
+    if (path.includes('.mpackage') || path.includes('/import/defaults/')) return true;
     if (id.startsWith('.') || id.startsWith('/') || id.startsWith('\0')) return false;
     if (/^[A-Za-z]:[\\/]/.test(id)) return false; // absolute Windows path
     if (id.startsWith('vite-plugin-node-polyfills')) return false;
