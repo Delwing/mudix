@@ -4182,3 +4182,45 @@ do
         return v
     end
 end
+
+-- ── Secondary map views ────────────────────────────────────────────────────
+-- Mudlet createMapView([areaID]) / closeMapView(viewID) / closeAllMapViews() /
+-- getMapViewIds() / getMapViewInfo(viewID). Extra map windows so several areas
+-- can be watched while the primary mapper follows the player.
+do
+    function createMapView(areaId)
+        local r = __createMapView(areaId)
+        if type(r) == 'string' then return nil, "createMapView: " .. r end
+        return r
+    end
+
+    local _rawCloseMapView = closeMapView
+    function closeMapView(viewId)
+        if _rawCloseMapView(viewId) then return true end
+        return nil, "closeMapView: view " .. tostring(viewId) .. " not found"
+    end
+
+    -- JS hands the id list over 0-indexed (wasmoon convention).
+    function getMapViewIds()
+        local raw = __getMapViewIds()
+        local out, i = {}, 0
+        if type(raw) == 'table' then
+            while raw[i] ~= nil do out[i + 1] = raw[i]; i = i + 1 end
+        end
+        return out
+    end
+
+    function getMapViewInfo(viewId)
+        local info = __getMapViewInfo(viewId)
+        if info == nil then
+            return nil, "getMapViewInfo: view " .. tostring(viewId) .. " not found"
+        end
+        -- Rebuilt off the wasmoon proxy so callers hold a plain Lua table.
+        return {
+            areaId = info.areaId,
+            centeredRoomId = info.centeredRoomId,
+            zoom = info.zoom,
+            zLevel = info.zLevel,
+        }
+    end
+end

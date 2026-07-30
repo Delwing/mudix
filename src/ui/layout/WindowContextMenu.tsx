@@ -18,7 +18,14 @@ export function WindowContextMenu({ windows, manager, x, y, onClose }: WindowCon
             {sorted.length === 0
                 ? <div className="ctx-menu__empty">No windows</div>
                 : sorted.map(w => (
-                    <div key={w.id} className="ctx-menu__item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    // The whole row is the checkbox's label, so clicking the
+                    // title toggles the window too — the title is the part
+                    // that's actually easy to hit.
+                    <label
+                        key={w.id}
+                        className="ctx-menu__item"
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                    >
                         <input
                             type="checkbox"
                             checked={w.visible}
@@ -26,16 +33,7 @@ export function WindowContextMenu({ windows, manager, x, y, onClose }: WindowCon
                             style={{ cursor: 'pointer', flexShrink: 0, accentColor: 'var(--accent)' }}
                         />
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.title}</span>
-                        <button
-                            type="button"
-                            className="ctx-menu__action"
-                            title={w.poppedOut ? 'Pop back into main window' : 'Pop out to a separate window'}
-                            onClick={() => { w.poppedOut ? manager.popIn(w.id) : manager.popOut(w.id); onClose(); }}
-                            style={{ flexShrink: 0, cursor: 'pointer' }}
-                        >
-                            {w.poppedOut ? 'Pop in' : 'Pop out'}
-                        </button>
-                    </div>
+                    </label>
                 ))
             }
         </ContextMenu>

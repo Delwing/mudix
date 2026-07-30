@@ -40,6 +40,17 @@ export function installMapBindings({
     lua.global.set('__setMapZoom', (zoom: unknown, areaID?: unknown) =>
         api.setMapZoom(Number(zoom), areaID == null || areaID === '' ? undefined : Number(areaID)));
     lua.global.set('updateMap',        ()                         => { api.updateMap(); });
+    // ── Secondary map views ───────────────────────────────────────────────
+    // createMapView hands back the new id, or the refusal message as a string;
+    // getMapViewInfo hands back the info table or null. Bridge.lua shapes both
+    // into Mudlet's (nil, errMsg) pairs and 1-indexes the id list.
+    lua.global.set('__createMapView', (areaId?: unknown) =>
+        api.createMapView(areaId == null || areaId === '' ? 0 : Number(areaId)));
+    lua.global.set('closeMapView', (viewId: unknown) => api.closeMapView(Number(viewId)));
+    lua.global.set('closeAllMapViews', () => api.closeAllMapViews());
+    lua.global.set('__getMapViewIds', () => api.getMapViewIds());
+    lua.global.set('__getMapViewInfo', (viewId: unknown) =>
+        api.getMapViewInfo(Number(viewId)) ?? null);
     // Mudlet getPlayerRoom: nil when no map / no valid room. We return
     // false because wasmoon nil round-trips through false more reliably.
     lua.global.set('getPlayerRoom',   ()                         => api.map.getPlayerRoom() ?? false);

@@ -372,8 +372,16 @@ export class Console {
         this.cursorCol = 0;
     }
 
+    /**
+     * Mudlet `getLines(from, to)` — the lines starting at the 0-based index
+     * `from`, `abs(to - from)` of them (TConsole::getLines). Note that `to` is
+     * exclusive and that neither bound is clamped by Mudlet; out-of-range
+     * indices simply yield fewer lines here.
+     */
     getLines(from: number, to: number): string[] {
-        return this.history.slice(from - 1, to).map(b => b.text);
+        const start = Math.max(0, Math.trunc(from));
+        const count = Math.abs(Math.trunc(to) - Math.trunc(from));
+        return this.history.slice(start, start + count).map(b => b.text);
     }
 
     /**
@@ -401,12 +409,60 @@ export class Console {
      * + `echo()` sequence left un-displayed newlines in the buffer. Returns
      * false when `lineNumber` is out of range.
      */
-    wrapLine(lineNumber: number): boolean {
+    /**
+     * Mudlet `wrapLine(lineNumber)` — re-wrap one stored line to the console's
+     * current wrap width, replacing it with as many buffer lines as it now
+     * needs. That is a real buffer edit in Mudlet (TBuffer::wrapLine splits the
+     * line in place), not a repaint: getLineCount and getLines see the split
+     * afterwards.
+     *
+     * `wrapAt` of 0 (wrapping disabled) leaves the line alone and just
+     * repaints. `indent` prefixes the first resulting line and `hangingIndent`
+     * every continuation, matching setWindowWrapIndent /
+     * setWindowWrapHangingIndent.
+     */
+    wrapLine(lineNumber: number, wrapAt = 0, indent = 0, hangingIndent = 0): boolean {
         if (!Number.isFinite(lineNumber)) return false;
         const idx = Math.trunc(lineNumber);
         const buf = this.history[idx];
         if (!buf) return false;
-        buf.rerender();
+        const width = Math.trunc(wrapAt);
+        if (!(width > 0)) { buf.rerender(); return true; }
+
+        // Break positions on the ORIGINAL text; the indents shrink the usable
+        // width but aren't inserted until afterwards, so they're accounted for
+        // here rather than by re-measuring after each edit.
+        const text = buf.text;
+        const breaks: number[] = [];
+        let lineStart = 0;
+        let usable = Math.max(1, width - Math.max(0, indent));
+        while (text.length - lineStart > usable) {
+            const limit = lineStart + usable;
+            // Prefer a word boundary, but never break before the line even
+            // starts — a single word longer than the width is split hard.
+            const space = text.lastIndexOf(' ', limit);
+            const at = space > lineStart ? space : limit;
+            breaks.push(at);
+            lineStart = text[at] === ' ' ? at + 1 : at;
+            usable = Math.max(1, width - Math.max(0, hangingIndent));
+        }
+        if (breaks.length === 0 && indent <= 0) { buf.rerender(); return true; }
+
+        // Applied back-to-front so each insertion leaves the earlier offsets
+        // valid. A break on a space keeps the space at the end of its line
+        // (Mudlet trims at the break; rejoining normalises it away either way).
+        const hang = hangingIndent > 0 ? ' '.repeat(hangingIndent) : '';
+        for (let i = breaks.length - 1; i >= 0; i--) {
+            const at = breaks[i];
+            buf.insert(text[at] === ' ' ? at + 1 : at, `\n${hang}`);
+        }
+        if (indent > 0) buf.insert(0, ' '.repeat(indent));
+
+        const lines = buf.splitLines();
+        buf.removeFromDom();
+        this.history.splice(idx, 1, ...lines);
+        // The cursor tracked a line index that may have moved down.
+        if (this.cursorIdx > idx) this.cursorIdx += lines.length - 1;
         return true;
     }
 }

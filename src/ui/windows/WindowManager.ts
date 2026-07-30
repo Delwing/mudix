@@ -929,6 +929,100 @@ export class WindowManager {
         return redrawn;
     }
 
+    // ── Secondary map views (Mudlet createMapView / closeMapView / …) ─────────
+    // Mudlet's TMapViewManager hands each view its own floating dock holding a
+    // second TMapView, so several areas can be watched at once while the primary
+    // mapper follows the player. Here each view is a floating window of kind
+    // 'map' plus the per-view state below; MapPanel reads its own view's area
+    // through {@link mapViewAreaFor} so the windows don't all show the same one.
+
+    private readonly mapViews = new Map<number, {
+        areaId: number; zoom: number; zLevel: number; centeredRoomId: number;
+    }>();
+    /** View ids start at 1 — Mudlet treats 0 as "no view". */
+    private nextMapViewId = 1;
+
+    /** The window id backing a map view. */
+    private static mapViewWindowId(viewId: number): string { return `mapView${viewId}`; }
+
+    /**
+     * Mudlet `createMapView([areaID])` — open a secondary map window. Returns
+     * the new view id, or a message when the areaID doesn't name an area (0 or
+     * omitted means "wherever the player is").
+     */
+    createMapView(areaId: number): number | string {
+        if (areaId > 0 && !this.mapStore.hasArea(areaId)) {
+            return `area ${areaId} does not exist`;
+        }
+        let area = areaId;
+        if (area <= 0) {
+            const room = this.mapStore.getPlayerRoom() ?? this.mapStore.getFallbackRoomId();
+            area = (room != null ? this.mapStore.getRoomArea(room) : undefined) ?? -1;
+        }
+        const viewId = this.nextMapViewId++;
+        this.mapViews.set(viewId, {
+            areaId: area,
+            zoom: this.mapStore.getAreaZoom(area) ?? MapStore.DEFAULT_MAP_ZOOM,
+            zLevel: 0,
+            centeredRoomId: this.mapStore.getAreaCenterRoomId(area, 0) ?? 0,
+        });
+        // Opens floating but stays dockable, matching Mudlet: the view is a real
+        // dock widget added to the right dock area and then immediately floated,
+        // so the user can drag it into a dock afterwards. `autoDock: false`
+        // alone would imply lockFloating, which is right for miniconsoles but
+        // would pin these permanently — hence the explicit false.
+        this.open(WindowManager.mapViewWindowId(viewId), {
+            kind: 'map',
+            title: `Map View ${viewId}`,
+            autoDock: false,
+            lockFloating: false,
+            ignoreHint: true,
+        });
+        return viewId;
+    }
+
+    /** Mudlet `closeMapView(viewID)`. False when no view has that id. */
+    closeMapView(viewId: number): boolean {
+        if (!this.mapViews.delete(viewId)) return false;
+        this.close(WindowManager.mapViewWindowId(viewId));
+        return true;
+    }
+
+    /** Mudlet `closeAllMapViews()` → how many were closed. */
+    closeAllMapViews(): number {
+        const ids = [...this.mapViews.keys()];
+        for (const id of ids) this.closeMapView(id);
+        return ids.length;
+    }
+
+    /** Mudlet `getMapViewIds()` — every open view, in creation order. */
+    getMapViewIds(): number[] { return [...this.mapViews.keys()]; }
+
+    /** Mudlet `getMapViewInfo(viewID)`. Undefined when no view has that id. */
+    getMapViewInfo(viewId: number): { areaId: number; zoom: number; zLevel: number; centeredRoomId: number } | undefined {
+        const v = this.mapViews.get(viewId);
+        return v ? { ...v } : undefined;
+    }
+
+    /** The area a map window should show, when it is a secondary view rather
+     *  than the primary mapper. Undefined for the primary one, which follows the
+     *  player as before. */
+    mapViewAreaFor(windowId: string): number | undefined {
+        const m = /^mapView(\d+)$/.exec(windowId);
+        if (!m) return undefined;
+        return this.mapViews.get(Number(m[1]))?.areaId;
+    }
+
+    /** Record what a mounted secondary view is actually showing, so
+     *  getMapViewInfo reports the live state rather than the creation-time one. */
+    noteMapViewState(windowId: string, state: { areaId?: number; zoom?: number; zLevel?: number; centeredRoomId?: number }): void {
+        const m = /^mapView(\d+)$/.exec(windowId);
+        if (!m) return;
+        const v = this.mapViews.get(Number(m[1]));
+        if (!v) return;
+        Object.assign(v, state);
+    }
+
     /** Mudlet `exportAreaImage(areaID, filePath[, zLevel])` — render an area to
      *  PNG bytes. Prefers a mounted map widget so the export picks up that
      *  panel's live Mapper settings, but falls back to a standalone render off
@@ -1389,6 +1483,16 @@ export class WindowManager {
     getWrap(id: string): number | null {
         const win = this.windows.get(id);
         return win?.wrapAt ?? null;
+    }
+
+    /** Companions to {@link getWrap} for the two indents — read by wrapLine,
+     *  which has to re-wrap to the same shape the renderer would. */
+    getWrapIndent(id: string): number {
+        return this.windows.get(id)?.wrapIndent ?? 0;
+    }
+
+    getWrapHangingIndent(id: string): number {
+        return this.windows.get(id)?.wrapHangingIndent ?? 0;
     }
 
     /** Mudlet setWindowWrapIndent — indent (in characters) of newline-started
@@ -2058,6 +2162,11 @@ export class WindowManager {
         this.miniConsoles.delete(id);
         this.cmdLineState.delete(id);
         this.cmdLineValueProbes.delete(id);
+        // A secondary map view closed from its own titlebar (rather than
+        // through closeMapView) must leave the registry too, or getMapViewIds
+        // would keep reporting a window that is gone.
+        const viewMatch = /^mapView(\d+)$/.exec(id);
+        if (viewMatch) this.mapViews.delete(Number(viewMatch[1]));
         this.onWindowClosed?.(id);
         this.notify();
     }
@@ -2241,6 +2350,12 @@ export class WindowManager {
     }
 
     private saveHint(id: string, win: ScriptWindowData): void {
+        // Secondary map views are deliberately NOT persisted, matching Mudlet:
+        // closing a profile loses them, and creating one again opens a fresh
+        // floating window rather than restoring wherever the last one was
+        // docked. Skipping the hint covers the layout snapshot too, which is
+        // built from the same cache.
+        if (/^mapView\d+$/.test(id)) return;
         const hint: WindowOpenOptions = {
             x: win.x, y: win.y, width: win.width, height: win.height,
             kind:      win.kind,

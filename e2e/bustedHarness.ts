@@ -56,14 +56,18 @@ export async function seedProfile(page: Page): Promise<void> {
         // replicate that fixture here. The patterns are anchored and specific, so
         // they never fire on any other spec's fed text. connectionTriggers isn't
         // normally in localStorage (it lives in the profile VFS), but a fresh
-        // profile has no VFS data, so the seeded slice hydrates and survives.
+        // profile has no VFS data, so the seeded slice hydrates and survives —
+        // PROVIDED the seed carries the CURRENT store version. A lower one sends
+        // it through appStore's migrate, which drops every automation slice on
+        // purpose (they moved into the VFS at v20), and the fixture silently
+        // never arrives. Keep this in step with MUDIX_STORE_VERSION.
         const t = (id: string, name: string, parentId: string | null, pattern: string, code: string, isFilter: boolean) => ({
             id, name, enabled: true, isGroup: false, parentId,
             patterns: [{ text: pattern, type: 'regex' }], code, language: 'lua',
             fireLength: 0, multipleMatches: false, multiline: false, delta: 0, isFilter,
         });
         localStorage.setItem('mudix_v1', JSON.stringify({
-            version: 20,
+            version: 21,
             state: {
                 // Mirror Mudlet's own test setup: the suite is designed to run
                 // under a profile NAMED "Mudlet self-test" (DebugTools.lua keeps

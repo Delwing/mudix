@@ -361,7 +361,12 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // `fresh` (a full map (re)load) ignores the stale displayed area so the
         // player position drives the area choice — Mudlet re-centers on the
         // current room after loadMap, it doesn't keep the pre-load view.
-        const keepArea = opts?.keepArea
+        // A secondary map view (createMapView) is pinned to the area it was
+        // opened for — following the player is the primary mapper's job, and
+        // the whole point of a second view is watching somewhere else.
+        const viewArea = manager.mapViewAreaFor(id);
+        const keepArea = viewArea
+            ?? opts?.keepArea
             ?? (opts?.fresh ? undefined : currentAreaRef.current)
             ?? (markerAreaValid ? markerArea : undefined)
             ?? (needsFitRef.current ? undefined : lastAreaId);
@@ -391,6 +396,10 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
         // clobbering the view we just restored.
         currentAreaRef.current = restoredArea;
         currentLevelRef.current = restoredLevel;
+        // Keep a secondary view's registry entry in step with what it actually
+        // shows, so getMapViewInfo reports the live state and not just the
+        // values createMapView seeded it with.
+        manager.noteMapViewState(id, { areaId: restoredArea, zLevel: restoredLevel });
         // drawArea → state.setArea unconditionally re-emits 'area', forcing a
         // full scene rebuild (createExits is ~280ms on the Arkadia map) even
         // when the displayed area is identical. At boot syncFromStore fires

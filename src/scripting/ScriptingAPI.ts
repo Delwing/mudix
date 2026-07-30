@@ -2822,7 +2822,23 @@ export class ScriptingAPI {
      * the window or line doesn't exist.
      */
     wrapLine(lineNumber: number, windowName?: string): boolean {
-        return this.getConsole(windowName)?.wrapLine(lineNumber) ?? false;
+        const con = this.getConsole(windowName);
+        if (!con) return false;
+        const isMain = !windowName || windowName === 'main';
+        const state = useAppStore.getState();
+        const wrapAt = isMain
+            ? (selectProfileField(state, this.connectionId, 'outputWrapAt') ?? 0)
+            : (this.session.windows.getWrap(windowName!) ?? 0);
+        const indent = isMain
+            ? (selectProfileField(state, this.connectionId, 'outputWrapIndent') ?? 0)
+            : this.session.windows.getWrapIndent(windowName!);
+        const hanging = isMain
+            ? (selectProfileField(state, this.connectionId, 'outputWrapHangingIndent') ?? 0)
+            : this.session.windows.getWrapHangingIndent(windowName!);
+        if (!con.wrapLine(lineNumber, wrapAt, indent, hanging)) return false;
+        if (isMain) this.drainMain();
+        else this.drainWindowConsole(windowName!, con);
+        return true;
     }
 
     /**
@@ -3770,6 +3786,38 @@ export class ScriptingAPI {
 
     centerView(roomId: number): boolean {
         return this.session.windows.centerView(roomId);
+    }
+
+    // ── Secondary map views ───────────────────────────────────────────────────
+    // Mudlet's createMapView family opens extra map windows so several areas can
+    // be watched while the primary mapper follows the player. The registry lives
+    // in WindowManager (it owns the windows); these are the Lua-facing shapes.
+
+    /** Mudlet `createMapView([areaID])` → the new view id, or the refusal
+     *  message when the areaID names no area. */
+    createMapView(areaId: number): number | string {
+        return this.session.windows.createMapView(areaId);
+    }
+
+    /** Mudlet `closeMapView(viewID)`. False when no view has that id. */
+    closeMapView(viewId: number): boolean {
+        return this.session.windows.closeMapView(viewId);
+    }
+
+    /** Mudlet `closeAllMapViews()` → how many were closed. */
+    closeAllMapViews(): number {
+        return this.session.windows.closeAllMapViews();
+    }
+
+    /** Mudlet `getMapViewIds()` — every open view, in creation order. */
+    getMapViewIds(): number[] {
+        return this.session.windows.getMapViewIds();
+    }
+
+    /** Mudlet `getMapViewInfo(viewID)` → `{areaId, centeredRoomId, zoom, zLevel}`,
+     *  or undefined when no view has that id. */
+    getMapViewInfo(viewId: number): { areaId: number; zoom: number; zLevel: number; centeredRoomId: number } | undefined {
+        return this.session.windows.getMapViewInfo(viewId);
     }
 
     /**
@@ -4749,7 +4797,14 @@ export class ScriptingAPI {
         // `?? 'main'` only catches null/undefined, so map the empty string too —
         // otherwise getLineNumber(""), getColumnNumber(""), etc. miss the main
         // buffer and return their not-found sentinels.
-        return this.session.consoles.get(name ? name : 'main') ?? null;
+        const key = name ? name : 'main';
+        const con = this.session.consoles.get(key);
+        if (con) return con;
+        // A window's Console is created lazily by the first write, so a
+        // just-created miniconsole had none — and every reader (getLineCount,
+        // getLines, moveCursor, …) reported "no such window" for a window that
+        // plainly exists. Materialise the empty one instead.
+        return this.consoleExists(name) ? this.outputConsole(name) : null;
     }
 
     /**
