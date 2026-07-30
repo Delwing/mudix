@@ -59,6 +59,10 @@ export function bundleToConnectionRecord(bundle: MudletProfileBundle): Omit<MudC
         mode: 'mud',
         host: bundle.host ?? '',
         port: bundle.port ?? 23,
+        // The imported profile's package set is authoritative — see
+        // ensureDefaultPackages: no stock defaults are added to a Mudlet-imported
+        // profile that doesn't already carry them.
+        mudletImported: true,
     };
     const raw = bundle.files[CONNECTION_SIDECAR_PATH];
     if (!raw) return base;

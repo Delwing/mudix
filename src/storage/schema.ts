@@ -43,6 +43,13 @@ export interface MudConnection {
      *  open and written back on save. Drives the linked badge on the connection
      *  screen. The folder handle itself lives in folderHandleStore (IndexedDB). */
     mudletLinked?: boolean;
+    /** Set when this profile was created by importing (copying) a Mudlet profile
+     *  folder/archive. Like {@link mudletLinked}, it marks the profile's own
+     *  package set as authoritative: `ensureDefaultPackages` never adds the stock
+     *  defaults (mapper, run-lua-code) to a Mudlet-originated profile that doesn't
+     *  already ship them — Mudlet installs those only into brand-new profiles, so
+     *  their absence in an imported profile is a real choice, not a gap to fill. */
+    mudletImported?: boolean;
     /** Free-text profile description (Mudlet's profile "description" field, read/
      *  written by getProfileInformation / setProfileInformation /
      *  clearProfileInformation). Lives on the connection record — not the VFS-
