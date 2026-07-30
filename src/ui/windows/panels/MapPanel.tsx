@@ -128,14 +128,6 @@ function applyInitialView(renderer: MapRenderer, mapStore: MapStore, areaId: num
  *  zoom in any closer. Mirrored here so wheel/pinch zoom obeys the same limit. */
 const MUDLET_MIN_MAP_ZOOM = 3;
 
-/** Window id of the dockable map widget — the one `openMapWidget()` and the
- *  toolbar button address. Embedded mappers (`createMapper`, id `mapper`) and
- *  any other map panel render the same MapStore but are script-placed chrome
- *  inside a layout, so they only get the canvas: no area/z-level pickers and no
- *  hamburger. Mudlet does the same — the area selector and map menu belong to
- *  the mapper dock widget, not to an embedded T2DMap. */
-const MAP_WIDGET_ID = 'map';
-
 interface MapPanelProps {
     id: string;
     manager: WindowManager;
@@ -143,7 +135,6 @@ interface MapPanelProps {
 }
 
 export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
-    const showControls = id === MAP_WIDGET_ID;
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<MapRenderer | null>(null);
     const readerRef = useRef<MudixMapReader | null>(null);
@@ -1340,10 +1331,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             {lodNotice && (
                 <div className="map-lod-badge" title={lodNotice.detail}>{lodNotice.label}</div>
             )}
-            {showControls && (
             <input ref={fileInputRef} type="file" accept=".dat,.xml" onChange={handleFileChange} hidden />
-            )}
-            {showControls && (
             <div className="map-panel-toolbar">
                 {status === 'ready' && areas.length > 1 && (
                     <div className="map-area-dropdown" ref={dropdownRef}>
@@ -1458,7 +1446,6 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
                     )}
                 </div>
             </div>
-            )}
             {menuOpen && infoOverlaysOpen && createPortal(
                 <div
                     ref={flyoutListRef}
