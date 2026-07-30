@@ -418,7 +418,7 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                     <button className="modal-close" onClick={onClose} type="button" aria-label="Close">✕</button>
                 </div>
                 {connectionId && (
-                    <div className="settings-tabs" role="tablist" aria-label="Settings categories">
+                    <div className="settings-tabs mudix-native-scrollbar" role="tablist" aria-label="Settings categories">
                         {TABS.map(tab => (
                             <button
                                 key={tab.value}

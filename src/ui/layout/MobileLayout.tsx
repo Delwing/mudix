@@ -59,7 +59,7 @@ export function MobileLayout({ session, manager, windows, stickyLines, commandIn
             </div>
 
             {panels.length > 0 && (
-                <nav className="mobile-switcher" role="tablist" aria-label="Panels">
+                <nav className="mobile-switcher mudix-native-scrollbar" role="tablist" aria-label="Panels">
                     <button
                         type="button"
                         role="tab"

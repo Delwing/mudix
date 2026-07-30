@@ -609,6 +609,71 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 
 ## UI Functions
 
+### Qt stylesheet selectors
+
+`setAppStyleSheet` / `setProfileStyleSheet` install a QApplication-level stylesheet in
+Mudlet, so themes address Qt widget *classes* (`QToolButton { … }`) and Mudlet widgets by
+Qt *objectName* (`QWidget#widget_panel { … }`). Both forms are syntactically valid CSS, so
+the browser parses them happily and they match nothing. `rewriteQtSelectors`
+(`src/ui/labels/qtCss.ts`) bridges them onto the DOM; the same pass Qt→CSS translates the
+declarations of any rule it rewrote (0–255 `rgba()` alpha, unitless lengths,
+`QLinearGradient`, Qt-only `subcontrol-*`). Unmapped types and plain `.mudix-*` CSS pass
+through byte-identical — app stylesheets are also Mudlet Web's brand-styling hook.
+
+- **objectName forms** — `QWidget#widget_panel` and bare `#widget_panel` map onto the
+  `data-qt-object` attributes components render (`QT_OBJECT_NAMES`). Because Qt clips a
+  widget to its geometry, a rule with `max-height: 0` also gets `overflow: hidden`.
+- **Widget types** — `QT_TYPE_MAP` maps types and their subcontrols onto Mudlet Web
+  classes: main window, dock widgets (user windows), dialogs, splitters, toolbars and
+  toolbar/push buttons, menus, text inputs, combo boxes, lists, trees, headers, tabs,
+  progress bars, tooltips, labels, scrollbars — plus Mudlet's own widget classes
+  (`TConsole`, `TTextEdit`, `TCommandLine`, `TLabel`, `TEasyButtonBar`, `dlgMapper`), so the
+  wiki's descendant recipe `TConsole QScrollBar:vertical { … }` scopes correctly. Adding
+  coverage is a table entry, not new code. Deliberately absent: `QStatusBar` (Mudlet Web has
+  no status bar) and Qt's `::up-arrow` / `::down-arrow` (painted inside the buttons
+  `::add-line` / `::sub-line` already claim).
+- **`QWidget` means what it means in Qt** — a type selector matches the class *and its
+  subclasses*, and `QWidget` is the root, so it matches every widget; themes use it for a
+  base coat. The expansion is the union of every mapped type, so it widens as the table
+  does. Two exclusions, both matching Mudlet rather than departing from it: self-painted
+  widgets (Mudlet's console draws its own text, so a blanket rule never reached it there)
+  and the scrollbar pseudo-elements. Name those types directly and they style fine.
+- **States** — `:hover`, `:pressed` → `:active`, `:focus`, `:disabled`, `:!x` → `:not(:x)`,
+  and per-type spellings for what CSS has no pseudo-class for (a tab's `:selected` is a
+  modifier class, a tool button's `:checked` is `aria-pressed`). States that describe a
+  fixed property of the layout (`:top`, `:active` as in "active window") are dropped from
+  the selector, keeping the rule. A state that *would* widen a rule if ignored — a list
+  item's `:selected` with no modifier class to hang off — leaves the whole rule inert
+  instead.
+- **Rewritten rules outrank Mudlet Web's own CSS.** Landing on the right element isn't
+  enough — mudix's rules often carry more specificity than the class the table maps to
+  (`.mudix-btn:hover` beats a bare `.mudix-btn`), so a theme would set a base colour and
+  then lose every hover. Every rewritten selector is prefixed with `:root:root`, which
+  matches the same elements and adds two classes' worth of specificity. Deliberately *not*
+  `!important`: that would also override inline style, and inline style is how a widget's
+  own stylesheet is applied (`setLabelStyleSheet` on a Geyser label) — Qt resolves that the
+  same way round, per-widget sheet over application sheet.
+- **Scrollbars** are the loosest mapping: the browser has no scrollbar element, only
+  WebKit/Blink's `::-webkit-scrollbar…` pseudo-elements, so themed scrollbars are
+  Chromium-only (Firefox exposes just `scrollbar-color`/`-width`). They're emitted as a
+  rule of their own — one unknown selector invalidates an entire CSS selector list, which
+  would take the ordinary selectors down with it. Chromium also ignores the whole WebKit
+  family once the standard `scrollbar-width`/`scrollbar-color` are set, and `App.css` sets
+  both globally, so a sheet that styles scrollbars emits a scoped
+  `scrollbar-width: auto; scrollbar-color: auto` preamble first. Scrollbar selectors are
+  also the one place the `:root:root` boost is *not* applied, and a scoped rule
+  (`TConsole QScrollBar:vertical`) resolves to the widget's own scroller
+  (`QtTypeEntry.scrollers`) rather than to a descendant selector: Chromium stops matching
+  the orientation pseudo-classes as soon as a combinator appears in front of the
+  pseudo-element, so `.output-container ::-webkit-scrollbar:vertical` parses, matches
+  nothing, and paints nothing. A widget with no scroller of its own can't host a scoped
+  rule, and one is left inert rather than widened to every scrollbar in the app. Two escape
+  hatches are
+  excluded from all of it: `mudix-native-scrollbar` (surfaces that hide their scrollbar by
+  design — the tab strip, the mobile switcher, the settings tabs — and the documented opt-out
+  for anything else) and `mudix-no-scrollbar` (a console that called `disableScrollBar`; an
+  explicit call outranks a theme).
+
 | Function | Status | Notes |
 |---|---|---|
 | `addCommandLineMenuEvent(name, event)` | ✅ | Right-click command-line menu hook |
@@ -760,7 +825,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `selectCurrentLine([window])` | ✅ | JS-exposed |
 | `selectSection([window,] col, len)` | ✅ | JS-exposed |
 | `selectString([window,] text, n)` | ✅ | JS-exposed |
-| `setAppStyleSheet(css)` | ✅ | Installs/replaces a CSS block in `document.head`; raises `sysAppStyleSheetChange`. **Profile-local** (Mudlet's is QApplication-wide, but a Mudlet Web tab hosts one profile at a time, so leaving it installed restyled the next profile opened in that tab) — the tag is keyed by connection id and removed with the profile. Qt selectors are bridged to the DOM by `rewriteQtSelectors` (`ui/labels/qtCss.ts`): objectName forms (`QWidget#widget_panel`) map onto the `data-qt-object` hooks components render, and mapped widget types (`QDockWidget`, plus its `::title` / `::close-button` / `::float-button` subcontrols) onto the matching classes. Rewritten rules also get their declarations Qt→CSS translated (0–255 `rgba()` alpha, unitless lengths, `QLinearGradient`); unmapped Qt types and plain `.mudix-*` CSS pass through untouched |
+| `setAppStyleSheet(css)` | ✅ | Installs/replaces a CSS block in `document.head`; raises `sysAppStyleSheetChange`. **Profile-local, and identical in scope to `setProfileStyleSheet`** — Mudlet separates the two because one QApplication hosts several profiles, but a Mudlet Web tab hosts one, so both are keyed by connection id and removed with the profile (leaving either installed restyled the next profile opened in that tab). Qt selectors are bridged to the DOM by `rewriteQtSelectors` (`ui/labels/qtCss.ts`) — see [Qt stylesheet selectors](#qt-stylesheet-selectors) |
 | `setBackgroundColor([window,] r,g,b,a)` | ✅ | JS-exposed |
 | `setBackgroundImage(name, path)` | ✅ | Pure Lua via GUIUtils.lua → `setLabelStyleSheet` |
 | `setBgColor([window,] r, g, b)` | ✅ | JS-exposed |
@@ -800,7 +865,7 @@ Implemented via the Web Speech API (`TtsManager`). Mudlet uses ranges `-1..1` fo
 | `setMovie(name, path)` / `setMovieFrame(name, n)` / `setMovieSpeed(name, factor)` / `startMovie(name)` | ✅ | QMovie replaced by an in-browser GIF decoder (`gifMovie.ts`) rendering to a `<canvas>` in the label — full pause/frame/speed/scale control; path resolves through the profile VFS. Animated WebP / APNG also decode via WebCodecs `ImageDecoder` where available (Chromium/Safari; frames land async into a pending player). Geyser `Label:setMovie` etc. work via the bundled wrappers. mp4 is NOT a QMovie format — video goes through `playVideoFile` (already ✅) |
 | `setOverline([window,] bool)` | ✅ | FormatState `overline` channel (ANSI SGR 53/55) → CSS `text-decoration: overline`; selection-aware like the other style setters. `setTextFormat`/`getTextFormat` carry it too |
 | `setPopup([window,] cmds, hints)` | ✅ | Right-click popup on the current selection (preserves formatting, like `setLink`) |
-| `setProfileStyleSheet(css)` | ✅ | Installs/replaces a profile-wide `<style>` block in `document.head` (keyed apart from `setAppStyleSheet`, and removed with the profile); raises `sysAppStyleSheetChange` with tag `"profile"`. Same Qt-selector bridge as `setAppStyleSheet` |
+| `setProfileStyleSheet(css)` | ✅ | Installs/replaces a profile-wide `<style>` block in `document.head` (keyed apart from `setAppStyleSheet` so the two coexist, and removed with the profile); raises `sysAppStyleSheetChange` with tag `"profile"`. Same scope and same Qt-selector bridge as `setAppStyleSheet` |
 | `setReverse([window,] bool)` | ✅ | Sets `FormatState.inverse` on pen + selection (renderer swaps fg/bg) |
 | `setStrikeOut([window,] bool)` | ✅ | JS-exposed |
 | `setTextFormat([window,] ...)` | ✅ | `r1,g1,b1,r2,g2,b2,bold,underline,italics[,strikeout,overline,reverse,blink]` |

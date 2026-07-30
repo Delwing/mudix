@@ -3917,6 +3917,8 @@ body.is-sorting {
     scrollbar-width: none;
 }
 .settings-tabs::-webkit-scrollbar { display: none; }
+/* Also carries `mudix-native-scrollbar`, so a Mudlet theme's QScrollBar rules
+   can't bring the hidden track back — see SCROLLBAR_OPT_OUT in ui/labels/qtCss.ts. */
 
 .settings-tab {
     appearance: none;

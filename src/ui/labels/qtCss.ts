@@ -329,68 +329,448 @@ export const QT_OBJECT_NAMES = {
 
 const QT_OBJECT_NAME_SET: ReadonlySet<string> = new Set(Object.values(QT_OBJECT_NAMES));
 
-/**
- * Qt *widget-type* selectors mapped onto the mudix DOM. Mudlet themes style
- * whole widget classes rather than named instances — `QDockWidget { … }` for
- * every user window, `QDockWidget::title { … }` for its title bars — so these
- * rules are what a pasted Mudlet app stylesheet actually spends most of its
- * lines on.
- *
- * `self` is the element(s) standing in for the widget; `sub` maps Qt subcontrols
- * (`::title`, `::close-button`) onto the DOM nodes that play those parts. A type
- * that isn't listed here is left alone — the selector stays in the sheet, inert,
- * exactly as it is today. Extending coverage is a table entry, not new code.
- *
- * Deliberately *not* mapped: bare `QWidget`, which in Qt matches every widget
- * and would repaint the entire app from one declaration block. That needs its
- * own decision about which mudix surfaces count as "every widget".
- */
-const QT_TYPE_MAP: Record<string, { self: readonly string[]; sub?: Record<string, readonly string[]> }> = {
+interface QtTypeEntry {
+    /** The element(s) standing in for the widget itself. */
+    self: readonly string[];
+    /** Qt subcontrols (`::title`, `::handle`) → the node(s) playing that part. */
+    sub?: Readonly<Record<string, readonly string[]>>;
+    /** Qt states whose DOM spelling is specific to this widget, *concatenated*
+     *  onto each target — so a BEM modifier (`--active`) or an attribute
+     *  (`[aria-pressed="true"]`) both work, and a target that doesn't follow the
+     *  convention simply matches nothing. A state that is neither listed here nor
+     *  in {@link QT_STATE_TO_CSS}/{@link QT_STATE_IGNORED} drops the rule rather
+     *  than silently widening it (Qt's `:selected` painting *every* row would be
+     *  worse than painting none). */
+    states?: Readonly<Record<string, string>>;
+    /** Targets are `::-webkit-scrollbar…` pseudo-elements: they need a host
+     *  element in front, must be the last token in a descendant chain, and can't
+     *  share a selector list with ordinary selectors (a browser without them
+     *  drops the whole list). */
+    pseudoElement?: true;
+    /** Single-compound selectors for the element(s) this widget scrolls with —
+     *  what a descendant scrollbar rule (`TConsole QScrollBar`) resolves to.
+     *
+     *  It has to be a single compound, not `ancestor descendant`: Chromium stops
+     *  matching the scrollbar orientation pseudo-classes as soon as the selector
+     *  contains a combinator, so `.output-container ::-webkit-scrollbar:vertical`
+     *  silently paints nothing while `.output-wrapper::-webkit-scrollbar:vertical`
+     *  works. A type without this can't host a scoped scrollbar rule, and one is
+     *  left inert rather than widened to every scrollbar in the app. */
+    scrollers?: readonly string[];
+    /** Kept out of the `QWidget` catch-all. Either the widget paints itself in
+     *  Mudlet (a blanket QWidget rule never reached it there either) or it's a
+     *  browser pseudo-element that a blanket background/border would wreck. */
+    selfPainted?: true;
+}
+
+// Shared entries, so the aliases below are the same object (and the QWidget
+// union dedupes them for free).
+const QT_DOCK_WIDGET: QtTypeEntry = {
     // Mudlet user windows are QDockWidgets, floating or docked. mudix renders
     // the two as separate components with parallel chrome.
-    QDockWidget: {
-        self: ['.script-window', '.docked-panel'],
-        sub: {
-            title: ['.script-window-titlebar', '.docked-panel-titlebar'],
-            'close-button': ['.script-window-btn.close'],
-            'float-button': ['.script-window-btn.popout'],
-        },
+    self: ['.script-window', '.docked-panel'],
+    sub: {
+        title: ['.script-window-titlebar', '.docked-panel-titlebar'],
+        'close-button': ['.script-window-btn.close'],
+        'float-button': ['.script-window-btn.popout'],
     },
 };
+// Mudlet's toggle buttons expose their state through Qt's `:checked`/`:on`;
+// mudix's carry aria-pressed (see ButtonsBar), which concatenates onto every
+// target the way a BEM modifier can't.
+const QT_BUTTON_STATES = {
+    checked: '[aria-pressed="true"]',
+    on: '[aria-pressed="true"]',
+    unchecked: '[aria-pressed="false"]',
+    off: '[aria-pressed="false"]',
+} as const;
+const QT_TEXT_INPUT: QtTypeEntry = { self: ['.input', '.command-input', '.window-cmdline'] };
+const QT_ITEM_VIEW: QtTypeEntry = {
+    self: ['.map-area-dropdown-list', '.font-picker__list', '.qo-list', '.connection-list'],
+    sub: { item: ['.map-area-dropdown-item', '.font-picker__item', '.qo-item', '.connection-card'] },
+};
+const QT_TREE_VIEW: QtTypeEntry = {
+    self: ['.script-editor__items', '.vfs-tree'],
+    sub: { item: ['.script-editor__item', '.vfs-row'] },
+    states: { selected: '--selected' },
+};
+const QT_SPLITTER_HANDLES = ['.dock-edge-splitter', '.dock-panel-splitter', '.split-group-splitter'];
 
-// A Qt type selector: `QDockWidget`, `QDockWidget::title`, `QDockWidget:hover`,
-// `QTabBar::tab:top:selected` — a type, an optional subcontrol, then any number
-// of pseudo-states.
-const QT_TYPE_SELECTOR_RE = /^(Q[A-Z][A-Za-z0-9_]*)(::[\w-]+)?((?::{1,2}!?[\w-]+)*)$/;
+/**
+ * Qt *widget-type* selectors mapped onto the mudix DOM. Mudlet themes style
+ * whole widget classes rather than named instances — `QToolButton { … }` for
+ * every toolbar button, `QDockWidget::title { … }` for user-window title bars —
+ * so these rules are what a pasted Mudlet app stylesheet actually spends most of
+ * its lines on.
+ *
+ * A type that isn't listed here is left alone: the selector stays in the sheet,
+ * inert, exactly as it arrived. Extending coverage is a table entry, not new
+ * code — and `QWidget` widens with it (see {@link qWidgetSelectors}).
+ *
+ * Mudlet's own widget classes (`TConsole`, `TCommandLine`, …) are in here too,
+ * because Mudlet's docs teach the descendant form for narrowing a rule to the
+ * game area: `TConsole QScrollBar:vertical { … }`.
+ *
+ * Deliberately absent, because mudix has no surface playing the part: `QStatusBar`
+ * (no status bar — connection state lives in the toolbar) and `QMdiArea`.
+ */
+const QT_TYPE_MAP: Record<string, QtTypeEntry> = {
+    // ── Windows, dialogs, docks ──────────────────────────────────────────────
+    QMainWindow: {
+        self: ['.app'],
+        sub: { separator: QT_SPLITTER_HANDLES },
+    },
+    QDockWidget: QT_DOCK_WIDGET,
+    TDockWidget: QT_DOCK_WIDGET,
+    QDialog: { self: ['.modal', '.resizable-modal', '.confirm-dialog'] },
+    QSplitter: { self: QT_SPLITTER_HANDLES, sub: { handle: QT_SPLITTER_HANDLES } },
 
-/** Translate one Qt pseudo-state token (`:hover`, `::hover`, `:!pressed`) into
- *  its CSS equivalent. Qt writes pseudo-classes with one or two colons; `:!x` is
- *  negation; `pressed` is CSS's `active`. */
-function qtPseudoToCss(pseudo: string): string {
-    let out = pseudo.startsWith('::') ? pseudo.slice(1) : pseudo;
-    if (out.startsWith(':!')) out = `:not(:${out.slice(2)})`;
-    return out === ':pressed' ? ':active'
-        : out === ':not(:pressed)' ? ':not(:active)'
-        : out;
+    // ── Toolbars and buttons ─────────────────────────────────────────────────
+    // Mudlet's main toolbar plus the user-defined button bars (TEasyButtonBar).
+    QToolBar: {
+        self: ['.mudix-toolbar', '.mudix-buttonbar', '.mudix-floating-toolbar', '.map-panel-toolbar'],
+        sub: {
+            separator: ['.toolbar-sep'],
+            handle: ['.mudix-floating-toolbar__handle'],
+        },
+    },
+    TEasyButtonBar: { self: ['.mudix-buttonbar', '.mudix-floating-toolbar'] },
+    // Buttons *in* a bar are QToolButtons in Mudlet; the ones in dialogs are
+    // QPushButtons. The descendant forms keep the two apart the way Qt's widget
+    // tree does — and outrank the plain `.btn` rule on specificity, so a sheet
+    // styling both lands the toolbar rule in the toolbar regardless of order.
+    QToolButton: {
+        self: ['.mudix-toolbar .btn', '.mudix-btn', '.toolbar-hamburger-btn', '.map-panel-toolbar .btn'],
+        states: QT_BUTTON_STATES,
+    },
+    QPushButton: { self: ['.btn'], states: QT_BUTTON_STATES },
+    QAbstractButton: { self: ['.btn', '.mudix-btn'], states: QT_BUTTON_STATES },
+    QCheckBox: { self: ['input[type="checkbox"]', '.toggle'] },
+
+    // ── Menus ────────────────────────────────────────────────────────────────
+    // mudix has no menu bar; the hamburger is what plays that part.
+    QMenuBar: { self: ['.toolbar-hamburger'], sub: { item: ['.toolbar-hamburger-btn'] } },
+    QMenu: {
+        self: ['.ctx-menu', '.toolbar-hamburger-menu', '.map-hamburger-menu', '.map-context-menu'],
+        sub: {
+            item: ['.ctx-menu__item', '.toolbar-hamburger-menu .btn', '.map-hamburger-item', '.map-context-menu-item'],
+            separator: ['.ctx-menu__sep', '.map-hamburger-separator', '.map-context-menu-separator'],
+            indicator: ['.ctx-menu__check', '.map-hamburger-check'],
+        },
+    },
+
+    // ── Text entry ───────────────────────────────────────────────────────────
+    QLineEdit: QT_TEXT_INPUT,
+    QPlainTextEdit: QT_TEXT_INPUT,
+    QTextEdit: QT_TEXT_INPUT,
+    // Mudlet's command line is a QPlainTextEdit subclass.
+    TCommandLine: { self: ['.command-input', '.window-cmdline'] },
+
+    // ── Lists, trees, combos ─────────────────────────────────────────────────
+    QComboBox: { self: ['select.input', '.script-editor__lang-select', '.map-area-dropdown-btn'] },
+    QAbstractItemView: QT_ITEM_VIEW,
+    QListView: QT_ITEM_VIEW,
+    QListWidget: QT_ITEM_VIEW,
+    QTreeView: QT_TREE_VIEW,
+    QTreeWidget: QT_TREE_VIEW,
+    QHeaderView: {
+        self: ['.script-editor__list-header', '.vfs-sql-table thead'],
+        sub: { section: ['.vfs-sql-table th'] },
+    },
+
+    // ── Tabs ─────────────────────────────────────────────────────────────────
+    QTabWidget: { self: ['.tab-group-panel'], sub: { 'tab-bar': ['.tab-group-tabbar'] } },
+    QTabBar: {
+        self: ['.tab-group-tabbar', '.mobile-switcher'],
+        sub: { tab: ['.tab-group-tab', '.mobile-switcher__tab'] },
+        states: { selected: '--active' },
+    },
+
+    // ── Misc chrome ──────────────────────────────────────────────────────────
+    QProgressBar: { self: ['.map-progress'], sub: { chunk: ['.map-progress-fill'] } },
+    QToolTip: { self: ['.help-tip-popover'] },
+    // Mudlet labels are QLabel (TLabel) — an app-level QLabel rule reached them
+    // there too. Labels that set their own stylesheet render it as *inline*
+    // style, which still wins, so only unstyled labels pick this up.
+    QLabel: { self: ['.label'] },
+    TLabel: { self: ['.label'] },
+
+    // ── Scrollbars ───────────────────────────────────────────────────────────
+    // The browser has no scrollbar element, only the WebKit/Blink pseudo-element
+    // family, so this is where the mapping is loosest. Qt's `::up-arrow` /
+    // `::down-arrow` are dropped: they're painted *inside* the buttons that
+    // `::add-line` / `::sub-line` already claim, and there's no second knob to
+    // give them. Firefox exposes only `scrollbar-color`/`-width`, so a themed
+    // scrollbar is Chromium-only.
+    QScrollBar: {
+        pseudoElement: true,
+        selfPainted: true,
+        self: ['::-webkit-scrollbar'],
+        sub: {
+            handle: ['::-webkit-scrollbar-thumb'],
+            groove: ['::-webkit-scrollbar-track'],
+            'add-page': ['::-webkit-scrollbar-track-piece'],
+            'sub-page': ['::-webkit-scrollbar-track-piece'],
+            'add-line': ['::-webkit-scrollbar-button:increment'],
+            'sub-line': ['::-webkit-scrollbar-button:decrement'],
+        },
+    },
+    QScrollArea: {
+        self: ['.output-container', '.docked-panel-content', '.script-window-content'],
+        scrollers: ['.output-wrapper'],
+        selfPainted: true,
+    },
+
+    // ── Mudlet's custom-painted widgets ──────────────────────────────────────
+    // TConsole/TTextEdit paint themselves in Mudlet, so a blanket QWidget rule
+    // never coloured the game text there — and mustn't here. Naming them
+    // explicitly still works, which is exactly what the wiki's scrollbar recipe
+    // (`TConsole QScrollBar:vertical`) relies on.
+    // `.output-wrapper` is every console's scroller — the main one and every
+    // miniconsole — which is exactly what Mudlet's `TConsole` covers too.
+    TConsole: { self: ['.output-container'], scrollers: ['.output-wrapper'], selfPainted: true },
+    TTextEdit: { self: ['.output-wrapper'], scrollers: ['.output-wrapper'], selfPainted: true },
+    dlgMapper: { self: ['.map-panel'] },
+};
+
+/**
+ * Elements a themed scrollbar must leave alone, appended to every host selector
+ * a `QScrollBar` rule generates:
+ *
+ *  - `mudix-native-scrollbar` — surfaces that hide their scrollbar as part of
+ *    their design (the tab strip, the mobile switcher, the settings tabs). Also
+ *    the documented escape hatch for anything else.
+ *  - `mudix-no-scrollbar` — a console the script *asked* to have no scrollbar
+ *    (`disableScrollBar`). An explicit call outranks a theme, same as in Mudlet.
+ *
+ * Doubling as the host for a bare `QScrollBar` rule: a lone `*` would lose to
+ * mudix's own `.output-wrapper::-webkit-scrollbar`, and this carries class-level
+ * specificity of its own.
+ */
+const SCROLLBAR_OPT_OUT = ':not(.mudix-native-scrollbar):not(.mudix-no-scrollbar)';
+
+/**
+ * Declarations that hand scrollbar rendering back to the `::-webkit-scrollbar`
+ * pseudo-elements. Chromium honours the *standard* `scrollbar-width` /
+ * `scrollbar-color` in preference to them — set either one and the whole WebKit
+ * pseudo-element family is ignored — and mudix sets both globally (`App.css`:
+ * `* { scrollbar-width: thin }`). Without this a themed `QScrollBar` rule parses,
+ * matches, and still paints nothing. Emitted once per sheet, for the hosts whose
+ * scrollbars the sheet actually styles, so a stylesheet that says nothing about
+ * scrollbars leaves mudix's own treatment alone.
+ */
+const SCROLLBAR_STANDARD_RESET = 'scrollbar-width: auto; scrollbar-color: auto';
+
+/**
+ * Prefix that gives a rewritten Qt rule authority over mudix's own CSS.
+ *
+ * The point of installing an app stylesheet is to *restyle the client*, and in
+ * Qt it does: the QApplication sheet governs the widgets it names. Landing on
+ * the right element isn't enough here — mudix's own rules often carry more
+ * specificity than the class the type table maps to (`.mudix-btn:hover` beats a
+ * bare `.mudix-btn`, `.map-level-dropdown .map-area-dropdown-btn` beats
+ * `.map-area-dropdown-btn`), so a theme would land a base colour and then lose
+ * every hover and every nested case.
+ *
+ * `:root:root` is a doubled pseudo-class on the html element: it matches exactly
+ * what it matched before and adds two classes' worth of specificity, putting
+ * every rewritten rule above anything mudix writes about the same element.
+ * Deliberately *not* `!important` — that would also override inline style, and
+ * inline style is how a widget's own stylesheet is applied (`setLabelStyleSheet`
+ * on a Geyser label). Qt resolves that the same way round: the per-widget sheet
+ * wins over the application one.
+ *
+ * Applied only to rules we rewrote. Plain `.mudix-*` CSS — the brand-styling
+ * hook — passes through with the specificity its author gave it.
+ */
+const SPECIFICITY_BOOST = ':root:root';
+
+function boostSelector(selector: string): string {
+    return `${SPECIFICITY_BOOST} ${selector}`;
 }
 
-/** Split a trailing pseudo-state run (`:top:selected`) into CSS tokens. */
-function qtPseudoRunToCss(run: string): string {
+/** Extra surfaces that are "a widget" in Qt's sense but aren't a widget *type*
+ *  any theme addresses by name — panels and containers that would be plain
+ *  QWidgets in Mudlet's layout. */
+const QWIDGET_EXTRA_SURFACES = [
+    '.app-content',
+    '.command-bar',
+    '.map-panel',
+    '.script-window-content',
+    '.docked-panel-content',
+    '.script-editor',
+];
+
+let qWidgetCache: readonly string[] | null = null;
+
+/**
+ * What `QWidget` means here. In Qt a type selector matches the class *and its
+ * subclasses*, so `QWidget` — the root of the hierarchy — matches every widget
+ * in the app; themes lean on that for a one-block base coat (`QWidget {
+ * background: #26192f; color: white; }`). Keeping the same meaning, the union is
+ * computed from the table: every mapped type is a QWidget, so a new entry widens
+ * this for free.
+ *
+ * Two exclusions, both matching what Mudlet does rather than departing from it:
+ * `selfPainted` widgets (the game text area draws itself, so a QWidget rule never
+ * reached it in Mudlet either) and the scrollbar pseudo-elements (not real
+ * elements; a blanket border/background makes a mess of them). Name those types
+ * directly and they style fine.
+ */
+function qWidgetSelectors(): readonly string[] {
+    if (qWidgetCache) return qWidgetCache;
+    const seen = new Set<string>();
+    for (const entry of Object.values(QT_TYPE_MAP)) {
+        if (entry.pseudoElement || entry.selfPainted) continue;
+        for (const sel of entry.self) seen.add(sel);
+    }
+    for (const sel of QWIDGET_EXTRA_SURFACES) seen.add(sel);
+    qWidgetCache = [...seen];
+    return qWidgetCache;
+}
+
+function lookupQtType(name: string): QtTypeEntry | undefined {
+    if (name === 'QWidget') return { self: qWidgetSelectors() };
+    return QT_TYPE_MAP[name];
+}
+
+// A Qt type selector token: `QDockWidget`, `QDockWidget::title`,
+// `QDockWidget:hover`, `QTabBar::tab:top:selected` — a type, an optional
+// subcontrol, then any number of pseudo-states. Lower-case starts are allowed
+// for Mudlet's own class names (`dlgMapper`); the table lookup is what decides
+// whether a token means anything.
+const QT_TYPE_SELECTOR_RE = /^([A-Za-z_][A-Za-z0-9_]*)(::[\w-]+)?((?::{1,2}!?[\w-]+)*)$/;
+
+/** Qt states with a direct CSS equivalent. */
+const QT_STATE_TO_CSS: Record<string, string> = {
+    hover: ':hover',
+    pressed: ':active',
+    focus: ':focus',
+    disabled: ':disabled',
+    enabled: ':enabled',
+    checked: ':checked',
+    unchecked: ':not(:checked)',
+    first: ':first-child',
+    last: ':last-child',
+};
+
+/** Qt states that carry no information here — they describe a position or a
+ *  window property that is always true in mudix's fixed layout (a tab bar is
+ *  always on top, the window is always the active one). Dropping the token keeps
+ *  the rule; dropping the *rule* would lose styling the theme meant to apply. */
+const QT_STATE_IGNORED = new Set([
+    'top', 'bottom', 'left', 'right', 'middle', 'only-one',
+    'active', 'window', 'closable', 'floatable', 'movable', 'flat', 'default',
+    'next-selected', 'previous-selected', 'alternate', 'adjoins-item',
+    'maximized', 'minimized',
+]);
+
+/**
+ * Translate a Qt pseudo-state run (`:top:selected`, `::hover`, `:!pressed`) for
+ * one widget type. Returns the CSS suffix, or null when a state carries meaning
+ * we can't express — the caller then leaves the whole selector alone rather than
+ * emit a rule that would apply too widely.
+ */
+function qtStateRunToCss(run: string, entry: QtTypeEntry): string | null {
     const tokens = run.match(/:{1,2}!?[\w-]+/g);
-    return tokens ? tokens.map(qtPseudoToCss).join('') : '';
+    if (!tokens) return '';
+    let out = '';
+    for (const token of tokens) {
+        const bare = token.replace(/^:{1,2}/, '');
+        const negated = bare.startsWith('!');
+        const name = negated ? bare.slice(1) : bare;
+
+        const custom = entry.states?.[name];
+        if (custom !== undefined) {
+            // A modifier class can't be negated into `:not(…)` — it isn't a
+            // pseudo-class — so `:!selected` drops the rule instead.
+            if (negated) return null;
+            out += custom;
+            continue;
+        }
+        // Orientation only distinguishes anything on a scrollbar (where WebKit
+        // spells it the same way); elsewhere it's a fixed property of the layout.
+        if (name === 'vertical' || name === 'horizontal') {
+            if (entry.pseudoElement) out += negated ? `:not(:${name})` : `:${name}`;
+            continue;
+        }
+        if (QT_STATE_IGNORED.has(name)) continue;
+        const css = QT_STATE_TO_CSS[name];
+        if (css === undefined) return null;
+        out += negated ? (css.startsWith(':not(') ? css.slice(5, -1) : `:not(${css})`) : css;
+    }
+    return out;
 }
 
-/** Expand one comma-separated Qt type selector into DOM selectors, or null when
- *  the type (or the named subcontrol) has no mudix stand-in. */
-function expandQtTypeSelector(part: string): string | null {
-    const m = part.trim().match(QT_TYPE_SELECTOR_RE);
-    if (!m) return null;
-    const entry = QT_TYPE_MAP[m[1]];
-    if (!entry) return null;
-    const targets = m[2] ? entry.sub?.[m[2].slice(2)] : entry.self;
-    if (!targets || targets.length === 0) return null;
-    const pseudo = qtPseudoRunToCss(m[3] ?? '');
-    return targets.map(t => `${t}${pseudo}`).join(', ');
+interface ExpandedPart {
+    selectors: string[];
+    /** Selectors end in a `::-webkit-scrollbar…` pseudo-element and must be
+     *  emitted as their own rule — see {@link QtTypeEntry.pseudoElement}. */
+    scrollbar: boolean;
+    /** For a scrollbar part, the element(s) owning those scrollbars — they need
+     *  the standard scrollbar properties switched off, see
+     *  {@link SCROLLBAR_STANDARD_RESET}. */
+    hosts?: string[];
+}
+
+/**
+ * Expand one comma-separated Qt type selector into DOM selectors, or null when
+ * any part of it has no mudix stand-in. Descendant chains (`TConsole
+ * QScrollBar::handle`) expand token by token, which is how Mudlet's docs tell
+ * people to scope a rule to the game area.
+ */
+function expandQtTypePart(part: string): ExpandedPart | null {
+    const tokens = part.trim().split(/\s+/);
+    if (tokens.length === 0 || tokens[0] === '') return null;
+    let prefixes: string[] = [''];
+    let scrollbar = false;
+    let ancestor: QtTypeEntry | undefined;
+    for (let i = 0; i < tokens.length; i++) {
+        const m = tokens[i].match(QT_TYPE_SELECTOR_RE);
+        if (!m) return null;
+        const entry = lookupQtType(m[1]);
+        if (!entry) return null;
+        // Qt spells pseudo-states with one *or two* colons, so a `::foo` that
+        // isn't a known subcontrol gets a second reading as a state.
+        const subName = m[2] ? m[2].slice(2) : '';
+        let targets = subName ? entry.sub?.[subName] : entry.self;
+        let stateRun = m[3] ?? '';
+        if (subName && !targets) {
+            targets = entry.self;
+            stateRun = `:${subName}${stateRun}`;
+        }
+        if (!targets || targets.length === 0) return null;
+        const states = qtStateRunToCss(stateRun, entry);
+        if (states === null) return null;
+        scrollbar = entry.pseudoElement === true;
+        // A pseudo-element can only be the last thing in a chain.
+        if (scrollbar && i !== tokens.length - 1) return null;
+        if (scrollbar) {
+            // A pseudo-element needs an element to hang off. `QScrollBar` on its
+            // own means every scrollbar in the app; `TConsole QScrollBar` means
+            // the ones that widget owns — and that has to resolve to a single
+            // compound selector, so it comes from the ancestor's `scrollers`
+            // rather than from a descendant combinator (see QtTypeEntry).
+            const owners = ancestor ? ancestor.scrollers : [''];
+            if (!owners || owners.length === 0) return null;
+            const hosts = owners.map(o => `${o}${SCROLLBAR_OPT_OUT}`);
+            const selectors: string[] = [];
+            for (const host of hosts) {
+                for (const target of targets) selectors.push(`${host}${target}${states}`);
+            }
+            return { selectors, scrollbar, hosts };
+        }
+        const next: string[] = [];
+        for (const prefix of prefixes) {
+            for (const target of targets) {
+                const sel = `${target}${states}`;
+                next.push(prefix === '' ? sel : `${prefix} ${sel}`);
+            }
+        }
+        prefixes = next;
+        ancestor = entry;
+    }
+    return { selectors: prefixes, scrollbar };
 }
 
 // `QWidget#name`, `QToolButton#name`, … — an unmistakably-Qt type prefix, so the
@@ -404,30 +784,69 @@ const BARE_OBJECT_RE = /(^|[\s,>+~(])#([A-Za-z_][\w-]*)/g;
 // told otherwise. Detected per-rule so `overflow: hidden` is only added where
 // the stylesheet asked for a collapse.
 const ZERO_MAX_SIZE_RE = /\bmax-(?:width|height)\s*:\s*0(?:\.0+)?(?:px)?\s*(?:;|$)/i;
+// Mudlet's own widget classes don't start with `Q`, so the cheap "is there
+// anything to do?" test needs them by name. Derived from the table so a new
+// entry can't forget to update it.
+const MUDLET_TYPE_RE = new RegExp(
+    `\\b(?:${Object.keys(QT_TYPE_MAP).filter(k => !/^Q[A-Z]/.test(k)).join('|')})\\b`,
+);
 
-function rewriteSelectorText(selector: string): string {
+interface RewrittenSelector {
+    /** Ordinary selectors, or the untouched original when nothing mapped. */
+    standard: string;
+    /** Scrollbar pseudo-element selectors, emitted as a rule of their own. */
+    scrollbar: string;
+    /** Elements owning the scrollbars this rule styles. */
+    scrollbarHosts: string[];
+    changed: boolean;
+}
+
+function rewriteSelectorText(selector: string): RewrittenSelector {
     // objectName forms first: they consume the `Q<Type>#name` prefix, so what
     // reaches the type pass below is a bare type selector or something we leave
     // alone.
     let out = selector.replace(QT_TYPED_OBJECT_RE, (_m, name: string) => `[data-qt-object="${cssEscape(name)}"]`);
     out = out.replace(BARE_OBJECT_RE, (m, lead: string, name: string) =>
         QT_OBJECT_NAME_SET.has(name) ? `${lead}[data-qt-object="${cssEscape(name)}"]` : m);
+    const objectFormChanged = out !== selector;
+
     // Widget-type forms, per comma-separated part. When no part maps to
     // anything, leave the selector exactly as it was: an unmapped Qt type stays
     // inert in the sheet, and — because the caller keys off whether the selector
     // changed — its declarations are left alone too.
-    if (out.indexOf('Q') >= 0) {
-        const parts = out.split(',');
-        const expanded = parts.map(expandQtTypeSelector);
-        if (expanded.some(e => e !== null)) {
-            // Surrounding whitespace is part of the sheet's formatting (and the
-            // space before `{`), so only the inter-part spacing is normalized.
-            const lead = out.match(/^\s*/)?.[0] ?? '';
-            const tail = out.match(/\s*$/)?.[0] ?? '';
-            out = lead + parts.map((p, i) => expanded[i] ?? p.trim()).join(', ') + tail;
-        }
+    // Surrounding whitespace is part of the sheet's formatting (and the space
+    // before `{`), so only the inter-part spacing is normalized.
+    const lead = out.match(/^\s*/)?.[0] ?? '';
+    const tail = out.match(/\s*$/)?.[0] ?? '';
+    const parts = out.split(',');
+    const expanded = parts.map(expandQtTypePart);
+    if (!expanded.some(e => e !== null)) {
+        // An objectName rewrite still needs the authority boost — the DOM node it
+        // found is one mudix styles itself.
+        const standard = objectFormChanged
+            ? lead + parts.map(p => boostSelector(p.trim())).join(', ') + tail
+            : out;
+        return { standard, scrollbar: '', scrollbarHosts: [], changed: objectFormChanged };
     }
-    return out;
+    // Deduped: two Qt subcontrols can share one DOM stand-in (`::add-page` and
+    // `::sub-page` are both the track piece), and repeating a selector in the
+    // list changes nothing but the noise.
+    const standard = new Set<string>();
+    const scrollbar = new Set<string>();
+    const scrollbarHosts: string[] = [];
+    parts.forEach((part, i) => {
+        const e = expanded[i];
+        if (!e) { standard.add(part.trim()); return; }
+        // Scrollbar selectors skip the boost: `:root:root` puts a descendant
+        // combinator in front of the pseudo-element, and Chromium then stops
+        // matching `:vertical` / `:horizontal` (see QtTypeEntry.scrollers). They
+        // don't need it — SCROLLBAR_OPT_OUT already carries two classes' worth.
+        if (e.scrollbar) for (const sel of e.selectors) scrollbar.add(sel);
+        else for (const sel of e.selectors) standard.add(boostSelector(sel));
+        if (e.hosts) scrollbarHosts.push(...e.hosts);
+    });
+    const join = (set: Set<string>) => (set.size ? lead + [...set].join(', ') + tail : '');
+    return { standard: join(standard), scrollbar: join(scrollbar), scrollbarHosts, changed: true };
 }
 
 const COMMENT_RE = /\/\*[\s\S]*?\*\//g;
@@ -450,9 +869,10 @@ export function rewriteQtSelectors(qss: string): string {
     // A rule needs a '{'; a rewritable selector needs either a '#' (objectName
     // form) or a Qt widget-type name.
     if (!qss || qss.indexOf('{') < 0) return qss;
-    if (qss.indexOf('#') < 0 && !/\bQ[A-Z]/.test(qss)) return qss;
+    if (qss.indexOf('#') < 0 && !/\bQ[A-Z]/.test(qss) && !MUDLET_TYPE_RE.test(qss)) return qss;
     const src = qss.indexOf('/*') < 0 ? qss : qss.replace(COMMENT_RE, '');
     const parts: string[] = [];
+    const scrollbarHosts = new Set<string>();
     let i = 0;
     let chunkStart = 0;
     while (i < src.length) {
@@ -469,14 +889,23 @@ export function rewriteQtSelectors(qss: string): string {
             const end = close < 0 ? src.length : close;
             const body = src.slice(i + 1, end);
             const rewritten = rewriteSelectorText(selector);
-            let outBody = body;
-            if (rewritten !== selector) {
+            if (!rewritten.changed) {
+                parts.push(rewritten.standard, '{', body, close < 0 ? '' : '}');
+            } else {
                 // Qt clips a widget to its geometry, so a zero max-height really
                 // does hide it and its children; the DOM needs telling.
                 const clip = ZERO_MAX_SIZE_RE.test(body) ? '; overflow: hidden' : '';
-                outBody = ` ${qtDeclarationsToCss(body)}${clip} `;
+                const outBody = ` ${qtDeclarationsToCss(body)}${clip} `;
+                const tail = close < 0 ? '' : '}';
+                // Scrollbar pseudo-elements go in a rule of their own: a browser
+                // that doesn't know `::-webkit-scrollbar` discards the entire
+                // selector list, which would take the ordinary selectors with it.
+                const rules: string[] = [];
+                if (rewritten.standard) rules.push(`${rewritten.standard}{${outBody}${tail}`);
+                if (rewritten.scrollbar) rules.push(`${rewritten.scrollbar}{${outBody}${tail}`);
+                parts.push(rules.join('\n'));
+                for (const host of rewritten.scrollbarHosts) scrollbarHosts.add(host);
             }
-            parts.push(rewritten, '{', outBody, close < 0 ? '' : '}');
             i = end + 1;
             chunkStart = i;
             continue;
@@ -484,7 +913,9 @@ export function rewriteQtSelectors(qss: string): string {
         i++;
     }
     parts.push(src.slice(chunkStart));
-    return parts.join('');
+    const out = parts.join('');
+    if (!scrollbarHosts.size) return out;
+    return `${[...scrollbarHosts].join(', ')} { ${SCROLLBAR_STANDARD_RESET} }\n${out}`;
 }
 
 // CSS.escape polyfill for attribute selector values — IE/older Safari don't
@@ -567,6 +998,16 @@ export function qtDeclarationsToCss(css: string, important = false): string {
 
 interface QtDeclaration { key: string; val: string }
 
+// Qt-only declarations that place a subcontrol inside its widget (`::add-line`
+// at the bottom of a scrollbar, and so on). The browser's scrollbar parts sit
+// where the browser puts them, so there's nothing to translate these into —
+// dropping them just keeps the emitted CSS free of dead declarations.
+const QT_ONLY_PROPS = new Set([
+    'subcontrol-position',
+    'subcontrol-origin',
+    'show-decoration-selected',
+]);
+
 function parseQtDeclarations(css: string): QtDeclaration[] {
     const out: QtDeclaration[] = [];
     for (const decl of splitDeclarations(css)) {
@@ -574,7 +1015,7 @@ function parseQtDeclarations(css: string): QtDeclaration[] {
         if (i < 0) continue;
         const key = decl.slice(0, i).trim().toLowerCase();
         const val = stripOuterQuotes(decl.slice(i + 1).trim());
-        if (!key || !val) continue;
+        if (!key || !val || QT_ONLY_PROPS.has(key)) continue;
         out.push({ key, val });
     }
     return out;

@@ -100,6 +100,22 @@ describe('setProfileStyleSheet — installs a <style> block in document.head', (
     env.run('setProfileStyleSheet("")');
   });
 
+  it('gives setAppStyleSheet the same scope and Qt bridge as setProfileStyleSheet', () => {
+    // Mudlet separates the two because one QApplication hosts several profiles.
+    // A mudix tab hosts one, so both are profile-local and profile-owned —
+    // identical in scope, differing only in which tag they replace. Anything
+    // else would leave a closed profile's CSS restyling the next one opened.
+    env.run('setAppStyleSheet("QDockWidget::title { background: #b8731b; }")');
+    env.run('setProfileStyleSheet("QDockWidget::title { background: #b8731b; }")');
+    const appTag = env.body.ownerDocument
+      .querySelector('style[data-mudix-app-stylesheet]') as HTMLStyleElement;
+    expect(appTag.textContent).toBe(profileTags()[0].textContent);
+    expect(appTag.textContent).toContain('.script-window-titlebar');
+    expect(appTag.dataset.mudixStyleOwner).toBe(profileTags()[0].dataset.mudixStyleOwner);
+    env.run('setAppStyleSheet("")');
+    env.run('setProfileStyleSheet("")');
+  });
+
   it('raises sysAppStyleSheetChange with tag "profile"', () => {
     // Wire api → runtime event routing exactly as ScriptingEngine does (the
     // bare test runtime doesn't set this up). Restored after the assertion.
