@@ -3,6 +3,7 @@ import {
   navigableLinks,
   focusAdjacentLink,
   handleLinkNavKeydown,
+  restoreFocusAfterLinkClick,
 } from '../../src/ui/output/linkNavigation';
 
 function link(label: string): HTMLElement {
@@ -143,5 +144,68 @@ describe('handleLinkNavKeydown', () => {
     e.preventDefault(); // e.g. a spoiler's own reveal handler already acted
     expect(handleLinkNavKeydown(e, root)).toBe(false);
     expect(clicks).toBe(0);
+  });
+});
+
+describe('restoreFocusAfterLinkClick', () => {
+  // A left-click reports detail >= 1; `element.click()` (how Enter/Space
+  // activates a link) reports 0.
+  const click = (target: EventTarget | null, detail = 1) => ({ detail, target });
+  const flush = () => new Promise<void>(resolve => queueMicrotask(() => resolve()));
+
+  let cmdLine: HTMLInputElement;
+  beforeEach(() => {
+    cmdLine = document.createElement('input');
+    document.body.appendChild(cmdLine);
+    cmdLine.focus();
+  });
+
+  it('hands focus back to the command line after a link steals it', async () => {
+    const a = link('a');
+    root.append(a);
+    a.focus(); // what the browser does on mousedown — tabIndex -1 is mouse-focusable
+    restoreFocusAfterLinkClick(click(a), () => cmdLine);
+    await flush();
+    expect(document.activeElement).toBe(cmdLine);
+  });
+
+  it('works when the click lands on a child of the link span', async () => {
+    const a = link('a');
+    const child = document.createElement('b');
+    a.append(child);
+    root.append(a);
+    a.focus();
+    restoreFocusAfterLinkClick(click(child), () => cmdLine);
+    await flush();
+    expect(document.activeElement).toBe(cmdLine);
+  });
+
+  it('ignores clicks that did not land on a link', async () => {
+    const plain = document.createElement('span');
+    root.append(plain);
+    plain.focus();
+    restoreFocusAfterLinkClick(click(plain), () => cmdLine);
+    await flush();
+    expect(document.activeElement).not.toBe(cmdLine);
+  });
+
+  it('leaves keyboard activation alone so Ctrl+] can carry on from the link', async () => {
+    const a = link('a');
+    root.append(a);
+    a.focus();
+    restoreFocusAfterLinkClick(click(a, 0), () => cmdLine);
+    await flush();
+    expect(document.activeElement).toBe(a);
+  });
+
+  it('does not disturb focus the link handler moved somewhere else', async () => {
+    const a = link('a');
+    const dialogField = document.createElement('input');
+    root.append(a, dialogField);
+    a.focus();
+    restoreFocusAfterLinkClick(click(a), () => cmdLine);
+    dialogField.focus(); // e.g. the link opened a dialog that focused itself
+    await flush();
+    expect(document.activeElement).toBe(dialogField);
   });
 });

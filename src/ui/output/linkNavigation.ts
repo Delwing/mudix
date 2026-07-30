@@ -11,9 +11,45 @@
  * the send/prompt/url action, reveals a spoiler, toggles selection, arms
  * visibility); the Menu key or Shift+F10 opens its context menu. Mirrors
  * Mudlet's TTextEdit key handling.
+ *
+ * Being focusable has a mouse-side cost, which `restoreFocusAfterLinkClick`
+ * pays back: a tabIndex of -1 keeps a span out of the Tab order but still lets
+ * a click focus it, and Mudlet's TTextEdit never takes focus off the command
+ * line that way.
  */
 
 const LINK_SELECTOR = '[data-output-clickable]';
+
+/**
+ * The link element at `node` (itself or an ancestor), or null. One logical link
+ * may be several spans; any of them answers here.
+ */
+function linkAt(node: EventTarget | null): HTMLElement | null {
+    return node instanceof Element ? node.closest<HTMLElement>(LINK_SELECTOR) : null;
+}
+
+/**
+ * Give focus back to the command line after a link is clicked with the mouse,
+ * so the player can keep typing — Mudlet's behaviour, where the output never
+ * takes focus at all.
+ *
+ * Call from a *capture*-phase click listener on the output container: a link's
+ * own handler stops propagation, so a bubble-phase listener never sees it. The
+ * hand-back is deferred to a microtask (i.e. after the click has been fully
+ * dispatched) and happens only if a link is still holding focus — a link that
+ * opened a dialog or moved focus deliberately keeps its say. Keyboard
+ * activation (`link.click()` from Enter/Space, which reports `detail === 0`)
+ * leaves focus on the link so Ctrl+]/Ctrl+[ can carry on from there.
+ */
+export function restoreFocusAfterLinkClick(
+    e: { detail: number; target: EventTarget | null },
+    commandInput: () => HTMLElement | null | undefined,
+): void {
+    if (e.detail === 0 || !linkAt(e.target)) return;
+    queueMicrotask(() => {
+        if (linkAt(document.activeElement)) commandInput()?.focus();
+    });
+}
 
 /**
  * One representative element per logical link under `root`, in document order.

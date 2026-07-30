@@ -60,6 +60,13 @@ export interface LabelState {
      *  styling for `<a>` links inside the label's HTML. Cleared by
      *  resetLinkStyle. Colors are any CSS color string (empty = leave default). */
     linkStyle?: { color?: string; visitedColor?: string; underline: boolean };
+    /** Hrefs clicked in this label, tracked so `linkStyle.visitedColor` can be
+     *  applied explicitly — CSS `:visited` only ever matches real browser
+     *  history, so it never fires for the `send:`/`prompt:` pseudo-schemes label
+     *  links use. Mirrors Mudlet's `TLabel::mVisitedLinks`, which exists for the
+     *  same reason (Qt won't style them either). Only populated while a visited
+     *  color is set, as Mudlet does. */
+    visitedLinks?: Set<string>;
     /** Click handler installed by setLabelClickCallback. The event table mirrors
      *  Mudlet's `mudlet.mouse_button` shape: `{button, x, y, alt, ctrl, shift, meta}`. */
     onClick?: (event: LabelMouseEvent) => void;
@@ -108,6 +115,11 @@ export interface LabelWheelEvent extends LabelMouseEvent {
 
 type Listener = (labels: LabelState[]) => void;
 
+/** Runs the action behind an `<a href>` clicked inside a label — installed by
+ *  ScriptingAPI, which owns the send/prompt/openUrl/Lua machinery the schemes
+ *  map onto (see {@link LabelManager.setLinkActivator}). */
+type LinkActivator = (href: string) => void;
+
 // Lua callers can pass nil or percentage strings ("12.5%") through createLabel /
 // moveWindow / resizeWindow — `Number(...)` then yields NaN, which React would
 // emit as `left: NaN` and warn about. Coerce non-finite inputs to 0 so the
@@ -139,6 +151,7 @@ export class LabelManager {
     // quadratic in the total label count.
     private readonly byParent = new Map<string, Map<string, LabelState>>();
     private readonly listeners = new Map<string, Set<Listener>>();
+    private linkActivator: LinkActivator | null = null;
 
     private indexAdd(lbl: LabelState): void {
         let bucket = this.byParent.get(lbl.parent);
@@ -391,6 +404,30 @@ export class LabelManager {
         };
         this.notify(lbl.parent);
         return true;
+    }
+
+    /**
+     * Install the handler that runs a clicked label link (`<a href="send:…">`).
+     * The manager itself has no scripting access, so LabelOverlay routes clicks
+     * here and ScriptingAPI supplies the behaviour.
+     */
+    setLinkActivator(fn: LinkActivator | null): void {
+        this.linkActivator = fn;
+    }
+
+    /**
+     * A link inside `name`'s rich text was clicked. Records it as visited (when
+     * a visited color is configured) and runs the activator — Mudlet's
+     * `TLabel::slot_linkActivated`, which does the same two things in the same
+     * order.
+     */
+    activateLink(name: string, href: string): void {
+        const lbl = this.labels.get(name);
+        if (lbl?.linkStyle?.visitedColor && !lbl.visitedLinks?.has(href)) {
+            (lbl.visitedLinks ??= new Set()).add(href);
+            this.notify(lbl.parent);
+        }
+        this.linkActivator?.(href);
     }
 
     /** Mudlet `resetLinkStyle(labelName)` — drop any setLinkStyle override. */

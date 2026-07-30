@@ -62,18 +62,26 @@ export interface ModalFocusOptions {
     /** Close on Escape via `onClose`. Default true. Set false when the modal has
      *  its own Escape handling (then `onClose` may be omitted). */
     closeOnEscape?: boolean;
+    /** Where focus should land on close, instead of the opener. Use when the
+     *  dialog was raised by the game rather than by a click, so "the opener" is
+     *  either nothing or a control that has since gone away — the GMCP login
+     *  popup hands focus to the command line this way. Falls back to the opener
+     *  when it returns null. */
+    restoreFocusTo?: () => HTMLElement | null | undefined;
 }
 
 export function useModalFocus<T extends HTMLElement = HTMLDivElement>(
     onClose?: () => void,
     opts: ModalFocusOptions = {},
 ): React.RefObject<T | null> {
-    const { autoFocus = true, closeOnEscape = true } = opts;
+    const { autoFocus = true, closeOnEscape = true, restoreFocusTo } = opts;
     const ref = useRef<T | null>(null);
     // Keep the latest onClose without re-running the setup effect (which would
     // re-grab focus on every parent render).
     const onCloseRef = useRef(onClose);
     useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+    const restoreRef = useRef(restoreFocusTo);
+    useEffect(() => { restoreRef.current = restoreFocusTo; }, [restoreFocusTo]);
 
     useEffect(() => {
         const node = ref.current;
@@ -106,8 +114,11 @@ export function useModalFocus<T extends HTMLElement = HTMLDivElement>(
 
         return () => {
             node.removeEventListener('keydown', onKeyDown);
-            // Restore focus to the opener if it's still in the document.
-            if (opener && document.contains(opener)) opener.focus();
+            // Restore focus: the caller's explicit target, else the opener if
+            // it's still in the document.
+            const target = restoreRef.current?.()
+                ?? (opener && document.contains(opener) ? opener : null);
+            target?.focus();
         };
     }, []);
 

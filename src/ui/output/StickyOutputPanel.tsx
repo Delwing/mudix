@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type React from 'react';
 import { OutputContextMenu, type OutputMenuExtraItem } from './OutputContextMenu';
+import { restoreFocusAfterLinkClick } from './linkNavigation';
 import {
     hasSelectionIn, selectAll, copySelectionText,
     copySelectionAsHtml, copySelectionAsImage,
@@ -83,6 +84,14 @@ export function StickyOutputPanel({
         commandInputRef.current?.focus();
     };
 
+    // A link's own click handler stops propagation, so `handleClick` above never
+    // sees one — clicking a link would otherwise leave focus on the link span
+    // instead of the command line. Capture phase catches it on the way down.
+    const handleClickCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (!commandInputRef) return;
+        restoreFocusAfterLinkClick(e, () => commandInputRef.current);
+    };
+
     const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
         e.preventDefault();
         // We own the output's right-click menu; stop it bubbling to ancestor
@@ -145,7 +154,7 @@ export function StickyOutputPanel({
     } : undefined;
 
     return (
-        <div className={containerClass} onClick={handleClick}>
+        <div className={containerClass} onClick={handleClick} onClickCapture={handleClickCapture}>
             <div
                 className="output-wrapper"
                 ref={outputRef}

@@ -8,6 +8,7 @@ import { CLIENT_VERSION } from '../version';
 import { getBrand } from '../branding';
 import type { WindowHandle, WindowOpenOptions } from '../ui/windows/types';
 import type { LabelManager, LabelCreateOptions, LabelMouseEvent, LabelWheelEvent } from '../ui/labels/LabelManager';
+import { classifyLabelLink } from '../ui/labels/labelLinks';
 import { decodeGif, decodeAnimatedImage, sniffDecodableImage, supportsImageDecoder, MoviePlayer } from '../ui/labels/gifMovie';
 import { resolveSvgIntrinsicSize } from '../ui/labels/backgroundImageSize';
 import type { CommandLineManager } from '../ui/cmdline/CommandLineManager';
@@ -675,6 +676,10 @@ export class ScriptingAPI {
             () => (css: string) => this.host.rewriteCss(css),
             () => (html: string) => this.host.rewriteHtml(html),
         );
+        // Clicking an <a href> inside a label's rich text is handled by the
+        // overlay, which has no way to send/run anything itself — supply the
+        // behaviour here (Mudlet does it in TLabel::slot_linkActivated).
+        session.labels.setLinkActivator((href) => { this.activateLabelLink(href); });
         this.cmdLines = session.cmdLines;
         this.scrollBoxes = session.scrollBoxes;
         this.aliases = aliasEngine;
@@ -2006,6 +2011,22 @@ export class ScriptingAPI {
         if (action.kind === 'send') this.send(action.command);
         else if (action.kind === 'prompt') this.printCmdLine(action.command);
         else this.openUrl(action.url);
+    }
+
+    /**
+     * Activate an `<a href>` clicked inside a label's rich text — Mudlet's
+     * `TLabel::slot_linkActivated`. Wired onto the LabelManager in the
+     * constructor; see labelLinks.ts for how the schemes differ from the OSC 8
+     * ones {@link runHyperlinkUri} handles (chiefly: a scheme-less href is a Lua
+     * chunk, which is how Geyser packages hang code off a label link).
+     */
+    activateLabelLink(href: string): void {
+        const action = classifyLabelLink(href);
+        if (!action) return;
+        if (action.kind === 'send') this.send(action.command);
+        else if (action.kind === 'prompt') this.printCmdLine(action.command);
+        else if (action.kind === 'url') this.openUrl(action.url);
+        else this.host.runLinkCode(action.code);
     }
 
     /**

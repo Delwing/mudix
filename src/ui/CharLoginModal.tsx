@@ -24,6 +24,10 @@ interface CharLoginModalProps {
     /** Decline GMCP login — sends the empty reply so the server falls back to
      *  its text login prompt. */
     onCancel: () => void;
+    /** Where focus goes once the popup closes. The server raised this dialog,
+     *  not a click, so there is no meaningful opener to return to — the caller
+     *  points this at the command line so the player can type straight away. */
+    restoreFocusTo?: () => HTMLElement | null | undefined;
 }
 
 /**
@@ -43,6 +47,7 @@ export function CharLoginModal({
     allowRemember = true,
     onSubmit,
     onCancel,
+    restoreFocusTo,
 }: CharLoginModalProps) {
     const [account, setAccount] = useState(initialAccount ?? '');
     const [password, setPassword] = useState(initialPassword ?? '');
@@ -51,7 +56,9 @@ export function CharLoginModal({
     const passwordRef = useRef<HTMLInputElement>(null);
     // Trap + restore only; this modal keeps its own Escape (window) and its own
     // initial focus (first empty field, for the password-manager flow).
-    const modalRef = useModalFocus<HTMLDivElement>(undefined, { autoFocus: false, closeOnEscape: false });
+    const modalRef = useModalFocus<HTMLDivElement>(undefined, {
+        autoFocus: false, closeOnEscape: false, restoreFocusTo,
+    });
 
     useEffect(() => {
         // Focus the first empty field so a fully-prefilled form is one Enter away.

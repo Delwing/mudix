@@ -883,6 +883,7 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                     initialAccount={getSessionCredentials(connection.id)?.account ?? charLoginAccount}
                     initialPassword={getSessionCredentials(connection.id)?.password ?? charLoginPassword}
                     allowRemember={!isBrandedMode()}
+                    restoreFocusTo={() => commandInputRef.current}
                     onSubmit={(account, password, remember) => {
                         // Optimistic close: most servers proceed on success. A
                         // failure re-opens the popup via the charLogin.result

@@ -3,6 +3,7 @@ import type React from 'react';
 import type { LabelManager, LabelMouseEvent, LabelState, LabelWheelEvent } from './LabelManager';
 import type { MoviePlayer } from './gifMovie';
 import { cssTextToParts, qtDeclarationsToCss, qtAlignmentToFlex, cssEscape } from './qtCss';
+import { labelLinkHref } from './labelLinks';
 import './LabelOverlay.css';
 
 // Mudlet reports `event.button` as a Qt button *name string* (not an int) — see
@@ -22,6 +23,13 @@ export function domButtonToMudlet(type: string, domButton: number): string {
     if (type === 'mousemove' || type === 'pointermove'
         || type === 'mouseenter' || type === 'mouseleave') return 'NoButton';
     return BUTTON_DOM_TO_MUDLET[domButton] ?? 'NoButton';
+}
+
+/** Escape a value for use inside a double-quoted CSS string (an attribute
+ *  selector's value). Not `cssEscape` — that produces an *identifier* escape,
+ *  which over-escapes almost every character of a URI. */
+function cssStringLiteral(s: string): string {
+    return s.replace(/[\\"]/g, '\\$&').replace(/\n/g, '\\A ').replace(/\r/g, '');
 }
 
 function buildMouseEvent(e: React.MouseEvent<HTMLDivElement>): LabelMouseEvent {
@@ -74,12 +82,19 @@ export function LabelOverlay({ manager, parent }: LabelOverlayProps) {
     if (labels.length === 0) return null;
     return (
         <div className="label-overlay">
-            {labels.map(l => <Label key={l.name} l={l} zIndex={manager.overlayZ.getZ(parent, 'labels', l.name)} />)}
+            {labels.map(l => (
+                <Label
+                    key={l.name}
+                    l={l}
+                    manager={manager}
+                    zIndex={manager.overlayZ.getZ(parent, 'labels', l.name)}
+                />
+            ))}
         </div>
     );
 }
 
-function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
+function Label({ l, manager, zIndex }: { l: LabelState; manager: LabelManager; zIndex: number }) {
     // Latest-callback ref so re-renders during a hover/drag don't lose pointer
     // state; the Mudlet API replaces callbacks live and we want the next event
     // to land on the new fn even if React hasn't re-mounted us yet.
@@ -129,6 +144,13 @@ function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
     // Mudlet setLinkStyle: color/underline the <a> links in the label's HTML.
     // Scoped via the same data-attribute selector as the stylesheet block.
     const linkStyle = l.linkStyle;
+    // Visited links are tracked by us (LabelManager.activateLink), not the
+    // browser: `:visited` only matches real navigation history, so it never
+    // fires for the send:/prompt: pseudo-schemes label links use. Emit an
+    // explicit `a[href="…"]` rule per visited link alongside it. Flattened to a
+    // string so the effect has a stable dependency — the Set is mutated in
+    // place, so its identity wouldn't change when a link is visited.
+    const visitedKey = l.visitedLinks ? [...l.visitedLinks].join('\n') : '';
     useEffect(() => {
         if (!linkStyle) return;
         const id = `mudix-label-linkstyle--${l.name}`;
@@ -141,11 +163,18 @@ function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
         const sel = `[data-mudix-label="${cssEscape(l.name)}"] a`;
         const decl: string[] = [`text-decoration: ${linkStyle.underline ? 'underline' : 'none'}`];
         if (linkStyle.color) decl.push(`color: ${linkStyle.color}`);
-        el.textContent =
-            `${sel} { ${decl.join('; ')} }` +
-            (linkStyle.visitedColor ? `\n${sel}:visited { color: ${linkStyle.visitedColor} }` : '');
+        const rules = [`${sel} { ${decl.join('; ')} }`];
+        if (linkStyle.visitedColor) {
+            rules.push(`${sel}:visited { color: ${linkStyle.visitedColor} }`);
+            // An attribute selector outranks the bare `sel` rule above, so the
+            // visited color wins without !important.
+            for (const href of visitedKey ? visitedKey.split('\n') : []) {
+                rules.push(`${sel}[href="${cssStringLiteral(href)}"] { color: ${linkStyle.visitedColor} }`);
+            }
+        }
+        el.textContent = rules.join('\n');
         return () => { document.getElementById(id)?.remove(); };
-    }, [linkStyle, l.name]);
+    }, [linkStyle, l.name, visitedKey]);
 
     if (!l.visible) return null;
 
@@ -237,6 +266,11 @@ function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
     const hasPress = !!(l.onClick || l.onMouseDown) || dragCapable;
     const onPointerDown = hasPress
         ? (e: React.PointerEvent<HTMLDivElement>) => {
+            // A press on an <a href> belongs to the link, not the label: Qt's
+            // QLabel consumes it and TLabel returns before running the click
+            // callback (TLabel::mousePressEvent). Skipping capture too, so a
+            // drag-capable label doesn't swallow the click that follows.
+            if (labelLinkHref(e.target) !== null) return;
             if (dragCapable) {
                 try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not supported */ }
             }
@@ -267,6 +301,9 @@ function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
         : undefined;
     const onPointerUp = l.onMouseUp
         ? (e: React.PointerEvent<HTMLDivElement>) => {
+            // Release over a link is the link's, matching the same guard in
+            // TLabel::mouseReleaseEvent.
+            if (labelLinkHref(e.target) !== null) return;
             // Flush any frame-pending move first so the release sees the final
             // drag position (e.g. the insertion target picked on the last move),
             // then drop the scheduled frame.
@@ -279,6 +316,18 @@ function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
             ref.current.onMouseUp?.(buildMouseEvent(e));
         }
         : undefined;
+
+    // Mudlet's TLabel connects QLabel::linkActivated, so an <a href> echoed
+    // into a label drives the game: `send:` fires a command, `prompt:` stages
+    // one, http(s) opens a tab, and a scheme-less href runs as Lua (see
+    // labelLinks.ts). The default must always be prevented — the pseudo-schemes
+    // aren't navigable, and a real http link would replace the whole app.
+    const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
+        const href = labelLinkHref(e.target);
+        if (href === null) return;
+        e.preventDefault();
+        manager.activateLink(ref.current.name, href);
+    };
 
     // Mudlet labels are Qt widgets — a right-click is delivered to the label's
     // own callback (see the RightButton branch in Adjustable.Container:onClick),
@@ -308,6 +357,7 @@ function Label({ l, zIndex }: { l: LabelState; zIndex: number }) {
             style={style}
             data-mudix-label={l.name}
             title={l.tooltip}
+            onClick={onClick}
             onContextMenu={onContextMenu}
             onPointerDown={onPointerDown}
             onPointerUp={onPointerUp}
