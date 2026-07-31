@@ -13,6 +13,9 @@ const SHOW_SENT_TEXT_OPTIONS: { value: ShowSentTextMode; label: string }[] = [
     { value: 'never',  label: 'Never echo' },
 ];
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
+import { TlsCertificateBox } from './TlsCertificateBox';
+import type { TlsStatus } from '../mud/events';
+import { effectiveProxyUrl, proxyCanInspectCertificates } from '../storage';
 
 const ANSI_LABELS = [
     'Black', 'Red', 'Green', 'Yellow', 'Blue', 'Magenta', 'Cyan', 'White',
@@ -95,9 +98,12 @@ interface SettingsModalProps {
     /** Active profile id; null on the connection screen (only theme is editable). */
     connectionId: string | null;
     vfs?: ProfileVFS | null;
+    /** TLS state of the live session, when there is one. Drives the certificate
+     *  box below the secure-connection reminder. */
+    tlsStatus?: TlsStatus | null;
 }
 
-export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsModalProps) {
+export function SettingsModal({ onClose, connectionId, vfs = null, tlsStatus = null }: SettingsModalProps) {
     const modalRef = useModalFocus<HTMLDivElement>(onClose);
     // Theme is per-profile with a launcher fallback: inside a profile the picker
     // shows/edits that profile's override; on the connection screen it edits the
@@ -111,6 +117,10 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const notificationsEnabled = useAppStore(s => s.client.notificationsEnabled);
     const patchClient = useAppStore(s => s.patchClient);
     const mudPackageInstallEnabled = allowMudPackageInstall !== false;
+    // Mudlet's checkBox_askTlsAvailable. Defaults on, and is switched off for
+    // good when the user declines an MSSP secure-port offer.
+    const askTlsAvailableSetting = useAppStore(s => (connectionId ? selectProfileField(s, connectionId, 'askTlsAvailable') : undefined));
+    const askTlsAvailable = askTlsAvailableSetting !== false;
     // Notifications are opt-in (default off) and require browser permission.
     const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
     const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
@@ -219,6 +229,21 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
     const patchProfile = (patch: Partial<ProfileSettings>) => {
         if (connectionId) patchConnectionProfile(connectionId, patch);
     };
+    // The TLS/certificate options live on the *connection* record, not the
+    // profile settings, but they have to be reachable from here: a rejected
+    // certificate is discovered mid-session, and the connection editor is only
+    // available after closing the profile.
+    const patchConnectionRecord = useAppStore(s => s.patchConnection);
+    const activeConnection = useAppStore(s => s.connections.find(c => c.id === connectionId));
+    const tlsProxyMode = (activeConnection?.mode ?? 'websocket') === 'mud';
+    const userProxyUrl = useAppStore(s => s.client.userProxyUrl);
+    // Two sources, cheapest first: the proxy URL tells us up front that a Worker
+    // can't inspect certificates, and a live TLS connection settles it for sure
+    // (covering a Worker on a custom domain, which the URL can't identify).
+    const certOptionsSupported = activeConnection
+        ? proxyCanInspectCertificates(effectiveProxyUrl(activeConnection, userProxyUrl))
+            && !(tlsStatus?.kind === 'established' && tlsStatus.info.certInspection === false)
+        : true;
     // Mapper is stored as a nested object so future renderer toggles share one
     // slot in ProfileSettings; patches merge into the current value so toggling
     // one field doesn't wipe siblings.
@@ -1282,6 +1307,99 @@ export function SettingsModal({ onClose, connectionId, vfs = null }: SettingsMod
                     )}
                     {activeTab === 'network' && connectionId && (
                         <section className="settings-section">
+                            <div className="settings-row">
+                                <span className="settings-label" id="ask-tls-available-label">
+                                    Allow secure connection reminder
+                                    <HelpTip label="About the secure connection reminder">
+                                        When a game advertises an encrypted port via MSSP, offer once to switch to it.
+                                        Declining the offer also turns this off for the profile.
+                                    </HelpTip>
+                                </span>
+                                <Toggle
+                                    id="ask-tls-available"
+                                    aria-labelledby="ask-tls-available-label"
+                                    checked={askTlsAvailable}
+                                    onChange={next => patchProfile({ askTlsAvailable: next })}
+                                />
+                            </div>
+                            {tlsProxyMode && activeConnection && (
+                                <>
+                                    <div className="settings-row">
+                                        <span className="settings-label" id="tls-enabled-label">
+                                            Secure connection (TLS)
+                                            <HelpTip label="About secure connections">
+                                                Ask the proxy to encrypt the link to the game. The game must offer a TLS
+                                                port — usually a different one from its plaintext port. Takes effect on
+                                                the next connect.
+                                            </HelpTip>
+                                        </span>
+                                        <Toggle
+                                            id="tls-enabled"
+                                            aria-labelledby="tls-enabled-label"
+                                            checked={!!activeConnection.tls}
+                                            onChange={next => patchConnectionRecord(connectionId, { tls: next || undefined })}
+                                        />
+                                    </div>
+                                    {activeConnection.tls && !certOptionsSupported && (
+                                        <div className="tls-cert-options tls-cert-options--unavailable">
+                                            <span className="tls-cert-options-title">Certificate options unavailable</span>
+                                            <span className="tls-cert-options-hint">
+                                                This proxy runs on Cloudflare Workers, which cannot inspect the game's
+                                                certificate or override a validation failure. The link is still
+                                                encrypted, but only connects if the game's certificate is valid and
+                                                publicly trusted. Use a self-hosted Node proxy to accept an expired or
+                                                self-signed certificate.
+                                            </span>
+                                        </div>
+                                    )}
+                                    {activeConnection.tls && certOptionsSupported && (
+                                        <div className="tls-cert-options">
+                                            <span className="tls-cert-options-title">If the certificate can't be verified</span>
+                                            <label className="tls-cert-option">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!activeConnection.sslIgnoreExpired}
+                                                    disabled={!!activeConnection.sslIgnoreAll}
+                                                    onChange={e => patchConnectionRecord(connectionId, { sslIgnoreExpired: e.target.checked || undefined })}
+                                                />
+                                                <span>Accept expired certificates</span>
+                                            </label>
+                                            <label className="tls-cert-option">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!activeConnection.sslIgnoreSelfSigned}
+                                                    disabled={!!activeConnection.sslIgnoreAll}
+                                                    onChange={e => patchConnectionRecord(connectionId, { sslIgnoreSelfSigned: e.target.checked || undefined })}
+                                                />
+                                                <span>Accept self-signed certificates</span>
+                                            </label>
+                                            <label className="tls-cert-option">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!activeConnection.sslIgnoreAll}
+                                                    onChange={e => patchConnectionRecord(connectionId, { sslIgnoreAll: e.target.checked || undefined })}
+                                                />
+                                                <span className="tls-cert-option-danger">
+                                                    Accept all certificate errors (unsecure)
+                                                </span>
+                                            </label>
+                                            <span className="tls-cert-options-hint">
+                                                Changing these doesn't reconnect on its own — reconnect to retry the
+                                                handshake.
+                                            </span>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                            {tlsStatus?.kind === 'established' && (
+                                <TlsCertificateBox
+                                    cert={tlsStatus.info.cert}
+                                    certInspection={tlsStatus.info.certInspection}
+                                    protocol={tlsStatus.info.protocol}
+                                    cipher={tlsStatus.info.cipher}
+                                    acceptedDespite={tlsStatus.info.acceptedDespite}
+                                />
+                            )}
                             <div className="settings-row">
                                 <label className="settings-label" htmlFor="prompt-timeout">
                                     Prompt timeout

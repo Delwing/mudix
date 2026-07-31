@@ -17,11 +17,23 @@ describe('connectionSecureTransport', () => {
     expect(connectionSecureTransport(conn({ url: 'ws://mud.example.com/ws' }))).toBe(false);
   });
 
-  it('is always false in proxy (mud) mode, even with a wss:// proxy URL', () => {
-    // The proxy reaches the MUD over plaintext TCP, so the game-facing link is
-    // never TLS regardless of how the browser reaches the proxy.
+  it('is false in proxy (mud) mode without TLS, even with a wss:// proxy URL', () => {
+    // A wss:// proxy URL only secures the browser↔proxy hop; without `tls` the
+    // proxy still reaches the game over plaintext TCP.
     expect(connectionSecureTransport(conn({
       mode: 'mud', host: 'aardmud.org', port: 23, proxyUrl: 'wss://proxy.example.com',
+    }))).toBe(false);
+  });
+
+  it('is true in proxy mode when the profile asked the proxy for TLS', () => {
+    expect(connectionSecureTransport(conn({
+      mode: 'mud', host: 'aardmud.org', port: 4443, tls: true,
+    }))).toBe(true);
+  });
+
+  it('ignores `tls` in websocket mode, where the URL scheme decides', () => {
+    expect(connectionSecureTransport(conn({
+      mode: 'websocket', url: 'ws://mud.example.com/ws', tls: true,
     }))).toBe(false);
   });
 

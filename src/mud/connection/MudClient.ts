@@ -33,7 +33,7 @@ import {
     TELNET_GA,
     TTYPE_COMMAND_CODE,
 } from "../protocol";
-import type { MudClientEvents } from "../events";
+import type { MudClientEvents, TlsEstablished, TlsError } from "../events";
 import { LineAssembler } from "./LineAssembler";
 import { TelnetNegotiator } from "./TelnetNegotiator";
 import {
@@ -111,9 +111,9 @@ export interface MudClientOptions {
     /** Whether the link to the *game server* is TLS-encrypted, reported as the
      *  NEW-ENVIRON `TLS` capability. Defaults to whether `url` is `wss://` — the
      *  correct answer for a direct websocket-mode connection. In proxy (`mud`)
-     *  mode the caller passes `false` explicitly, because a `wss://` proxy URL
-     *  only secures the browser↔proxy hop while the proxy↔MUD telnet socket is
-     *  plaintext (see connectionSecureTransport). */
+     *  mode the caller passes the answer explicitly, because a `wss://` proxy URL
+     *  only secures the browser↔proxy hop: the proxy↔MUD leg is plaintext telnet
+     *  unless the profile enabled TLS (see connectionSecureTransport). */
     secureTransport?: boolean;
     /** Whether to advertise screen-reader use, reported as the MTTS SCREEN
      *  READER bit and the NEW-ENVIRON `SCREEN_READER` capability
@@ -211,6 +211,15 @@ export class MudClient {
      *  announce ourselves twice. Reset on each connect(). */
     private gmcpHelloSent = false;
 
+    /** Set when this dial asked the proxy for TLS (`&tls=1` in the URL), so the
+     *  client knows to expect a `tls.established` control frame and to police
+     *  the deadline below. */
+    private readonly tlsRequested: boolean;
+    /** True once the proxy confirmed the handshake, or once any game bytes have
+     *  arrived (which can only happen through a working tunnel). */
+    private tlsResolved = false;
+    private tlsDeadline: ReturnType<typeof setTimeout> | null = null;
+
     commandEcho: boolean;
     /** Gates the in-band `!!SOUND(...)` / `!!MUSIC(...)` tag parsing — the tag
      *  bytes are legitimate text on non-MSP MUDs. */
@@ -278,7 +287,8 @@ export class MudClient {
                 nawsEnabled,
                 // Fall back to the URL scheme when the caller doesn't say —
                 // correct for a direct websocket connection; proxy mode passes
-                // false explicitly.
+                // its own answer, since a wss:// proxy URL says nothing about
+                // whether the proxy↔game leg is encrypted.
                 secureTransport: secureTransport ?? /^wss:/i.test(url),
                 screenReaderAdvertised,
             },
@@ -290,6 +300,10 @@ export class MudClient {
                 getEncoding: () => this.codec.encoding,
             },
         );
+
+        // The proxy contract is expressed in the URL, so that's where we learn
+        // whether a TLS handshake is supposed to be happening on the far side.
+        this.tlsRequested = /[?&]tls=1(?:&|$)/.test(url);
 
         this.gmcpStream = createGmcpStream({
             onEnvelope: ({ path, value }) => {
@@ -412,6 +426,12 @@ export class MudClient {
         this.negotiator.reset();
         this.charModeDetected = false;
         this.gmcpHelloSent = false;
+        // Redialling re-runs the handshake, so the previous verdict is stale.
+        this.tlsResolved = false;
+        if (this.tlsDeadline !== null) {
+            clearTimeout(this.tlsDeadline);
+            this.tlsDeadline = null;
+        }
         this.mspParser.reset();
 
         try {
@@ -426,9 +446,20 @@ export class MudClient {
             // of its (and our) per-message CPU cost.
             this.socket.binaryType = "arraybuffer";
 
-            this.socket.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+            this.socket.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
                 try {
+                    // Text frames are the proxy's out-of-band control channel;
+                    // game bytes only ever arrive as binary. Proxies predating
+                    // TLS support never send these, so this stays compatible.
+                    if (typeof event.data === 'string') {
+                        this.handleControlFrame(event.data);
+                        return;
+                    }
                     if (event.data.byteLength === 0) return;
+                    // Any game byte proves the tunnel works end to end, so it
+                    // also clears a pending TLS deadline — a proxy that reports
+                    // no control frames still can't fake decrypted traffic.
+                    if (this.tlsRequested && !this.tlsResolved) this.resolveTls();
                     const decodedData = bytesToLatin1(new Uint8Array(event.data));
                     const data = this.mccpHandler.processData(decodedData);
                     if (debugTelnetEnabled()) {
@@ -456,6 +487,14 @@ export class MudClient {
             };
 
             this.socket.onclose = (event: CloseEvent) => {
+                // Closing without a single confirmed byte, while TLS was asked
+                // for, is the other face of the same ambiguity the deadline
+                // covers — report it now rather than waiting it out.
+                if (this.tlsRequested && !this.tlsResolved) {
+                    this.resolveTls();
+                    this.eventBus.emit('tls.timeout', parseHostPort(this.url));
+                }
+                this.resolveTls();
                 this.assembler.flush(Date.now(), true);
                 this.eventBus.emit('close', event);
                 if (isAbnormalClose(event)) {
@@ -486,6 +525,19 @@ export class MudClient {
                     }
                 }
                 this.negotiator.onSocketOpen();
+                // A TLS failure is not reliably reportable: an out-of-date proxy
+                // ignores `&tls=1` and opens a plaintext socket to a port that
+                // will never answer, and a Cloudflare-Worker proxy whose peer
+                // cert is rejected goes silent indefinitely (measured: no error,
+                // no close). Either way the symptom is the same — nothing ever
+                // arrives — so treat prolonged silence as the failure signal.
+                if (this.tlsRequested && !this.tlsResolved && this.tlsDeadline === null) {
+                    this.tlsDeadline = setTimeout(() => {
+                        this.tlsDeadline = null;
+                        if (this.tlsResolved) return;
+                        this.eventBus.emit('tls.timeout', parseHostPort(this.url));
+                    }, TLS_HANDSHAKE_TIMEOUT_MS);
+                }
                 this.eventBus.emit('open', event);
                 this.eventBus.emit('client.connect');
             };
@@ -493,6 +545,53 @@ export class MudClient {
             const message = error instanceof Error ? error.message : String(error);
             this.eventBus.emit('error', error);
             this.eventBus.emit('client.error', `Failed to open WebSocket: ${message}`);
+        }
+    }
+
+    /** Stop policing the TLS deadline — the handshake is accounted for. */
+    private resolveTls(): void {
+        this.tlsResolved = true;
+        if (this.tlsDeadline !== null) {
+            clearTimeout(this.tlsDeadline);
+            this.tlsDeadline = null;
+        }
+    }
+
+    /** Decode one proxy control frame. Anything unrecognised is ignored so a
+     *  newer proxy can add message types without breaking older clients. */
+    private handleControlFrame(raw: string): void {
+        let msg: Record<string, unknown>;
+        try {
+            msg = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+            return; // not our control channel; drop it rather than corrupt the stream
+        }
+        if (!msg || typeof msg.type !== 'string') return;
+
+        if (msg.type === 'tls.established') {
+            this.resolveTls();
+            this.eventBus.emit('tls.established', {
+                protocol: typeof msg.protocol === 'string' ? msg.protocol : '',
+                cipher: typeof msg.cipher === 'string' ? msg.cipher : '',
+                cert: (msg.cert ?? null) as TlsEstablished['cert'],
+                certInspection: msg.certInspection !== false,
+                acceptedDespite: Array.isArray(msg.acceptedDespite) ? msg.acceptedDespite as string[] : [],
+                unsupportedOptions: Array.isArray(msg.unsupportedOptions) ? msg.unsupportedOptions as string[] : [],
+            });
+            return;
+        }
+
+        if (msg.type === 'tls.error') {
+            // A reported failure is an answer, so the deadline has served its
+            // purpose — let the specific error surface instead of a timeout.
+            this.resolveTls();
+            this.eventBus.emit('tls.error', {
+                code: typeof msg.code === 'string' ? msg.code : 'TLS_ERROR',
+                message: typeof msg.message === 'string' ? msg.message : '',
+                codes: Array.isArray(msg.codes) ? msg.codes as string[] : [],
+                cert: (msg.cert ?? null) as TlsError['cert'],
+                certInspection: msg.certInspection !== false,
+            });
         }
     }
 
@@ -883,6 +982,23 @@ export class MudClient {
 
         this.messageBuffer = [];
         this.eventBus.emit('flushLines', groups);
+    }
+}
+
+/** How long a TLS-requested connection may stay silent before we call it a
+ *  failure. Generous, because it also covers a MUD that is simply slow to
+ *  greet — but bounded, because on some proxies a rejected certificate produces
+ *  no error and no close at all, so silence is the only symptom there is. */
+const TLS_HANDSHAKE_TIMEOUT_MS = 12_000;
+
+/** Recover the game's host/port from a proxy URL, for error messages. Falls
+ *  back to empty/0 for a direct websocket URL, which carries neither. */
+function parseHostPort(url: string): { host: string; port: number } {
+    try {
+        const params = new URL(url).searchParams;
+        return { host: params.get('host') ?? '', port: parseInt(params.get('port') ?? '0', 10) || 0 };
+    } catch {
+        return { host: '', port: 0 };
     }
 }
 

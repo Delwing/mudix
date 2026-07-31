@@ -1,5 +1,6 @@
 import * as http from 'http';
 import * as net from 'net';
+import * as tls from 'tls';
 import { WebSocketServer, WebSocket } from 'ws';
 
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
@@ -126,6 +127,113 @@ function safeClose(ws: WebSocket, code: number, reason: string): void {
     }
 }
 
+/** Out-of-band control message to the client. Sent as a **text** frame; MUD
+ *  bytes always travel as binary frames, so the client can route the two apart
+ *  without an envelope. Proxies predating TLS support simply never send these,
+ *  which is what lets the client detect an out-of-date proxy. */
+function sendControl(ws: WebSocket, payload: unknown): void {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(JSON.stringify(payload)); } catch { /* ignore */ }
+}
+
+interface TlsPrefs {
+    enabled: boolean;
+    ignoreExpired: boolean;
+    ignoreSelfSigned: boolean;
+    ignoreAll: boolean;
+}
+
+function boolParam(params: URLSearchParams, name: string): boolean {
+    const v = params.get(name);
+    return v === '1' || v === 'true' || v === 'yes';
+}
+
+// OpenSSL verify codes, grouped the way Mudlet's ignore-flags are grouped.
+// Deliberately *only* CERT_HAS_EXPIRED: Mudlet whitelists QSslError::Certificate-
+// Expired alone, so a not-yet-valid cert stays fatal unless "ignore all" is set.
+const EXPIRED_CODES = new Set(['CERT_HAS_EXPIRED']);
+const SELF_SIGNED_CODES = new Set(['DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN']);
+
+function tolerated(code: string, p: TlsPrefs): boolean {
+    if (p.ignoreAll) return true;
+    if (p.ignoreExpired && EXPIRED_CODES.has(code)) return true;
+    if (p.ignoreSelfSigned && SELF_SIGNED_CODES.has(code)) return true;
+    return false;
+}
+
+/** The cert fields the client renders. Deliberately a flat, small subset — the
+ *  full PeerCertificate carries the raw DER, which we never need to ship. */
+function describeCert(cert: tls.PeerCertificate | undefined): Record<string, string> | null {
+    if (!cert || Object.keys(cert).length === 0) return null;
+    // A DN field may legitimately repeat (multiple CNs); Qt joins them, so do we.
+    const flat = (v: string | string[] | undefined): string => Array.isArray(v) ? v.join(', ') : (v ?? '');
+    return {
+        subject: flat(cert.subject?.CN),
+        subjectOrg: flat(cert.subject?.O),
+        issuer: flat(cert.issuer?.CN),
+        issuerOrg: flat(cert.issuer?.O),
+        validFrom: cert.valid_from ?? '',
+        validTo: cert.valid_to ?? '',
+        // Mudlet's Preferences → Connection → Certificate box shows issuer CN,
+        // subject CN, expiry and serial; the rest is ours for diagnostics.
+        serial: cert.serialNumber ?? '',
+        fingerprint: cert.fingerprint256 ?? cert.fingerprint ?? '',
+        altNames: cert.subjectaltname ?? '',
+    };
+}
+
+/** Verify the peer ourselves instead of letting the handshake abort, so that a
+ *  user who opted to tolerate an expired/self-signed cert still connects — and
+ *  so we can report what the cert actually was in either outcome.
+ *
+ *  Returns *every* problem, because OpenSSL surfaces only the first one it hits
+ *  via `authorizationError`. A self-signed cert issued for a different host
+ *  reports just DEPTH_ZERO_SELF_SIGNED_CERT, so checking the identity only when
+ *  `authorizationError` is clear would let "accept self-signed" silently also
+ *  accept a hostname mismatch. The identity check therefore always runs. */
+function certProblems(socket: tls.TLSSocket, host: string, cert: tls.PeerCertificate): { code: string; message: string }[] {
+    const problems: { code: string; message: string }[] = [];
+    const add = (code: string, message: string) => {
+        if (!problems.some(p => p.code === code)) problems.push({ code, message });
+    };
+
+    const authErr = socket.authorizationError as unknown;
+    if (authErr) {
+        // Node reports this as a bare code string on some paths, an Error on others.
+        const code = typeof authErr === 'string' ? authErr : ((authErr as NodeJS.ErrnoException).code ?? String(authErr));
+        const message = typeof authErr === 'string' ? authErr : ((authErr as Error).message ?? String(authErr));
+        add(code, message);
+    }
+
+    if (cert && Object.keys(cert).length > 0) {
+        // OpenSSL stops at the first failure, but Qt hands Mudlet the *full*
+        // error list and requires a matching checkbox for each. Re-derive the
+        // two individually-ignorable conditions so that, e.g., "accept expired"
+        // alone can't also wave through an untrusted self-signed issuer.
+        const now = Date.now();
+        const notAfter = Date.parse(cert.valid_to ?? '');
+        const notBefore = Date.parse(cert.valid_from ?? '');
+        if (Number.isFinite(notAfter) && now > notAfter) {
+            add('CERT_HAS_EXPIRED', `certificate expired on ${cert.valid_to}`);
+        }
+        if (Number.isFinite(notBefore) && now < notBefore) {
+            add('CERT_NOT_YET_VALID', `certificate is not valid until ${cert.valid_from}`);
+        }
+        // A depth-zero self-signed leaf has an issuer DN identical to its subject.
+        // (A self-signed *root* higher in a chain is normal and is reported by
+        // OpenSSL as SELF_SIGNED_CERT_IN_CHAIN instead.)
+        const dn = (v: unknown) => JSON.stringify(Object.entries((v ?? {}) as Record<string, unknown>).sort());
+        if (cert.subject && cert.issuer && dn(cert.subject) === dn(cert.issuer)) {
+            add('DEPTH_ZERO_SELF_SIGNED_CERT', 'self-signed certificate');
+        }
+        // `rejectUnauthorized: false` skips the hostname check entirely, so run
+        // it explicitly — otherwise a cert for the wrong host passes unnoticed.
+        const idErr = tls.checkServerIdentity(host, cert);
+        if (idErr) add('ERR_TLS_CERT_ALTNAME_INVALID', idErr.message);
+    }
+    return problems;
+}
+
 wss.on('connection', (ws, req) => {
     const reqUrl = req.url ?? '/';
     const params = new URL(reqUrl, 'http://localhost').searchParams;
@@ -142,15 +250,58 @@ wss.on('connection', (ws, req) => {
         return;
     }
 
-    console.log(`[proxy] Connecting to ${host}:${port}`);
+    const tlsPrefs: TlsPrefs = {
+        enabled: boolParam(params, 'tls'),
+        ignoreExpired: boolParam(params, 'tlsIgnoreExpired'),
+        ignoreSelfSigned: boolParam(params, 'tlsIgnoreSelfSigned'),
+        ignoreAll: boolParam(params, 'tlsIgnoreAll'),
+    };
 
-    const tcp = net.connect(port, host);
+    console.log(`[proxy] Connecting to ${host}:${port}${tlsPrefs.enabled ? ' (TLS)' : ''}`);
+
+    let tcp: net.Socket;
     let tcpConnected = false;
 
-    tcp.on('connect', () => {
-        tcpConnected = true;
-        console.log(`[proxy] Connected to ${host}:${port}`);
-    });
+    if (tlsPrefs.enabled) {
+        const secure = tls.connect({ host, port, servername: host, rejectUnauthorized: false });
+        secure.on('secureConnect', () => {
+            tcpConnected = true;
+            const cert = secure.getPeerCertificate();
+            const problems = certProblems(secure, host, cert);
+            const blocking = problems.filter(p => !tolerated(p.code, tlsPrefs));
+            if (blocking.length > 0) {
+                const codes = blocking.map(p => p.code).join(', ');
+                console.warn(`[proxy] TLS cert rejected for ${host}:${port}: ${codes}`);
+                sendControl(ws, {
+                    type: 'tls.error',
+                    code: blocking[0].code,
+                    message: blocking.map(p => p.message).join('; '),
+                    codes: blocking.map(p => p.code),
+                    cert: describeCert(cert),
+                });
+                safeClose(ws, 1011, `Proxy: TLS certificate rejected: ${codes}`);
+                secure.destroy();
+                return;
+            }
+            console.log(`[proxy] Connected to ${host}:${port} over ${secure.getProtocol() ?? 'TLS'}`);
+            sendControl(ws, {
+                type: 'tls.established',
+                protocol: secure.getProtocol() ?? '',
+                cipher: secure.getCipher()?.name ?? '',
+                cert: describeCert(cert),
+                // Non-empty when the user's ignore-flags waved real problems through,
+                // so the UI can show that the link is encrypted but unverified.
+                acceptedDespite: problems.map(p => p.code),
+            });
+        });
+        tcp = secure;
+    } else {
+        tcp = net.connect(port, host);
+        tcp.on('connect', () => {
+            tcpConnected = true;
+            console.log(`[proxy] Connected to ${host}:${port}`);
+        });
+    }
 
     tcp.on('data', (chunk: Buffer) => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -204,4 +355,5 @@ server.listen(PORT, () => {
     console.log(`[proxy] Listening on ws://localhost:${PORT}`);
     console.log(`[proxy] Usage: connect with ws://localhost:${PORT}?host=<mud-host>&port=<mud-port>`);
     console.log(`[proxy] Example: ws://localhost:${PORT}?host=aardmud.org&port=23`);
+    console.log(`[proxy] TLS:     add &tls=1 (optionally &tlsIgnoreExpired=1, &tlsIgnoreSelfSigned=1, &tlsIgnoreAll=1)`);
 });

@@ -4642,3 +4642,167 @@ body.is-sorting {
     justify-content: flex-end;
     gap: 8px;
 }
+
+/* ── TLS: secure-connection offer + failure banner ──────────── */
+
+.tls-upgrade-modal {
+    width: 380px;
+}
+
+.tls-upgrade-lead {
+    margin: 0 0 10px;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.tls-upgrade-note {
+    margin: 0 0 12px;
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.tls-upgrade-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.tls-alert-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    /* Warning accent down the leading edge, so the banner reads as a problem
+       without repainting the whole strip in an alarm colour. */
+    box-shadow: inset 3px 0 0 var(--warning, #d08770);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.tls-alert-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 260px;
+    color: var(--text-dim);
+}
+
+.tls-alert-title {
+    color: var(--text);
+}
+
+.tls-alert-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.tls-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.tls-cert-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.tls-cert-options-title {
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.tls-cert-option {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-dim);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.tls-cert-option input[disabled] {
+    cursor: not-allowed;
+}
+
+.tls-cert-option-danger {
+    color: var(--warning, #d08770);
+}
+
+.tls-cert-options-hint {
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.5;
+}
+
+.tls-cert-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    margin: 4px 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.tls-cert-box-title {
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.tls-cert-box-note,
+.tls-cert-box-warning {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.5;
+}
+
+.tls-cert-box-warning {
+    color: var(--warning, #d08770);
+}
+
+.tls-cert-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 3px 10px;
+    margin: 0;
+    font-size: 11px;
+}
+
+.tls-cert-grid dt {
+    color: var(--text-dim);
+}
+
+.tls-cert-grid dd {
+    margin: 0;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.tls-cert-mono {
+    font-family: var(--font-mono), monospace;
+    font-size: 10px;
+}
+
+/* Shown in place of the certificate checkboxes when the proxy can't act on
+   them (Cloudflare Workers) — informational, so it drops the accent colour. */
+.tls-cert-options--unavailable .tls-cert-options-title {
+    color: var(--text-dim);
+}

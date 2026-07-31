@@ -3,12 +3,24 @@ import { Button, Input, FormField, Toggle } from './components';
 import { useModalFocus } from './components/useModalFocus';
 import { ProxyInfoModal } from './ProxyInfoModal';
 import { ProxyWhyModal } from './ProxyWhyModal';
-import { DEFAULT_PROXY_URL, useAppStore, type ConnectionMode, type MudConnection } from '../storage';
+import { DEFAULT_PROXY_URL, proxyCanInspectCertificates, useAppStore, type ConnectionMode, type MudConnection } from '../storage';
 
-function buildPreviewUrl(host: string, port: string, proxyUrl: string, fallback: string): string {
+/** Preview of the proxy URL the profile will dial. Mirrors `connectionUrl()` in
+ *  storage/schema.ts — keep the two in step. */
+function buildPreviewUrl(
+    host: string, port: string, proxyUrl: string, fallback: string,
+    tls: { on: boolean; expired: boolean; selfSigned: boolean; all: boolean },
+): string {
     const base = (proxyUrl.trim() || fallback).replace(/\/$/, '');
     const p = parseInt(port, 10);
-    return `${base}?host=${encodeURIComponent(host.trim())}&port=${isNaN(p) ? 23 : p}`;
+    let url = `${base}?host=${encodeURIComponent(host.trim())}&port=${isNaN(p) ? 23 : p}`;
+    if (tls.on) {
+        url += '&tls=1';
+        if (tls.expired) url += '&tlsIgnoreExpired=1';
+        if (tls.selfSigned) url += '&tlsIgnoreSelfSigned=1';
+        if (tls.all) url += '&tlsIgnoreAll=1';
+    }
+    return url;
 }
 
 function modeOf(c: MudConnection): ConnectionMode {
@@ -51,6 +63,14 @@ export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, 
     const [proxyUrl, setProxyUrl] = useState(connection?.proxyUrl ?? '');
     const [url, setUrl] = useState(connection?.url ?? '');
     const [autoReconnect, setAutoReconnect] = useState(connection?.autoReconnect ?? false);
+    const [tls, setTls] = useState(connection?.tls ?? false);
+    const [sslIgnoreExpired, setSslIgnoreExpired] = useState(connection?.sslIgnoreExpired ?? false);
+    const [sslIgnoreSelfSigned, setSslIgnoreSelfSigned] = useState(connection?.sslIgnoreSelfSigned ?? false);
+    const [sslIgnoreAll, setSslIgnoreAll] = useState(connection?.sslIgnoreAll ?? false);
+    // A Cloudflare-Worker proxy cannot inspect certificates, so the tolerance
+    // options below would be silently ignored. Derived from the live field so
+    // editing the proxy URL updates the form without a save/reopen.
+    const certOptionsSupported = proxyCanInspectCertificates(proxyUrl.trim() || effectiveDefaultProxy);
     const [account, setAccount] = useState(connection?.charLoginAccount ?? '');
     const [password, setPassword] = useState(connection?.charLoginPassword ?? '');
     const [description, setDescription] = useState(connection?.description ?? '');
@@ -84,6 +104,13 @@ export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, 
                 mode: 'mud',
                 host: host.trim(),
                 port: isNaN(parsedPort) ? 23 : parsedPort,
+                // TLS is a proxy-mode concept only — in websocket mode the URL
+                // scheme decides it, so these are deliberately not carried over.
+                tls: tls || undefined,
+                sslIgnoreExpired: tls && sslIgnoreExpired ? true : undefined,
+                sslIgnoreSelfSigned: tls && sslIgnoreSelfSigned ? true : undefined,
+                sslIgnoreAll: tls && sslIgnoreAll ? true : undefined,
+                preTlsPort: connection?.preTlsPort,
                 ...common,
             };
         }
@@ -235,10 +262,76 @@ export function ConnectionFormModal({ connection, firstConnection, busy, onAdd, 
                             </span>
                         </div>
 
+                        {mode === 'mud' && (
+                            <div className="tls-settings">
+                                <div className="connection-autoconnect-row">
+                                    <label className="connection-autoconnect-label" htmlFor="cs-tls">
+                                        <span className="connection-autoconnect-title">Secure connection (TLS)</span>
+                                        <span className="connection-autoconnect-hint">
+                                            The proxy encrypts the link to the game. The game must offer a TLS port —
+                                            usually a different one from its plaintext port.
+                                        </span>
+                                    </label>
+                                    <Toggle id="cs-tls" checked={tls} onChange={setTls} />
+                                </div>
+                                {tls && !certOptionsSupported && (
+                                    <div className="tls-cert-options tls-cert-options--unavailable">
+                                        <span className="tls-cert-options-title">Certificate options unavailable</span>
+                                        <span className="tls-cert-options-hint">
+                                            This proxy runs on Cloudflare Workers, which cannot inspect the game's
+                                            certificate or override a validation failure. The connection is still
+                                            encrypted, but it only succeeds if the game's certificate is valid and
+                                            publicly trusted. To accept an expired or self-signed certificate, use a
+                                            self-hosted Node proxy.
+                                        </span>
+                                    </div>
+                                )}
+                                {tls && certOptionsSupported && (
+                                    <div className="tls-cert-options">
+                                        <span className="tls-cert-options-title">If the certificate can't be verified</span>
+                                        <label className="tls-cert-option">
+                                            <input
+                                                type="checkbox"
+                                                checked={sslIgnoreExpired}
+                                                disabled={sslIgnoreAll}
+                                                onChange={e => setSslIgnoreExpired(e.target.checked)}
+                                            />
+                                            <span>Accept expired certificates</span>
+                                        </label>
+                                        <label className="tls-cert-option">
+                                            <input
+                                                type="checkbox"
+                                                checked={sslIgnoreSelfSigned}
+                                                disabled={sslIgnoreAll}
+                                                onChange={e => setSslIgnoreSelfSigned(e.target.checked)}
+                                            />
+                                            <span>Accept self-signed certificates</span>
+                                        </label>
+                                        <label className="tls-cert-option">
+                                            <input
+                                                type="checkbox"
+                                                checked={sslIgnoreAll}
+                                                onChange={e => setSslIgnoreAll(e.target.checked)}
+                                            />
+                                            <span className="tls-cert-option-danger">
+                                                Accept all certificate errors (unsecure)
+                                            </span>
+                                        </label>
+                                        <span className="tls-cert-options-hint">
+                                            Accepting all errors keeps the traffic encrypted but no longer proves you're
+                                            talking to the right server.
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         {mode === 'mud' && host.trim() && (
                             <div className="proxy-url-preview">
                                 <span className="proxy-url-preview-label">Connects via</span>
-                                <code className="proxy-url-preview-url">{buildPreviewUrl(host, port, proxyUrl, effectiveDefaultProxy)}</code>
+                                <code className="proxy-url-preview-url">{buildPreviewUrl(host, port, proxyUrl, effectiveDefaultProxy, {
+                                    on: tls, expired: sslIgnoreExpired, selfSigned: sslIgnoreSelfSigned, all: sslIgnoreAll,
+                                })}</code>
                             </div>
                         )}
 

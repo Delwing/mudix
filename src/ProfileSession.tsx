@@ -11,6 +11,11 @@ import { FileBrowserModal } from './ui/FileBrowserModal';
 import { LogBrowserModal } from './ui/LogBrowserModal';
 import { ScriptingDocsModal } from './ui/ScriptingDocsModal';
 import { CharLoginModal } from './ui/CharLoginModal';
+import { TlsUpgradeModal } from './ui/TlsUpgradeModal';
+import { TlsAlertBanner } from './ui/TlsAlertBanner';
+import { applyMsspVariable, emptyMsspTlsFacts, shouldOfferTlsUpgrade } from './mud/protocol/msspTls';
+import { describeCertCode } from './mud/protocol/tlsCodes';
+import type { TlsStatus } from './mud/events';
 import { QuickOpenPalette } from './ui/QuickOpenPalette';
 import { SessionLogger } from './logging/SessionLogger';
 import { useAppStore, selectProfileField, ConnectionIdContext, connectionUrl, connectionSecureTransport, PROTOCOL_DEFAULTS, type MudConnection } from './storage';
@@ -64,6 +69,21 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // GMCP Char.Login credentials popup. Non-null while the server is waiting on
     // a Char.Login.Default reply; `error` carries a previous attempt's failure.
     const [charLogin, setCharLogin] = useState<{ error?: string } | null>(null);
+    // The MSSP-advertised secure-port offer. Non-null while the question is on
+    // screen; `port` is the port the server says speaks TLS.
+    const [tlsOffer, setTlsOffer] = useState<{ port: number } | null>(null);
+    // Outcome of a TLS connection attempt, surfaced in the toolbar//status and
+    // used to explain a failed upgrade. Null before anything is known.
+    const [tlsStatus, setTlsStatus] = useState<TlsStatus | null>(null);
+    // MSSP facts for this connection, and a latch so a server that re-sends its
+    // status block can't stack duplicate offers. Refs, not state: they're read
+    // inside event handlers and must never trigger a re-render themselves.
+    const msspTlsFacts = useRef(emptyMsspTlsFacts());
+    const tlsPromptInFlight = useRef(false);
+    // `connection` is a snapshot taken when the profile was opened — App holds it
+    // in state and never re-reads it. The TLS flow rewrites port/tls/preTlsPort
+    // in the store, so anything rendered from those must use the live record.
+    const liveConnection = useAppStore(s => s.connections.find(c => c.id === connection.id)) ?? connection;
     // Pending Lua invokeFileDialog requests. Each parks a Lua handler until its
     // onPick fires, so requests queue up and resolve strictly one at a time.
     const [fileDialogs, setFileDialogs] = useState<FileDialogRequest[]>([]);
@@ -183,9 +203,10 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     // otherwise — the raw telnet stream mudix decodes.
     const subprotocols = connection.mode === 'mud' ? [] : [...wsSubprotocols];
     // The NEW-ENVIRON TLS variable describes the game-facing link: a direct
-    // wss:// connection is TLS, but proxy mode is plaintext upstream regardless
-    // of the proxy URL scheme (see connectionSecureTransport).
-    const secureTransport = connectionSecureTransport(connection);
+    // wss:// connection is TLS, and in proxy mode it depends on whether the
+    // profile asked the proxy to encrypt the upstream leg. Read live, so a TLS
+    // upgrade is reported correctly on the connection it takes effect on.
+    const secureTransport = connectionSecureTransport(liveConnection);
     // Mudlet's `advertiseScreenReader` (config bag). Read like the protocol
     // toggles above — the MTTS/NEW-ENVIRON negotiation only runs at connect
     // time, so a mid-session change takes effect on the next reconnect.
@@ -473,6 +494,75 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
         return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); };
     }, [session]);
 
+    // MSSP-advertised secure port, plus the outcome of any TLS handshake.
+    // Mirrors Mudlet's cTelnet::promptTlsConnectionAvailable: a server that
+    // advertises a TLS port gets to ask, once, whether to switch to it.
+    useEffect(() => {
+        const t1 = session.events.on('mssp', ({ name, value }) => {
+            msspTlsFacts.current = applyMsspVariable(msspTlsFacts.current, name, value);
+            const conn = useAppStore.getState().connections.find(c => c.id === connection.id) ?? connection;
+            const ask = selectProfileField(useAppStore.getState(), connection.id, 'askTlsAvailable') ?? true;
+            if (!shouldOfferTlsUpgrade({
+                facts: msspTlsFacts.current,
+                host: conn.host ?? '',
+                port: conn.port ?? 23,
+                tlsEnabled: !!conn.tls,
+                askTlsAvailable: ask,
+                promptInFlight: tlsPromptInFlight.current,
+                proxyMode: (conn.mode ?? 'websocket') === 'mud',
+            })) return;
+            // Latch before showing, so repeated advertisements can't stack dialogs.
+            tlsPromptInFlight.current = true;
+            const port = msspTlsFacts.current.tlsPort;
+            postTlsMessage(`A more secure connection on port ${port} is available.`);
+            setTlsOffer({ port });
+        });
+        const t2 = session.events.on('tls.established', (info) => {
+            setTlsStatus({ kind: 'established', info });
+            // A working secure connection retires the revert affordance.
+            if (useAppStore.getState().connections.find(c => c.id === connection.id)?.preTlsPort !== undefined) {
+                useAppStore.getState().patchConnection(connection.id, { preTlsPort: undefined });
+            }
+            const parts = [info.protocol, info.cipher].filter(Boolean).join(', ');
+            postTlsMessage(`Secure connection made${parts ? ` (${parts})` : ''}.`);
+            if (info.acceptedDespite.length > 0) {
+                postTlsMessage(
+                    `Certificate accepted even though ${info.acceptedDespite.map(describeCertCode).join(', and ')}.`,
+                    true,
+                );
+            }
+            if (info.unsupportedOptions.length > 0) {
+                postTlsMessage(
+                    'This proxy cannot override certificate validation, so the certificate options you set were ignored.',
+                    true,
+                );
+            }
+        });
+        const t3 = session.events.on('tls.error', (info) => {
+            setTlsStatus({ kind: 'error', info });
+            const reasons = (info.codes.length ? info.codes : [info.code]).map(describeCertCode).join('; ');
+            postTlsMessage(`Secure connection refused — ${reasons}.`, true);
+        });
+        const t4 = session.events.on('tls.timeout', ({ host, port }) => {
+            setTlsStatus({ kind: 'timeout', host, port });
+            postTlsMessage(
+                `No response on the secure port ${port}. Either the proxy is too old to support TLS, `
+                + 'or the game rejected the connection.',
+                true,
+            );
+        });
+        // A fresh dial invalidates the previous connection's verdict.
+        const t5 = session.events.on('client.connect', () => {
+            msspTlsFacts.current = emptyMsspTlsFacts();
+            setTlsStatus(null);
+        });
+        const t6 = session.events.on('client.disconnect', () => {
+            tlsPromptInFlight.current = false;
+            setTlsOffer(null);
+        });
+        return () => { t1(); t2(); t3(); t4(); t5(); t6(); };
+    }, [session, connection]);
+
     // Replay state → toolbar. Playback can start outside the UI too (Lua
     // loadReplay), so both controls track the session's events rather than
     // local click handlers.
@@ -488,6 +578,17 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
         session.events.emit(
             'message',
             isError ? `\x1b[31m[ WARN ]\x1b[0m  - ${text}` : `\x1b[36m[ INFO ]\x1b[0m  - ${text}`,
+            'script',
+            Date.now(),
+        );
+    };
+
+    /** Console notice about the secure connection, in Mudlet's house style —
+     *  `[ INFO ]` for progress, `[ ALERT ]` for a refusal or a downgrade. */
+    const postTlsMessage = (text: string, isAlert = false) => {
+        session.events.emit(
+            'message',
+            isAlert ? `\x1b[31m[ ALERT ]\x1b[0m - ${text}` : `\x1b[36m[ INFO ]\x1b[0m  - ${text}`,
             'script',
             Date.now(),
         );
@@ -706,7 +807,64 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
     }, [session, connection.id, saveWindowHint, saveDockExtents, engineRef]);
 
     const handleDisconnect = () => disconnect();
-    const handleReconnect  = () => connect(connectionUrl(connection, useAppStore.getState().client.userProxyUrl));
+    // Reads the store rather than the `connection` snapshot, so a reconnect after
+    // a TLS upgrade dials the new secure port instead of the original one.
+    const handleReconnect  = () => redialFromStore();
+
+    /** Redial using the connection record as it stands in the store right now,
+     *  rather than the `connection` prop captured at render — the TLS handlers
+     *  below have just rewritten port/tls and need the updated URL. */
+    const redialFromStore = () => {
+        const state = useAppStore.getState();
+        const conn = state.connections.find(c => c.id === connection.id) ?? connection;
+        connect(connectionUrl(conn, state.client.userProxyUrl));
+    };
+
+    /** Accept the MSSP secure-port offer: drop the plaintext link, move to the
+     *  advertised port with TLS on, and redial. Mirrors Mudlet's
+     *  slot_tlsUpgradeResponse(true) — including persisting the choice. */
+    const handleAcceptTlsUpgrade = () => {
+        const port = tlsOffer?.port;
+        setTlsOffer(null);
+        tlsPromptInFlight.current = false;
+        if (!port) return;
+        disconnect();
+        // Remember where we came from so a failed upgrade can be undone.
+        useAppStore.getState().patchConnection(connection.id, {
+            port,
+            tls: true,
+            preTlsPort: useAppStore.getState().connections.find(c => c.id === connection.id)?.port ?? connection.port ?? 23,
+        });
+        postTlsMessage(`Switching to port ${port} with encryption…`);
+        redialFromStore();
+    };
+
+    /** Decline: remember not to ask again for this profile. Mudlet also cycles
+     *  the connection here purely to flush its read buffer; mudix has no such
+     *  need, so the session simply carries on undisturbed. */
+    const handleDeclineTlsUpgrade = () => {
+        setTlsOffer(null);
+        tlsPromptInFlight.current = false;
+        useAppStore.getState().patchConnectionProfile(connection.id, { askTlsAvailable: false });
+    };
+
+    /** Undo an upgrade that didn't work: back to the remembered plaintext port. */
+    const handleRevertTls = () => {
+        const conn = useAppStore.getState().connections.find(c => c.id === connection.id) ?? connection;
+        const port = conn.preTlsPort ?? 23;
+        disconnect();
+        useAppStore.getState().patchConnection(connection.id, { port, tls: false, preTlsPort: undefined });
+        // Reverting *is* a verdict on the advertised port: without this, the very
+        // next MSSP block would offer the same broken upgrade again, and the user
+        // would be stuck in an accept/fail/revert loop.
+        useAppStore.getState().patchConnectionProfile(connection.id, { askTlsAvailable: false });
+        setTlsStatus(null);
+        postTlsMessage(
+            `Reverted to port ${port} without encryption. Re-enable "Allow secure connection reminder" `
+            + 'in Settings → Network to be offered the secure port again.',
+        );
+        redialFromStore();
+    };
 
     const handleOpenMap = () => {
         if (session.windows.isVisible('map')) {
@@ -795,6 +953,15 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                     onClose={onToggleSettings}
                     connectionId={connection.id}
                     vfs={vfs}
+                    tlsStatus={tlsStatus}
+                />
+            )}
+            {tlsStatus && tlsStatus.kind !== 'established' && (
+                <TlsAlertBanner
+                    status={tlsStatus}
+                    revertPort={liveConnection.preTlsPort}
+                    onRevert={handleRevertTls}
+                    onDismiss={() => setTlsStatus(null)}
                 />
             )}
             <div className="app-content">
@@ -876,7 +1043,19 @@ export function ProfileSession({ connection, autoConnect, vfs, settingsOpen, onT
                     onClose={() => setQuickOpenOpen(false)}
                 />
             )}
-            {charLogin && (
+            {tlsOffer && (
+                <TlsUpgradeModal
+                    port={tlsOffer.port}
+                    onAccept={handleAcceptTlsUpgrade}
+                    onDecline={handleDeclineTlsUpgrade}
+                />
+            )}
+            {/* The secure-port offer wins the race when a server volunteers MSSP
+                and GMCP Char.Login in the same burst (StickMUD sends MSSP ~600ms
+                in, alongside the login request). Accepting the upgrade drops the
+                connection, so collecting credentials first would throw them away
+                and ask twice; declining renders this immediately afterwards. */}
+            {charLogin && !tlsOffer && (
                 <CharLoginModal
                     connectionName={connection.name}
                     error={charLogin.error}

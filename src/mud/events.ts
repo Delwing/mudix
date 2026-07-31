@@ -4,6 +4,51 @@ import type { ScriptLogSource } from './MudSession';
 
 export type SessionStatus = 'disconnected' | 'connecting' | 'connected';
 
+/** The peer certificate as reported by the proxy. Mirrors the four fields
+ *  Mudlet shows (issuer / issued-to / expiry / serial) plus a little extra for
+ *  diagnostics. All strings, already formatted for display. */
+export interface TlsCertInfo {
+    subject: string;
+    subjectOrg: string;
+    issuer: string;
+    issuerOrg: string;
+    validFrom: string;
+    validTo: string;
+    serial: string;
+    fingerprint: string;
+    altNames: string;
+}
+
+export interface TlsEstablished {
+    /** Negotiated protocol, e.g. `TLSv1.3`. Empty when the proxy can't report it. */
+    protocol: string;
+    /** Negotiated cipher suite name. Empty when the proxy can't report it. */
+    cipher: string;
+    cert: TlsCertInfo | null;
+    /** False when the proxy runtime cannot inspect certificates at all. */
+    certInspection: boolean;
+    /** Certificate faults tolerated because of the profile's ignore-flags. */
+    acceptedDespite: string[];
+    /** Cert-tolerance options this proxy was asked for but cannot honour. */
+    unsupportedOptions: string[];
+}
+
+/** What the UI knows about the current connection's TLS state. */
+export type TlsStatus =
+    | { kind: 'established'; info: TlsEstablished }
+    | { kind: 'error'; info: TlsError }
+    /** TLS was asked for but nothing came back — see the `tls.timeout` event. */
+    | { kind: 'timeout'; host: string; port: number };
+
+export interface TlsError {
+    /** Primary blocking fault, e.g. `CERT_HAS_EXPIRED`. */
+    code: string;
+    message: string;
+    codes: string[];
+    cert: TlsCertInfo | null;
+    certInspection: boolean;
+}
+
 /** A pending Mudlet `invokeFileDialog(...)` request. The Lua handler that
  *  called it is suspended (parked coroutine) until `onPick` fires, so the UI
  *  must always resolve it eventually — pass the picked VFS path, or '' for
@@ -29,6 +74,21 @@ export type MudClientEvents = {
     /** The WebSocket subprotocol the server selected from our advertised list
      *  (RFC 6455), or '' if none — only emitted when we advertised any. */
     'client.subprotocol': [protocol: string];
+    /** The proxy completed a TLS handshake with the game and the link is
+     *  carrying decrypted traffic. `cert` is null when the proxy cannot inspect
+     *  certificates (the Cloudflare Worker runtime can't), in which case
+     *  `certInspection` is false. `acceptedDespite` lists any certificate faults
+     *  the profile's ignore-flags waved through — non-empty means encrypted but
+     *  not authenticated. */
+    'tls.established': [info: TlsEstablished];
+    /** The proxy refused the game's certificate, or the TLS handshake failed.
+     *  The connection is closing; `codes` carries every blocking fault. */
+    'tls.error': [info: TlsError];
+    /** TLS was requested but the link produced no evidence of a handshake before
+     *  the deadline. Distinct from `tls.error` because the cause is ambiguous:
+     *  a proxy too old to understand `&tls=1`, or a Cloudflare-Worker-backed
+     *  proxy where a rejected certificate hangs silently instead of reporting. */
+    'tls.timeout': [info: { host: string; port: number }];
     'gmcp.negotiated': void;
     'msdp.negotiated': void;
     'mssp.negotiated': void;

@@ -50,6 +50,28 @@ export interface MudConnection {
      *  already ship them — Mudlet installs those only into brand-new profiles, so
      *  their absence in an imported profile is a real choice, not a gap to fill. */
     mudletImported?: boolean;
+    /** Connect to the game over TLS — Mudlet's `mSslTsl` / the connection
+     *  dialog's "secure connection" checkbox. Meaningful in `mud` (proxy) mode
+     *  only: the browser cannot wrap a raw socket itself, so the proxy performs
+     *  the handshake on our behalf (`&tls=1`). In `websocket` mode the URL
+     *  scheme already decides it, so this flag is ignored there. */
+    tls?: boolean;
+    /** Tolerate an expired peer certificate (Mudlet's `mSslIgnoreExpired`). */
+    sslIgnoreExpired?: boolean;
+    /** Tolerate a self-signed peer certificate (Mudlet's `mSslIgnoreSelfSigned`). */
+    sslIgnoreSelfSigned?: boolean;
+    /** Tolerate *every* certificate fault, hostname mismatch included — this
+     *  gives up the authentication half of TLS and leaves only encryption
+     *  (Mudlet's `mSslIgnoreAll`, labelled "unsecure" in its UI).
+     *
+     *  ⚠ All three are honoured only by the Node proxy. The Cloudflare Worker
+     *  runtime's `connect()` exposes no way to inspect or override certificate
+     *  validation, so a worker-backed profile silently ignores them. */
+    sslIgnoreAll?: boolean;
+    /** The plaintext port in use before an MSSP-advertised TLS upgrade, kept so
+     *  a failed upgrade can be reverted in one click. Cleared once a secure
+     *  connection has actually worked. */
+    preTlsPort?: number;
     /** Free-text profile description (Mudlet's profile "description" field, read/
      *  written by getProfileInformation / setProfileInformation /
      *  clearProfileInformation). Lives on the connection record — not the VFS-
@@ -107,6 +129,12 @@ export interface ProfileSettings {
      *  installed automatically). Disable to ignore those requests. Per-profile
      *  so each MUD is trusted independently. */
     allowMudPackageInstall?: boolean;
+    /** When true (default), a server that advertises a TLS port via MSSP prompts
+     *  once to switch to it. Declining sets this false so the offer never
+     *  reappears for this profile. Mudlet calls it `mAskTlsAvailable`
+     *  ("Allow secure connection reminder"), settable from Lua via
+     *  `setProfileConfig("askTlsAvailable", …)`. */
+    askTlsAvailable?: boolean;
     showTimestamps: boolean;
     fontSize: number;
     outputBackground: string;
@@ -748,9 +776,50 @@ export function connectionUrl(c: MudConnection, userProxyUrl?: string): string {
         // Precedence: connection-level proxy > user's deployed proxy > brand
         // proxy (white-label builds) > built-in default.
         const base = (c.proxyUrl?.trim() || userProxyUrl || getBrand().proxyUrl || DEFAULT_PROXY_URL).replace(/\/$/, '');
-        return `${base}?host=${encodeURIComponent(c.host ?? '')}&port=${c.port ?? 23}`;
+        let url = `${base}?host=${encodeURIComponent(c.host ?? '')}&port=${c.port ?? 23}`;
+        if (c.tls) {
+            // Ask the proxy to wrap the game socket in TLS. The cert-tolerance
+            // flags are only sent when actually set, so an older proxy that
+            // doesn't understand them still sees a URL it can parse.
+            url += '&tls=1';
+            if (c.sslIgnoreExpired) url += '&tlsIgnoreExpired=1';
+            if (c.sslIgnoreSelfSigned) url += '&tlsIgnoreSelfSigned=1';
+            if (c.sslIgnoreAll) url += '&tlsIgnoreAll=1';
+        }
+        return url;
     }
     return c.url ?? '';
+}
+
+/** The proxy a `mud`-mode connection will actually dial, applying the same
+ *  precedence as {@link connectionUrl}: per-connection > user's own > brand >
+ *  built-in default. */
+export function effectiveProxyUrl(c: MudConnection, userProxyUrl?: string): string {
+    return (c.proxyUrl?.trim() || userProxyUrl || getBrand().proxyUrl || DEFAULT_PROXY_URL).replace(/\/$/, '');
+}
+
+/**
+ * Whether a proxy can inspect the game's certificate — and therefore whether
+ * the "accept expired / self-signed / all" options mean anything.
+ *
+ * Only the Node proxy can: it uses `tls.connect` and reads the peer certificate.
+ * A Cloudflare Worker cannot, because `cloudflare:sockets` `connect()` exposes
+ * no certificate and no way to waive a validation failure — the options would be
+ * silently ignored, so the UI disables them instead of pretending.
+ *
+ * Recognised by the `workers.dev` hostname, which covers the built-in default
+ * proxy and anything deployed from `worker/`. A Worker on a custom domain can't
+ * be told apart from a Node proxy up front; that case is corrected at runtime by
+ * the `certInspection: false` flag the proxy reports on `tls.established`.
+ */
+export function proxyCanInspectCertificates(proxyUrl: string): boolean {
+    try {
+        // The scheme is ws/wss; URL parses those fine.
+        const host = new URL(proxyUrl).hostname.toLowerCase();
+        return !(host === 'workers.dev' || host.endsWith('.workers.dev'));
+    } catch {
+        return true; // unparseable — don't hide controls on a guess
+    }
 }
 
 export function connectionDisplayAddr(c: MudConnection): string {
@@ -761,11 +830,10 @@ export function connectionDisplayAddr(c: MudConnection): string {
 /** Whether the connection's link to the *game server* is TLS-encrypted — the
  *  signal reported as the NEW-ENVIRON `TLS` variable. In `websocket` mode the
  *  browser connects straight to the game, so a `wss://` URL is end-to-end TLS.
- *  In `mud` (proxy) mode the browser↔proxy hop may be `wss://`, but the proxy
- *  reaches the MUD over a raw TCP telnet socket (`net.connect`, no upstream
- *  TLS) — so the server's inbound connection is always plaintext and this is
- *  false regardless of the proxy URL scheme. */
+ *  In `mud` (proxy) mode the browser↔proxy hop being `wss://` says nothing about
+ *  the proxy↔game hop: that leg is a plaintext telnet socket unless `tls` is set,
+ *  which makes the proxy perform a TLS handshake with the game instead. */
 export function connectionSecureTransport(c: MudConnection): boolean {
-    if (c.mode === 'mud') return false;
+    if (c.mode === 'mud') return !!c.tls;
     return (c.url ?? '').trim().toLowerCase().startsWith('wss://');
 }
