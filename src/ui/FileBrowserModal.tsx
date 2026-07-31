@@ -1,10 +1,12 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { Folder, FolderOpen, FolderPlus, FolderUp, File, RefreshCw, LucideFolderPen, Upload, Trash2, Home, Link, Unlink, Play } from 'lucide-react';
+import { Folder, FolderOpen, FolderPlus, FolderUp, File, RefreshCw, LucideFolderPen, Upload, Trash2, Home, Link, Unlink, Play, Download, FolderDown } from 'lucide-react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
+import { zipSync } from 'fflate';
 import { ResizableModal } from './ResizableModal';
 import { ContextMenu } from './components';
 import { useAppStore } from '../storage';
+import { downloadBlob } from '../storage/logExport';
 import type { ProfileVFS } from '../scripting/vfs/ProfileVFS';
 import { getSqliteClient } from '../db/sqliteClient';
 import { CodeEditorPreview, EDITABLE_EXTENSIONS } from './CodeEditorPreview';
@@ -65,6 +67,66 @@ function moveVFSNode(vfs: ProfileVFS, srcPath: string, destDirPath: string): voi
         copyDirRecursive(vfs, srcPath, destPath);
         vfs.rmdir(srcPath);
     }
+}
+
+// ─── Download Helpers ──────────────────────────────────────────────────────
+
+function safeDownloadName(name: string): string {
+    return name.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim() || 'download';
+}
+
+// Flatten a VFS directory into fflate's { path: bytes } map, relative to
+// `prefix`. Empty directories are emitted as explicit `dir/` entries so the
+// archive round-trips the layout. Unreadable files are skipped rather than
+// failing the whole export.
+export function collectZipEntries(
+    vfs: ProfileVFS,
+    dirPath: string,
+    prefix: string,
+    out: Record<string, Uint8Array>,
+    depth = 0,
+): void {
+    if (depth > 24) return;
+    let names: string[];
+    try { names = vfs.readdir(dirPath); } catch { return; }
+    if (names.length === 0) {
+        if (prefix) out[prefix] = new Uint8Array(0);
+        return;
+    }
+    for (const name of names) {
+        const full = `${dirPath}/${name}`;
+        if (vfs.stat(full)?.type === 'dir') {
+            collectZipEntries(vfs, full, `${prefix}${name}/`, out, depth + 1);
+        } else {
+            try {
+                const raw = vfs.readBinaryFile(full);
+                // Copy out of ZenFS's Buffer view — it can carry a non-zero
+                // byteOffset over a shared backing store.
+                const bytes = new Uint8Array(raw.byteLength);
+                bytes.set(raw);
+                out[`${prefix}${name}`] = bytes;
+            } catch (err) {
+                console.error(`[download] skipped ${full}:`, err);
+            }
+        }
+    }
+}
+
+function downloadVfsFile(vfs: ProfileVFS, node: VFSNode): void {
+    const raw = vfs.readBinaryFile(node.path);
+    const bytes = new Uint8Array(raw.byteLength);
+    bytes.set(raw);
+    downloadBlob(safeDownloadName(node.name), new Blob([bytes], { type: 'application/octet-stream' }));
+}
+
+function downloadVfsDir(vfs: ProfileVFS, dirPath: string, zipName: string): void {
+    const entries: Record<string, Uint8Array> = {};
+    collectZipEntries(vfs, dirPath, '', entries);
+    const zipped = zipSync(entries, { level: 6 });
+    downloadBlob(
+        `${safeDownloadName(zipName)}.zip`,
+        new Blob([zipped.slice()], { type: 'application/zip' }),
+    );
 }
 
 // ─── Preview Strategy System ───────────────────────────────────────────────
@@ -822,6 +884,7 @@ interface FileBrowserModalProps {
 export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, initialPathTick, initialLine, onPlayReplay }: FileBrowserModalProps) {
     const savedBounds     = useAppStore(s => s.connectionModalBounds[connectionId]?.['files']);
     const saveModalBounds = useAppStore(s => s.saveModalBounds);
+    const connectionName  = useAppStore(s => s.connections.find(c => c.id === connectionId)?.name);
 
     // ── Tree rebuild ──────────────────────────────────────────────────────
 
@@ -1198,6 +1261,48 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
         }
     }, [vfs, pruneExpanded, clearSelection, bumpRev]);
 
+    // ── Download ──────────────────────────────────────────────────────────
+
+    // Zipping is synchronous and blocks the UI, so flag it while it runs —
+    // a large profile (fonts, sounds, maps) can take a moment.
+    const [zipping, setZipping] = useState(false);
+
+    const runDownload = useCallback((fn: () => void) => {
+        setZipping(true);
+        // Yield to the event loop so the disabled/greyed button gets a chance
+        // to paint before zipSync takes the main thread. A timeout rather than
+        // requestAnimationFrame: rAF never fires in a background tab, which
+        // would leave the download silently stuck.
+        setTimeout(() => {
+            try {
+                fn();
+            } catch (err) {
+                console.error('Download failed:', err);
+                window.alert(`Download failed: ${(err as Error).message}`);
+            } finally {
+                setZipping(false);
+            }
+        });
+    }, []);
+
+    const handleDownload = useCallback((node: VFSNode) => {
+        setCtxMenu(null);
+        if (!vfs) return;
+        if (node.type === 'file') {
+            runDownload(() => downloadVfsFile(vfs, node));
+        } else {
+            const name = node.path === vfs.profilePath
+                ? (connectionName || 'profile')
+                : node.name;
+            runDownload(() => downloadVfsDir(vfs, node.path, name));
+        }
+    }, [vfs, connectionName, runDownload]);
+
+    const handleDownloadAll = useCallback(() => {
+        if (!vfs) return;
+        runDownload(() => downloadVfsDir(vfs, vfs.profilePath, connectionName || 'profile'));
+    }, [vfs, connectionName, runDownload]);
+
     // ── Drag & Drop ───────────────────────────────────────────────────────
 
     const [dragPath, setDragPath] = useState<string | null>(null);
@@ -1516,6 +1621,14 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                         >
                             <FolderUp size={13} />
                         </button>
+                        <button
+                            className="modal-close"
+                            title="Download the whole profile as a .zip"
+                            onClick={handleDownloadAll}
+                            disabled={!vfs || zipping}
+                        >
+                            <FolderDown size={13} style={zipping ? { opacity: 0.4 } : undefined} />
+                        </button>
                         {linkSupported && (linkedHandle ? (
                             <button
                                 className="modal-close"
@@ -1677,6 +1790,14 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                             <button
                                 className="ctx-menu__item"
                                 type="button"
+                                onClick={() => handleDownload(ctxMenu.node)}
+                            >
+                                <FolderDown size={13} />
+                                {isRoot(ctxMenu.node) ? 'Download profile as .zip' : 'Download folder as .zip'}
+                            </button>
+                            <button
+                                className="ctx-menu__item"
+                                type="button"
                                 onClick={() => handleRename(ctxMenu.node)}
                             >
                                 <LucideFolderPen size={13} />
@@ -1709,6 +1830,14 @@ export function FileBrowserModal({ connectionId, vfs, onClose, initialPath, init
                                     Play replay
                                 </button>
                             )}
+                            <button
+                                className="ctx-menu__item"
+                                type="button"
+                                onClick={() => handleDownload(ctxMenu.node)}
+                            >
+                                <Download size={13} />
+                                Download
+                            </button>
                             <button
                                 className="ctx-menu__item"
                                 type="button"
