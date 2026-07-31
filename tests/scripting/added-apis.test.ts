@@ -652,7 +652,25 @@ describe('gotoRoom', () => {
   beforeEach(async () => { env = await createTestRuntime(); });
   afterEach(() => env.dispose());
 
-  it('pathfinds from the current room and sends the moves', () => {
+  // Mudlet's gotoRoom never walks the path itself — it fills the speedWalk*
+  // tables and calls the mapper package's doSpeedWalk, which owns the pacing,
+  // balance checks and off-path recovery.
+  it('hands the path to the mapper doSpeedWalk instead of sending it', () => {
+    env.run('addRoom(1); addRoom(2); addRoom(3); setExit(1, 2, "north"); setExit(2, 3, "north"); centerview(1)');
+    env.run('walked = nil; function doSpeedWalk() walked = table.concat(speedWalkDir, ",") end');
+    const before = env.mainOutput.length;
+    expect(env.run('return (gotoRoom(3))')).toBe(true);
+    expect(env.run('return #speedWalkDir')).toBe(2);
+    expect(env.run('return walked')).toBe('n,n');
+    // The mapper decides when to send, so gotoRoom itself echoed nothing.
+    expect(env.mainOutput.slice(before).join('')).toBe('');
+    env.run('doSpeedWalk = nil');
+  });
+
+  // Mudlet raises "attempt to call a nil value" here and the player doesn't
+  // move; mudix keeps the pre-delegation behaviour so a profile with no mapper
+  // package installed still walks.
+  it('falls back to sending the moves when no mapper defines doSpeedWalk', () => {
     env.run('addRoom(1); addRoom(2); setExit(1, 2, "north"); centerview(1)');
     const before = env.mainOutput.length;
     expect(env.run('return (gotoRoom(2))')).toBe(true);
@@ -674,6 +692,60 @@ describe('gotoRoom', () => {
   it('fails for an invalid target room', () => {
     env.run('addRoom(1); centerview(1)');
     expect(env.run('return (gotoRoom(999))')).toBeNull();
+  });
+});
+
+// The map's double-click-to-walk gesture (Mudlet T2DMap::initiateSpeedWalk →
+// Host::startSpeedWalk). MapPanel resolves the clicked room and calls
+// WindowManager.startSpeedWalk, which lands in the Lua entry point below.
+describe('map double-click speedwalk', () => {
+  let env: TestRuntime;
+  beforeEach(async () => {
+    env = await createTestRuntime();
+    // The wiring ScriptingEngine does for the real app.
+    env.session.windows.onStartSpeedWalk = (from, to) => env.rt.startSpeedWalk(from, to);
+  });
+  afterEach(() => env.dispose());
+
+  it('pathfinds from the player room and hands the route to doSpeedWalk', () => {
+    env.run('addRoom(1); addRoom(2); addRoom(3); setExit(1, 2, "east"); setExit(2, 3, "east"); centerview(1)');
+    env.run('walked = nil; function doSpeedWalk() walked = table.concat(speedWalkDir, ",") end');
+    expect(env.session.windows.startSpeedWalk(3)).toBe(true);
+    expect(env.run('return walked')).toBe('e,e');
+  });
+
+  it('ignores a double-click on a room that is not in the map', () => {
+    env.run('addRoom(1); centerview(1)');
+    expect(env.session.windows.startSpeedWalk(999)).toBe(false);
+  });
+
+  it('reports the mapper message when no path exists', () => {
+    env.run('addRoom(1); addRoom(2); centerview(1)'); // no exits between them
+    env.run('walked = nil; function doSpeedWalk() walked = "walked" end');
+    const before = env.mainOutput.length;
+    expect(env.session.windows.startSpeedWalk(2)).toBe(true);
+    expect(env.run('return walked')).toBeNull();
+    expect(env.mainOutput.slice(before).join('')).toContain('Cannot find a path from 1 to 2');
+  });
+
+  // An unknown player room pathfinds from -1 (Mudlet: from the missing profile
+  // entry, room 0) and so finds nothing — reported, not silently dropped.
+  it('reports rather than walks when the player room is unknown', () => {
+    env.run('addRoom(1); addRoom(2); setExit(1, 2, "east")'); // no centerview
+    const before = env.mainOutput.length;
+    expect(env.session.windows.startSpeedWalk(2)).toBe(true);
+    expect(env.mainOutput.slice(before).join('')).toContain('Cannot find a path from -1 to 2');
+  });
+
+  // mudlet.custom_speedwalk hands the endpoints to a mapper that does its own
+  // pathfinding; Mudlet computes no path at all in that case.
+  it('honours mudlet.custom_speedwalk', () => {
+    env.run('addRoom(1); addRoom(2); centerview(1)'); // no path between them
+    env.run('mudlet = mudlet or {}; mudlet.custom_speedwalk = true');
+    env.run('endpoints = nil; function doSpeedWalk() endpoints = speedWalkFrom .. "->" .. speedWalkTo end');
+    expect(env.session.windows.startSpeedWalk(2)).toBe(true);
+    expect(env.run('return endpoints')).toBe('1->2');
+    env.run('mudlet.custom_speedwalk = nil');
   });
 });
 

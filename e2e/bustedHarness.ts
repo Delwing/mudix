@@ -103,14 +103,34 @@ export async function seedProfile(page: Page): Promise<void> {
 // StrictMode remount + the deep-link connection effect), each time resetting the
 // hook — so waiting for it to merely *exist* races a soon-to-be-destroyed runtime.
 // Instead poll an actual trivial run until it returns.
+//
+// Lua answering is necessary but NOT sufficient: __runBusted goes live well
+// before ScriptingEngine.start() finishes its initial load pass. perm aliases and
+// perm triggers are written to the store only (createPermAlias et al), and reach
+// the AliasEngine/TriggerEngine solely via the store subscription start() attaches
+// at its very end; triggers additionally compile only once PCRE wasm resolves.
+// Since a busted run is one synchronous doStringSync, a queued apply can never
+// catch up mid-run — so a run started early makes every perm* spec (and the
+// seeded nested-trigger fixture below) fail nondeterministically. __mudixBustedReady
+// reports whether sysLoadEvent has fired, which the engine raises only once all
+// of that is in place.
 export async function reopen(page: Page): Promise<void> {
     await page.goto('/?profile=mudlet-self-test');
     await page.waitForFunction(
         () => {
-            const fn = (window as unknown as { __runBusted?: (p: string) => { total?: number } }).__runBusted;
-            if (typeof fn !== 'function') return false;
+            const w = window as unknown as {
+                __runBusted?: (p: string) => { total?: number };
+                __mudixBustedReady?: () => boolean;
+            };
+            if (typeof w.__mudixBustedReady !== 'function') return false;
             try {
-                return (fn('StringUtils').total ?? 0) > 0;
+                if (!w.__mudixBustedReady()) return false;
+            } catch {
+                return false; // runtime torn down mid-poll
+            }
+            if (typeof w.__runBusted !== 'function') return false;
+            try {
+                return (w.__runBusted('StringUtils').total ?? 0) > 0;
             } catch {
                 return false;
             }

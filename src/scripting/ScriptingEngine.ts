@@ -249,8 +249,8 @@ export class ScriptingEngine implements EngineHost {
     private vfs: ProfileVFS | null = null;
     private readonly runtimeReady: Promise<IScriptingRuntime>;
     // Resolves once the initial load pass has finished — scripts/aliases/timers/
-    // keys applied, sysLoadEvent fired, and triggers compiled (PCRE wasm ready
-    // and patterns applied). The auto-connect path awaits this so the socket
+    // keys applied, triggers compiled (PCRE wasm ready and patterns applied),
+    // and sysLoadEvent fired. The auto-connect path awaits this so the socket
     // isn't dialed until every script handler and trigger is in place — matching
     // Mudlet, where a profile loads before it connects. Resolves on every load
     // path including failures so a connect never hangs waiting on it.
@@ -356,6 +356,10 @@ export class ScriptingEngine implements EngineHost {
         session.windows.onRaiseEvent = (event, args) => this.raiseEvent(event, args);
         // Map UI "download map from game" → the Client.Map/MMP download flow.
         session.windows.onDownloadMap = () => void this.downloadMap();
+        // Double-clicking a room on the map walks there (Mudlet
+        // T2DMap::initiateSpeedWalk): pathfind, then hand the route to the
+        // mapper package's doSpeedWalk.
+        session.windows.onStartSpeedWalk = (from, to) => this.runtimes.lua?.startSpeedWalk(from, to);
         // A File dropped on a window can't be installed from its name alone, so
         // stage its bytes in the profile VFS and then raise sysDropEvent with a
         // path the bundled packageDrop handler can read.
@@ -473,56 +477,6 @@ export class ScriptingEngine implements EngineHost {
             this.applyTimersFromStore();
             this.applyKeybindingsFromStore();
             this.warnBrowserReservedKeybindings();
-            // sysLoadEvent fires first, before notifying freshly-installed
-            // default/brand packages of their install. In real Mudlet,
-            // sysInstallPackage and sysLoadEvent essentially never fire together
-            // in the same burst for one package — a package is either installed
-            // into an already-running profile (only sysInstallPackage fires) or
-            // a profile with already-installed packages is opened (only
-            // sysLoadEvent fires, against a package whose saved state already
-            // reflects a prior real install). mudix's default/brand-package
-            // bootstrap is the one case that fires both, synchronously, for the
-            // same freshly-installed package — and a package's own sysLoadEvent
-            // handler commonly restores saved UI/layout state (e.g. Mudlet's
-            // Adjustable.Container:load()) captured before the package had ever
-            // run its sysInstallPackage setup. Firing install-notify first let
-            // that later load-restore silently undo whatever install just set up
-            // (e.g. attachToBorder) with no error anywhere. Firing sysLoadEvent
-            // first instead makes sysInstallPackage's setup the last word for
-            // this bootstrap, matching what a real first-time install feels like
-            // to the package (nothing left to load/restore over it yet).
-            // sysMapLoadEvent follows when a persisted map was ingested, so
-            // scripts can register a sysMapLoadEvent handler during sysLoadEvent
-            // and still see the firing for the boot-time load.
-            // Map-open notification keeps map-aware scripts in sync if the
-            // map is already visible at connection time.
-            this.raiseEvent('sysLoadEvent');
-            if (mapLoaded) this.raiseEvent('sysMapLoadEvent');
-            if (this.api.windows.isVisible('map')) this.mapOpen.notify();
-            // Default/brand packages installed just above never go through
-            // installPackageFromVfsPath, so notifyPackageInstalled was never
-            // called for them — fire it now that their own scripts are loaded
-            // (applyScriptsFromStore, above) and can see it.
-            for (const name of freshlyInstalledPackages) this.notifyPackageInstalled(name);
-            this.api.flushOutput();
-
-            // Triggers need PCRE wasm; until that resolves, skip apply on
-            // the initial pass and on subsequent store updates. Once ready,
-            // apply whatever the store says now. The initial apply is done
-            // synchronously (not scheduled) so the load isn't reported complete
-            // with triggers still uncompiled — the auto-connect path waits on
-            // scriptsLoaded, and the login banner must be matchable when the
-            // socket opens. resolveScriptsLoaded is idempotent, so the catch
-            // (wasm init failure) still unblocks connect.
-            void TriggerEngine.ready().then(
-                () => {
-                    this.triggersReady = true;
-                    if (!this.disposed) this.applyTriggersFromStore();
-                    this.markScriptsLoaded();
-                },
-                () => { this.markScriptsLoaded(); },
-            );
-
             this.storeUnsub = useAppStore.subscribe((state, prevState) => {
                 const id = this.connectionId;
                 const scriptsChanged  = state.connectionScripts[id]      !== prevState.connectionScripts[id];
@@ -565,10 +519,72 @@ export class ScriptingEngine implements EngineHost {
                 }
             });
 
+            // Triggers need PCRE wasm, so unlike every other unit they can't be
+            // compiled synchronously. Mudlet compiles them as part of the load
+            // (getTriggerUnit()->compileAll(), Host.cpp) and only *then* raises
+            // sysLoadEvent, so a handler always runs against live triggers — and
+            // scripts rely on that: one that calls permRegexTrigger/tempTrigger
+            // from a sysLoadEvent handler would otherwise have the store change
+            // dropped by the `triggersReady` guard above and its trigger would
+            // silently never fire. So wait for the compile here, before the load
+            // events, rather than letting it land after them. The subscription is
+            // already attached, so anything those handlers create propagates.
+            let triggersCompiled = true;
+            try {
+                await TriggerEngine.ready();
+            } catch {
+                triggersCompiled = false; // wasm init failed; load still completes
+            }
+            // destroy() during the await already closed the Lua VM and calls
+            // markScriptsLoaded() itself, so bailing here can't strand a connect.
+            if (this.disposed) return;
+            if (triggersCompiled) {
+                this.triggersReady = true;
+                this.applyTriggersFromStore();
+            }
+
+            // sysLoadEvent fires first, before notifying freshly-installed
+            // default/brand packages of their install. In real Mudlet,
+            // sysInstallPackage and sysLoadEvent essentially never fire together
+            // in the same burst for one package — a package is either installed
+            // into an already-running profile (only sysInstallPackage fires) or
+            // a profile with already-installed packages is opened (only
+            // sysLoadEvent fires, against a package whose saved state already
+            // reflects a prior real install). mudix's default/brand-package
+            // bootstrap is the one case that fires both, synchronously, for the
+            // same freshly-installed package — and a package's own sysLoadEvent
+            // handler commonly restores saved UI/layout state (e.g. Mudlet's
+            // Adjustable.Container:load()) captured before the package had ever
+            // run its sysInstallPackage setup. Firing install-notify first let
+            // that later load-restore silently undo whatever install just set up
+            // (e.g. attachToBorder) with no error anywhere. Firing sysLoadEvent
+            // first instead makes sysInstallPackage's setup the last word for
+            // this bootstrap, matching what a real first-time install feels like
+            // to the package (nothing left to load/restore over it yet).
+            // sysMapLoadEvent follows when a persisted map was ingested, so
+            // scripts can register a sysMapLoadEvent handler during sysLoadEvent
+            // and still see the firing for the boot-time load.
+            // Map-open notification keeps map-aware scripts in sync if the
+            // map is already visible at connection time.
+            this.raiseEvent('sysLoadEvent');
+            if (mapLoaded) this.raiseEvent('sysMapLoadEvent');
+            if (this.api.windows.isVisible('map')) this.mapOpen.notify();
+            // Default/brand packages installed just above never go through
+            // installPackageFromVfsPath, so notifyPackageInstalled was never
+            // called for them — fire it now that their own scripts are loaded
+            // (applyScriptsFromStore, above) and can see it.
+            for (const name of freshlyInstalledPackages) this.notifyPackageInstalled(name);
+            this.api.flushOutput();
+
             // Capture the merged boot state (loaded file + freshly-installed default
             // packages + reloaded modules) once, since those mutations ran before
             // the subscription was attached and so didn't schedule a write.
             if (this.vfs) this.scheduleProfileDataSave();
+
+            // Everything is wired: scripts/aliases/timers/keys applied, triggers
+            // compiled, load events delivered. Unblocks whenScriptsLoaded() and
+            // dials any connect deferred during the load.
+            this.markScriptsLoaded();
         };
         const safeStart = () => {
             start().catch(err => {
@@ -2799,7 +2815,7 @@ export class ScriptingEngine implements EngineHost {
 
     /**
      * Resolves once the initial load pass has finished (scripts/aliases/timers/
-     * keys applied, sysLoadEvent fired, triggers compiled). The auto-connect
+     * keys applied, triggers compiled, sysLoadEvent fired). The auto-connect
      * path awaits this so the MUD socket isn't dialed until every handler and
      * trigger is in place. Always resolves — never rejects — so a failed or
      * torn-down load can't leave a profile waiting to connect forever.
@@ -2918,6 +2934,7 @@ export class ScriptingEngine implements EngineHost {
         this.unsubs.length = 0;
         this.session.windows.onRaiseEvent = undefined;
         this.session.windows.onDownloadMap = undefined;
+        this.session.windows.onStartSpeedWalk = undefined;
         this.session.windows.onFileDrop = undefined;
         this.session.sounds.onMediaFinished = undefined;
         this.session.sounds.onMediaCaption = undefined;

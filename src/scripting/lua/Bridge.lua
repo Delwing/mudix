@@ -49,11 +49,40 @@ function centerview(roomID)
     return nil, "centerview: number " .. tostring(roomID) .. " is not a valid room id."
 end
 
--- Mudlet gotoRoom(targetRoomID) — pathfind from the player's current room to the
--- target and walk it. mudix has no autonomous timed-walk engine, so the
--- direction commands getPath produced are sent immediately, in order. Returns
--- true, or (false, errMsg) when the current room is unknown, the target roomID
--- is invalid, or no path exists.
+-- Mudlet Host::startSpeedWalk — hand an assembled path over to the mapper.
+-- Mudlet never walks a path itself: gotoRoom and the 2D map's double-click
+-- gesture both fill speedWalkPath/Dir/Weight and then call the global
+-- doSpeedWalk, which a mapper package defines (mudlet-mapper.xml,
+-- generic_mapper.xml) and which owns the pacing, balance/lag checks, off-path
+-- recovery and the arrival message. Mudlet's mLuaInterpreter.call swallows an
+-- error raised in there (it lands in the error console) and the caller still
+-- returns its own result, so pcall + printError here.
+function __mudix_do_speedwalk()
+    if type(doSpeedWalk) ~= 'function' then
+        -- No mapper package installed, so nothing owns the walk. Mudlet errors
+        -- with "attempt to call a nil value" and the player simply doesn't
+        -- move; mudix instead sends the directions in order — what gotoRoom did
+        -- before it delegated — so mapper-less profiles keep working.
+        for i = 1, #speedWalkDir do
+            send(speedWalkDir[i])
+        end
+        return
+    end
+    local ok, err = pcall(doSpeedWalk)
+    if not ok then
+        printError("doSpeedWalk: " .. tostring(err))
+    end
+end
+
+-- Mudlet gotoRoom(targetRoomID) — pathfind from the player's current room to
+-- the target and hand the path to the mapper (TLuaInterpreter::gotoRoom →
+-- Host::startSpeedWalk). Returns true once the walk is handed over, (nil,
+-- errMsg) for an invalid target or an unknown current room, or (false, errMsg)
+-- when no path exists.
+--
+-- Deviation from Mudlet: an unknown current room is reported as such. Mudlet
+-- pathfinds from room 0 and reports the generic "no path found"; naming the
+-- real cause saves a debugging session, and the value stays falsy either way.
 function gotoRoom(targetRoomID)
     local from = getPlayerRoom()
     if not from then
@@ -67,9 +96,34 @@ function gotoRoom(targetRoomID)
         speedWalkPath, speedWalkDir, speedWalkWeight = {}, {}, {}
         return false, "gotoRoom: no path found from current room to room with id " .. tostring(targetRoomID)
     end
-    for i = 1, #speedWalkDir do
-        send(speedWalkDir[i])
+    __mudix_do_speedwalk()
+    return true
+end
+
+-- The map's double-click-to-walk gesture (Mudlet T2DMap::initiateSpeedWalk).
+-- MapPanel resolves the double-clicked room and the player's room, and
+-- WindowManager.startSpeedWalk calls in here through LuaRuntime.
+--
+-- `mudlet.custom_speedwalk` lets a mapper do its own pathfinding: it gets the
+-- endpoints in speedWalkFrom/speedWalkTo and no path is computed for it (Mudlet
+-- checks for a real boolean, so `== true`). Otherwise the path is computed here
+-- and a failure prints Mudlet's mapper message. `from` is -1 when the player
+-- room is unknown, which simply finds no path — as in Mudlet, where the missing
+-- profile entry pathfinds from room 0.
+function __mudix_start_speedwalk(from, to)
+    if mudlet and mudlet.custom_speedwalk == true then
+        speedWalkFrom, speedWalkTo = from, to
+        __mudix_do_speedwalk()
+        return true
     end
+    if not getPath(from, to) then
+        -- Mudlet prints this through printSystemMessage, which mudix has no
+        -- equivalent of; the mapper packages echo their own notices the same way.
+        cecho("<red>Mapper: Cannot find a path from " .. tostring(from)
+            .. " to " .. tostring(to) .. " using known exits.\n")
+        return false
+    end
+    __mudix_do_speedwalk()
     return true
 end
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MapRenderer, createSettings } from 'mudlet-map-renderer';
-import type { LodEventDetail, RoomClickEventDetail, RoomContextMenuEventDetail, RoomLens } from 'mudlet-map-renderer';
+import type { AreaExitClickEventDetail, LodEventDetail, RoomClickEventDetail, RoomContextMenuEventDetail, RoomLens } from 'mudlet-map-renderer';
 import type { WindowManager, MapControl, MapLoadProgress } from '../WindowManager';
 import type { MapEventEntry, MapInfoResult, MapInfoContributor, MapStore } from '../../../map/MapStore';
 import { MudixMapReader } from '../../../map/MudixMapReader';
@@ -523,16 +523,39 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             lastClickWithModifier = e.ctrlKey || e.metaKey || e.shiftKey;
         };
         mapContainer?.addEventListener('mousedown', onClickCapture, { capture: true });
+        // Double-clicking a room walks there (Mudlet T2DMap::mouseDoubleClickEvent
+        // → initiateSpeedWalk). The renderer has no double-click event of its own
+        // and the native `dblclick` carries no room id, so remember what the last
+        // click resolved to — the renderer emits roomclick/areaexitclick/mapclick
+        // on mouseup, i.e. before the dblclick that follows the second one. A
+        // click that resolved to nothing (mapclick) clears the target, so a miss
+        // on the second click can't walk to the first click's room.
+        let lastClickTarget: number | null = null;
         renderer.backend.events.on('roomclick', (detail: RoomClickEventDetail) => {
+            lastClickTarget = detail.roomId;
             if (lastClickWithModifier) {
                 manager.mapStore.toggleMapRoomSelection(detail.roomId);
             } else {
                 manager.mapStore.selectMapRoom(detail.roomId);
             }
         });
+        // Mudlet also speedwalks on a double-clicked out-of-area exit marker,
+        // targeting the room it leads to in the other area.
+        renderer.backend.events.on('areaexitclick', (detail: AreaExitClickEventDetail) => {
+            lastClickTarget = detail.targetRoomId;
+        });
         renderer.backend.events.on('mapclick', () => {
+            lastClickTarget = null;
             manager.mapStore.clearMapSelection();
         });
+        // Mudlet ignores a double-click carrying any other button, and mudix
+        // additionally ignores the modifier chords that mean "extend selection".
+        const onDoubleClick = (e: MouseEvent) => {
+            if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+            if (lastClickTarget == null) return;
+            manager.startSpeedWalk(lastClickTarget);
+        };
+        mapContainer?.addEventListener('dblclick', onDoubleClick);
 
         // Submenus registered via addMapMenu are pure containers (no event);
         // surface them as event-shaped nodes so addMapEvent entries whose
@@ -690,6 +713,7 @@ export function MapPanel({ id, manager, connectionId }: MapPanelProps) {
             panelEl?.removeEventListener('wheel', onWheelCapture, { capture: true });
             mapContainer?.removeEventListener('mousedown', onMapMouseDown);
             mapContainer?.removeEventListener('contextmenu', onMapContextMenu);
+            mapContainer?.removeEventListener('dblclick', onDoubleClick);
             mapContainer?.removeEventListener('mousedown', onClickCapture, { capture: true });
             renderer.camera.off('change', onCameraChange);
             renderer.destroy();

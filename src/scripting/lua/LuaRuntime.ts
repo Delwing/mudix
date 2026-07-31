@@ -1881,6 +1881,27 @@ end`,
         });
 
         if (typeof window === 'undefined') return;
+
+        // ── readiness gate for the e2e harness ───────────────────────────────
+        // __runBusted goes live here, at the tail of setup() — but the engine's
+        // load pass isn't finished: triggers compile only once PCRE wasm resolves,
+        // and perm aliases/triggers reach the engines through the store
+        // subscription attached at the end of ScriptingEngine.start(). A run
+        // started in that window sees a half-wired engine, and since the whole run
+        // is one synchronous doStringSync no queued apply can catch up mid-run —
+        // every perm* spec then fails at random. sysLoadEvent is raised last, once
+        // all of that is in place (Mudlet parity: Host.cpp compiles the trigger
+        // unit before raising it), so the flag it sets is the exact gate we need.
+        // Kept in Lua rather than on window so it dies with this lua_State: a
+        // runtime that gets recreated (StrictMode remount, profile switch) can
+        // never leave a stale "ready" behind for the next one.
+        this.lua.doStringSync(
+            '__mudix_busted_loaded = false\n' +
+            'registerAnonymousEventHandler("sysLoadEvent", function() __mudix_busted_loaded = true end, true)',
+        );
+        (window as unknown as { __mudixBustedReady?: () => boolean }).__mudixBustedReady = () =>
+            this.lua.doStringSync('return __mudix_busted_loaded == true') === true;
+
         const specPaths = bustedSpecVfsPaths();
         (window as unknown as { __runBusted?: (pattern?: string) => unknown }).__runBusted = (pattern?: string) => {
             // Prefer an exact spec-name match (`Foo` → /lua/specs/Foo_spec.lua) so
@@ -2662,6 +2683,20 @@ end`,
     private unregisterCb(cbId: number): void {
         if (!cbId) return;
         this.runChunk(`__mudix_unregister_cb(${cbId})`, 'unregister cb');
+    }
+
+    /**
+     * Mudlet `T2DMap::initiateSpeedWalk` / `Host::startSpeedWalk` — the map's
+     * double-click-to-walk gesture. Pathfinds `from` → `to` (unless the mapper
+     * opted into `mudlet.custom_speedwalk`) and calls the mapper package's
+     * `doSpeedWalk`; see `__mudix_start_speedwalk` in Bridge.lua. Errors inside
+     * the mapper are reported, never thrown at the UI caller.
+     */
+    startSpeedWalk(from: number, to: number): void {
+        if (this.destroyed) return;
+        this.runChunk(`__mudix_start_speedwalk(${Math.trunc(from)}, ${Math.trunc(to)})`,
+            'speedwalk');
+        this.api.flushOutput();
     }
 
     private execModule(code: string, name: string, globalName: string): void {

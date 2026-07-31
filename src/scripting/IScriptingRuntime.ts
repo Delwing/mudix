@@ -76,6 +76,12 @@ export interface IScriptingRuntime {
      */
     dispatchSendRequest(text: string): boolean;
     /**
+     * Start a speedwalk between two rooms (Mudlet Host::startSpeedWalk): find
+     * the path and hand it to the mapper package's `doSpeedWalk`. Driven by the
+     * map's double-click-to-walk gesture via WindowManager.startSpeedWalk.
+     */
+    startSpeedWalk(from: number, to: number): void;
+    /**
      * Kill every event handler registered by `wrapScript` for the given
      * script id. Called when a script is removed or disabled so its handlers
      * stop firing without waiting for a full runtime reload.

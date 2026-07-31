@@ -248,6 +248,9 @@ export class WindowManager {
     /** Bridge to ScriptingEngine.downloadMap — the map UI's "download map from
      *  game" action (Mudlet dlgMapper's Download button). */
     onDownloadMap?:       () => void;
+    /** Bridge to the Lua speedwalk entry point (Mudlet Host::startSpeedWalk),
+     *  wired by ScriptingEngine. Driven by {@link startSpeedWalk}. */
+    onStartSpeedWalk?:    (from: number, to: number) => void;
 
     /** The MMP map URL from GMCP `Client.Map`, or '' when none announced. */
     get mmpMapLocation(): string {
@@ -885,6 +888,26 @@ export class WindowManager {
         // so getPlayerRoom() returns this id afterwards.
         this.mapStore.setPlayerRoom(roomId);
         for (const cb of this.mapCallbacks.values()) cb(roomId);
+        return true;
+    }
+
+    /**
+     * Mudlet `T2DMap::initiateSpeedWalk` — start a speedwalk from the player's
+     * current room to `targetRoomId`, the room the user double-clicked on the
+     * map (or the far side of a double-clicked out-of-area exit).
+     *
+     * Like Mudlet, an unknown target room is ignored outright, while an unknown
+     * *player* room is not: it pathfinds from -1 (Mudlet uses the missing
+     * profile entry, 0), finds nothing, and the Lua side reports the mapper's
+     * "cannot find a path" message rather than failing silently.
+     *
+     * Returns false when the gesture didn't start a walk — no such room, or no
+     * scripting runtime attached to walk it.
+     */
+    startSpeedWalk(targetRoomId: number): boolean {
+        if (!this.onStartSpeedWalk) return false;
+        if (!this.mapStore.roomExists(targetRoomId)) return false;
+        this.onStartSpeedWalk(this.mapStore.getPlayerRoom() ?? -1, targetRoomId);
         return true;
     }
 
